@@ -83,7 +83,7 @@ cp config.example.yaml config.yaml && cp .env.example .env   # 填入凭据
 cd ../frontend && npm install && npm run build               # 构建 Web UI
 
 # 启动（二选一）
-pm2 start deploy/botler.config.js && pm2 save && pm2 startup
+pm2 start deploy/botler.config.cjs && pm2 save && pm2 startup
 # 或
 sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --now botler
 ```

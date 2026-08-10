@@ -227,7 +227,10 @@ deploy_to_code01:
       # 调试进度日志（部署排查用，job 目录可直接读取）
       DBG_LOG="$CI_PROJECT_DIR/deploy_progress.log"
       dbg() { echo "$(date '+%H:%M:%S') [$1] $2" >> "$DBG_LOG"; }
-      dbg START "CI_PROJECT_DIR=$CI_PROJECT_DIR 凭据注入状态: GITLAB_BOT_TOKEN=${GITLAB_BOT_TOKEN:+已注入}${GITLAB_BOT_TOKEN:-未注入} WEBHOOK_SECRET=${WEBHOOK_SECRET:+已注入}${WEBHOOK_SECRET:-未注入}"
+      # ⚠️ 只输出注入状态标记，绝不输出变量值（避免凭据落盘）
+      GBT=$([ -n "${GITLAB_BOT_TOKEN:-}" ] && echo 已注入 || echo 未注入)
+      WHS=$([ -n "${WEBHOOK_SECRET:-}" ] && echo 已注入 || echo 未注入)
+      dbg START "CI_PROJECT_DIR=$CI_PROJECT_DIR 凭据注入状态: GITLAB_BOT_TOKEN=$GBT WEBHOOK_SECRET=$WHS"
 
       # ================================================================
       # 第 1 步：验证前端构建产物（artifacts 下载位置 = FastAPI 托管目录）
@@ -323,7 +326,9 @@ deploy_to_code01:
       dbg STEP5 "pm2 delete + start"
       echo "=== 5. 启动 botler 服务 ==="
       pm2 delete ${APP_NAME} >/dev/null 2>&1 || true
-      pm2 start deploy/botler.config.js >> "$DBG_LOG" 2>&1 || { dbg STEP5 "FAIL: pm2 start"; echo "错误：pm2 start 失败"; exit 1; }
+      # ⚠️ 配置文件必须是 .cjs：job 目录在 dify 项目下（package.json 含
+      # type: module），.js 会被当作 ESM 解析导致 require 未定义
+      pm2 start deploy/botler.config.cjs >> "$DBG_LOG" 2>&1 || { dbg STEP5 "FAIL: pm2 start"; echo "错误：pm2 start 失败"; exit 1; }
       pm2 save >/dev/null 2>&1 || true
       dbg STEP5 "OK"
       sleep 3
