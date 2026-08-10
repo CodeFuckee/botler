@@ -1,0 +1,107 @@
+"""GitLab webhook 事件接收与任务创建。
+
+- 校验 X-Gitlab-Token
+- 仅处理 issues 事件且与 assignee 相关（assignee changed / opened）
+- 判定 assignee 是否包含 bot 账号
+- 去重入队（scheduler.enqueue 保证同一 issue 只有一条活跃任务）
+"""
+
+from __future__ import annotations
+
+import hmac
+import logging
+
+from .config import ConfigManager
+from .database import Database
+from .gitlab_client import GitLabClient, GitLabError
+from .scheduler import TaskScheduler
+
+logger = logging.getLogger(__name__)
+
+# GitLab issue 事件 action 中与「指派」相关的
+ASSIGNEE_ACTIONS = {"assignee", "open", "opened", "reopen", "update"}
+
+# 触发入队的 action（设计方案：assignee changed / opened 为主；update 保守处理）
+ENQUEUE_ACTIONS = {"assignee", "open", "opened"}
+
+
+class WebhookError(Exception):
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class WebhookHandler:
+    def __init__(self, config: ConfigManager, db: Database,
+                 gitlab: GitLabClient, scheduler: TaskScheduler):
+        self.config = config
+        self.db = db
+        self.gitlab = gitlab
+        self.scheduler = scheduler
+
+    def handle(self, body: dict, header_token: str | None) -> dict:
+        """处理 webhook 请求，返回响应体。校验失败抛 WebhookError。"""
+        cfg = self.config.get()
+
+        # 1. secret 校验（防伪造）
+        expected = cfg.webhook_secret
+        if not expected:
+            raise WebhookError("webhook secret 未配置，拒绝处理", 500)
+        if not header_token or not hmac.compare_digest(header_token, expected):
+            logger.warning("webhook secret 校验失败")
+            raise WebhookError("webhook secret 校验失败", 401)
+
+        # 2. 事件过滤
+        event = body.get("object_kind")
+        if event != "issue":
+            return {"accepted": False, "reason": f"忽略非 issue 事件: {event}"}
+
+        attrs = body.get("object_attributes") or {}
+        action = attrs.get("action")
+        if action not in ENQUEUE_ACTIONS:
+            return {"accepted": False, "reason": f"忽略 action: {action}"}
+
+        project_id = body.get("project", {}).get("id") or attrs.get("project_id")
+        issue_iid = attrs.get("iid")
+        if not project_id or not issue_iid:
+            raise WebhookError("事件缺少 project_id / issue_iid")
+
+        # 3. assignee 判定：事件里找 bot id，找不到则查 API 确认
+        issue = body.get("issue") or {}
+        bot_id = cfg.bot_id or self.gitlab.get_bot_id()
+        assignee_ids = [a.get("id") for a in (issue.get("assignees") or [])]
+        attr_ids = attrs.get("assignee_ids") or []
+        is_for_bot = bot_id in assignee_ids or bot_id in attr_ids
+
+        if not is_for_bot and action in ("assignee", "open", "opened"):
+            # 事件快照可能不可靠，以 API 为准（open 事件也可能直接指派给 bot）
+            try:
+                current = self.gitlab.get_issue(project_id, issue_iid)
+            except GitLabError as e:
+                logger.warning("webhook 查询 issue %s#%s 失败: %s", project_id, issue_iid, e)
+                current = None
+            if current is None:
+                is_for_bot = False
+            else:
+                cur_assignees = [a.get("id") for a in (current.get("assignees") or [])]
+                is_for_bot = bot_id in cur_assignees
+
+        if not is_for_bot:
+            return {"accepted": False, "reason": "issue 未指派给 bot 账号"}
+
+        # 4. 入队（去重由 scheduler 保证）
+        repo = self.db.get_repo_by_project_id(project_id)
+        if repo is None:
+            logger.info("webhook 来自未注册仓库 project=%s，忽略", project_id)
+            return {"accepted": False, "reason": "仓库未在平台注册"}
+        if not repo["enabled"]:
+            return {"accepted": False, "reason": "仓库已停用"}
+
+        title = issue.get("title") or attrs.get("title") or f"issue #{issue_iid}"
+        task_id = self.db.create_task(
+            repo["id"], project_id, issue_iid, title, triggered_by="webhook")
+        if task_id is None:
+            return {"accepted": True, "reason": "已有活跃任务，跳过（去重）"}
+        self.scheduler.enqueue(task_id)
+        logger.info("webhook 入队: 任务 %s (%s#%s)", task_id, project_id, issue_iid)
+        return {"accepted": True, "task_id": task_id}

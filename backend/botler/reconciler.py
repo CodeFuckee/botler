@@ -1,0 +1,81 @@
+"""对账兜底调度器（APScheduler）。
+
+每 reconcile_interval_seconds 扫描一次启用中的仓库：
+找出「assignee 是 bot 但任务表无活跃记录」的 open issues，补入队。
+解决 webhook 丢事件 / 平台重启窗口期漏任务的问题。
+"""
+
+from __future__ import annotations
+
+import logging
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+
+from .config import ConfigManager
+from .database import Database
+from .gitlab_client import GitLabClient, GitLabError
+from .scheduler import TaskScheduler
+
+logger = logging.getLogger(__name__)
+
+
+class Reconciler:
+    def __init__(self, config: ConfigManager, db: Database,
+                 gitlab: GitLabClient, scheduler: TaskScheduler):
+        self.config = config
+        self.db = db
+        self.gitlab = gitlab
+        self.scheduler = scheduler
+        self._aps = BackgroundScheduler(timezone="UTC")
+
+    def start(self) -> None:
+        cfg = self.config.get()
+        trigger = IntervalTrigger(seconds=max(60, cfg.reconcile_interval_seconds))
+        self._aps.add_job(
+            self.reconcile_once, trigger,
+            id="botler-reconcile", name="对账兜底扫描",
+            coalesce=True, max_instances=1, replace_existing=True,
+        )
+        self._aps.start()
+        logger.info("对账兜底已启动（间隔 %ss）", cfg.reconcile_interval_seconds)
+        # 启动后异步先跑一次，缩短首次空窗（不阻塞启动流程）
+        import threading
+        threading.Thread(target=self.reconcile_once, name="botler-reconcile-first", daemon=True).start()
+
+    def stop(self) -> None:
+        if self._aps.running:
+            self._aps.shutdown(wait=False)
+
+    def reconcile_once(self) -> dict:
+        """扫描一轮，返回补入队的任务数。"""
+        cfg = self.config.get()
+        try:
+            bot_id = cfg.bot_id or self.gitlab.get_bot_id()
+        except GitLabError as e:
+            logger.warning("对账失败：无法获取 bot 身份: %s", e)
+            return {"scanned": 0, "enqueued": 0}
+
+        scanned = enqueued = 0
+        for repo in self.db.list_repos():
+            if not repo["enabled"]:
+                continue
+            try:
+                issues = self.gitlab.list_open_issues(repo["gitlab_project_id"], assignee_id=bot_id)
+            except GitLabError as e:
+                logger.warning("对账失败：仓库 %s: %s", repo["name"], e)
+                continue
+            for issue in issues:
+                scanned += 1
+                if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
+                    continue  # 已有活跃任务（含排队中）
+                task_id = self.db.create_task(
+                    repo["id"], repo["gitlab_project_id"], issue["iid"],
+                    issue.get("title") or f"issue #{issue['iid']}",
+                    triggered_by="reconcile")
+                if task_id is not None:
+                    self.scheduler.enqueue(task_id)
+                    enqueued += 1
+                    logger.info("对账补入队: 任务 %s (%s#%s)",
+                                task_id, repo["gitlab_project_id"], issue["iid"])
+        return {"scanned": scanned, "enqueued": enqueued}

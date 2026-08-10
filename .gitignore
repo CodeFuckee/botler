@@ -1,1 +1,19 @@
+# macOS
 **/.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+backend/.venv/
+backend/botler.db*
+backend/config.yaml
+backend/.env
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# 运行时数据（部署机器上生成，不入库）
+workspace/
+logs/
+*.log

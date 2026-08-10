@@ -1,0 +1,44 @@
+# Botler 配置文件（唯一事实来源，Web UI 是编辑它的外壳）
+# 复制为 config.yaml 并填写。凭据用 ${ENV_VAR} 引用 .env 中的环境变量，不落明文。
+
+gitlab:
+  url: https://home.chenkaidi.top:509
+  bot_token: ${GITLAB_BOT_TOKEN}      # bot 账号 PAT，scope 至少 api + write_repository
+  webhook_secret: ${WEBHOOK_SECRET}   # webhook 校验 secret（任意随机串）
+  bot_username: ""                    # 可选：bot 账号用户名（不填则自动识别）
+  verify_ssl: false                   # 自建 GitLab 若为自签证书设 false
+
+worker:
+  max_concurrent_repos: 3             # 跨仓库并行上限
+  task_timeout_seconds: 1800          # 单任务超时 30 分钟
+  max_retries: 2                      # 失败重试次数（"无法解决"不重试）
+  reconcile_interval_seconds: 300     # 对账兜底扫描间隔
+
+claude:
+  command: claude
+  args: ["-p", "--output-format", "json"]
+  # Claude Code 认证继承自服务器环境变量（见 .env.example 注释）
+
+templates:
+  default: |
+    你是 {repo_name} 仓库的 AI 维护者。请处理以下指派给你的 issue：
+
+    标题: {issue_title}
+    正文: {issue_body}
+    链接: {issue_url}
+
+    工作要求：
+    1. 在本地工作区（已检出 main 最新代码）分析问题，定位根因
+    2. 编写修复代码并自测通过（运行相关测试/构建验证）
+    3. 自测通过后，直接推送到 main 分支：
+       git add -A && git commit -m "fix: 解决 issue #{issue_iid}" && git push origin main
+    4. 推送成功后，调用 GitLab API 关闭该 issue：
+       curl -s -X PUT "{gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}" \
+         -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+         -d "state_event=close"
+    5. 若确实无法解决，不要推送代码，如实汇报失败原因和已做的尝试
+
+    注意：只修改与 issue 相关的代码，不要顺手重构无关部分。
+
+# 仓库列表（在 Web UI 添加仓库时会自动写入这里）
+repos: []

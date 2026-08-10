@@ -1,0 +1,25 @@
+# systemd 服务（备选方案，与 pm2 二选一）
+# 安装：
+#   sudo cp deploy/botler.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now botler
+# 查看日志：journalctl -u botler -f
+
+[Unit]
+Description=Botler — GitLab AI Issue Bot Platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ckd                 # 改成部署服务器上的实际用户
+WorkingDirectory=/home/ckd/codes/botler
+# 凭据来自 backend/.env（后端启动时自动加载）
+EnvironmentFile=/home/ckd/codes/botler/backend/.env
+Environment=BOTLER_CONFIG=/home/ckd/codes/botler/backend/config.yaml
+Environment=BOTLER_DB=/home/ckd/codes/botler/backend/botler.db
+ExecStart=/home/ckd/codes/botler/backend/.venv/bin/uvicorn botler.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
