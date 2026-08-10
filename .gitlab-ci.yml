@@ -1,0 +1,346 @@
+# ================================================================
+# Botler 统一 CI/CD 流水线
+#
+# 涵盖前端 (React/Vite) 和后端 (Python FastAPI) 的构建、测试和
+# 部署任务（参考 Shipyard 项目的 CI 模式）。前端构建与后端测试
+# 并行执行，部署阶段等待前端构建产物通过后才触发。
+#
+# Stage 拓扑（依赖关系）：
+#
+#   build（并行）                    deploy
+#   ┌──────────────────────┐
+#   │ frontend:build ────────────► deploy_to_code01
+#   │   (React/Vite 构建)   │      (pm2 本机部署 + 健康检查)
+#   └──────────────────────┘
+#
+# 说明：
+#   - 第一阶段 build：frontend:build（npm 构建前端，产出 dist 产物）与
+#     backend:test（uv 安装依赖 + pytest/语法检查）并行执行
+#   - 第二阶段 deploy：必须等 frontend:build 成功且拿到 dist 产物后才
+#     部署到本机（code01 = 10.0.0.122，shell executor，pm2 管理 uvicorn）
+#
+# 部署模型（与 Shipyard 的 deploy_to_code01 同构）：
+#   - 部署目标就是 gitlab-runner 所在机器（10.0.0.122），shell executor
+#     工作目录跨 job 持久化：.venv、backend/.env、backend/config.yaml
+#     等运行时文件天然保留，无需迁移
+#   - 前端 dist 由 frontend:build 通过 artifacts 传入，下载位置恰好是
+#     FastAPI 静态托管目录 frontend/dist，无需移动
+#   - 凭据（backend/.env，gitignore 排除）不入库、不进日志
+# ================================================================
+
+stages:
+  - build
+  - deploy
+
+# ================================================================
+# 全局变量
+# ================================================================
+variables:
+  # shell executor 工作目录跨 job 持久化，GIT_CLEAN_FLAGS: none 防止
+  # clean 掉运行时文件（.env / config.yaml / .venv 等）
+  GIT_CLEAN_FLAGS: none
+
+  # ----------------------------------------------------------
+  # 镜像 / 注册表地址（国内源，可在 GitLab UI 中覆盖）
+  # ----------------------------------------------------------
+  PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+  NPM_REGISTRY_URL: "https://registry.npmmirror.com"
+
+  # ----------------------------------------------------------
+  # 部署变量
+  # ----------------------------------------------------------
+  APP_NAME: "botler"
+  DEPLOY_PORT: "8000"
+  # 部署后健康检查超时（秒）
+  HEALTHCHECK_RETRIES: "15"
+
+# ================================================================
+# 公共配置
+# ================================================================
+
+# --- 前端公共配置 ---
+.frontend_setup:
+  before_script:
+    - cd frontend
+    - |
+      set +e
+      git config --global --add safe.directory "$CI_PROJECT_DIR"
+      # node/npm 在 $HOME/.local/bin（shell executor 的 PATH 可能不含）
+      export PATH="$HOME/.local/bin:$HOME/miniconda3/bin:$PATH"
+      echo "=== 环境信息 ==="
+      echo "CI_PROJECT_DIR: $CI_PROJECT_DIR"
+      echo "Node 版本: $(node --version 2>/dev/null || echo '未安装')"
+      echo "npm 版本: $(npm --version 2>/dev/null || echo '未安装')"
+      echo "npm registry: $NPM_REGISTRY_URL"
+
+# --- 后端公共配置 ---
+.backend_setup:
+  before_script:
+    - cd backend
+    - |
+      set +e
+      git config --global --add safe.directory "$CI_PROJECT_DIR"
+      export PATH="$HOME/.local/bin:$HOME/miniconda3/bin:$PATH"
+      echo "=== 环境信息 ==="
+      echo "CI_PROJECT_DIR: $CI_PROJECT_DIR"
+      echo "Python 版本: $(python3 --version 2>/dev/null || echo '未安装')"
+      echo "uv 版本: $(uv --version 2>/dev/null || echo '未安装')"
+
+# ================================================================
+# Stage: build —— 第一阶段：前端构建 + 后端测试（并行）
+# ================================================================
+
+# --- 前端：React/Vite 构建（产出 dist，供部署使用）---
+frontend:build:
+  extends: .frontend_setup
+  stage: build
+  tags:
+    - linux
+    - code01
+  timeout: 20m
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - echo "=== 1. 安装依赖（npm ci）==="
+    - npm ci --registry=${NPM_REGISTRY_URL}
+    - echo "=== 2. 构建前端（vite build）==="
+    - npm run build
+    - echo "=== 3. 验证构建产物 ==="
+    - ls -la dist/index.html
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [frontend:build] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
+      echo "========================================="
+  artifacts:
+    paths:
+      - frontend/dist
+    expire_in: 1 day
+
+# --- 后端：Python 测试（uv 高速包管理）---
+# 在 gitlab-runner 机器（code01）上直接运行（shell executor），
+# 不依赖 Docker，与 Shipyard 的 backend:test 同模式。
+backend:test:
+  extends: .backend_setup
+  stage: build
+  tags:
+    - linux
+    - code01
+  timeout: 30m
+  cache:
+    key: uv-cache-${CI_COMMIT_REF_SLUG}
+    paths:
+      - backend/.uv-cache/
+    policy: pull-push
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      # uv 缓存目录（CI 缓存持久化，加速后续构建）
+      export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
+
+      STEP1_START=$(date +%s)
+      echo "=== 1. 确保 uv 可用 ==="
+      if ! command -v uv >/dev/null 2>&1; then
+        # PEP 668 保护阻止系统级 pip install，使用 --break-system-packages
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+      echo "uv: $(uv --version)"
+      STEP1_END=$(date +%s)
+      echo "⏱️  步骤1 (确保 uv) 用时: $((STEP1_END - STEP1_START)) 秒"
+
+      STEP2_START=$(date +%s)
+      echo "=== 2. 创建/复用虚拟环境 ==="
+      # shell executor 工作目录跨 job 持久化，.venv 复用；全新环境才创建
+      if [ ! -x .venv/bin/python ]; then
+        rm -rf .venv
+        uv venv .venv
+      fi
+      PYTHON=".venv/bin/python"
+      STEP2_END=$(date +%s)
+      echo "⏱️  步骤2 (虚拟环境) 用时: $((STEP2_END - STEP2_START)) 秒"
+
+      STEP3_START=$(date +%s)
+      echo "=== 3. 安装项目依赖 ==="
+      uv pip install -r requirements.txt -i ${PIP_INDEX_URL}
+      STEP3_END=$(date +%s)
+      echo "⏱️  步骤3 (安装依赖) 用时: $((STEP3_END - STEP3_START)) 秒"
+
+      STEP4_START=$(date +%s)
+      echo "=== 4. 运行测试 ==="
+      if [ -d tests ]; then
+        $PYTHON -m pytest tests/ -v --tb=short
+      else
+        echo "⚠️  未发现 tests/ 目录，执行语法与导入冒烟检查"
+        $PYTHON -m compileall botler -q && echo "✓ 语法检查通过"
+        # config.yaml 被 gitignore，全新 checkout 时用示例兜底（不影响导入冒烟）
+        if [ ! -f config.yaml ]; then
+          cp config.example.yaml config.yaml
+          echo "⚠️  config.yaml 不存在，已用 config.example.yaml 兜底"
+        fi
+        $PYTHON -c "import botler.main; print('✓ botler.main 导入成功')"
+      fi
+      STEP4_END=$(date +%s)
+      echo "⏱️  步骤4 (运行测试) 用时: $((STEP4_END - STEP4_START)) 秒"
+
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [backend:test] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
+      echo "========================================="
+      echo ""
+      echo "========== 各步骤耗时汇总 =========="
+      echo "  步骤1 (确保 uv):          $((STEP1_END - STEP1_START)) 秒"
+      echo "  步骤2 (虚拟环境):         $((STEP2_END - STEP2_START)) 秒"
+      echo "  步骤3 (安装依赖):         $((STEP3_END - STEP3_START)) 秒"
+      echo "  步骤4 (运行测试):         $((STEP4_END - STEP4_START)) 秒"
+      echo "========================================="
+
+# ================================================================
+# Stage: deploy —— 第二阶段：本机部署（pm2 + 健康检查）
+# 与 Shipyard 的 deploy_to_code01 同构：在 gitlab-runner 机器
+# （code01 = 10.0.0.122）上直接部署，无需 SSH / docker。
+# ================================================================
+deploy_to_code01:
+  stage: deploy
+  tags:
+    - linux
+    - code01
+  # 第二阶段门禁：frontend:build 成功且拿到 dist 产物后才部署
+  needs:
+    - job: frontend:build
+      artifacts: true
+  before_script:
+    - |
+      set +e
+      git config --global --add safe.directory "$CI_PROJECT_DIR"
+      export PATH="$HOME/.local/bin:$HOME/miniconda3/bin:$PATH"
+      echo "=== 环境信息 ==="
+      echo "CI_PROJECT_DIR: $CI_PROJECT_DIR"
+      echo "当前用户: $(whoami)"
+      echo "Python 版本: $(python3 --version 2>/dev/null || echo '未安装')"
+      echo "pm2 版本: $(pm2 --version 2>/dev/null || echo '未安装')"
+  script:
+    - |
+      JOB_START_TIME=$(date +%s)
+
+      # ================================================================
+      # 第 1 步：验证前端构建产物（artifacts 下载位置 = FastAPI 托管目录）
+      # ================================================================
+      echo "=== 1. 验证前端构建产物 ==="
+      ls -la frontend/dist/index.html || { echo "错误：缺少前端构建产物 frontend/dist"; exit 1; }
+
+      # ================================================================
+      # 第 2 步：准备后端运行环境（复用跨 job 持久化的 .venv）
+      # ================================================================
+      echo "=== 2. 准备后端运行环境 ==="
+      cd backend
+      export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+      fi
+      if [ ! -x .venv/bin/python ]; then
+        rm -rf .venv
+        uv venv .venv
+      fi
+      uv pip install -r requirements.txt -i ${PIP_INDEX_URL}
+      cd ..
+
+      # ================================================================
+      # 第 3 步：检查运行时配置（凭据不入库，必须已存在服务器上）
+      # ================================================================
+      echo "=== 3. 检查运行时配置 ==="
+      if [ ! -f backend/.env ]; then
+        echo "⚠️  backend/.env 不存在！凭据未配置，服务可能无法正常工作。"
+        echo "   请在部署机器上创建 backend/.env（参考 backend/.env.example）"
+      else
+        echo "✓ backend/.env 存在"
+      fi
+      if [ ! -f backend/config.yaml ]; then
+        echo "⚠️  backend/config.yaml 不存在，用示例配置兜底（凭据引用的环境变量缺失时启动会失败）"
+        cp backend/config.example.yaml backend/config.yaml
+      else
+        echo "✓ backend/config.yaml 存在"
+      fi
+
+      # ================================================================
+      # 第 4 步：确保 pm2 可用（未安装则全局安装）
+      # ================================================================
+      echo "=== 4. 确保 pm2 可用 ==="
+      export PATH="$(npm config get prefix 2>/dev/null || echo "$HOME/.local"):$PATH"
+      if ! command -v pm2 >/dev/null 2>&1; then
+        echo "pm2 未安装，全局安装（${NPM_REGISTRY_URL}）..."
+        npm install -g pm2 --registry=${NPM_REGISTRY_URL} || { echo "错误：pm2 安装失败"; exit 1; }
+      fi
+      echo "pm2: $(pm2 --version)"
+
+      # ================================================================
+      # 第 5 步：启动/重启 botler（pm2，配置见 deploy/botler.config.js）
+      # ================================================================
+      echo "=== 5. 启动 botler 服务 ==="
+      if pm2 describe ${APP_NAME} >/dev/null 2>&1; then
+        echo "服务已存在，重启..."
+        pm2 restart ${APP_NAME} || { echo "错误：pm2 restart 失败"; exit 1; }
+      else
+        echo "服务不存在，启动..."
+        pm2 start deploy/botler.config.js || { echo "错误：pm2 start 失败"; exit 1; }
+      fi
+      pm2 save >/dev/null 2>&1 || true
+      sleep 3
+
+      # ================================================================
+      # 第 6 步：等待服务就绪（健康检查，失败必须 exit 1 不能假绿）
+      # ================================================================
+      echo "=== 6. 等待服务就绪（http://localhost:${DEPLOY_PORT}）==="
+      HEALTHY=false
+      for i in $(seq 1 ${HEALTHCHECK_RETRIES:-15}); do
+        if curl -sf "http://localhost:${DEPLOY_PORT}/api/health" >/dev/null 2>&1; then
+          echo "✓ 后端健康检查通过 (${i}s)"
+          HEALTHY=true
+          break
+        fi
+        echo "  等待中... (${i}s)"
+        sleep 1
+      done
+
+      # ================================================================
+      # 第 7 步：验证部署结果（后端健康 + 前端页面可达）
+      # ================================================================
+      echo "=== 7. 验证部署 ==="
+      if [ "$HEALTHY" = true ]; then
+        echo "--- 后端健康检查 ---"
+        curl -sf "http://localhost:${DEPLOY_PORT}/api/health" && echo "" && echo "✓ /api/health OK"
+        echo "--- 前端页面检查 ---"
+        if curl -sf "http://localhost:${DEPLOY_PORT}/" | grep -q '<div id="root">'; then
+          echo "✓ 前端页面可达（index.html 渲染）"
+        else
+          echo "⚠️  前端页面未返回预期内容（dist 可能未更新，检查 pm2 工作目录）"
+        fi
+        echo ""
+        echo "=== pm2 进程状态 ==="
+        pm2 describe ${APP_NAME} | grep -E "status|restarts|uptime" || pm2 ls | grep ${APP_NAME}
+        echo ""
+        echo "✓ 部署成功！应用运行在 http://10.0.0.122:${DEPLOY_PORT}"
+      else
+        echo "错误：服务健康检查未通过（${DEPLOY_PORT} 端口无响应）"
+        echo ""
+        echo "=== 服务状态 ==="
+        pm2 ls | grep ${APP_NAME} || echo "  （进程未找到）"
+        echo ""
+        echo "=== 最近日志 ==="
+        tail -30 logs/pm2-error.log 2>/dev/null || pm2 logs ${APP_NAME} --nostream --lines 30 2>/dev/null || true
+        echo ""
+        echo "错误：部署验证失败，Job 标记为失败"
+        exit 1
+      fi
+
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [deploy_to_code01] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
+      echo "========================================="
