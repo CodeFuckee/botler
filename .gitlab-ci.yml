@@ -250,17 +250,34 @@ deploy_to_code01:
       cd ..
 
       # ================================================================
-      # 第 3 步：检查运行时配置（凭据不入库，必须已存在服务器上）
+      # 第 3 步：检查运行时凭据（凭据不入库；CI 变量或 backend/.env 任一提供）
+      # config.py 的 load_dotenv 不覆盖已有环境变量，所以 CI 变量
+      # 直接 export 即可生效，无需 .env 文件；两者都缺则服务必崩
+      # （config.yaml 的 ${VAR} 引用无法展开），提前失败并给出指引。
       # ================================================================
-      echo "=== 3. 检查运行时配置 ==="
+      echo "=== 3. 检查运行时凭据 ==="
       if [ ! -f backend/.env ]; then
-        echo "⚠️  backend/.env 不存在！凭据未配置，服务可能无法正常工作。"
-        echo "   请在部署机器上创建 backend/.env（参考 backend/.env.example）"
+        echo "⚠️  backend/.env 不存在，检查 CI 变量..."
+        MISSING_VARS=""
+        for var in GITLAB_BOT_TOKEN WEBHOOK_SECRET; do
+          if [ -z "${!var:-}" ]; then
+            MISSING_VARS="${MISSING_VARS} ${var}"
+          fi
+        done
+        if [ -n "${MISSING_VARS}" ]; then
+          echo "❌ 凭据缺失：backend/.env 不存在，且 CI 变量未提供：${MISSING_VARS}"
+          echo "   配置方法（推荐）：GitLab 项目 Settings > CI/CD > Variables 添加"
+          echo "     GITLAB_BOT_TOKEN — bot 账号 PAT（scope 至少 api + write_repository）"
+          echo "     WEBHOOK_SECRET   — webhook 校验 secret（如 openssl rand -hex 32）"
+          echo "   或首次手动部署时在 backend/ 创建 .env（参考 backend/.env.example）"
+          exit 1
+        fi
+        echo "✓ CI 变量已提供全部凭据（load_dotenv 不覆盖环境变量，无需 .env 文件）"
       else
         echo "✓ backend/.env 存在"
       fi
       if [ ! -f backend/config.yaml ]; then
-        echo "⚠️  backend/config.yaml 不存在，用示例配置兜底（凭据引用的环境变量缺失时启动会失败）"
+        echo "⚠️  backend/config.yaml 不存在，用示例配置兜底"
         cp backend/config.example.yaml backend/config.yaml
       else
         echo "✓ backend/config.yaml 存在"
@@ -279,15 +296,13 @@ deploy_to_code01:
 
       # ================================================================
       # 第 5 步：启动/重启 botler（pm2，配置见 deploy/botler.config.js）
+      # ⚠️ 不用 pm2 restart：restart 保留旧配置（进程信息在 pm2 守护
+      # 进程里），botler.config.js 的修改不会生效。delete + start 确保
+      # 每次部署都加载最新配置。
       # ================================================================
       echo "=== 5. 启动 botler 服务 ==="
-      if pm2 describe ${APP_NAME} >/dev/null 2>&1; then
-        echo "服务已存在，重启..."
-        pm2 restart ${APP_NAME} || { echo "错误：pm2 restart 失败"; exit 1; }
-      else
-        echo "服务不存在，启动..."
-        pm2 start deploy/botler.config.js || { echo "错误：pm2 start 失败"; exit 1; }
-      fi
+      pm2 delete ${APP_NAME} >/dev/null 2>&1 || true
+      pm2 start deploy/botler.config.js || { echo "错误：pm2 start 失败"; exit 1; }
       pm2 save >/dev/null 2>&1 || true
       sleep 3
 
