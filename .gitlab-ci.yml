@@ -224,30 +224,39 @@ deploy_to_code01:
   script:
     - |
       JOB_START_TIME=$(date +%s)
+      # 调试进度日志（部署排查用，job 目录可直接读取）
+      DBG_LOG="$CI_PROJECT_DIR/deploy_progress.log"
+      dbg() { echo "$(date '+%H:%M:%S') [$1] $2" >> "$DBG_LOG"; }
+      dbg START "CI_PROJECT_DIR=$CI_PROJECT_DIR 凭据注入状态: GITLAB_BOT_TOKEN=${GITLAB_BOT_TOKEN:+已注入}${GITLAB_BOT_TOKEN:-未注入} WEBHOOK_SECRET=${WEBHOOK_SECRET:+已注入}${WEBHOOK_SECRET:-未注入}"
 
       # ================================================================
       # 第 1 步：验证前端构建产物（artifacts 下载位置 = FastAPI 托管目录）
       # ================================================================
+      dbg STEP1 "验证前端构建产物"
       echo "=== 1. 验证前端构建产物 ==="
-      ls -la frontend/dist/index.html || { echo "错误：缺少前端构建产物 frontend/dist"; exit 1; }
+      ls -la frontend/dist/index.html >> "$DBG_LOG" 2>&1 || { dbg STEP1 "FAIL: frontend/dist/index.html 不存在"; echo "错误：缺少前端构建产物 frontend/dist"; exit 1; }
 
       # ================================================================
       # 第 2 步：准备后端运行环境（复用跨 job 持久化的 .venv）
       # ================================================================
+      dbg STEP2 "准备后端运行环境"
       echo "=== 2. 准备后端运行环境 ==="
       cd backend
       export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
       if ! command -v uv >/dev/null 2>&1; then
+        dbg STEP2 "uv 不在 PATH，尝试安装"
         pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
           curl -LsSf https://astral.sh/uv/install.sh | sh
         export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
       fi
+      dbg STEP2 "uv: $(command -v uv)"
       if [ ! -x .venv/bin/python ]; then
         rm -rf .venv
         uv venv .venv
       fi
-      uv pip install -r requirements.txt -i ${PIP_INDEX_URL}
+      uv pip install -r requirements.txt -i ${PIP_INDEX_URL} || { dbg STEP2 "FAIL: uv pip install"; exit 1; }
       cd ..
+      dbg STEP2 "OK"
 
       # ================================================================
       # 第 3 步：检查运行时凭据（凭据不入库；CI 变量或 backend/.env 任一提供）
@@ -255,16 +264,22 @@ deploy_to_code01:
       # 直接 export 即可生效，无需 .env 文件；两者都缺则服务必崩
       # （config.yaml 的 ${VAR} 引用无法展开），提前失败并给出指引。
       # ================================================================
+      dbg STEP3 "检查运行时凭据"
       echo "=== 3. 检查运行时凭据 ==="
       if [ ! -f backend/.env ]; then
         echo "⚠️  backend/.env 不存在，检查 CI 变量..."
+        dbg STEP3 "backend/.env 不存在，逐个检查 CI 变量"
         MISSING_VARS=""
         for var in GITLAB_BOT_TOKEN WEBHOOK_SECRET; do
           if [ -z "${!var:-}" ]; then
             MISSING_VARS="${MISSING_VARS} ${var}"
+            dbg STEP3 "缺失: ${var}"
+          else
+            dbg STEP3 "存在: ${var}"
           fi
         done
         if [ -n "${MISSING_VARS}" ]; then
+          dbg STEP3 "FAIL: 凭据缺失 ${MISSING_VARS}"
           echo "❌ 凭据缺失：backend/.env 不存在，且 CI 变量未提供：${MISSING_VARS}"
           echo "   配置方法（推荐）：GitLab 项目 Settings > CI/CD > Variables 添加"
           echo "     GITLAB_BOT_TOKEN — bot 账号 PAT（scope 至少 api + write_repository）"
@@ -272,8 +287,10 @@ deploy_to_code01:
           echo "   或首次手动部署时在 backend/ 创建 .env（参考 backend/.env.example）"
           exit 1
         fi
+        dbg STEP3 "OK: CI 变量已提供全部凭据"
         echo "✓ CI 变量已提供全部凭据（load_dotenv 不覆盖环境变量，无需 .env 文件）"
       else
+        dbg STEP3 "OK: backend/.env 存在"
         echo "✓ backend/.env 存在"
       fi
       if [ ! -f backend/config.yaml ]; then
@@ -286,13 +303,16 @@ deploy_to_code01:
       # ================================================================
       # 第 4 步：确保 pm2 可用（未安装则全局安装）
       # ================================================================
+      dbg STEP4 "确保 pm2 可用"
       echo "=== 4. 确保 pm2 可用 ==="
       export PATH="$(npm config get prefix 2>/dev/null || echo "$HOME/.local"):$PATH"
       if ! command -v pm2 >/dev/null 2>&1; then
         echo "pm2 未安装，全局安装（${NPM_REGISTRY_URL}）..."
-        npm install -g pm2 --registry=${NPM_REGISTRY_URL} || { echo "错误：pm2 安装失败"; exit 1; }
+        dbg STEP4 "安装 pm2..."
+        npm install -g pm2 --registry=${NPM_REGISTRY_URL} || { dbg STEP4 "FAIL: pm2 安装失败"; echo "错误：pm2 安装失败"; exit 1; }
       fi
       echo "pm2: $(pm2 --version)"
+      dbg STEP4 "OK: $(pm2 --version)"
 
       # ================================================================
       # 第 5 步：启动/重启 botler（pm2，配置见 deploy/botler.config.js）
@@ -300,26 +320,34 @@ deploy_to_code01:
       # 进程里），botler.config.js 的修改不会生效。delete + start 确保
       # 每次部署都加载最新配置。
       # ================================================================
+      dbg STEP5 "pm2 delete + start"
       echo "=== 5. 启动 botler 服务 ==="
       pm2 delete ${APP_NAME} >/dev/null 2>&1 || true
-      pm2 start deploy/botler.config.js || { echo "错误：pm2 start 失败"; exit 1; }
+      pm2 start deploy/botler.config.js >> "$DBG_LOG" 2>&1 || { dbg STEP5 "FAIL: pm2 start"; echo "错误：pm2 start 失败"; exit 1; }
       pm2 save >/dev/null 2>&1 || true
+      dbg STEP5 "OK"
       sleep 3
 
       # ================================================================
       # 第 6 步：等待服务就绪（健康检查，失败必须 exit 1 不能假绿）
       # ================================================================
+      dbg STEP6 "健康检查 http://localhost:${DEPLOY_PORT}/api/health"
       echo "=== 6. 等待服务就绪（http://localhost:${DEPLOY_PORT}）==="
       HEALTHY=false
       for i in $(seq 1 ${HEALTHCHECK_RETRIES:-15}); do
         if curl -sf "http://localhost:${DEPLOY_PORT}/api/health" >/dev/null 2>&1; then
           echo "✓ 后端健康检查通过 (${i}s)"
+          dbg STEP6 "OK: 健康检查通过 (${i}s)"
           HEALTHY=true
           break
         fi
         echo "  等待中... (${i}s)"
         sleep 1
       done
+      if [ "$HEALTHY" = false ]; then
+        dbg STEP6 "FAIL: 健康检查 15 次全部失败"
+        dbg STEP6 "pm2 状态: $(pm2 describe ${APP_NAME} 2>/dev/null | grep -E 'status|restarts' | tr '\n' ' ')"
+      fi
 
       # ================================================================
       # 第 7 步：验证部署结果（后端健康 + 前端页面可达）
