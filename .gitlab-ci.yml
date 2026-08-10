@@ -176,12 +176,10 @@ backend:test:
       else
         echo "⚠️  未发现 tests/ 目录，执行语法与导入冒烟检查"
         $PYTHON -m compileall botler -q && echo "✓ 语法检查通过"
-        # config.yaml 被 gitignore，全新 checkout 时用示例兜底（不影响导入冒烟）
-        if [ ! -f config.yaml ]; then
-          cp config.example.yaml config.yaml
-          echo "⚠️  config.yaml 不存在，已用 config.example.yaml 兜底"
-        fi
-        $PYTHON -c "import botler.main; print('✓ botler.main 导入成功')"
+        # ⚠️ 不 import botler.main：模块级 create_app() 会加载 config.yaml，
+        #    凭据环境变量（GITLAB_BOT_TOKEN 等）在 CI 中未设置会导致
+        #    ValueError。仅导入无副作用的顶层包。
+        $PYTHON -c "import botler; print('✓ botler 包导入成功 (v' + botler.__version__ + ')')"
       fi
       STEP4_END=$(date +%s)
       echo "⏱️  步骤4 (运行测试) 用时: $((STEP4_END - STEP4_START)) 秒"
