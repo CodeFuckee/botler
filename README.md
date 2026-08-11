@@ -126,6 +126,8 @@ curl http://localhost:8000/api/health      # {"ok":true,...}
 数据持久化（全部卷挂载，容器重建不丢失）：`data/backend/config.yaml`（Web UI 设置页会写回）、
 `data/backend/.env`（只读）、`data/backend/botler.db`、`data/workspace/`、`data/logs/`。
 容器时区固定为 **Asia/Shanghai**（compose `TZ` 环境变量 + 镜像内 tzdata）。
+CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/codes/botler/data`**
+（显式 export `BOTLER_DATA_DIR`，不随 gitlab-runner 构建目录漂移，构建目录可能被清理）。
 
 可调参数：
 

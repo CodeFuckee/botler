@@ -40,9 +40,11 @@
   pm2 / systemd 仍保留为手动部署备选。
 
 - Docker 部署**数据目录集中到 `data/`、时区固定 Asia/Shanghai**（issue #7 追加需求）：
-  compose 挂载源默认改为 `./data`（即 `/home/ckd/codes/botler/data`），config.yaml /
-  .env / botler.db / workspace / logs 全部集中在 `data/` 下（`BOTLER_DATA_DIR`
-  仍可覆盖）；容器时区固定为亚洲/上海（compose `TZ: Asia/Shanghai` + 镜像安装
+  compose 挂载源默认改为 `./data`（相对部署目录，默认 = `data/` 文件夹），
+  config.yaml / .env / botler.db / workspace / logs 全部集中在 `data/` 下；
+  **CI 部署显式固定 `BOTLER_DATA_DIR=/home/ckd/codes/botler/data`**（用户指定
+  绝对路径，不随 gitlab-runner 构建目录漂移——构建目录可能被清理导致数据
+  丢失）；容器时区固定为亚洲/上海（compose `TZ: Asia/Shanghai` + 镜像安装
   tzdata 并写入 `/etc/localtime`）；`.gitignore` 忽略 `data/` 文件夹；CI
   `deploy_to_code01` 增加旧位置散落数据（backend/.env、config.yaml、botler.db、
   workspace/、logs/）到 `data/` 的**一次性自动迁移**（目标已有文件则保留 data/

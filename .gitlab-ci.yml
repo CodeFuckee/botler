@@ -21,10 +21,12 @@
 #
 # 部署模型（Docker 部署，issue #7 起替代原 pm2 模式）：
 #   - 部署目标就是 gitlab-runner 所在机器（10.0.0.122），shell executor
-#     工作目录跨 job 持久化：data/backend/.env、data/backend/config.yaml、
+#     数据目录固定为 /home/ckd/codes/botler/data（CI 显式 export
+#     BOTLER_DATA_DIR，不随 runner 构建目录漂移——构建目录可能被清理，
+#     历史部署数据曾因此丢失）：data/backend/.env、data/backend/config.yaml、
 #     data/backend/botler.db、data/workspace/、data/logs/ 等运行时文件
-#     天然保留，作为 compose 挂载数据目录（BOTLER_DATA_DIR 默认 ./data，
-#     即 /home/ckd/codes/botler/data；旧位置的散落数据首次自动迁移）
+#     天然保留，作为 compose 挂载数据目录；构建目录/旧代码目录的散落
+#     数据首次自动迁移到 data/
 #   - 前端已打进镜像（Dockerfile 多阶段构建，FastAPI 直接托管），
 #     deploy 不再下载 frontend:build 的 dist 产物
 #   - 容器内 git 操作（执行器 clone/push）凭据：宿主 ~/.git-credentials
@@ -263,9 +265,10 @@ deploy_to_code01:
 
       # ================================================================
       # 第 2 步：数据目录迁移 + 准备运行时凭据 data/backend/.env
-      # compose 挂载自 ./data（BOTLER_DATA_DIR 默认 ./data = 本目录的
-      # data/ 文件夹，如 /home/ckd/codes/botler/data）。历史部署数据曾
-      # 散落在工作目录根（backend/.env、config.yaml、botler.db、
+      # 数据目录固定为 /home/ckd/codes/botler/data（用户指定，不随
+      # gitlab-runner 构建目录漂移——构建目录可能被清理，历史部署数据
+      # 曾因此丢失）。compose 挂载源取 $BOTLER_DATA_DIR。历史部署数据
+      # 曾散落在构建目录根（backend/.env、config.yaml、botler.db、
       # workspace/、logs/），首次切换时自动迁移到 data/ 下，避免
       # 任务记录/配置丢失；data/ 已有对应文件则保留 data/ 版本。
       # 凭据已存在则保留（服务器手动维护的配置优先）；缺失时用 CI
@@ -274,7 +277,8 @@ deploy_to_code01:
       # ================================================================
       dbg STEP2 "迁移旧数据 + 准备 data/backend/.env"
       echo "=== 2. 数据目录迁移 + 准备 data/backend/.env ==="
-      DATA_DIR="$CI_PROJECT_DIR/data"
+      export BOTLER_DATA_DIR=/home/ckd/codes/botler/data
+      DATA_DIR="$BOTLER_DATA_DIR"
       mkdir -p "$DATA_DIR/backend"
       # 2a. 一次性迁移：旧根目录散落数据 → data/（目标已存在则跳过）
       for f in .env config.yaml botler.db botler.db-wal botler.db-shm; do
@@ -364,9 +368,9 @@ deploy_to_code01:
       # ================================================================
       # 第 5 步：构建镜像并启动容器（docker compose up -d --build）
       # 前端/后端/依赖全部打进镜像（Dockerfile 多阶段构建）；配置与
-      # 数据挂载自 ./data（BOTLER_DATA_DIR 默认 ./data = 本目录 data/，
-      # 即 /home/ckd/codes/botler/data，已由第 2 步迁移/准备），容器
-      # 重建不丢数据；NODE_IMAGE / RUNTIME_IMAGE 可用 CI 变量覆盖（国内源）。
+      # 数据挂载自 /home/ckd/codes/botler/data（BOTLER_DATA_DIR 已由
+      # 第 2 步 export 固定，已迁移/准备），容器重建不丢数据；
+      # NODE_IMAGE / RUNTIME_IMAGE 可用 CI 变量覆盖（国内源）。
       # ⚠️ 默认官方源构建失败时（国内网络访问 Docker Hub 超时），
       # 自动改用国内镜像源 docker.m.daocloud.io 重试一次。
       # ================================================================
