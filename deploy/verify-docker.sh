@@ -88,6 +88,11 @@ if [[ "${1:-}" == "--full" ]]; then
   curl -fsS http://127.0.0.1:18000/ | grep -qi 'id="root"' || die "前端页面未正常返回"
   ok "前端首页正常返回（含 #root 挂载点）"
 
+  echo "----- 校验容器时区（Asia/Shanghai）-----"
+  TZ_OUT=$(docker compose -p botler-verify exec -T botler date +%Z) || die "容器内 date 不可用"
+  [ "$TZ_OUT" = "CST" ] || die "容器时区异常: $TZ_OUT（应为 CST = Asia/Shanghai）"
+  ok "容器时区为 Asia/Shanghai（date +%Z = CST）"
+
   echo "----- 幂等性：重复 up 无报错 -----"
   BOTLER_DATA_DIR="$TMP" BOTLER_HTTP_PORT=18000 \
     docker compose -p botler-verify up -d >/dev/null 2>&1 || die "重复 up 失败"

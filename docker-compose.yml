@@ -9,13 +9,15 @@
 #
 # 可调参数（环境变量，均有默认值）:
 #   BOTLER_HTTP_PORT=8000    宿主机映射端口
-#   BOTLER_DATA_DIR=.        数据目录前缀（config.yaml/.env/botler.db/workspace/logs 的挂载来源）
+#   BOTLER_DATA_DIR=./data   数据目录前缀（config.yaml/.env/botler.db/workspace/logs 的挂载来源，
+#                            默认 ./data = 部署目录下 data/ 文件夹，如 /home/ckd/codes/botler/data）
 #
 # 说明:
 #   - 前端已打进镜像（多阶段构建），FastAPI 直接托管，无需 nginx
 #   - 容器内已装 claude CLI，ANTHROPIC_* 凭据经 backend/.env 注入
 #     （后端 load_dotenv 加载后由执行器子进程继承）
 #   - config.yaml 为可写挂载：Web UI 设置页会写回
+#   - 时区固定 Asia/Shanghai（TZ 环境变量 + 镜像内 tzdata 时区库）
 #   - 换数据目录后 botler.db/config.yaml 需一并迁移
 # ================================================================
 
@@ -39,6 +41,8 @@ services:
       BOTLER_CONFIG: /app/backend/config.yaml
       BOTLER_DB: /app/backend/botler.db
       PYTHONPATH: /app/backend
+      # 部署时区固定为亚洲/上海（镜像内已装 tzdata，TZ 环境变量即时生效）
+      TZ: Asia/Shanghai
       # 容器内 git（执行器 clone/push 仓库）凭据：强制 store helper 读取
       # 挂载的凭据文件（容器内无 libsecret/D-Bus，宿主 credential.helper
       # 配置不可用；镜像以 root 运行，凭据文件固定挂载为 /root/.git-credentials）
@@ -47,13 +51,16 @@ services:
       GIT_CONFIG_VALUE_0: store --file=/root/.git-credentials
     volumes:
       # 配置与凭据（挂载文件，改动即生效；.env 只读）
-      - ${BOTLER_DATA_DIR:-.}/backend/config.yaml:/app/backend/config.yaml
-      - ${BOTLER_DATA_DIR:-.}/backend/.env:/app/backend/.env:ro
+      # 默认挂载源为 ./data/（部署目录下 data/ 文件夹，如
+      # /home/ckd/codes/botler/data），config.yaml / .env / botler.db /
+      # workspace / logs 全部集中在 data/ 下，便于备份与 gitignore 隔离
+      - ${BOTLER_DATA_DIR:-./data}/backend/config.yaml:/app/backend/config.yaml
+      - ${BOTLER_DATA_DIR:-./data}/backend/.env:/app/backend/.env:ro
       # SQLite 数据库（仓库/任务记录，容器重建不丢失）
-      - ${BOTLER_DATA_DIR:-.}/backend/botler.db:/app/backend/botler.db
+      - ${BOTLER_DATA_DIR:-./data}/backend/botler.db:/app/backend/botler.db
       # 仓库工作区与任务执行日志
-      - ${BOTLER_DATA_DIR:-.}/workspace:/app/workspace
-      - ${BOTLER_DATA_DIR:-.}/logs:/app/logs
+      - ${BOTLER_DATA_DIR:-./data}/workspace:/app/workspace
+      - ${BOTLER_DATA_DIR:-./data}/logs:/app/logs
       # 容器内 git 凭据（执行器 clone/push 用）。默认挂载 /dev/null 兜底
       # （docker 对不存在的源路径会创建目录导致挂载错位，空凭据无害）；
       # 部署脚本 / verify 脚本 export GIT_CREDENTIALS_FILE 指向真实凭据

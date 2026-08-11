@@ -40,11 +40,16 @@ ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
     BOTLER_CONFIG=/app/backend/config.yaml \
     BOTLER_DB=/app/backend/botler.db \
     PYTHONPATH=/app/backend \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    # 部署时区固定亚洲/上海（tzdata 见下方 apt 安装）
+    TZ=Asia/Shanghai
 
-# git: 执行器工作区必需；curl: healthcheck；python3-venv: 后端虚拟环境
+# git: 执行器工作区必需；curl: healthcheck；python3-venv: 后端虚拟环境；
+# tzdata: 时区库（TZ=Asia/Shanghai 依赖它解析，日志/时间戳按上海时间）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git curl ca-certificates python3 python3-venv python3-pip \
+        git curl ca-certificates python3 python3-venv python3-pip tzdata \
+    && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo Asia/Shanghai > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

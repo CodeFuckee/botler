@@ -39,6 +39,17 @@
   新增 `GIT_CREDENTIALS_FILE` 可调挂载、`deploy/verify-docker.sh` 同步适配。
   pm2 / systemd 仍保留为手动部署备选。
 
+- Docker 部署**数据目录集中到 `data/`、时区固定 Asia/Shanghai**（issue #7 追加需求）：
+  compose 挂载源默认改为 `./data`（即 `/home/ckd/codes/botler/data`），config.yaml /
+  .env / botler.db / workspace / logs 全部集中在 `data/` 下（`BOTLER_DATA_DIR`
+  仍可覆盖）；容器时区固定为亚洲/上海（compose `TZ: Asia/Shanghai` + 镜像安装
+  tzdata 并写入 `/etc/localtime`）；`.gitignore` 忽略 `data/` 文件夹；CI
+  `deploy_to_code01` 增加旧位置散落数据（backend/.env、config.yaml、botler.db、
+  workspace/、logs/）到 `data/` 的**一次性自动迁移**（目标已有文件则保留 data/
+  版本），`.env` 缺失时在 `data/backend/.env` 用 CI 变量生成；`deploy/verify-docker.sh`
+  新增容器时区校验（`date +%Z` = CST）。涉及 `docker-compose.yml`、`Dockerfile`、
+  `.gitignore`、`.gitlab-ci.yml`、`deploy/verify-docker.sh`、`README.md`。
+
 - 「添加仓库」默认方式改为**本地文件夹方式**：打开仓库管理页时默认选中「本地文件夹
   （读取 git remote）」，而非 GitLab URL 方式；切换方式仍可随时手动选择。涉及
   `frontend/src/pages/Repos.jsx`。

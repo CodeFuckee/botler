@@ -14,6 +14,8 @@ frontend/node_modules/
 frontend/dist/
 
 # 运行时数据（部署机器上生成，不入库）
+# Docker 部署数据目录（默认 ./data，即 /home/ckd/codes/botler/data）
+data/
 workspace/
 logs/
 *.log

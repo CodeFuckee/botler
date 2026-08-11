@@ -104,10 +104,11 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 前置条件：Docker 20.10+ / docker compose v2。
 
 ```bash
-# 1. 准备配置（与 pm2/systemd 部署相同）
-cp backend/config.example.yaml backend/config.yaml
-cp backend/.env.example backend/.env      # 填入 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHROPIC_*
-touch backend/botler.db                   # SQLite 库（首次运行自动建表）
+# 1. 准备配置（数据统一放在 data/ 目录下，容器重建不丢；目录不存在会自动创建）
+mkdir -p data/backend
+cp backend/config.example.yaml data/backend/config.yaml
+cp backend/.env.example data/backend/.env   # 填入 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHROPIC_*
+touch data/backend/botler.db                # SQLite 库（首次运行自动建表）
 
 # 2. 构建并启动
 docker compose up -d --build
@@ -119,18 +120,19 @@ docker compose up -d --build
 # 3. 验证
 docker compose ps                          # 状态 healthy
 curl http://localhost:8000/api/health      # {"ok":true,...}
-./deploy/verify-docker.sh --full           # 10 项冒烟检查（临时数据目录，不碰真实数据）
+./deploy/verify-docker.sh --full           # 11 项冒烟检查（临时数据目录，不碰真实数据）
 ```
 
-数据持久化（全部卷挂载，容器重建不丢失）：`backend/config.yaml`（Web UI 设置页会写回）、
-`backend/.env`（只读）、`backend/botler.db`、`workspace/`、`logs/`。
+数据持久化（全部卷挂载，容器重建不丢失）：`data/backend/config.yaml`（Web UI 设置页会写回）、
+`data/backend/.env`（只读）、`data/backend/botler.db`、`data/workspace/`、`data/logs/`。
+容器时区固定为 **Asia/Shanghai**（compose `TZ` 环境变量 + 镜像内 tzdata）。
 
 可调参数：
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `BOTLER_HTTP_PORT` | `8000` | 宿主机映射端口 |
-| `BOTLER_DATA_DIR` | `.` | 数据目录前缀（换目录时 config.yaml / botler.db 需一并迁移） |
+| `BOTLER_DATA_DIR` | `./data` | 数据目录前缀（换目录时 config.yaml / botler.db 需一并迁移） |
 | `NODE_IMAGE` / `RUNTIME_IMAGE` | 官方镜像 | 构建基础镜像覆盖（国内镜像源） |
 | `GIT_CREDENTIALS_FILE` | `/dev/null` | 容器内 git 凭据文件（挂载为 `/root/.git-credentials`，执行器 clone/push 仓库依赖；CI 部署自动用宿主凭据或 `GITLAB_BOT_TOKEN` 生成，手动部署可指向任意格式的 `.git-credentials` 文件） |
 

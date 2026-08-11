@@ -21,14 +21,16 @@
 #
 # 部署模型（Docker 部署，issue #7 起替代原 pm2 模式）：
 #   - 部署目标就是 gitlab-runner 所在机器（10.0.0.122），shell executor
-#     工作目录跨 job 持久化：backend/.env、backend/config.yaml、botler.db、
-#     workspace/、logs/ 等运行时文件天然保留，作为 compose 挂载数据目录
-#     （BOTLER_DATA_DIR 默认 "."）
+#     工作目录跨 job 持久化：data/backend/.env、data/backend/config.yaml、
+#     data/backend/botler.db、data/workspace/、data/logs/ 等运行时文件
+#     天然保留，作为 compose 挂载数据目录（BOTLER_DATA_DIR 默认 ./data，
+#     即 /home/ckd/codes/botler/data；旧位置的散落数据首次自动迁移）
 #   - 前端已打进镜像（Dockerfile 多阶段构建，FastAPI 直接托管），
 #     deploy 不再下载 frontend:build 的 dist 产物
 #   - 容器内 git 操作（执行器 clone/push）凭据：宿主 ~/.git-credentials
 #     或 GITLAB_BOT_TOKEN 生成，挂载为容器 /root/.git-credentials
-#   - 凭据（backend/.env、.git-credentials，gitignore 排除）不入库、不进日志
+#   - 容器时区固定 Asia/Shanghai（compose TZ + 镜像 tzdata）
+#   - 凭据（data/backend/.env、.git-credentials，gitignore 排除）不入库、不进日志
 # ================================================================
 
 stages:
@@ -260,41 +262,62 @@ deploy_to_code01:
       dbg STEP1 "OK"
 
       # ================================================================
-      # 第 2 步：准备运行时凭据 backend/.env（凭据不入库）
-      # 已存在则保留（服务器手动维护的配置优先）；缺失时用 CI 变量
-      # 生成。容器经卷挂载读取（compose 挂载 :ro），后端 load_dotenv
-      # 加载 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHROPIC_* 等。
+      # 第 2 步：数据目录迁移 + 准备运行时凭据 data/backend/.env
+      # compose 挂载自 ./data（BOTLER_DATA_DIR 默认 ./data = 本目录的
+      # data/ 文件夹，如 /home/ckd/codes/botler/data）。历史部署数据曾
+      # 散落在工作目录根（backend/.env、config.yaml、botler.db、
+      # workspace/、logs/），首次切换时自动迁移到 data/ 下，避免
+      # 任务记录/配置丢失；data/ 已有对应文件则保留 data/ 版本。
+      # 凭据已存在则保留（服务器手动维护的配置优先）；缺失时用 CI
+      # 变量生成。容器经卷挂载读取（compose 挂载 :ro），后端
+      # load_dotenv 加载 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHROPIC_* 等。
       # ================================================================
-      dbg STEP2 "准备 backend/.env"
-      echo "=== 2. 准备 backend/.env ==="
-      if [ ! -f backend/.env ]; then
-        dbg STEP2 "backend/.env 不存在，尝试用 CI 变量生成"
+      dbg STEP2 "迁移旧数据 + 准备 data/backend/.env"
+      echo "=== 2. 数据目录迁移 + 准备 data/backend/.env ==="
+      DATA_DIR="$CI_PROJECT_DIR/data"
+      mkdir -p "$DATA_DIR/backend"
+      # 2a. 一次性迁移：旧根目录散落数据 → data/（目标已存在则跳过）
+      for f in .env config.yaml botler.db botler.db-wal botler.db-shm; do
+        if [ -f "backend/$f" ] && [ ! -e "$DATA_DIR/backend/$f" ]; then
+          mv "backend/$f" "$DATA_DIR/backend/$f"
+          echo "✓ 迁移 backend/$f → data/backend/$f"
+        fi
+      done
+      for d in workspace logs; do
+        if [ -d "$d" ] && [ ! -e "$DATA_DIR/$d" ]; then
+          mv "$d" "$DATA_DIR/$d"
+          echo "✓ 迁移 $d/ → data/$d"
+        fi
+      done
+      # 2b. 凭据准备（读写在 data/backend/.env）
+      if [ ! -f "$DATA_DIR/backend/.env" ]; then
+        dbg STEP2 "data/backend/.env 不存在，尝试用 CI 变量生成"
         if [ -z "${GITLAB_BOT_TOKEN:-}" ] && [ -z "${WEBHOOK_SECRET:-}" ]; then
           dbg STEP2 "FAIL: 凭据缺失"
-          echo "❌ 凭据缺失：backend/.env 不存在，且 CI 变量未提供"
+          echo "❌ 凭据缺失：data/backend/.env 不存在，且 CI 变量未提供"
           echo "   GITLAB_BOT_TOKEN / WEBHOOK_SECRET"
           echo "   配置方法（推荐）：GitLab 项目 Settings > CI/CD > Variables 添加"
           echo "     GITLAB_BOT_TOKEN — bot 账号 PAT（scope 至少 api + write_repository）"
           echo "     WEBHOOK_SECRET   — webhook 校验 secret（如 openssl rand -hex 32）"
-          echo "   或首次手动部署时在 backend/ 创建 .env（参考 backend/.env.example）"
+          echo "   或首次手动部署时在 data/backend/ 创建 .env（参考 backend/.env.example）"
           exit 1
         fi
-        : > backend/.env
+        : > "$DATA_DIR/backend/.env"
         for var in GITLAB_BOT_TOKEN WEBHOOK_SECRET ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL; do
-          [ -n "${!var:-}" ] && echo "${var}=${!var}" >> backend/.env
+          [ -n "${!var:-}" ] && echo "${var}=${!var}" >> "$DATA_DIR/backend/.env"
         done
-        chmod 600 backend/.env
-        echo "✓ 已用 CI 变量生成 backend/.env（变量：$(cut -d= -f1 backend/.env | paste -sd ',' -)）"
+        chmod 600 "$DATA_DIR/backend/.env"
+        echo "✓ 已用 CI 变量生成 data/backend/.env（变量：$(cut -d= -f1 "$DATA_DIR/backend/.env" | paste -sd ',' -)）"
         dbg STEP2 "OK: CI 变量生成"
       else
-        echo "✓ backend/.env 已存在（保留服务器配置）"
+        echo "✓ data/backend/.env 已存在（保留服务器配置）"
         dbg STEP2 "OK: 已存在"
       fi
-      if [ ! -f backend/config.yaml ]; then
-        echo "⚠️  backend/config.yaml 不存在，用示例配置兜底"
-        cp backend/config.example.yaml backend/config.yaml
+      if [ ! -f "$DATA_DIR/backend/config.yaml" ]; then
+        echo "⚠️  data/backend/config.yaml 不存在，用示例配置兜底"
+        cp backend/config.example.yaml "$DATA_DIR/backend/config.yaml"
       else
-        echo "✓ backend/config.yaml 存在"
+        echo "✓ data/backend/config.yaml 存在"
       fi
 
       # ================================================================
@@ -341,8 +364,9 @@ deploy_to_code01:
       # ================================================================
       # 第 5 步：构建镜像并启动容器（docker compose up -d --build）
       # 前端/后端/依赖全部打进镜像（Dockerfile 多阶段构建）；配置与
-      # 数据挂载自工作目录（BOTLER_DATA_DIR 默认 "."），容器重建不丢
-      # 数据；NODE_IMAGE / RUNTIME_IMAGE 可用 CI 变量覆盖（国内源）。
+      # 数据挂载自 ./data（BOTLER_DATA_DIR 默认 ./data = 本目录 data/，
+      # 即 /home/ckd/codes/botler/data，已由第 2 步迁移/准备），容器
+      # 重建不丢数据；NODE_IMAGE / RUNTIME_IMAGE 可用 CI 变量覆盖（国内源）。
       # ⚠️ 默认官方源构建失败时（国内网络访问 Docker Hub 超时），
       # 自动改用国内镜像源 docker.m.daocloud.io 重试一次。
       # ================================================================
