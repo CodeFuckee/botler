@@ -64,6 +64,10 @@ def get_settings(request: Request):
         "browse": {
             "default_path": s.browse_default_path or "",
         },
+        "backup": {
+            "enabled": s.backup_enabled,
+            "retention_days": s.backup_retention_days,
+        },
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -95,6 +99,11 @@ def update_settings(request: Request, body: dict):
     if browse is not None:
         _validate_browse(browse)
         c.config.update_browse(browse)
+
+    backup = body.get("backup")
+    if backup is not None:
+        _validate_backup(backup)
+        c.config.update_backup(backup)
 
     return get_settings(request)
 
@@ -142,6 +151,16 @@ def _validate_browse(patch: dict) -> None:
             raise HTTPException(400, "browse.default_path 必须是字符串（留空 = 服务器用户主目录）")
         # 空串/空白 = 清空配置，回退默认主目录
         patch["default_path"] = val.strip() or None
+
+
+def _validate_backup(patch: dict) -> None:
+    """校验 backup 段：enabled 布尔、retention_days 1~365 正整数。"""
+    if "enabled" in patch and not isinstance(patch["enabled"], bool):
+        raise HTTPException(400, "backup.enabled 必须是布尔值")
+    if "retention_days" in patch:
+        val = patch["retention_days"]
+        if not isinstance(val, int) or isinstance(val, bool) or not 1 <= val <= 365:
+            raise HTTPException(400, "backup.retention_days 必须是 1~365 的整数（天）")
 
 
 def ctx_of(request: Request):

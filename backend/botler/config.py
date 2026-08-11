@@ -71,6 +71,8 @@ class Settings:
     claude_args: list[str] = field(default_factory=lambda: ["-p", "--output-format", "json"])
     default_template: str = ""
     browse_default_path: str | None = None
+    backup_enabled: bool = True
+    backup_retention_days: int = 30
     repos: list[RepoConfig] = field(default_factory=list)
 
 
@@ -80,6 +82,7 @@ KNOWN_FIELDS = {
     "claude": {"command", "args"},
     "templates": {"default"},
     "browse": {"default_path"},
+    "backup": {"enabled", "retention_days"},
 }
 
 DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以下指派给你的 issue：
@@ -128,6 +131,7 @@ class ConfigManager:
         claude = data.get("claude", {})
         tpl = data.get("templates", {})
         browse = data.get("browse", {})
+        backup = data.get("backup", {})
         repos_raw = data.get("repos", []) or []
 
         repos = []
@@ -158,6 +162,8 @@ class ConfigManager:
             claude_args=claude.get("args", ["-p", "--output-format", "json"]),
             default_template=tpl.get("default", DEFAULT_TEMPLATE),
             browse_default_path=browse.get("default_path") or None,
+            backup_enabled=bool(backup.get("enabled", True)),
+            backup_retention_days=int(backup.get("retention_days", 30)),
             repos=repos,
         )
 
@@ -205,6 +211,17 @@ class ConfigManager:
         for key in KNOWN_FIELDS["browse"]:
             if key in patch:
                 browse[key] = patch[key]
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_backup(self, patch: dict[str, Any]) -> Settings:
+        """更新 backup 配置并写回（定时备份开关 / 保留天数）。"""
+        self.get()  # 确保 _data 已加载（避免未 load 时写盘覆盖配置）
+        backup = self._data.setdefault("backup", {})
+        for key in KNOWN_FIELDS["backup"]:
+            if key in patch:
+                backup[key] = patch[key]
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

@@ -46,6 +46,11 @@ browse:
   # 配置的路径不存在时自动回退主目录，不会导致对话框打不开。
   default_path: ""
 
+backup:
+  # 备份与恢复（config.yaml + botler.db → <数据目录>/backups/botler-backup-*.tar.gz）
+  enabled: true            # 定时备份开关（每天 03:00 Asia/Shanghai 自动备份）
+  retention_days: 30       # 保留策略：只保留最近 N 天的备份（清理更旧的）
+
 # 仓库列表（在 Web UI 添加仓库时会自动写入这里）
 repos: []
 

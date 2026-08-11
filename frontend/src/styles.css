@@ -212,6 +212,10 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .btn-danger { color: var(--err); }
 .btn-danger:hover { background: var(--err-weak); border-color: var(--err); }
+.btn-sm { padding: 3px 10px; font-size: 12px; }
+.btn-upload { cursor: pointer; }
+.btn-upload:hover { background: var(--bg-hover); border-color: var(--border-hover); }
+.checkbox-label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 
 .saved-hint { color: var(--ok); }
 

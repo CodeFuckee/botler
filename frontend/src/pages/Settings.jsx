@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
+import BackupManager from '../components/BackupManager.jsx'
 
 const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
@@ -119,6 +120,8 @@ export default function Settings() {
             : '（未配置 ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY，请检查 .env）'}
         </p>
       </div>
+
+      <BackupManager />
 
       <div className="card">
         <h2>GitLab 凭据（只读）</h2>

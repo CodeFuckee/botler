@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import router as api_router
+from .backup import BotlerBackup
 from .config import ConfigManager
 from .database import Database
 from .executor import ClaudeExecutor
@@ -54,6 +55,7 @@ class AppContext:
     scheduler: TaskScheduler
     reconciler: Reconciler
     webhook: WebhookHandler
+    backup: BotlerBackup
     config_path: str = ""
 
 
@@ -70,10 +72,11 @@ def build_context(config_path: str | None = None) -> AppContext:
     scheduler = TaskScheduler(config, db, executor)
     reconciler = Reconciler(config, db, gitlab, scheduler)
     webhook = WebhookHandler(config, db, gitlab, scheduler)
+    backup = BotlerBackup(config.path, db.path, config=config)
     return AppContext(
         config=config, db=db, gitlab=gitlab, renderer=renderer,
         executor=executor, scheduler=scheduler, reconciler=reconciler,
-        webhook=webhook, config_path=config.path,
+        webhook=webhook, backup=backup, config_path=config.path,
     )
 
 
@@ -112,10 +115,12 @@ async def lifespan(app: FastAPI):
         logger.warning("启动时无法连接 GitLab（对账/入队将重试）: %s", e)
     ctx.scheduler.start()
     ctx.reconciler.start()
+    ctx.backup.start_scheduler()
     logger.info("Botler 启动完成")
     yield
     ctx.scheduler.stop()
     ctx.reconciler.stop()
+    ctx.backup.stop_scheduler()
     logger.info("Botler 已停止")
 
 

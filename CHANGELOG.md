@@ -6,6 +6,26 @@
 
 ### Added
 
+- 新增**备份与恢复**功能（issue #5）：备份范围为 `config.yaml` + `botler.db`
+  （SQLite，用 sqlite backup API 生成一致性快照，WAL 下安全），打包为
+  `botler-backup-<时间戳>.tar.gz` 存于服务器 `data/backups/`（compose 新增挂载）。
+  - 触发：手动（设置页「立即备份」/ `POST /api/backups`）+ 定时（每天 03:00
+    Asia/Shanghai，`backup.enabled` 开关）；保留策略按 `retention_days`（前端
+    可配置 1~365，默认 30）清理更旧备份。
+  - 恢复：Web UI 上传备份文件 / 选择服务器历史备份（`POST /api/backups/restore`
+    与 `/restore/upload`），校验成员名白名单（防路径穿越）+ manifest sha256
+    校验和（缺 manifest / 篡改文件拒绝恢复），覆盖数据后 `os.execv` 自动重启
+    进程（Docker / pm2 / systemd / dev 通用；重启后 running 任务自动重新入队）。
+  - API：`GET/POST /api/backups`、`GET /api/backups/{name}/download`、
+    `DELETE /api/backups/{name}`；settings API 新增 `backup` 段。
+  - 涉及 `backend/botler/backup.py`（新）、`backend/botler/api/backup.py`（新）、
+    `config.py`（KNOWN_FIELDS + Settings 新字段）、`api/settings.py`、`main.py`
+    （AppContext + 定时任务启停）、`docker-compose.yml`（backups 挂载）、
+    `frontend/src/components/BackupManager.jsx`（新，设置页备份管理卡片）、
+    `frontend/src/api.js`（下载/上传封装）。新增 `backend/tests/test_backup.py`
+    （21 个用例，含路径穿越 / 损坏包 / 校验和失败 / WAL 一致性 / 保留清理等
+    边界）与 `test_api_backup.py`（17 个用例）。
+
 - 任务列表**详细失败原因**查看（issue #4 追加需求）：失败摘要之外，executor 每次
   尝试失败时都会提取错误信息（claude JSON 输出中优先提取 `Traceback` 堆栈，否则
   取输出尾部），连同退出码按尝试次数序列化写入 `tasks.error_detail`；任务列表
