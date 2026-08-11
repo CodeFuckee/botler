@@ -104,16 +104,23 @@ def list_repos(request: Request):
 
 
 @router.get("/browse")
-def browse_directories(path: str = "/"):
+def browse_directories(request: Request, path: str | None = None):
     """列出服务器上指定路径的子目录（前端目录选择对话框逐级浏览用）。
 
     返回当前路径、父路径与子目录列表；每个子目录标记是否为 git 仓库、
     是否可读。伪文件系统（/proc、/sys 等）不展示。
-    """
-    from ..dir_browse import DirBrowseError, list_subdirectories
 
+    path 缺省或为空时，定位到配置的默认初始目录（browse.default_path，
+    未配置则回退服务器用户主目录 ~），供对话框打开时初始定位使用；
+    显式传 path=/ 仍从根目录开始浏览。
+    """
+    from ..dir_browse import DirBrowseError, list_subdirectories, resolve_default_path
+
+    target = path.strip() if path else ""
+    if not target:
+        target = resolve_default_path(request.app.state.ctx.config.get().browse_default_path)
     try:
-        return list_subdirectories(path.strip() or "/")
+        return list_subdirectories(target)
     except DirBrowseError as e:
         raise HTTPException(400, str(e))
 

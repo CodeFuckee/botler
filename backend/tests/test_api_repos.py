@@ -1,5 +1,6 @@
 """仓库管理 API 测试：本地文件夹方式添加仓库（discover + add_repo with local_path）。"""
 
+import os
 import subprocess
 from types import SimpleNamespace
 
@@ -173,18 +174,19 @@ class TestBrowseDirectories:
         by_name = {d["name"]: d for d in resp.json()["subdirs"]}
         assert by_name["repo"]["is_git"] is True
 
-    def test_browse_default_path_is_root(self, client):
+    def test_browse_without_path_uses_home(self, client):
+        """不带 path 时初始定位到服务器用户主目录（默认初始目录）。"""
         tc, stub, tmp_path = client
         resp = tc.get("/api/repos/browse")
         assert resp.status_code == 200
-        assert resp.json()["path"] == "/"
+        assert resp.json()["path"] == os.path.expanduser("~")
 
-    def test_browse_blank_path_uses_root(self, client):
-        """空 path 参数不应解析到服务进程工作目录，回退到根目录。"""
+    def test_browse_blank_path_uses_default(self, client):
+        """空 path 参数走默认初始目录（而非解析到进程工作目录）。"""
         tc, stub, tmp_path = client
         resp = tc.get("/api/repos/browse", params={"path": "  "})
         assert resp.status_code == 200
-        assert resp.json()["path"] == "/"
+        assert resp.json()["path"] == os.path.expanduser("~")
 
     def test_browse_missing_path_returns_400(self, client):
         tc, stub, tmp_path = client
@@ -198,3 +200,28 @@ class TestBrowseDirectories:
         f.write_text("x")
         resp = tc.get("/api/repos/browse", params={"path": str(f)})
         assert resp.status_code == 400
+
+
+class TestBrowseDefaultPath:
+    def test_configured_default_path_used(self, client, tmp_path):
+        """配置了 browse.default_path 时，不带 path 请求定位到该目录。"""
+        tc, stub, _ = client
+        target = tmp_path / "custom-start"
+        target.mkdir()
+        # 在配置文件中写入 default_path 后重新加载
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            CONFIG_TEXT.replace("worker: {}", f"worker: {{}}\nbrowse:\n  default_path: {target}"),
+            encoding="utf-8",
+        )
+        resp = tc.get("/api/repos/browse")
+        assert resp.status_code == 200
+        assert resp.json()["path"] == str(target)
+
+    def test_explicit_root_still_works(self, client):
+        """显式 path=/ 仍浏览根目录（用户手动跳转不受影响）。"""
+        tc, stub, tmp_path = client
+        resp = tc.get("/api/repos/browse", params={"path": "/"})
+        assert resp.status_code == 200
+        assert resp.json()["path"] == "/"
+        assert resp.json()["parent"] is None

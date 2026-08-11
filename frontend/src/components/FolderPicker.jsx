@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 
 /**
- * 服务器目录选择对话框：浏览服务器文件系统（从 / 开始），
+ * 服务器目录选择对话框：浏览服务器文件系统，
  * 点击目录进入子级、返回上级、路径输入跳转，底部「选择此文件夹」确认。
  * 用于「本地文件夹方式添加仓库」时挑选服务器上的 git 仓库目录。
+ * 打开时无初始路径则从服务端默认初始目录开始（browse.default_path，
+ * 未配置时为服务器用户主目录 ~）。
  */
 export default function FolderPicker({ open, initialPath, onSelect, onClose }) {
   const [currentPath, setCurrentPath] = useState('/')
@@ -31,9 +33,9 @@ export default function FolderPicker({ open, initialPath, onSelect, onClose }) {
     }
   }
 
-  // 打开对话框时从当前表单路径（或 /）开始浏览
+  // 打开对话框时从当前表单路径开始浏览；无路径则交给后端默认初始目录
   useEffect(() => {
-    if (open) load(initialPath || '/')
+    if (open) load(initialPath || '')
   }, [open, initialPath])
 
   // ESC 关闭

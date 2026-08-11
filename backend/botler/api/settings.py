@@ -61,6 +61,9 @@ def get_settings(request: Request):
         "templates": {
             "default": s.default_template,
         },
+        "browse": {
+            "default_path": s.browse_default_path or "",
+        },
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -87,6 +90,11 @@ def update_settings(request: Request, body: dict):
     tpl = body.get("templates")
     if tpl is not None and "default" in tpl:
         c.config.update_default_template(tpl["default"])
+
+    browse = body.get("browse")
+    if browse is not None:
+        _validate_browse(browse)
+        c.config.update_browse(browse)
 
     return get_settings(request)
 
@@ -125,6 +133,15 @@ def _validate_claude(patch: dict) -> None:
         raise HTTPException(400, "claude.command 必须是字符串")
     if "args" in patch and (not isinstance(patch["args"], list) or not all(isinstance(a, str) for a in patch["args"])):
         raise HTTPException(400, "claude.args 必须是字符串数组")
+
+
+def _validate_browse(patch: dict) -> None:
+    if "default_path" in patch:
+        val = patch["default_path"]
+        if not isinstance(val, str):
+            raise HTTPException(400, "browse.default_path 必须是字符串（留空 = 服务器用户主目录）")
+        # 空串/空白 = 清空配置，回退默认主目录
+        patch["default_path"] = val.strip() or None
 
 
 def ctx_of(request: Request):

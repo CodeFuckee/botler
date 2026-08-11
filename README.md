@@ -106,6 +106,7 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
 | `claude.command` / `args` | `claude -p --output-format json` | 执行命令 |
+| `browse.default_path` | 空（服务器用户主目录 `~`） | 目录选择对话框的初始定位目录；支持 `~` 展开，路径不存在时自动回退主目录 |
 
 提示词模版支持变量占位符：`{repo_name}` `{issue_title}` `{issue_body}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}`。
 全局默认模版 + 仓库级覆盖可在 Web UI「模版」页编辑。
@@ -116,7 +117,7 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 GET    /api/health                    健康检查
 GET    /api/repos                     仓库列表
 POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook）
-GET    /api/repos/browse              浏览服务器目录（目录选择对话框逐级浏览用）
+GET    /api/repos/browse              浏览服务器目录（无 path 时初始定位到 browse.default_path，默认服务器用户主目录 ~）
 POST   /api/repos/discover            读取本地文件夹的 git remote 列表
 PUT    /api/repos/{id}                更新仓库（启用/停用/模版覆盖）
 DELETE /api/repos/{id}                删除仓库

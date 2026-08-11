@@ -1,4 +1,4 @@
-"""目录浏览模块测试（list_subdirectories）。
+"""目录浏览模块测试（list_subdirectories / resolve_default_path）。
 
 供「本地文件夹方式添加仓库」的目录选择对话框使用：
 前端浏览服务器文件系统时逐级获取子目录列表。
@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import botler.dir_browse as dir_browse
-from botler.dir_browse import DirBrowseError, list_subdirectories
+from botler.dir_browse import DirBrowseError, list_subdirectories, resolve_default_path
 
 
 def _names(result: dict) -> list[str]:
@@ -148,3 +148,50 @@ class TestListSubdirectoriesRoot:
         assert result["parent"] is None
         # 真实根目录下的标准目录应出现（CI 环境可读）
         assert "etc" in _names(result)
+
+
+class TestResolveDefaultPath:
+    """resolve_default_path：目录选择对话框的初始定位目录。
+
+    优先级：配置值（~ 展开、相对路径基于服务器工作目录）→ 服务器用户主目录 → /。
+    """
+
+    def test_none_returns_home(self):
+        assert resolve_default_path(None) == os.path.expanduser("~")
+
+    def test_empty_returns_home(self):
+        assert resolve_default_path("") == os.path.expanduser("~")
+        assert resolve_default_path("   ") == os.path.expanduser("~")
+
+    def test_tilde_alone_returns_home(self):
+        assert resolve_default_path("~") == os.path.expanduser("~")
+
+    def test_tilde_expanded_to_existing_subdir(self, tmp_path, monkeypatch):
+        """配置为 ~/xxx 且存在时展开到该子目录（不依赖真实主目录）。"""
+        sub = tmp_path / "projects"
+        sub.mkdir()
+        monkeypatch.setattr(dir_browse.os.path, "expanduser", lambda p: str(sub) if p.startswith("~") else p)
+        assert resolve_default_path("~/projects") == str(sub)
+
+    def test_absolute_path_kept(self, tmp_path):
+        assert resolve_default_path(str(tmp_path)) == str(tmp_path)
+
+    def test_relative_path_resolved_from_cwd(self, tmp_path, monkeypatch):
+        """相对路径基于服务器工作目录解析。"""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(tmp_path)
+        assert resolve_default_path("sub") == str(sub)
+
+    def test_missing_configured_path_falls_back_to_home(self):
+        assert resolve_default_path("/nonexistent/xyz") == os.path.expanduser("~")
+
+    def test_file_path_falls_back_to_home(self, tmp_path):
+        f = tmp_path / "file.txt"
+        f.write_text("x")
+        assert resolve_default_path(str(f)) == os.path.expanduser("~")
+
+    def test_home_unavailable_falls_back_to_root(self, monkeypatch):
+        """主目录也不可用时回退根目录 /。"""
+        monkeypatch.setattr(dir_browse.os.path, "expanduser", lambda p: "/nonexistent-home")
+        assert resolve_default_path(None) == "/"

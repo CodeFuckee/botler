@@ -191,7 +191,7 @@ export default function Repos() {
 
       <FolderPicker
         open={pickerOpen}
-        initialPath={form.local_path || '/'}
+        initialPath={form.local_path || ''}
         onSelect={handlePickFolder}
         onClose={() => setPickerOpen(false)}
       />

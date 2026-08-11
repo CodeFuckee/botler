@@ -70,6 +70,7 @@ class Settings:
     claude_command: str = "claude"
     claude_args: list[str] = field(default_factory=lambda: ["-p", "--output-format", "json"])
     default_template: str = ""
+    browse_default_path: str | None = None
     repos: list[RepoConfig] = field(default_factory=list)
 
 
@@ -78,6 +79,7 @@ KNOWN_FIELDS = {
     "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries", "reconcile_interval_seconds"},
     "claude": {"command", "args"},
     "templates": {"default"},
+    "browse": {"default_path"},
 }
 
 DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以下指派给你的 issue：
@@ -125,6 +127,7 @@ class ConfigManager:
         worker = data.get("worker", {})
         claude = data.get("claude", {})
         tpl = data.get("templates", {})
+        browse = data.get("browse", {})
         repos_raw = data.get("repos", []) or []
 
         repos = []
@@ -154,6 +157,7 @@ class ConfigManager:
             claude_command=claude.get("command", "claude"),
             claude_args=claude.get("args", ["-p", "--output-format", "json"]),
             default_template=tpl.get("default", DEFAULT_TEMPLATE),
+            browse_default_path=browse.get("default_path") or None,
             repos=repos,
         )
 
@@ -190,6 +194,17 @@ class ConfigManager:
 
     def update_default_template(self, text: str) -> Settings:
         self._data.setdefault("templates", {})["default"] = text
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_browse(self, patch: dict[str, Any]) -> Settings:
+        """更新 browse 配置并写回（目录选择对话框初始定位目录）。"""
+        self.get()  # 确保 _data 已加载（避免未 load 时写盘覆盖配置）
+        browse = self._data.setdefault("browse", {})
+        for key in KNOWN_FIELDS["browse"]:
+            if key in patch:
+                browse[key] = patch[key]
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

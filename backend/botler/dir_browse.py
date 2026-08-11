@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +22,25 @@ DEFAULT_MAX_ENTRIES = 500
 
 class DirBrowseError(Exception):
     """路径不存在、不是目录或无法读取。"""
+
+
+def resolve_default_path(configured: str | None = None) -> str:
+    """解析目录选择对话框的初始定位目录。
+
+    优先级：配置值（支持 ~ 展开、相对路径基于服务器工作目录解析）→
+    服务器用户主目录 → 根目录 /。配置的路径不存在或不是目录时回退
+    主目录；主目录也不可用时回退 /，保证对话框始终能打开。
+    """
+    candidates: list[str] = []
+    if configured and configured.strip():
+        candidates.append(os.path.expanduser(configured.strip()))
+    candidates.append(os.path.expanduser("~"))
+    for c in candidates:
+        real = os.path.realpath(c)
+        if os.path.isdir(real):
+            return real
+        logger.warning("目录浏览默认路径不可用（回退下一个候选）: %s", c)
+    return "/"
 
 
 def _is_pseudo_fs(path: str) -> bool:
