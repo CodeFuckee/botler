@@ -31,6 +31,7 @@
 stages:
   - build
   - deploy
+  - sync
 
 # ================================================================
 # 全局变量
@@ -390,3 +391,116 @@ deploy_to_code01:
       echo "========================================="
       echo "⏱️  [deploy_to_code01] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
       echo "========================================="
+
+# ================================================================
+# Stage: sync —— GitHub 镜像同步（剔除 .gitlab-ci.yml + 内部信息脱敏）
+# 在每次 main 分支 push 的流水线全部成功后，把本次提交镜像到
+# GitHub（CodeFuckee/botler，公开展示用；参考 Shipyard 的
+# sync_to_github，同账号同模式）。GitHub 仓库不需要 GitLab 专有
+# CI 配置，同步时剔除 .gitlab-ci.yml；同时对所有包含内部地址的
+# 文件做脱敏（自建 GitLab 域名、内网服务器 IP 替换为 RFC 2606
+# 示例占位符），合并为一个 commit 后 force push，镜像历史由本
+# job 全权维护。
+#
+# 脱敏规则（同步前对工作区文本文件全局替换，.gitlab-ci.yml 已
+# 剔除、不进 GitHub）：
+#   home.chenkaidi.top:509  →  gitlab.example.com
+#   10.0.0.122              →  your-server.example.com
+# 文件按内容动态扫描，未来新增含内部地址的文件也会被覆盖。
+#
+# 前提：GitLab CI/CD 变量 GITHUB_PUSH_TOKEN（GitHub PAT，需对
+#       botler 仓库有写权限，建议勾选 Masked + Protected）。
+#       未配置时本 job 跳过（exit 0），不影响主流水线。
+# ================================================================
+sync_to_github:
+  stage: sync
+  tags:
+    - linux
+    - code01
+  variables:
+    # 本 job 用完整克隆（CI_REPOSITORY_URL）重新检出，不需要 runner 的 checkout
+    GIT_STRATEGY: none
+  # 仅 main 分支的 push 流水线触发；同步 commit 带 [skip ci]，
+  # 不触发流水线，不会造成同步循环
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+  script:
+    - |
+      set -e
+      echo "=== GitHub 镜像同步（CodeFuckee/botler：剔除 .gitlab-ci.yml + 脱敏）==="
+
+      # ⚠️ code01 上存在全局代理环境变量（会干扰外网直连），
+      # 与 deploy_to_code01 一致：先清理代理再走外网
+      unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+      export NO_PROXY="localhost,127.0.0.1,::1"
+      export no_proxy="$NO_PROXY"
+
+      # 未配置 token 时跳过（不影响主流水线）：
+      # 配置位置：Settings > CI/CD > Variables，键名 GITHUB_PUSH_TOKEN，
+      # 值用 GitHub PAT（repo 写权限），勾选 Masked + Protected
+      if [ -z "${GITHUB_PUSH_TOKEN:-}" ]; then
+        echo "⚠️ 未配置 GITHUB_PUSH_TOKEN，跳过 GitHub 同步"
+        echo "   配置方法：GitLab 项目 Settings > CI/CD > Variables 添加"
+        echo "   GITHUB_PUSH_TOKEN = <GitHub PAT>（勾选 Masked + Protected）"
+        exit 0
+      fi
+
+      # 完整克隆当前仓库（CI_JOB_TOKEN 只读权限即可），检出本次提交
+      # （不用浅克隆：force push 浅历史会导致 GitHub 侧提交链断裂）
+      SYNC_DIR="/tmp/sync-github-botler"
+      rm -rf "${SYNC_DIR}"
+      git clone --quiet "${CI_REPOSITORY_URL}" "${SYNC_DIR}"
+      cd "${SYNC_DIR}"
+      git checkout --quiet "${CI_COMMIT_SHA}"
+      echo "✓ 已检出提交 ${CI_COMMIT_SHA}"
+
+      # 剔除 .gitlab-ci.yml（GitHub 镜像不需要 GitLab 专有配置）
+      git rm --quiet .gitlab-ci.yml
+
+      # ----------------------------------------------------------
+      # 脱敏：内部地址替换为示例占位符（RFC 2606 保留域名，不指向
+      # 真实主机）。扫描对象 = git 跟踪的全部文本文件（git rm
+      # .gitlab-ci.yml 后已不含 CI 文件；node_modules 等未跟踪
+      # 目录天然排除），不受扩展名限制，未来新增文件含内部
+      # 地址也会被覆盖。
+      # ----------------------------------------------------------
+      SENSITIVE_FILES=$(git ls-files -z | xargs -0 grep -lI \
+        'home\.chenkaidi\.top:509\|10\.0\.0\.122' 2>/dev/null || true)
+      if [ -n "${SENSITIVE_FILES}" ]; then
+        for f in ${SENSITIVE_FILES}; do
+          sed -i 's|home\.chenkaidi\.top:509|gitlab.example.com|g; s|10\.0\.0\.122|your-server.example.com|g' "$f"
+          echo "🔒 已脱敏: ${f}"
+        done
+      else
+        echo "✓ 无需脱敏（未发现内部地址）"
+      fi
+
+      git config user.name "CI Bot"
+      git config user.email "ci-bot@botler.local"
+      git commit --quiet -am "chore: GitHub 镜像——剔除 .gitlab-ci.yml 并脱敏内部信息 [skip ci]"
+
+      # force push 到 GitHub main（镜像历史由本 job 全权维护）。
+      # -q 抑制成功输出（push URL 不落日志；token 若配置 Masked，
+      # GitLab 自动将变量值打码为 [FILTERED]）
+      # detached HEAD 下 push 必须用完整 refspec（refs/heads/main），
+      # 否则空仓库首次推送时 git 无法推断 main 是分支还是 tag
+      # 失败自动重试：最多 10 次、间隔 10 秒，规避网络抖动/代理波动
+      # 等暂时性故障
+      pushed=false
+      for attempt in $(seq 1 10); do
+        if git push --quiet --force \
+          "https://x-access-token:${GITHUB_PUSH_TOKEN}@github.com/CodeFuckee/botler.git" \
+          HEAD:refs/heads/main; then
+          pushed=true
+          break
+        fi
+        echo "⚠️ 第 ${attempt} 次推送失败，10 秒后重试（${attempt}/10）"
+        echo "   （若提示 Repository not found：请先在 GitHub 创建空的 CodeFuckee/botler 仓库）"
+        [ "$attempt" -lt 10 ] && sleep 10
+      done
+      if [ "$pushed" != "true" ]; then
+        echo "❌ 连续 10 次推送 GitHub 失败，放弃同步"
+        exit 1
+      fi
+      echo "✓ 已同步到 https://github.com/CodeFuckee/botler（main 分支）"
+      echo "  （如需 GitHub Actions CI，可仿 Shipyard 添加 .github/workflows/ 并用 workflow_dispatch 触发）"
