@@ -123,6 +123,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   margin-bottom: 12px;
 }
 .form-row.wrap { flex-wrap: wrap; }
+.form-row.center { justify-content: center; }
 .add-method {
   display: inline-flex;
   gap: 6px;

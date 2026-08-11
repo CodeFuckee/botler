@@ -183,7 +183,7 @@ export default function Repos() {
             onChange={(e) => setForm({ ...form, webhook_url: e.target.value })}
           />
         </div>
-        <div className="form-row">
+        <div className="form-row center">
           <button className="btn btn-primary" disabled={busy} onClick={addRepo}>
             {busy ? '添加中…' : '添加'}
           </button>
