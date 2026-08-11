@@ -103,7 +103,12 @@ export default function Tasks() {
                   <td><Link to={`/tasks/${t.id}`}>#{t.issue_iid}</Link></td>
                   <td className="ellipsis" title={t.issue_title}>{t.issue_title || '—'}</td>
                   <td><span className={'badge ' + meta.cls}>{meta.label}</span></td>
-                  <td>{t.attempt_count}</td>
+                  <td>
+                    {t.attempt_count}
+                    {t.resumed && (
+                      <span className="badge resume" title="从上次中断的 claude 会话恢复执行（断点续跑）">恢复</span>
+                    )}
+                  </td>
                   <td>{t.triggered_by === 'reconcile' ? '对账' : 'webhook'}</td>
                   <td className="ellipsis" title={failedReason}>
                     {failedReason || <span className="muted">—</span>}

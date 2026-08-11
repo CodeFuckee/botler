@@ -36,6 +36,7 @@ def _task_to_dict(row, repo_name: str | None = None) -> dict:
         "exit_code": row["exit_code"],
         "error_message": row["error_message"],
         "error_detail": detail,
+        "resumed": bool(row["claude_session_id"]),  # 会话断点续跑标记（issue #8）
         "log_path": row["log_path"],
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],

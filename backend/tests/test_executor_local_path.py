@@ -81,6 +81,16 @@ class TestPrepareWorkspaceLocalPath:
         # 远端文件仍然完好
         assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
 
+    def test_resume_keeps_dirty_changes(self, executor, tmp_path):
+        """恢复执行（resume=True）：不清工作区——保留 Claude 上次的未提交改动。"""
+        repo = _make_local_repo(tmp_path)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        (repo / "dirty.txt").write_text("dirty", encoding="utf-8")
+        executor.prepare_workspace(_repo_dict(str(repo)), resume=True)
+        # dirty 文件保留，远端文件未被覆盖
+        assert (repo / "dirty.txt").exists()
+        assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
+
     def test_missing_local_path(self, executor, tmp_path):
         with pytest.raises(ExecutorError):
             executor.prepare_workspace(_repo_dict(str(tmp_path / "nope")))

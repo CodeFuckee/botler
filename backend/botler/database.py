@@ -94,6 +94,10 @@ class Database:
         task_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
         if "error_detail" not in task_cols:
             conn.execute("ALTER TABLE tasks ADD COLUMN error_detail TEXT")
+        if "claude_session_id" not in task_cols:
+            # issue #8：claude --resume 会话断点续跑——记录上次执行的 claude 会话，
+            # 重启/重试后用于接续对话（从上次结束的地方继续）
+            conn.execute("ALTER TABLE tasks ADD COLUMN claude_session_id TEXT")
 
     @contextmanager
     def _conn(self):
@@ -215,12 +219,13 @@ class Database:
                 (project_id, issue_iid)).fetchone()
 
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:
-        """更新任务状态及附加字段（attempt_count / exit_code / error_message / error_detail / log_path / started_at / finished_at）。
+        """更新任务状态及附加字段（attempt_count / exit_code / error_message /
+        error_detail / log_path / started_at / finished_at / claude_session_id）。
 
         status 传 None 时只更新附加字段，不改状态。
         """
         allowed = {"attempt_count", "exit_code", "error_message", "error_detail",
-                   "log_path", "started_at", "finished_at"}
+                   "log_path", "started_at", "finished_at", "claude_session_id"}
         cols: list[str] = []
         vals: list = []
         if status is not None:

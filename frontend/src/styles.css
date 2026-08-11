@@ -278,6 +278,8 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .status-failed { background: var(--err-weak); color: var(--err); }
 .status-interrupted { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
 .badge-muted { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
+/* 断点续跑标记（issue #8）：任务从上次中断的 claude 会话恢复执行 */
+.badge.resume { margin-left: 6px; background: var(--primary-weak); color: var(--primary); font-size: 11px; }
 
 /* ---- 统计条 ---- */
 .stats-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }

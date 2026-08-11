@@ -22,6 +22,10 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
                           └─► 调 GitLab API 关闭 issue（Claude 自己执行）
 ```
 
+> 💡 **断点续跑**（issue #8）：CI/CD 频繁重新部署时，执行中的任务被进程重启打断后
+> 不会从头重跑——executor 持久化 claude 会话 id，重启恢复时用 `claude --resume`
+> 接续上次会话且保留工作区改动，从上次中断处继续（会话文件丢失时自动降级全新会话）。
+
 ## 目录结构
 
 ```
@@ -124,7 +128,9 @@ curl http://localhost:8000/api/health      # {"ok":true,...}
 ```
 
 数据持久化（全部卷挂载，容器重建不丢失）：`data/backend/config.yaml`（Web UI 设置页会写回）、
-`data/backend/.env`（只读）、`data/backend/botler.db`、`data/workspace/`、`data/logs/`。
+`data/backend/.env`（只读）、`data/backend/botler.db`、`data/workspace/`、`data/logs/`、
+`data/claude-home/`（claude 会话文件 `~/.claude`，断点续跑依赖——容器重建后
+`--resume` 才能找到上次会话；pm2 部署下在宿主 HOME 天然持久，无需此挂载）。
 容器时区固定为 **Asia/Shanghai**（compose `TZ` 环境变量 + 镜像内 tzdata）。
 CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/codes/botler/data`**
 （显式 export `BOTLER_DATA_DIR`，不随 gitlab-runner 构建目录漂移，构建目录可能被清理）。

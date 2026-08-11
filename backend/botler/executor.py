@@ -8,6 +8,11 @@
 5. 结果判定：exit 0 且 issue 已关闭 → 成功；否则重试（最多 max_retries）
 6. 收尾：仍失败 → issue 留失败评论 + 打 bot-failed 标签
 
+断点续跑（issue #8）：每次执行后把 claude 会话 id 落库；重试或平台
+重启恢复（调度器 requeue_interrupted 重新入队）时用 `claude --resume`
+接续上次会话，且工作区只 fetch 不清空（保留 Claude 已做的修改），
+从上次中断处继续而非从头重跑。会话文件丢失时自动降级为全新会话。
+
 git 凭据通过 GIT_ASKPASS 注入，token 不落盘（askpass 脚本在每次 clean 时被清除）。
 """
 
@@ -45,6 +50,15 @@ _UNRESOLVABLE_RE = re.compile("|".join(UNRESOLVABLE_PATTERNS), re.IGNORECASE)
 # 日志保留行数（落盘 + 失败评论摘要）
 LOG_TAIL_LINES = 400
 COMMENT_TAIL_CHARS = 3000
+
+# 恢复执行引导语（issue #8）：中断恢复时不用完整模版重发 issue 描述，
+# 而是让 Claude 检查工作区现状后从断点继续（避免重复分析与重复评论）
+RESUME_PROMPT = """【继续处理（中断恢复）】你正在处理 {repo_name} 仓库的 issue #{issue_iid}「{issue_title}」：{issue_url}
+
+上次处理因平台重新部署而中断，你的对话与工作区改动已保留。请先检查当前状态
+（git status / git log / 未提交改动），弄清上次做到哪一步，然后从断点继续：
+完成剩余的修复/实现 → 自测 → 推送 → 用 GitLab API 关闭 issue。
+不要从零重新分析 issue（除非确认上次未开始实质工作），不要重复已经完成的工作。"""
 
 
 class ExecutorError(Exception):
@@ -107,10 +121,13 @@ class ClaudeExecutor:
         script.chmod(0o700)
         return script
 
-    def prepare_workspace(self, repo: dict) -> tuple[Path, dict]:
+    def prepare_workspace(self, repo: dict, resume: bool = False) -> tuple[Path, dict]:
         """确保工作区存在且干净，返回 (workdir, git_env)。
 
         local_path 仓库直接用该文件夹（不 clone）；普通仓库首次执行时 clone。
+        resume=True（会话断点续跑）时只 fetch 更新远端引用，跳过
+        checkout / reset --hard / clean -fd——保留 Claude 上次的未提交改动
+        与本地提交，供恢复会话接续使用。
         """
         cfg = self.config.get()
         workdir = self._repo_workdir(repo)
@@ -143,13 +160,14 @@ class ClaudeExecutor:
         # remote_name 记录本地方式添加时用户选中的 remote（老数据缺省为 origin）
         remote = repo.get("remote_name") or "origin"
         self._git(workdir, "fetch", remote, "--prune", env=git_env)
-        try:
-            self._git(workdir, "checkout", "main", env=git_env)
-        except ExecutorError:
-            logger.warning("%s: 无 main 分支，尝试 checkout master", repo["name"])
-            self._git(workdir, "checkout", "master", env=git_env)
-        self._git(workdir, "reset", "--hard", f"{remote}/HEAD", env=git_env)
-        self._git(workdir, "clean", "-fd", env=git_env)
+        if not resume:
+            try:
+                self._git(workdir, "checkout", "main", env=git_env)
+            except ExecutorError:
+                logger.warning("%s: 无 main 分支，尝试 checkout master", repo["name"])
+                self._git(workdir, "checkout", "master", env=git_env)
+            self._git(workdir, "reset", "--hard", f"{remote}/HEAD", env=git_env)
+            self._git(workdir, "clean", "-fd", env=git_env)
         # askpass 脚本被 clean -fd 清除（.botler-askpass.sh 不受 .gitignore 保护时会被删；
         # 保险起见再显式删除，避免 token 残留）
         askpass.unlink(missing_ok=True)
@@ -171,19 +189,72 @@ class ClaudeExecutor:
         env["ISSUE_IID"] = str(issue["iid"])
         return env
 
+    # ---- 会话断点续跑（issue #8）----
+
+    def _extract_session_id(self, output: str) -> str | None:
+        """从 claude JSON 输出解析 session_id（无 / 非法 JSON 返回 None）。"""
+        if not output:
+            return None
+        try:
+            data = json.loads(output)
+        except (ValueError, TypeError):
+            return None
+        sid = data.get("session_id") if isinstance(data, dict) else None
+        return sid or None
+
+    def _claude_home(self) -> Path:
+        """claude 会话文件根目录（~/.claude，session 的 .jsonl 落盘处）。"""
+        return Path.home() / ".claude"
+
+    def _session_file(self, session_id: str) -> Path | None:
+        """查找 session 文件 ~/.claude/projects/*/<sid>.jsonl；不存在返回 None。"""
+        projects = self._claude_home() / "projects"
+        if not projects.is_dir():
+            return None
+        try:
+            for proj in projects.iterdir():
+                f = proj / f"{session_id}.jsonl"
+                if f.is_file():
+                    return f
+        except OSError:
+            return None
+        return None
+
+    def _resume_prompt(self, repo: dict, issue: dict) -> str:
+        """恢复执行引导语：基于上次会话继续，不重复已完成的工作。"""
+        variables = self.renderer.build_variables(repo["name"], issue)
+        return self.renderer.render(RESUME_PROMPT, variables)
+
     # ---- 单次执行 ----
 
-    def _run_once(self, task_id: int, repo: dict, issue: dict) -> tuple[int, str]:
-        """执行一次 claude -p。返回 (exit_code, output)。"""
+    def _run_once(self, task_id: int, repo: dict, issue: dict,
+                  resume_session: str | None = None) -> tuple[int, str]:
+        """执行一次 claude -p。返回 (exit_code, output)。
+
+        resume_session 非空时为断点续跑：claude --resume 接续上次会话，
+        工作区保留（不清空 Claude 已做的修改）；执行后解析 JSON 输出中的
+        session_id 落库，供下次重试 / 平台重启继续。
+        """
         cfg = self.config.get()
-        workdir, git_env = self.prepare_workspace(repo)
-        prompt = self._build_prompt(repo, issue)
+        workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
+        if resume_session:
+            prompt = self._resume_prompt(repo, issue)
+            self.db.add_log(
+                task_id, "info",
+                f"恢复上次会话 {resume_session[:8]}… 继续执行"
+                f"（工作区保留，超时 {cfg.task_timeout_seconds}s）")
+        else:
+            prompt = self._build_prompt(repo, issue)
+            self.db.add_log(task_id, "info",
+                            f"执行 claude -p（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
         env = self._build_env(repo, issue)
 
         log_path = self._log_file(task_id)
-        self.db.add_log(task_id, "info", f"执行 claude -p（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
 
-        cmd = [cfg.claude_command, *cfg.claude_args, prompt]
+        cmd = [cfg.claude_command, *cfg.claude_args]
+        if resume_session:
+            cmd.extend(["--resume", resume_session])
+        cmd.append(prompt)
         try:
             proc = subprocess.Popen(
                 cmd, cwd=workdir, env=env,
@@ -229,12 +300,20 @@ class ClaudeExecutor:
             output = "".join(chunks)
             self.db.add_log(task_id, "error",
                             f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止进程组")
+            self._persist_session_id(task_id, output)
             return 124, output  # 124 = timeout 约定退出码
 
         exit_code = proc.wait(timeout=30)
         output = "".join(chunks)
         self.db.add_log(task_id, "info", f"claude 退出码: {exit_code}")
+        self._persist_session_id(task_id, output)
         return exit_code, output
+
+    def _persist_session_id(self, task_id: int, output: str) -> None:
+        """执行结束后把 claude 会话 id 落库（供下次重试 / 平台重启断点续跑）。"""
+        session_id = self._extract_session_id(output)
+        if session_id:
+            self.db.set_task_status(task_id, None, claude_session_id=session_id)
 
     def _log_file(self, task_id: int) -> Path:
         base = Path(__file__).resolve().parents[1] / "logs"
@@ -301,6 +380,16 @@ class ClaudeExecutor:
 
         while True:
             attempt += 1
+            # issue #8 断点续跑：上次执行留过 claude 会话 → 接续（resume）；
+            # 会话文件丢失（如 ~/.claude 未持久化）→ 清除后降级全新会话
+            task = self.db.get_task(task_id)
+            resume_session = task["claude_session_id"] if task else None
+            if resume_session and not self._session_file(resume_session):
+                self.db.set_task_status(task_id, None, claude_session_id=None)
+                self.db.add_log(
+                    task_id, "warn",
+                    f"上次会话 {resume_session[:8]}… 的会话文件已不存在，降级为全新会话")
+                resume_session = None
             self.db.set_task_status(
                 task_id, STATUS_RUNNING,
                 attempt_count=attempt,
@@ -319,7 +408,7 @@ class ClaudeExecutor:
                     self.db.add_log(task_id, "warn", f"发送处理中评论失败: {e}")
 
             try:
-                exit_code, output = self._run_once(task_id, repo, issue)
+                exit_code, output = self._run_once(task_id, repo, issue, resume_session)
             except ExecutorError as e:
                 exit_code, output = -1, f"[executor] {e}"
                 self.db.add_log(task_id, "error", output)

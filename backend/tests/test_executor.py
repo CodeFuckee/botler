@@ -2,9 +2,12 @@
 
 issue #4 新增「查看详细原因」按钮依赖 executor 在失败时把每次尝试的
 退出码 + 提取的错误/trace 序列化写入 tasks.error_detail 字段。
+issue #8 会话断点续跑：claude --resume 恢复上次会话 + 保留工作区。
 """
 
+import io
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -47,6 +50,17 @@ def _mk_repo(db) -> int:
 
 def _mk_task(db, repo_id: int, issue_iid: int = 1) -> int:
     return db.create_task(repo_id, 42, issue_iid, "失败任务")
+
+
+# 直接传 _run_once 的 repo 字典（_build_prompt 需 prompt_template 键）
+_REPO = {"name": "demo", "prompt_template": None}
+
+
+def _issue_dict(state: str = "opened") -> dict:
+    """run_task 所需的完整 issue 字典（build_variables 依赖 project_id/iid）。"""
+    return {"state": state, "title": "标题", "description": "正文",
+            "web_url": "https://gitlab.example.com/x/-/issues/7",
+            "project_id": 42, "iid": 7}
 
 
 class TestExtractError:
@@ -173,3 +187,158 @@ class TestRunTaskErrorDetail:
         # 失败评论 + bot-failed 标签各一次
         assert sum(1 for kind, _ in calls if kind == "comment") == 2  # 处理中 + 失败
         assert sum(1 for kind, _ in calls if kind == "labels") == 1
+
+
+# ---- issue #8 会话断点续跑 ----
+
+class _FakeStdout:
+    """一次输出 + EOF；EOF 后 poll() 视为进程已退出。"""
+
+    def __init__(self, text: str):
+        self._lines = [text] if text else []
+
+    def readline(self) -> str:
+        return self._lines.pop(0) if self._lines else ""
+
+
+class _FakeProc:
+    def __init__(self, output: str, exit_code: int = 0):
+        self.stdout = _FakeStdout(output)
+        self._exit = exit_code
+
+    def poll(self):
+        return self._exit if not self.stdout._lines else None
+
+    def wait(self, timeout=None):
+        return self._exit
+
+
+class TestSessionResume:
+    """claude --resume 会话恢复：session_id 落库、恢复执行、降级回退。"""
+
+    def _session_toolkit(self, executor, monkeypatch, tmp_path, output, exit_code=0):
+        """构造 resume 测试环境：fake Popen 捕获 cmd、fake claude home 会话文件。"""
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["cwd"] = kwargs.get("cwd")
+            return _FakeProc(output, exit_code)
+
+        monkeypatch.setattr("botler.executor.subprocess.Popen", fake_popen)
+        claude_home = tmp_path / "claude-home"
+        monkeypatch.setattr(executor, "_claude_home", lambda: claude_home)
+        monkeypatch.setattr(executor, "prepare_workspace",
+                            lambda repo, resume=False: (tmp_path / "ws", {}))
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+        return captured
+
+    @staticmethod
+    def _mk_session_file(claude_home: Path, session_id: str) -> Path:
+        proj = claude_home / "projects" / "-proj"
+        proj.mkdir(parents=True, exist_ok=True)
+        f = proj / f"{session_id}.jsonl"
+        f.write_text('{"type":"user","message":"hi"}\n', encoding="utf-8")
+        return f
+
+    def test_extract_session_id_from_output(self, executor):
+        """JSON 输出含 session_id 时解析成功；无/非法 JSON 返回 None。"""
+        assert executor._extract_session_id(
+            json.dumps({"result": "ok", "session_id": "sid-abc"})) == "sid-abc"
+        assert executor._extract_session_id(
+            json.dumps({"result": "ok"})) is None
+        assert executor._extract_session_id("not json") is None
+        assert executor._extract_session_id("") is None
+
+    def test_run_once_uses_resume_flag_and_guidance(self, executor, monkeypatch, tmp_path):
+        """恢复执行：cmd 含 --resume <sid>，prompt 换成恢复引导语（含「继续」），工作区保留。"""
+        session_id = "resume-sid-1"
+        captured = self._session_toolkit(
+            executor, monkeypatch, tmp_path,
+            json.dumps({"result": "ok", "session_id": session_id}))
+        self._mk_session_file(tmp_path / "claude-home", session_id)
+
+        executor._run_once(1, {"name": "demo"}, {"project_id": 42, "iid": 7}, "resume-sid-1")
+
+        cmd = captured["cmd"]
+        assert cmd[0] == "claude"
+        assert "--resume" in cmd
+        assert cmd[cmd.index("--resume") + 1] == session_id
+        prompt = cmd[-1]
+        assert "继续" in prompt and "resume-sid-1" not in prompt
+        assert "demo" in prompt and "7" in prompt  # 引导语渲染了仓库/issue 变量
+
+    def test_run_once_fresh_without_resume_flag(self, executor, monkeypatch, tmp_path):
+        """首次执行：不带 --resume，prompt 为完整模版。"""
+        captured = self._session_toolkit(
+            executor, monkeypatch, tmp_path,
+            json.dumps({"result": "ok", "session_id": "s-new"}))
+
+        executor._run_once(1, _REPO, {"project_id": 42, "iid": 7})
+
+        cmd = captured["cmd"]
+        assert "--resume" not in cmd
+        assert "你是" in cmd[-1]  # 默认模版文案
+
+    def test_run_once_persists_session_id(self, executor, monkeypatch, tmp_path):
+        """执行完成后 session_id 落库（供下次重试/重启恢复）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        captured = self._session_toolkit(
+            executor, monkeypatch, tmp_path,
+            json.dumps({"result": "ok", "session_id": "sid-persist"}))
+
+        executor._run_once(task_id, _REPO, {"project_id": 42, "iid": 7})
+
+        assert db.get_task(task_id)["claude_session_id"] == "sid-persist"
+
+    def test_requeued_task_resumes_session(self, executor, monkeypatch, tmp_path):
+        """平台重启恢复（requeue_interrupted 后任务重新入队）：run_task 走 resume。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        session_id = "requeue-sid"
+        db.set_task_status(task_id, "running", claude_session_id=session_id)
+        self._mk_session_file(tmp_path / "claude-home", session_id)
+        captured = self._session_toolkit(
+            executor, monkeypatch, tmp_path,
+            json.dumps({"result": "ok", "session_id": session_id}))
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda pid, iid: _issue_dict("closed"),  # 一次尝试即成功
+            add_comment=lambda *a, **k: None,
+            add_labels=lambda *a, **k: None,
+        )
+
+        executor.run_task(task_id)
+
+        assert "--resume" in captured["cmd"]
+        assert captured["cmd"][captured["cmd"].index("--resume") + 1] == session_id
+        assert db.get_task(task_id)["status"] == "succeeded"
+        assert db.get_task(task_id)["claude_session_id"] == session_id
+        # 日志记录了恢复执行
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("恢复" in m for m in logs)
+
+    def test_missing_session_file_downgrades_to_fresh(self, executor, monkeypatch, tmp_path):
+        """session 文件已丢失（如 ~/.claude 未持久化）：清掉 session_id，降级全新会话。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        db.set_task_status(task_id, "running", claude_session_id="ghost-sid")
+        captured = self._session_toolkit(
+            executor, monkeypatch, tmp_path,
+            json.dumps({"result": "ok", "session_id": "s-fresh"}))
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda pid, iid: _issue_dict("opened"),
+            add_comment=lambda *a, **k: None,
+            add_labels=lambda *a, **k: None,
+        )
+
+        executor.run_task(task_id)
+
+        assert "--resume" not in captured["cmd"]
+        # 无效 session_id 被清除，新会话 id 落库
+        assert db.get_task(task_id)["claude_session_id"] == "s-fresh"
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("降级" in m for m in logs)

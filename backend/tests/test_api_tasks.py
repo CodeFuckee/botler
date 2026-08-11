@@ -97,6 +97,19 @@ class TestListTasks:
                     "status", "attempt_count", "triggered_by", "error_message"):
             assert key in by_iid[1], f"列表项缺少字段 {key}"
 
+    def test_list_returns_resumed_flag(self, client):
+        """列表项 resumed 字段：有 claude_session_id（会话恢复过）为 true，否则 false。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        _mk_task(db, repo_id, issue_iid=1, title="恢复过的任务")
+        db.set_task_status(_mk_task(db, repo_id, issue_iid=2, title="全新任务"),
+                           "running", claude_session_id="sid-abc")
+
+        body = app_client.get("/api/tasks").json()
+        by_iid = {t["issue_iid"]: t for t in body["tasks"]}
+        assert by_iid[1]["resumed"] is False
+        assert by_iid[2]["resumed"] is True
+
     def test_list_returns_error_detail_object(self, client):
         """列表项 error_detail 应解析为结构化对象（「查看详细原因」按钮的数据契约）。"""
         app_client, db = client

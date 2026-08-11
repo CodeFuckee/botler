@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- **任务断点续跑**（issue #8）：CI/CD 频繁重新部署导致正在执行的任务进程被杀后，
+  重启不再从头重跑——executor 每次执行后把 claude 会话 id（`claude -p` JSON 输出
+  的 `session_id`）持久化到 `tasks.claude_session_id`；重试或平台重启恢复
+  （调度器 `requeue_interrupted` 重新入队）时用 `claude -p --resume <sid>` 接续
+  上次会话，且工作区只 fetch 不清空（保留 Claude 已做的修改），并注入恢复引导语
+  让 Claude 检查现状后从断点继续，不重复已完成的工作。会话文件丢失（如 Docker
+  未挂载 `~/.claude`）时自动清掉无效 id 降级为全新会话。任务 API 新增 `resumed`
+  字段，前端任务列表在「尝试」列显示「恢复」徽标。
+  - 涉及 `backend/botler/executor.py`（`_extract_session_id` / `_session_file` /
+    `_resume_prompt` / resume 工作区保留）、`database.py`（迁移新增列）、
+    `api/tasks.py`、`frontend/src/pages/Tasks.jsx`、`frontend/src/styles.css`、
+    `docker-compose.yml`（新增 `data/claude-home` 挂载，Docker 部署会话持久化）。
+  - 测试：新增 9 个用例（session_id 解析落库、resume 参数与引导语、工作区保留、
+    会话文件缺失降级、重启恢复任务自动 resume、API `resumed` 契约）。
+  - 说明：pm2 部署下 `~/.claude` 在宿主 HOME 天然持久，无需额外配置；Docker
+    部署需重建容器使新挂载生效。
+
 ### Changed
 
 - 「添加仓库」按钮移到表单底部单独一行并水平居中（issue #6）：原按钮与「显示名称」
