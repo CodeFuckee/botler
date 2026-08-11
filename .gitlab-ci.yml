@@ -106,6 +106,17 @@ frontend:build:
     - linux
     - code01
   timeout: 20m
+  # node_modules 缓存（runner 全局缓存目录，构建目录被 git clean 后
+  # npm ci 也能从缓存快速恢复；key 基于 package-lock.json 哈希，
+  # 依赖不变则跨提交命中）
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+      prefix: frontend-npm
+    paths:
+      - frontend/node_modules/
+    policy: pull-push
   script:
     - JOB_START_TIME=$(date +%s)
     - echo "=== 1. 安装依赖（npm ci）==="
