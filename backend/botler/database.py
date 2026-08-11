@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS repos (
   name TEXT NOT NULL,
   url TEXT NOT NULL,
   local_path TEXT,
+  remote_name TEXT,
   prompt_template TEXT,
   enabled INTEGER DEFAULT 1,
   created_at TEXT DEFAULT (datetime('now'))
@@ -82,6 +83,13 @@ class Database:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
+
+    def _migrate(self, conn) -> None:
+        """轻量迁移：给旧库补新增列（CREATE TABLE IF NOT EXISTS 不更新已有表）。"""
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+        if "remote_name" not in cols:
+            conn.execute("ALTER TABLE repos ADD COLUMN remote_name TEXT")
 
     @contextmanager
     def _conn(self):
@@ -102,16 +110,19 @@ class Database:
 
     def upsert_repo(self, project_id: int, name: str, url: str,
                     prompt_template: str | None = None,
-                    enabled: bool = True, local_path: str | None = None) -> int:
+                    enabled: bool = True, local_path: str | None = None,
+                    remote_name: str | None = None) -> int:
         with self._conn() as conn:
             cur = conn.execute(
-                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(gitlab_project_id) DO UPDATE SET
                      name=excluded.name, url=excluded.url,
                      prompt_template=excluded.prompt_template,
-                     enabled=excluded.enabled, local_path=excluded.local_path""",
-                (project_id, name, url, prompt_template, 1 if enabled else 0, local_path),
+                     enabled=excluded.enabled, local_path=excluded.local_path,
+                     remote_name=excluded.remote_name""",
+                (project_id, name, url, prompt_template, 1 if enabled else 0,
+                 local_path, remote_name),
             )
             return cur.lastrowid
 
@@ -130,7 +141,7 @@ class Database:
                 "SELECT * FROM repos WHERE gitlab_project_id=?", (project_id,)).fetchone()
 
     def update_repo(self, repo_id: int, **fields) -> None:
-        allowed = {"name", "url", "prompt_template", "enabled", "local_path"}
+        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return

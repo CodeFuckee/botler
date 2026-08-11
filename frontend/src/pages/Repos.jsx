@@ -7,8 +7,10 @@ export default function Repos() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // 添加表单
-  const [form, setForm] = useState({ url: '', name: '', webhook_url: '' })
+  // 添加表单（method: 'url' = GitLab URL 方式，'local' = 本地文件夹方式）
+  const [method, setMethod] = useState('url')
+  const [form, setForm] = useState({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '' })
+  const [remotes, setRemotes] = useState([])
   const [addError, setAddError] = useState('')
   // 测试结果: repoId -> {token/project/webhook}
   const [testResults, setTestResults] = useState({})
@@ -26,18 +28,42 @@ export default function Repos() {
 
   const addRepo = async () => {
     setAddError('')
-    if (!form.url.trim()) { setAddError('请填写 GitLab 项目 URL 或 project_id'); return }
+    if (method === 'url' && !form.url.trim()) { setAddError('请填写 GitLab 项目 URL 或 project_id'); return }
+    if (method === 'local') {
+      if (!form.local_path.trim()) { setAddError('请填写本地文件夹路径'); return }
+      if (!form.remote_name) { setAddError('请先在本地文件夹中选择一个 remote'); return }
+    }
     setBusy(true)
     try {
       await api.post('/api/repos', {
-        url: form.url.trim(),
+        url: method === 'url' ? form.url.trim() : undefined,
+        local_path: method === 'local' ? form.local_path.trim() : undefined,
+        remote_name: method === 'local' ? form.remote_name : undefined,
         name: form.name.trim() || undefined,
         webhook_url: form.webhook_url.trim() || undefined,
       })
-      setForm({ url: '', name: '', webhook_url: '' })
+      setForm({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '' })
+      setRemotes([])
       await load()
     } catch (e) {
       setAddError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 本地文件夹方式：读取该文件夹 git remote -v 的 remote 列表
+  const discover = async () => {
+    setAddError('')
+    if (!form.local_path.trim()) { setAddError('请填写本地文件夹路径'); return }
+    setBusy(true)
+    try {
+      const res = await api.post('/api/repos/discover', { local_path: form.local_path.trim() })
+      setRemotes(res.remotes)
+      setForm((f) => ({ ...f, remote_name: res.remotes.length === 1 ? res.remotes[0].name : '' }))
+    } catch (e) {
+      setAddError(e.message)
+      setRemotes([])
     } finally {
       setBusy(false)
     }
@@ -76,29 +102,74 @@ export default function Repos() {
       <div className="card">
         <h2>添加仓库</h2>
         <div className="form-row">
+          <label className="add-method">
+            <input type="radio" checked={method === 'url'} onChange={() => { setMethod('url'); setRemotes([]); }} />
+            GitLab URL / project_id
+          </label>
+          <label className="add-method">
+            <input type="radio" checked={method === 'local'} onChange={() => { setMethod('local'); setRemotes([]); }} />
+            本地文件夹（读取 git remote）
+          </label>
+        </div>
+
+        {method === 'url' && (
+          <div className="form-row">
+            <input
+              className="input grow"
+              placeholder="GitLab 项目 URL 或 project_id（如 https://home.chenkaidi.top:509/group/project.git）"
+              value={form.url}
+              onChange={(e) => setForm({ ...form, url: e.target.value })}
+            />
+          </div>
+        )}
+
+        {method === 'local' && (
+          <>
+            <div className="form-row">
+              <input
+                className="input grow"
+                placeholder="服务器上的本地 git 仓库文件夹路径（如 /home/user/projects/my-repo）"
+                value={form.local_path}
+                onChange={(e) => setForm({ ...form, local_path: e.target.value })}
+              />
+              <button className="btn" disabled={busy} onClick={discover}>
+                {busy ? '读取中…' : '读取 remote'}
+              </button>
+            </div>
+            {remotes.length > 0 && (
+              <div className="form-row remote-list">
+                {remotes.map((r) => (
+                  <label key={r.name} className="remote-option">
+                    <input
+                      type="radio"
+                      name="remote"
+                      checked={form.remote_name === r.name}
+                      onChange={() => setForm({ ...form, remote_name: r.name })}
+                    />
+                    <code>{r.name}</code> {r.url}
+                  </label>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        <div className="form-row">
           <input
             className="input grow"
-            placeholder="GitLab 项目 URL 或 project_id（如 https://home.chenkaidi.top:509/group/project.git）"
-            value={form.url}
-            onChange={(e) => setForm({ ...form, url: e.target.value })}
-          />
-          <input
-            className="input"
             placeholder="显示名称（可选）"
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
-          <button className="btn btn-primary" disabled={busy} onClick={addRepo}>
-            {busy ? '添加中…' : '添加'}
-          </button>
-        </div>
-        <div className="form-row">
           <input
             className="input grow"
             placeholder="webhook 回调地址（可选，默认用当前访问地址；跨网络场景可覆盖）"
             value={form.webhook_url}
             onChange={(e) => setForm({ ...form, webhook_url: e.target.value })}
           />
+          <button className="btn btn-primary" disabled={busy} onClick={addRepo}>
+            {busy ? '添加中…' : '添加'}
+          </button>
         </div>
         {addError && <div className="alert alert-error">{addError}</div>}
       </div>
@@ -114,6 +185,9 @@ export default function Repos() {
                 {!repo.enabled && <span className="badge badge-muted">已停用</span>}
               </div>
               <div className="muted small">{repo.url} · project_id={repo.gitlab_project_id}</div>
+              {repo.local_path && (
+                <div className="muted small">本地工作区: {repo.local_path}</div>
+              )}
               {testResults[repo.id] && (
                 <TestResult result={testResults[repo.id]} />
               )}

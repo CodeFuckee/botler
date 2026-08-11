@@ -21,6 +21,15 @@ HOOK_URL_PATH = "/webhook/gitlab"
 HOOK_TIMEOUT_SECONDS = 5
 
 
+def _looks_like_scp_url(value: str) -> bool:
+    """git remote -v 的 scp-like 形态：user@host:path/to/repo.git。
+
+    特征：含 ':' 与 '/'（有仓库路径），且不是带 scheme 的 URL
+    （带 scheme 的会被 urlparse 分支处理）。
+    """
+    return ":" in value and "/" in value and "://" not in value
+
+
 class GitLabError(Exception):
     def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
@@ -107,7 +116,8 @@ class GitLabClient:
     def resolve_project(self, url_or_id: str) -> dict:
         """从仓库 URL 或数字 ID 识别项目。
 
-        URL 支持 https://host/group/project.git 或 ssh://git@host/group/project.git。
+        URL 支持 https://host/group/project.git、ssh://git@host/group/project.git，
+        以及 git remote -v 常见的 scp-like 形态 git@host:group/project.git。
         """
         value = url_or_id.strip()
         if value.isdigit():
@@ -115,6 +125,13 @@ class GitLabClient:
         parsed = urlparse(value)
         if parsed.scheme in ("http", "https", "ssh"):
             path = parsed.path.strip("/")
+            if path.endswith(".git"):
+                path = path[:-4]
+            return self.get_project_by_path(unquote(path))
+        if _looks_like_scp_url(value):
+            # scp-like 无 scheme，urlparse 会把整串当 path；
+            # 从最后一个 ':' 之后取仓库路径
+            path = value.rpartition(":")[2].strip("/")
             if path.endswith(".git"):
                 path = path[:-4]
             return self.get_project_by_path(unquote(path))

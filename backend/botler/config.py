@@ -51,6 +51,8 @@ class RepoConfig:
     url: str
     enabled: bool = True
     prompt_template: str | None = None
+    local_path: str | None = None
+    remote_name: str | None = None
 
 
 @dataclass
@@ -133,6 +135,8 @@ class ConfigManager:
                 url=r["url"],
                 enabled=bool(r.get("enabled", True)),
                 prompt_template=r.get("prompt_template"),
+                local_path=r.get("local_path"),
+                remote_name=r.get("remote_name"),
             ))
 
         bot_id = gitlab.get("bot_id")
@@ -206,4 +210,8 @@ class ConfigManager:
         }
         if repo.prompt_template:
             d["prompt_template"] = repo.prompt_template
+        if repo.local_path:
+            d["local_path"] = repo.local_path
+        if repo.remote_name:
+            d["remote_name"] = repo.remote_name
         return d

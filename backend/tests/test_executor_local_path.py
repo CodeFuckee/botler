@@ -1,0 +1,100 @@
+"""ClaudeExecutor 本地工作区测试：local_path 仓库直接在该文件夹执行。"""
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from botler.config import ConfigManager
+from botler.database import Database
+from botler.executor import ClaudeExecutor, ExecutorError
+from botler.gitlab_client import GitLabClient
+from botler.templates import TemplateRenderer
+
+CONFIG_TEXT = """\
+gitlab:
+  url: https://gitlab.example.com
+  bot_token: test-token
+  webhook_secret: test-secret
+  verify_ssl: false
+worker: {}
+claude: {}
+templates: {}
+repos: []
+"""
+
+
+@pytest.fixture
+def executor(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(CONFIG_TEXT, encoding="utf-8")
+    config = ConfigManager(str(config_path))
+    db = Database(str(tmp_path / "test.db"))
+    gitlab = GitLabClient("https://gitlab.example.com", "test-token", verify_ssl=False)
+    renderer = TemplateRenderer(config)
+    return ClaudeExecutor(config, db, gitlab, renderer,
+                          workspace_root=str(tmp_path / "workspace"))
+
+
+def _make_local_repo(tmp_path) -> Path:
+    """创建带一个提交的本地仓库，remote 指向本地 bare 仓库（fetch 不联网）。"""
+    bare = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+    (seed / "file.txt").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(seed), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(bare)], check=True)
+    subprocess.run(["git", "-C", str(seed), "push", "-q", "-u", "origin", "main"], check=True)
+    # git init --bare 的 HEAD 默认指向 master（不存在），push 不会更新它；
+    # 显式指向 main，否则 clone 时 origin/HEAD 悬空
+    subprocess.run(["git", "--git-dir", str(bare), "symbolic-ref", "HEAD", "refs/heads/main"],
+                   check=True)
+    subprocess.run(["git", "clone", "-q", str(bare), str(repo)], check=True)
+    return repo
+
+
+def _repo_dict(local_path: str) -> dict:
+    return {
+        "name": "project",
+        "url": "git@gitlab.example.com:group/project.git",
+        "local_path": local_path,
+        "remote_name": "origin",
+    }
+
+
+class TestPrepareWorkspaceLocalPath:
+    def test_uses_local_path_as_workdir(self, executor, tmp_path):
+        repo = _make_local_repo(tmp_path)
+        workdir, _env = executor.prepare_workspace(_repo_dict(str(repo)))
+        assert Path(workdir) == repo
+
+    def test_cleans_dirty_local_changes(self, executor, tmp_path):
+        """本地文件夹里的未提交改动会被重置清掉（每次执行同步到远端）。"""
+        repo = _make_local_repo(tmp_path)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        (repo / "dirty.txt").write_text("dirty", encoding="utf-8")
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert not (repo / "dirty.txt").exists()
+        # 远端文件仍然完好
+        assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
+
+    def test_missing_local_path(self, executor, tmp_path):
+        with pytest.raises(ExecutorError):
+            executor.prepare_workspace(_repo_dict(str(tmp_path / "nope")))
+
+    def test_local_path_not_a_git_repo(self, executor, tmp_path):
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        (plain / "some.txt").write_text("x", encoding="utf-8")
+        with pytest.raises(ExecutorError):
+            executor.prepare_workspace(_repo_dict(str(plain)))
+
+    def test_remote_name_fallback_to_origin(self, executor, tmp_path):
+        repo = _make_local_repo(tmp_path)
+        d = _repo_dict(str(repo))
+        d["remote_name"] = None  # 老数据没有 remote_name，应回退 origin
+        workdir, _env = executor.prepare_workspace(d)
+        assert Path(workdir) == repo

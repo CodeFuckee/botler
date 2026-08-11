@@ -87,11 +87,13 @@ def _sync_config_repos_to_db(ctx: AppContext) -> None:
                 name=repo.name, url=repo.url,
                 prompt_template=repo.prompt_template,
                 enabled=repo.enabled,
+                local_path=repo.local_path, remote_name=repo.remote_name,
             )
         else:
             ctx.db.upsert_repo(
                 project_id=repo.project_id, name=repo.name, url=repo.url,
-                prompt_template=repo.prompt_template, enabled=repo.enabled)
+                prompt_template=repo.prompt_template, enabled=repo.enabled,
+                local_path=repo.local_path, remote_name=repo.remote_name)
     logger.info("config.yaml → db 同步完成（%s 个仓库）", len(ctx.config.get().repos))
 
 

@@ -16,12 +16,46 @@ router = APIRouter(prefix="/repos", tags=["repos"])
 
 
 class RepoCreate(BaseModel):
-    url: str = Field(description="GitLab 项目 URL（如 https://host/group/project.git）或数字 project_id")
+    url: str | None = Field(
+        default=None, description="GitLab 项目 URL（如 https://host/group/project.git）或数字 project_id，与 local_path 二选一")
+    local_path: str | None = Field(
+        default=None, description="本地 git 仓库文件夹路径（与 url 二选一），平台运行 git remote -v 读取 remote")
+    remote_name: str | None = Field(
+        default=None, description="local_path 方式下选中的 remote 名称（如 origin）")
     name: str | None = None
     prompt_template: str | None = None
     enabled: bool = True
     webhook_url: str | None = Field(
         default=None, description="webhook 回调地址覆盖（默认用当前请求的 base_url）")
+
+
+class LocalPathBody(BaseModel):
+    local_path: str = Field(description="本地 git 仓库文件夹路径")
+
+
+def _resolve_repo_source(body: RepoCreate, c) -> tuple[str, str | None, str | None]:
+    """确定仓库来源，返回 (url, local_path, remote_name)。
+
+    url 方式直接透传；local_path 方式在服务端运行 git remote -v，
+    从选中的 remote 读取仓库 URL（local_path 同时被记录为执行工作区）。
+    """
+    if body.local_path:
+        from ..git_remote import NoGitRemoteError, list_local_remotes
+
+        try:
+            remotes = list_local_remotes(body.local_path)
+        except NoGitRemoteError as e:
+            raise HTTPException(400, f"读取本地仓库 remote 失败: {e}")
+        if not body.remote_name:
+            raise HTTPException(400, "local_path 方式需要指定 remote_name")
+        match = next((r for r in remotes if r["name"] == body.remote_name), None)
+        if match is None:
+            available = ", ".join(r["name"] for r in remotes)
+            raise HTTPException(400, f"本地仓库没有 remote「{body.remote_name}」（可用: {available}）")
+        return match["url"], body.local_path, body.remote_name
+    if not body.url or not body.url.strip():
+        raise HTTPException(400, "需要提供 url 或 local_path 其中之一")
+    return body.url.strip(), None, None
 
 
 class RepoUpdate(BaseModel):
@@ -38,6 +72,7 @@ def _repo_row_to_dict(row) -> dict:
         "name": row["name"],
         "url": row["url"],
         "local_path": row["local_path"],
+        "remote_name": row["remote_name"],
         "prompt_template": row["prompt_template"],
         "enabled": bool(row["enabled"]),
         "created_at": row["created_at"],
@@ -55,6 +90,8 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
         url=repo_dict["url"],
         enabled=repo_dict["enabled"],
         prompt_template=repo_dict["prompt_template"] or None,
+        local_path=repo_dict.get("local_path"),
+        remote_name=repo_dict.get("remote_name"),
     ))
     config.update_repos([config.repo_to_config_dict(r) for r in kept])
 
@@ -66,19 +103,33 @@ def list_repos(request: Request):
     return {"repos": [_repo_row_to_dict(r) for r in rows]}
 
 
+@router.post("/discover")
+def discover_remote(request: Request, body: LocalPathBody):
+    """读取本地 git 仓库的 remote 列表（前端展示，供用户选择）。"""
+    c = ctx_of(request)
+    from ..git_remote import NoGitRemoteError, list_local_remotes
+
+    try:
+        remotes = list_local_remotes(body.local_path)
+    except NoGitRemoteError as e:
+        raise HTTPException(400, f"读取本地仓库 remote 失败: {e}")
+    return {"remotes": remotes, "local_path": body.local_path}
+
+
 @router.post("", status_code=201)
 def add_repo(request: Request, body: RepoCreate):
     c = ctx_of(request)
     config = c.config.get()
 
+    url, local_path, remote_name = _resolve_repo_source(body, c)
     try:
-        project = c.gitlab.resolve_project(body.url)
+        project = c.gitlab.resolve_project(url)
     except GitLabError as e:
         raise HTTPException(400, f"无法识别项目: {e}")
 
     project_id = int(project["id"])
     name = body.name or project.get("path") or project.get("name") or str(project_id)
-    url = project.get("http_url_to_repo") or project.get("web_url") or body.url
+    url = project.get("http_url_to_repo") or project.get("web_url") or url
 
     existing = c.db.get_repo_by_project_id(project_id)
     if existing:
@@ -97,10 +148,12 @@ def add_repo(request: Request, body: RepoCreate):
 
     repo_id = c.db.upsert_repo(
         project_id=project_id, name=name, url=url,
-        prompt_template=body.prompt_template, enabled=body.enabled)
+        prompt_template=body.prompt_template, enabled=body.enabled,
+        local_path=local_path, remote_name=remote_name)
     _sync_repo_to_config(request.app, _repo_row_to_dict(c.db.get_repo(repo_id)))
 
-    logger.info("添加仓库 %s (project=%s) 并注册 webhook", name, project_id)
+    source = f"local_path={local_path}" if local_path else f"url={url}"
+    logger.info("添加仓库 %s (project=%s, %s) 并注册 webhook", name, project_id, source)
     return _repo_row_to_dict(c.db.get_repo(repo_id))
 
 

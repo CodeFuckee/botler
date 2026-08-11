@@ -83,6 +83,46 @@ h2 { font-size: 15px; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
   margin-bottom: 8px;
 }
 .form-row.wrap { flex-wrap: wrap; }
+.add-method {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+}
+.add-method:has(input:checked) {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--bg-hover);
+}
+.remote-list {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  padding-left: 2px;
+}
+.remote-option {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.remote-option:has(input:checked) {
+  border-color: var(--primary);
+  background: var(--bg-hover);
+}
+.remote-option code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--primary);
+}
 .input {
   background: var(--bg);
   border: 1px solid var(--border);

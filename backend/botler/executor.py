@@ -65,8 +65,11 @@ class ClaudeExecutor:
 
     # ---- 工作区管理 ----
 
-    def _repo_workdir(self, repo_name: str) -> Path:
-        return self.workspace_root / repo_name
+    def _repo_workdir(self, repo: dict) -> Path:
+        """仓库工作区：有 local_path（本地文件夹方式添加）时直接用该文件夹。"""
+        if repo.get("local_path"):
+            return Path(repo["local_path"])
+        return self.workspace_root / repo["name"]
 
     def _git(self, workdir: Path, *args: str, env: dict | None = None,
              timeout: int = 300) -> None:
@@ -105,9 +108,12 @@ class ClaudeExecutor:
         return script
 
     def prepare_workspace(self, repo: dict) -> tuple[Path, dict]:
-        """确保工作区存在且干净，返回 (workdir, git_env)。"""
+        """确保工作区存在且干净，返回 (workdir, git_env)。
+
+        local_path 仓库直接用该文件夹（不 clone）；普通仓库首次执行时 clone。
+        """
         cfg = self.config.get()
-        workdir = self._repo_workdir(repo["name"])
+        workdir = self._repo_workdir(repo)
         askpass = self._askpass_script(repo["name"])
         git_env = {
             "GIT_ASKPASS": str(askpass),
@@ -117,6 +123,9 @@ class ClaudeExecutor:
         git_env.update(os.environ)
 
         if not (workdir / ".git").exists():
+            if repo.get("local_path"):
+                raise ExecutorError(
+                    f"本地文件夹不是 git 仓库: {workdir}（local_path 方式要求存在 .git 目录）")
             logger.info("首次克隆仓库 %s", repo["name"])
             # 不要预先创建 workdir：git clone 要求目标目录不存在（或为空）
             self.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -130,14 +139,16 @@ class ClaudeExecutor:
                 raise ExecutorError(
                     f"克隆仓库 {repo['name']} 失败: {(result.stderr or result.stdout).strip()[-500:]}")
 
-        # 每次执行前重置到远端 main，从根上消除脏状态
-        self._git(workdir, "fetch", "origin", "--prune", env=git_env)
+        # 每次执行前重置到远端 main，从根上消除脏状态。
+        # remote_name 记录本地方式添加时用户选中的 remote（老数据缺省为 origin）
+        remote = repo.get("remote_name") or "origin"
+        self._git(workdir, "fetch", remote, "--prune", env=git_env)
         try:
             self._git(workdir, "checkout", "main", env=git_env)
         except ExecutorError:
             logger.warning("%s: 无 main 分支，尝试 checkout master", repo["name"])
             self._git(workdir, "checkout", "master", env=git_env)
-        self._git(workdir, "reset", "--hard", "origin/HEAD", env=git_env)
+        self._git(workdir, "reset", "--hard", f"{remote}/HEAD", env=git_env)
         self._git(workdir, "clean", "-fd", env=git_env)
         # askpass 脚本被 clean -fd 清除（.botler-askpass.sh 不受 .gitignore 保护时会被删；
         # 保险起见再显式删除，避免 token 残留）
