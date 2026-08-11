@@ -171,6 +171,15 @@
 
 ### Fixed
 
+- **修复运行任务必现失败**（issue #11）：任务每次执行都在 `prepare_workspace` 抛
+  `AttributeError: 'sqlite3.Row' object has no attribute 'get'`，重试耗尽后退出码
+  -1。根因：`database` 层查询返回 `sqlite3.Row`（无 `.get()` 方法），而 `executor`
+  的 `_repo_workdir` / `prepare_workspace` 按 dict 风格对 repo 调 `.get()` 访问
+  `local_path` / `remote_name`。修复：新增 `_row_get(row, key, default)` 兼容
+  访问器（同时支持 sqlite3.Row 与 dict），替换 3 处 `.get()` 调用；涉及
+  `backend/botler/executor.py`。测试：新增 2 个用例（`_repo_workdir` 直接收
+  sqlite3.Row；`run_task` 全流程从 db 取 Row 仓库正常 succeeded——与 CI 日志
+  同调用路径的端到端复现）。
 - 修复添加仓库时 webhook 注册报错「注册 webhook 失败: GitLab API 错误 422: Invalid url given」
   （webhook_url 留空时必现，URL 方式添加同样受影响）：根因是 Botler 部署在内网
   （10.0.0.122），GitLab 默认禁止向本地/私有网络地址注册 webhook（SSRF 防护，

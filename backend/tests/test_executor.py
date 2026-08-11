@@ -7,6 +7,7 @@ issue #8 会话断点续跑：claude --resume 恢复上次会话 + 保留工作�
 
 import io
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -342,3 +343,54 @@ class TestSessionResume:
         assert db.get_task(task_id)["claude_session_id"] == "s-fresh"
         logs = [l["message"] for l in db.list_logs(task_id)]
         assert any("降级" in m for m in logs)
+
+
+# ---- issue #11 复现：db 返回 sqlite3.Row，executor 却按 dict 用 .get() ----
+
+class TestRepoSqlite3RowCompat:
+    """issue #11：真实运行中 repo 来自 db.get_repo()（sqlite3.Row，无 .get() 方法），
+    executor 的 _repo_workdir / prepare_workspace 对 repo 调 .get() → AttributeError，
+    被 run_task 兜底捕获为「[executor] 未预期异常: 'sqlite3.Row' object has no
+    attribute 'get'」，重试耗尽后退出码 -1（CI 日志 task_1.log 同款报错）。"""
+
+    def test_repo_workdir_accepts_sqlite3_row(self, executor, tmp_path):
+        """_repo_workdir 对 db 查出的 sqlite3.Row 不应抛 AttributeError。"""
+        db = executor.db
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo = db.get_repo(repo_id)
+        assert isinstance(repo, sqlite3.Row)  # 前置条件：确认真实类型是 Row
+        workdir = executor._repo_workdir(repo)
+        assert workdir == tmp_path / "workspace" / "demo"
+
+    def test_run_task_with_row_repo_succeeds(self, executor, monkeypatch, tmp_path):
+        """端到端复现（与 CI 日志同调用路径）：run_task 拿到 Row 类型的 repo 后
+        应正常走完流程并 succeeded；修复前会在 prepare_workspace 抛
+        'sqlite3.Row' object has no attribute 'get'，任务 failed。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        # 预建工作区 .git 跳过 clone 分支；git 子命令与 claude 子进程全部 mock
+        (tmp_path / "workspace" / "demo" / ".git").mkdir(parents=True)
+        monkeypatch.setattr(executor, "_git", lambda *a, **k: None)
+        monkeypatch.setattr(executor, "_askpass_script", lambda n: tmp_path / "askpass.sh")
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _FakeProc(json.dumps({"result": "ok", "session_id": "sid-row"}), 0)
+
+        monkeypatch.setattr("botler.executor.subprocess.Popen", fake_popen)
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda pid, iid: _issue_dict("closed"),
+            add_comment=lambda *a, **k: None,
+            add_labels=lambda *a, **k: None,
+        )
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        assert "未预期异常" not in (task["error_message"] or "")
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert not any("sqlite3.Row" in m for m in logs)

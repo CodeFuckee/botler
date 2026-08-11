@@ -65,6 +65,20 @@ class ExecutorError(Exception):
     pass
 
 
+def _row_get(row, key, default=None):
+    """兼容 sqlite3.Row 与 dict 的字段读取。
+
+    database 层返回的是 sqlite3.Row（无 .get() 方法，issue #11）；
+    调用方传 dict（如测试）时同样可用。键不存在返回 default。
+    """
+    if row is None:
+        return default
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
+
+
 class ClaudeExecutor:
     def __init__(self, config: ConfigManager, db: Database,
                  gitlab: GitLabClient, renderer: TemplateRenderer,
@@ -81,7 +95,7 @@ class ClaudeExecutor:
 
     def _repo_workdir(self, repo: dict) -> Path:
         """仓库工作区：有 local_path（本地文件夹方式添加）时直接用该文件夹。"""
-        if repo.get("local_path"):
+        if _row_get(repo, "local_path"):
             return Path(repo["local_path"])
         return self.workspace_root / repo["name"]
 
@@ -140,7 +154,7 @@ class ClaudeExecutor:
         git_env.update(os.environ)
 
         if not (workdir / ".git").exists():
-            if repo.get("local_path"):
+            if _row_get(repo, "local_path"):
                 raise ExecutorError(
                     f"本地文件夹不是 git 仓库: {workdir}（local_path 方式要求存在 .git 目录）")
             logger.info("首次克隆仓库 %s", repo["name"])
@@ -158,7 +172,7 @@ class ClaudeExecutor:
 
         # 每次执行前重置到远端 main，从根上消除脏状态。
         # remote_name 记录本地方式添加时用户选中的 remote（老数据缺省为 origin）
-        remote = repo.get("remote_name") or "origin"
+        remote = _row_get(repo, "remote_name") or "origin"
         self._git(workdir, "fetch", remote, "--prune", env=git_env)
         if not resume:
             try:
