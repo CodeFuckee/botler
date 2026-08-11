@@ -246,12 +246,17 @@ deploy_to_code01:
 
       # ================================================================
       # 第 1 步：检查 docker / docker compose 可用
+      # ⚠️ code01 的 docker 默认 context 为 rootless，容器运行有已知故障
+      # （shim 启动报 unsupported protocol: unix，TTRPC 连接失败），
+      # 强制使用 rootful socket（/var/run/docker.sock）部署
       # ================================================================
       dbg STEP1 "检查 docker 可用性"
       echo "=== 1. 检查 Docker ==="
+      export DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock}"
       command -v docker >/dev/null 2>&1 || { dbg STEP1 "FAIL: docker 不可用"; echo "❌ docker 不可用：Docker 部署需要 code01 安装 Docker 20.10+"; exit 1; }
       docker compose version >/dev/null 2>&1 || { dbg STEP1 "FAIL: docker compose 不可用"; echo "❌ docker compose 不可用（需 compose v2）"; exit 1; }
-      echo "✓ docker: $(docker --version) / compose: $(docker compose version --short)"
+      docker info >/dev/null 2>&1 || { dbg STEP1 "FAIL: docker daemon 不可达（rootful socket）"; echo "❌ docker daemon 不可达：${DOCKER_HOST}"; echo "   rootless context 有容器运行故障，需 rootful daemon 可用（runner 用户需 docker 组权限）"; exit 1; }
+      echo "✓ docker: $(docker --version) / compose: $(docker compose version --short) / daemon: $(docker info --format '{{.ServerVersion}}')"
       dbg STEP1 "OK"
 
       # ================================================================
