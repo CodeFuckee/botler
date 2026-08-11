@@ -1,0 +1,21 @@
+# Git
+.git
+.gitignore
+
+# 后端（本地运行时文件，镜像内不需要）
+backend/.venv/
+backend/.pytest_cache/
+backend/.uv-cache/
+backend/botler.db*
+backend/config.yaml
+backend/.env
+backend/__pycache__/
+
+# 前端（dist 由多阶段构建阶段 1 生成）
+frontend/node_modules/
+frontend/dist/
+
+# 运行时数据（部署机器生成，不入镜像）
+workspace/
+logs/
+*.log

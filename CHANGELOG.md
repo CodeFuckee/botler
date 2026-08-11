@@ -20,6 +20,21 @@
 
 ### Added
 
+- 新增 **Docker 部署方式**（与 pm2 / systemd 并存，三选一）：
+  - `Dockerfile` 多阶段构建：node 构建 React/Vite 前端 → node + python 运行时
+    （内置 `git`、`claude` CLI（`@anthropic-ai/claude-code`，执行器核心依赖）、
+    后端 Python 依赖；pip 走清华源、npm 走 npmmirror）
+  - `docker-compose.yml` 一键部署：端口 `BOTLER_HTTP_PORT`（默认 8000）与数据目录
+    `BOTLER_DATA_DIR`（默认 `.`）可调；config.yaml / .env / botler.db / workspace / logs
+    全部卷挂载持久化，容器重建不丢数据；内置 healthcheck（`/api/health`）与
+    `restart: unless-stopped`
+  - 国内无法访问 Docker Hub 时，构建参数 `NODE_IMAGE` / `RUNTIME_IMAGE` 可覆盖
+    基础镜像前缀（如 `docker.m.daocloud.io/library/node:20-alpine`），CLI 与
+    docker compose 两种方式均支持
+  - `deploy/verify-docker.sh` 冒烟验证脚本：静态校验 → compose 配置校验 → 镜像构建
+    → 起容器 → 健康检查 → API/前端页面 → 重复 up 幂等 → 数据落盘，共 10 项检查
+    （`--full` 用临时数据目录与 18000 端口，不触碰真实数据）
+
 - 目录选择对话框支持配置默认初始定位目录（`browse.default_path`）：打开「添加仓库 → 本地
   文件夹 → 浏览…」对话框时不再从 `/` 开始，而是定位到配置的目录；未配置时默认为服务器用户
   主目录（`~`）。支持 `~` 展开与相对路径，配置的路径不存在时自动回退主目录、主目录不可用

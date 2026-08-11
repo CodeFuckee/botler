@@ -1,0 +1,56 @@
+# ================================================================
+# Botler Docker 部署（docker compose）
+#
+# 快速开始:
+#   cp backend/config.example.yaml backend/config.yaml
+#   cp backend/.env.example backend/.env     # 填入 GITLAB_BOT_TOKEN 等凭据
+#   touch backend/botler.db                  # SQLite 库（首次运行自动建表）
+#   docker compose up -d --build
+#
+# 可调参数（环境变量，均有默认值）:
+#   BOTLER_HTTP_PORT=8000    宿主机映射端口
+#   BOTLER_DATA_DIR=.        数据目录前缀（config.yaml/.env/botler.db/workspace/logs 的挂载来源）
+#
+# 说明:
+#   - 前端已打进镜像（多阶段构建），FastAPI 直接托管，无需 nginx
+#   - 容器内已装 claude CLI，ANTHROPIC_* 凭据经 backend/.env 注入
+#     （后端 load_dotenv 加载后由执行器子进程继承）
+#   - config.yaml 为可写挂载：Web UI 设置页会写回
+#   - 换数据目录后 botler.db/config.yaml 需一并迁移
+# ================================================================
+
+services:
+  botler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 国内无法访问 Docker Hub 时设置环境变量 NODE_IMAGE / RUNTIME_IMAGE
+        # 覆盖为基础镜像（如 docker.m.daocloud.io/library/node:20-alpine）
+        NODE_IMAGE: ${NODE_IMAGE:-node:20-alpine}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-node:20-bookworm-slim}
+    image: botler:latest
+    container_name: botler
+    restart: unless-stopped
+    ports:
+      - "${BOTLER_HTTP_PORT:-8000}:8000"
+    environment:
+      # 后端启动时读取（config.py / database.py 均支持环境变量覆盖）
+      BOTLER_CONFIG: /app/backend/config.yaml
+      BOTLER_DB: /app/backend/botler.db
+      PYTHONPATH: /app/backend
+    volumes:
+      # 配置与凭据（挂载文件，改动即生效；.env 只读）
+      - ${BOTLER_DATA_DIR:-.}/backend/config.yaml:/app/backend/config.yaml
+      - ${BOTLER_DATA_DIR:-.}/backend/.env:/app/backend/.env:ro
+      # SQLite 数据库（仓库/任务记录，容器重建不丢失）
+      - ${BOTLER_DATA_DIR:-.}/backend/botler.db:/app/backend/botler.db
+      # 仓库工作区与任务执行日志
+      - ${BOTLER_DATA_DIR:-.}/workspace:/app/workspace
+      - ${BOTLER_DATA_DIR:-.}/logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3

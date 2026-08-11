@@ -82,14 +82,54 @@ cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp config.example.yaml config.yaml && cp .env.example .env   # 填入凭据
 cd ../frontend && npm install && npm run build               # 构建 Web UI
 
-# 启动（二选一）
+# 启动（三选一）
 pm2 start deploy/botler.config.cjs && pm2 save && pm2 startup
 # 或
 sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --now botler
+# 或 Docker（见下方「Docker 部署」）
 ```
 
 冒烟测试：浏览器打开 `http://10.0.0.122:8000` → 添加仓库（自动注册 webhook）→
 在 GitLab 建一个测试 issue 指派给 bot → 观察任务列表，验证代码推上 main、issue 自动关闭。
+
+## Docker 部署
+
+镜像已包含全部运行时（前端构建产物、Python 依赖、`git`、`claude` CLI），只需挂载配置与数据。
+
+前置条件：Docker 20.10+ / docker compose v2。
+
+```bash
+# 1. 准备配置（与 pm2/systemd 部署相同）
+cp backend/config.example.yaml backend/config.yaml
+cp backend/.env.example backend/.env      # 填入 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHROPIC_*
+touch backend/botler.db                   # SQLite 库（首次运行自动建表）
+
+# 2. 构建并启动
+docker compose up -d --build
+# 国内无法访问 Docker Hub 时，用环境变量覆盖基础镜像：
+#   NODE_IMAGE=docker.m.daocloud.io/library/node:20-alpine \
+#   RUNTIME_IMAGE=docker.m.daocloud.io/library/node:20-bookworm-slim \
+#   docker compose up -d --build
+
+# 3. 验证
+docker compose ps                          # 状态 healthy
+curl http://localhost:8000/api/health      # {"ok":true,...}
+./deploy/verify-docker.sh --full           # 10 项冒烟检查（临时数据目录，不碰真实数据）
+```
+
+数据持久化（全部卷挂载，容器重建不丢失）：`backend/config.yaml`（Web UI 设置页会写回）、
+`backend/.env`（只读）、`backend/botler.db`、`workspace/`、`logs/`。
+
+可调参数：
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `BOTLER_HTTP_PORT` | `8000` | 宿主机映射端口 |
+| `BOTLER_DATA_DIR` | `.` | 数据目录前缀（换目录时 config.yaml / botler.db 需一并迁移） |
+| `NODE_IMAGE` / `RUNTIME_IMAGE` | 官方镜像 | 构建基础镜像覆盖（国内镜像源） |
+
+自定义镜像：`docker build -t botler:latest .`（见 Dockerfile 头部注释）。
+停止：`docker compose down`（数据保留）；删除数据：`docker compose down -v`。
 
 ## 配置说明
 
