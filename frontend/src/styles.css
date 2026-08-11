@@ -445,3 +445,46 @@ code {
   justify-content: flex-end;
   gap: 10px;
 }
+/* 失败详细原因弹窗（任务列表「详情」按钮） */
+.btn-mini {
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.error-summary {
+  font-size: 13px;
+  color: var(--text);
+}
+.error-detail-body {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.error-attempt {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.error-attempt-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--muted);
+}
+.error-attempt-trace {
+  margin: 0;
+  padding: 10px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-card);
+}

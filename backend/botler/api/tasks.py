@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -10,6 +12,17 @@ STATUSES = {"queued", "running", "retrying", "succeeded", "failed", "interrupted
 
 
 def _task_to_dict(row, repo_name: str | None = None) -> dict:
+    """把任务行转为 API 字典。
+
+    error_detail 为 executor 写入的 JSON 字符串（每次尝试的失败详情），
+    这里解析成结构化对象供前端「查看详细原因」按钮使用；解析失败返回 None。
+    """
+    detail = None
+    if row["error_detail"]:
+        try:
+            detail = json.loads(row["error_detail"])
+        except ValueError:
+            detail = None
     return {
         "id": row["id"],
         "repo_id": row["repo_id"],
@@ -22,6 +35,7 @@ def _task_to_dict(row, repo_name: str | None = None) -> dict:
         "triggered_by": row["triggered_by"],
         "exit_code": row["exit_code"],
         "error_message": row["error_message"],
+        "error_detail": detail,
         "log_path": row["log_path"],
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],

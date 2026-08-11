@@ -1,9 +1,11 @@
-"""任务 API 测试：列表（过滤/搜索/分页）、详情、统计与 error_message 数据契约。
+"""任务 API 测试：列表（过滤/搜索/分页）、详情、统计与失败原因数据契约。
 
-任务列表「失败原因显示」功能依赖 GET /api/tasks 返回的 error_message 字段，
+任务列表「失败原因显示」功能依赖 GET /api/tasks 返回的 error_message / error_detail
+字段（error_detail 为每次尝试失败详情的结构化对象，供「查看详细原因」按钮使用），
 本文件验证该数据契约及其余列表行为。
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -54,10 +56,12 @@ def _mk_repo(db, project_id: int = 42, name: str = "demo") -> int:
 
 
 def _mk_task(db, repo_id: int, issue_iid: int = 1, title: str = "修复登录问题",
-             status: str = "succeeded", error_message: str | None = None) -> int:
+             status: str = "succeeded", error_message: str | None = None,
+             error_detail: str | None = None) -> int:
     """创建任务并按需更新状态，返回 task_id。"""
     task_id = db.create_task(repo_id, 42, issue_iid, title, triggered_by="webhook")
-    db.set_task_status(task_id, status, error_message=error_message)
+    db.set_task_status(task_id, status, error_message=error_message,
+                       error_detail=error_detail)
     return task_id
 
 
@@ -92,6 +96,35 @@ class TestListTasks:
         for key in ("id", "repo_id", "repo_name", "issue_iid", "issue_title",
                     "status", "attempt_count", "triggered_by", "error_message"):
             assert key in by_iid[1], f"列表项缺少字段 {key}"
+
+    def test_list_returns_error_detail_object(self, client):
+        """列表项 error_detail 应解析为结构化对象（「查看详细原因」按钮的数据契约）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        detail_json = json.dumps(
+            {"summary": "重试耗尽后仍失败，最后退出码 1",
+             "attempts": [{"attempt": 1, "exit_code": 1, "error": "构建超时"},
+                          {"attempt": 2, "exit_code": 1, "error": "Traceback: boom"}]})
+        _mk_task(db, repo_id, issue_iid=1, title="失败任务",
+                 status="failed", error_message="重试耗尽（2 次）后仍失败，最后退出码 1",
+                 error_detail=detail_json)
+        _mk_task(db, repo_id, issue_iid=2, title="无详情的失败",
+                 status="failed", error_message="平台重启导致中断")
+
+        body = app_client.get("/api/tasks").json()
+        by_iid = {t["issue_iid"]: t for t in body["tasks"]}
+        assert by_iid[1]["error_detail"]["summary"] == "重试耗尽后仍失败，最后退出码 1"
+        assert by_iid[1]["error_detail"]["attempts"][1]["error"] == "Traceback: boom"
+        assert by_iid[2]["error_detail"] is None
+
+    def test_invalid_error_detail_returns_none(self, client):
+        """error_detail 存了非法 JSON 时 API 返回 None（不 500）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        _mk_task(db, repo_id, issue_iid=1, title="脏数据任务",
+                 status="failed", error_message="原因", error_detail="not-json{{")
+        body = app_client.get("/api/tasks").json()
+        assert body["tasks"][0]["error_detail"] is None
 
     def test_status_filter(self, client):
         app_client, db = client

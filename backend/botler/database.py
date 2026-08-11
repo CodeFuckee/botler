@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   triggered_by TEXT,
   exit_code INTEGER,
   error_message TEXT,
+  error_detail TEXT,
   log_path TEXT,
   started_at TEXT,
   finished_at TEXT,
@@ -90,6 +91,9 @@ class Database:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         if "remote_name" not in cols:
             conn.execute("ALTER TABLE repos ADD COLUMN remote_name TEXT")
+        task_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        if "error_detail" not in task_cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN error_detail TEXT")
 
     @contextmanager
     def _conn(self):
@@ -211,11 +215,12 @@ class Database:
                 (project_id, issue_iid)).fetchone()
 
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:
-        """更新任务状态及附加字段（attempt_count / exit_code / error_message / log_path / started_at / finished_at）。
+        """更新任务状态及附加字段（attempt_count / exit_code / error_message / error_detail / log_path / started_at / finished_at）。
 
         status 传 None 时只更新附加字段，不改状态。
         """
-        allowed = {"attempt_count", "exit_code", "error_message", "log_path", "started_at", "finished_at"}
+        allowed = {"attempt_count", "exit_code", "error_message", "error_detail",
+                   "log_path", "started_at", "finished_at"}
         cols: list[str] = []
         vals: list = []
         if status is not None:

@@ -9,6 +9,7 @@ export default function Tasks() {
   const [repos, setRepos] = useState([])
   const [repoId, setRepoId] = useState('')
   const [error, setError] = useState('')
+  const [detailTask, setDetailTask] = useState(null) // 正在查看详细失败原因的任务
   const timer = useRef(null)
 
   const load = useCallback(async () => {
@@ -93,6 +94,8 @@ export default function Tasks() {
                 (t.status === 'failed' || t.status === 'interrupted') && t.error_message
                   ? t.error_message
                   : ''
+              // 详细失败原因（每次尝试 + trace）不直接展示，通过按钮弹窗查看
+              const hasDetail = Array.isArray(t.error_detail?.attempts) && t.error_detail.attempts.length > 0
               return (
                 <tr key={t.id}>
                   <td><Link to={`/tasks/${t.id}`}>#{t.id}</Link></td>
@@ -104,6 +107,9 @@ export default function Tasks() {
                   <td>{t.triggered_by === 'reconcile' ? '对账' : 'webhook'}</td>
                   <td className="ellipsis" title={failedReason}>
                     {failedReason || <span className="muted">—</span>}
+                    {hasDetail && (
+                      <button className="btn btn-mini" onClick={() => setDetailTask(t)}>详情</button>
+                    )}
                   </td>
                   <td>{fmtTime(t.created_at)}</td>
                 </tr>
@@ -113,6 +119,40 @@ export default function Tasks() {
         </table>
         <p className="muted small">共 {data.total} 条（最多显示 50 条）</p>
       </div>
+
+      {detailTask && (
+        <div className="modal-overlay" onClick={() => setDetailTask(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <strong>失败详细原因 — #{detailTask.issue_iid} {detailTask.issue_title}</strong>
+              <button className="btn modal-close" onClick={() => setDetailTask(null)} title="关闭">×</button>
+            </div>
+            {detailTask.error_message && (
+              <div className="error-summary">
+                <strong>摘要：</strong>
+                <span className="pre-wrap">{detailTask.error_message}</span>
+              </div>
+            )}
+            <div className="error-detail-body">
+              {(detailTask.error_detail?.attempts || []).map((a) => (
+                <div key={a.attempt} className="error-attempt">
+                  <div className="error-attempt-head">
+                    <span>第 {a.attempt} 次尝试</span>
+                    <code>退出码: {a.exit_code ?? '—'}</code>
+                  </div>
+                  <pre className="error-attempt-trace">{a.error || '（无输出）'}</pre>
+                </div>
+              ))}
+              {!detailTask.error_detail?.attempts?.length && (
+                <p className="muted">该任务没有更详细的失败记录</p>
+              )}
+            </div>
+            <div className="modal-footer">
+              {detailTask.log_path && <code className="muted small">日志文件: {detailTask.log_path}</code>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -246,6 +246,26 @@ class ClaudeExecutor:
     def _is_unresolvable(self, output: str) -> bool:
         return bool(_UNRESOLVABLE_RE.search(output))
 
+    def _extract_error(self, output: str, max_chars: int = 3000) -> str:
+        """从一次执行的输出中提取错误信息（trace 优先，否则取尾部）。
+
+        claude -p --output-format json 时输出为 JSON，核心内容在 result 字段；
+        result 内若含 Python Traceback 则从其起始处截取（异常堆栈对调试最有价值）。
+        """
+        if not output:
+            return ""
+        text = output
+        try:
+            data = json.loads(output)
+            if isinstance(data, dict) and isinstance(data.get("result"), str):
+                text = data["result"]
+        except (ValueError, TypeError):
+            pass
+        idx = text.rfind("Traceback (most recent call last)")
+        if idx != -1:
+            text = text[idx:]
+        return text[-max_chars:]
+
     def _issue_state(self, project_id: int, iid: int) -> str:
         try:
             return self.gitlab.get_issue(project_id, iid).get("state", "unknown")
@@ -277,6 +297,7 @@ class ClaudeExecutor:
         attempt = 0
         last_output = ""
         last_exit = -1
+        attempt_details: list[dict] = []  # 每次失败的详情（退出码 + 提取的 trace/错误），供 error_detail 落库
 
         while True:
             attempt += 1
@@ -316,8 +337,19 @@ class ClaudeExecutor:
                     return
                 # exit 0 但 issue 未关：Claude 可能自认无法解决（不重试）或 API 调用失败（可重试）
                 if self._is_unresolvable(output):
-                    self._finish_failed(task_id, "Claude Code 报告无法解决该 issue", output)
+                    detail = {"attempt": attempt, "exit_code": exit_code,
+                              "error": self._extract_error(output)}
+                    self._finish_failed(task_id, "Claude Code 报告无法解决该 issue", output,
+                                        error_detail=self._dump_error_detail(
+                                            [*attempt_details, detail], last_exit))
                     return
+
+            # 记录本次失败详情（含 trace 提取），供界面「查看详细原因」按钮展示
+            attempt_details.append({
+                "attempt": attempt,
+                "exit_code": exit_code,
+                "error": self._extract_error(output),
+            })
 
             # 环境性失败 → 按策略重试
             if attempt > max_retries:
@@ -326,9 +358,18 @@ class ClaudeExecutor:
             self.db.add_log(task_id, "warn", f"第 {attempt} 次失败（exit {exit_code}），准备重试（剩余 {max_retries - attempt} 次）")
             time.sleep(5)
 
-        self._finish_failed(task_id, f"重试耗尽（{max_retries} 次）后仍失败，最后退出码 {last_exit}", last_output)
+        self._finish_failed(
+            task_id, f"重试耗尽（{max_retries} 次）后仍失败，最后退出码 {last_exit}",
+            last_output,
+            error_detail=self._dump_error_detail(attempt_details, last_exit))
 
     # ---- 收尾 ----
+
+    def _dump_error_detail(self, attempts: list[dict], last_exit: int) -> str:
+        """把每次尝试的失败详情序列化为 error_detail（JSON 字符串，界面「详情」按钮展示）。"""
+        return json.dumps(
+            {"summary": f"重试耗尽后仍失败，最后退出码 {last_exit}", "attempts": attempts},
+            ensure_ascii=False)
 
     def _tail_output(self, output: str) -> str:
         lines = output.strip().splitlines()
@@ -345,12 +386,14 @@ class ClaudeExecutor:
         self._write_log_tail(task_id, output)
         logger.info("任务 %s 成功", task_id)
 
-    def _finish_failed(self, task_id: int, reason: str, output: str = "") -> None:
+    def _finish_failed(self, task_id: int, reason: str, output: str = "",
+                       error_detail: str | None = None) -> None:
         task = self.db.get_task(task_id)
         self.db.set_task_status(
             task_id, STATUS_FAILED,
             exit_code=None,
             error_message=reason,
+            error_detail=error_detail,
             finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         self.db.add_log(task_id, "error", f"任务失败: {reason}")
         self._write_log_tail(task_id, output)

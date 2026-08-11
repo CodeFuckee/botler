@@ -6,6 +6,18 @@
 
 ### Added
 
+- 任务列表**详细失败原因**查看（issue #4 追加需求）：失败摘要之外，executor 每次
+  尝试失败时都会提取错误信息（claude JSON 输出中优先提取 `Traceback` 堆栈，否则
+  取输出尾部），连同退出码按尝试次数序列化写入 `tasks.error_detail`；任务列表
+  失败原因列在存在详细记录时显示「详情」按钮，点击弹窗逐次展示「第 N 次尝试 /
+  退出码 / 错误与堆栈」（长内容可滚动），另附完整摘要与日志文件路径，界面默认
+  不直接展示详细内容。API `error_detail` 解析为结构化对象，脏数据（非法 JSON）
+  返回 `None` 不报错。涉及 `backend/botler/executor.py`、`backend/botler/database.py`
+  （迁移新增列）、`backend/botler/api/tasks.py`、`frontend/src/pages/Tasks.jsx`、
+  `frontend/src/styles.css`；新增 `backend/tests/test_executor.py`（10 个用例）覆盖
+  错误提取（JSON/Traceback/截断/空输出）、error_detail 序列化与重试耗尽 /
+  unresolvable 落库，`test_api_tasks.py` 补 error_detail 数据契约用例。
+
 - 任务列表新增**失败原因**列（issue #4）：failed / interrupted 状态直接展示后端
   `error_message`（重试耗尽、Claude 无法解决、获取 issue 失败、平台中断等），
   长文本省略号截断、悬浮显示完整内容；其余状态显示 `—`。后端 `/api/tasks` 原有
