@@ -10,22 +10,25 @@
 #   build（并行）                    deploy
 #   ┌──────────────────────┐
 #   │ frontend:build ────────────► deploy_to_code01
-#   │   (React/Vite 构建)   │      (pm2 本机部署 + 健康检查)
+#   │   (React/Vite 构建)   │      (Docker 部署 + 健康检查)
 #   └──────────────────────┘
 #
 # 说明：
-#   - 第一阶段 build：frontend:build（npm 构建前端，产出 dist 产物）与
+#   - 第一阶段 build：frontend:build（npm 构建前端，构建预检）与
 #     backend:test（uv 安装依赖 + pytest/语法检查）并行执行
-#   - 第二阶段 deploy：必须等 frontend:build 成功且拿到 dist 产物后才
-#     部署到本机（code01 = 10.0.0.122，shell executor，pm2 管理 uvicorn）
+#   - 第二阶段 deploy：frontend:build 通过后部署到本机
+#     （code01 = 10.0.0.122，shell executor，docker compose 管理容器）
 #
-# 部署模型（与 Shipyard 的 deploy_to_code01 同构）：
+# 部署模型（Docker 部署，issue #7 起替代原 pm2 模式）：
 #   - 部署目标就是 gitlab-runner 所在机器（10.0.0.122），shell executor
-#     工作目录跨 job 持久化：.venv、backend/.env、backend/config.yaml
-#     等运行时文件天然保留，无需迁移
-#   - 前端 dist 由 frontend:build 通过 artifacts 传入，下载位置恰好是
-#     FastAPI 静态托管目录 frontend/dist，无需移动
-#   - 凭据（backend/.env，gitignore 排除）不入库、不进日志
+#     工作目录跨 job 持久化：backend/.env、backend/config.yaml、botler.db、
+#     workspace/、logs/ 等运行时文件天然保留，作为 compose 挂载数据目录
+#     （BOTLER_DATA_DIR 默认 "."）
+#   - 前端已打进镜像（Dockerfile 多阶段构建，FastAPI 直接托管），
+#     deploy 不再下载 frontend:build 的 dist 产物
+#   - 容器内 git 操作（执行器 clone/push）凭据：宿主 ~/.git-credentials
+#     或 GITLAB_BOT_TOKEN 生成，挂载为容器 /root/.git-credentials
+#   - 凭据（backend/.env、.git-credentials，gitignore 排除）不入库、不进日志
 # ================================================================
 
 stages:
@@ -52,8 +55,8 @@ variables:
   # ----------------------------------------------------------
   APP_NAME: "botler"
   DEPLOY_PORT: "8000"
-  # 部署后健康检查超时（秒）
-  HEALTHCHECK_RETRIES: "15"
+  # 部署后健康检查重试次数（×2 秒 ≈ 90 秒；Docker 容器启动较 pm2 慢）
+  HEALTHCHECK_RETRIES: "45"
 
 # ================================================================
 # 公共配置
@@ -91,7 +94,7 @@ variables:
 # Stage: build —— 第一阶段：前端构建 + 后端测试（并行）
 # ================================================================
 
-# --- 前端：React/Vite 构建（产出 dist，供部署使用）---
+# --- 前端：React/Vite 构建（构建预检；产物供排查，部署走镜像内构建）---
 frontend:build:
   extends: .frontend_setup
   stage: build
@@ -199,19 +202,22 @@ backend:test:
       echo "========================================="
 
 # ================================================================
-# Stage: deploy —— 第二阶段：本机部署（pm2 + 健康检查）
-# 与 Shipyard 的 deploy_to_code01 同构：在 gitlab-runner 机器
-# （code01 = 10.0.0.122）上直接部署，无需 SSH / docker。
+# Stage: deploy —— 第二阶段：本机 Docker 部署（docker compose + 健康检查）
+# 在 gitlab-runner 机器（code01 = 10.0.0.122）上构建镜像并起容器：
+# 前端/后端/全部依赖打进镜像（Dockerfile 多阶段构建），配置与数据
+# 卷挂载自 runner 工作目录（跨 job 持久化）。原 pm2 模式退役，
+# 部署前自动停止旧 pm2 服务避免端口冲突（pm2 仍保留为手动备选）。
 # ================================================================
 deploy_to_code01:
   stage: deploy
   tags:
     - linux
     - code01
-  # 第二阶段门禁：frontend:build 成功且拿到 dist 产物后才部署
+  timeout: 30m
+  # 第二阶段门禁：frontend:build 通过后才部署（镜像自含前端构建，
+  # 不下载 dist 产物；frontend:build 起构建预检作用）
   needs:
     - job: frontend:build
-      artifacts: true
   before_script:
     - |
       set +e
@@ -220,8 +226,13 @@ deploy_to_code01:
       echo "=== 环境信息 ==="
       echo "CI_PROJECT_DIR: $CI_PROJECT_DIR"
       echo "当前用户: $(whoami)"
-      echo "Python 版本: $(python3 --version 2>/dev/null || echo '未安装')"
-      echo "pm2 版本: $(pm2 --version 2>/dev/null || echo '未安装')"
+      echo "Docker 版本: $(docker --version 2>/dev/null || echo '未安装')"
+      echo "Compose 版本: $(docker compose version --short 2>/dev/null || echo '未安装')"
+      # code01 存在全局代理环境变量（干扰外网直连），docker build 需
+      # 访问 Docker Hub 拉基础镜像，先清理代理（与 sync_to_github 一致）
+      unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+      export NO_PROXY="localhost,127.0.0.1,::1"
+      export no_proxy="$NO_PROXY"
   script:
     - |
       JOB_START_TIME=$(date +%s)
@@ -234,68 +245,45 @@ deploy_to_code01:
       dbg START "CI_PROJECT_DIR=$CI_PROJECT_DIR 凭据注入状态: GITLAB_BOT_TOKEN=$GBT WEBHOOK_SECRET=$WHS"
 
       # ================================================================
-      # 第 1 步：验证前端构建产物（artifacts 下载位置 = FastAPI 托管目录）
+      # 第 1 步：检查 docker / docker compose 可用
       # ================================================================
-      dbg STEP1 "验证前端构建产物"
-      echo "=== 1. 验证前端构建产物 ==="
-      ls -la frontend/dist/index.html >> "$DBG_LOG" 2>&1 || { dbg STEP1 "FAIL: frontend/dist/index.html 不存在"; echo "错误：缺少前端构建产物 frontend/dist"; exit 1; }
+      dbg STEP1 "检查 docker 可用性"
+      echo "=== 1. 检查 Docker ==="
+      command -v docker >/dev/null 2>&1 || { dbg STEP1 "FAIL: docker 不可用"; echo "❌ docker 不可用：Docker 部署需要 code01 安装 Docker 20.10+"; exit 1; }
+      docker compose version >/dev/null 2>&1 || { dbg STEP1 "FAIL: docker compose 不可用"; echo "❌ docker compose 不可用（需 compose v2）"; exit 1; }
+      echo "✓ docker: $(docker --version) / compose: $(docker compose version --short)"
+      dbg STEP1 "OK"
 
       # ================================================================
-      # 第 2 步：准备后端运行环境（复用跨 job 持久化的 .venv）
+      # 第 2 步：准备运行时凭据 backend/.env（凭据不入库）
+      # 已存在则保留（服务器手动维护的配置优先）；缺失时用 CI 变量
+      # 生成。容器经卷挂载读取（compose 挂载 :ro），后端 load_dotenv
+      # 加载 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHROPIC_* 等。
       # ================================================================
-      dbg STEP2 "准备后端运行环境"
-      echo "=== 2. 准备后端运行环境 ==="
-      cd backend
-      export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
-      if ! command -v uv >/dev/null 2>&1; then
-        dbg STEP2 "uv 不在 PATH，尝试安装"
-        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-      fi
-      dbg STEP2 "uv: $(command -v uv)"
-      if [ ! -x .venv/bin/python ]; then
-        rm -rf .venv
-        uv venv .venv
-      fi
-      uv pip install -r requirements.txt -i ${PIP_INDEX_URL} || { dbg STEP2 "FAIL: uv pip install"; exit 1; }
-      cd ..
-      dbg STEP2 "OK"
-
-      # ================================================================
-      # 第 3 步：检查运行时凭据（凭据不入库；CI 变量或 backend/.env 任一提供）
-      # config.py 的 load_dotenv 不覆盖已有环境变量，所以 CI 变量
-      # 直接 export 即可生效，无需 .env 文件；两者都缺则服务必崩
-      # （config.yaml 的 ${VAR} 引用无法展开），提前失败并给出指引。
-      # ================================================================
-      dbg STEP3 "检查运行时凭据"
-      echo "=== 3. 检查运行时凭据 ==="
+      dbg STEP2 "准备 backend/.env"
+      echo "=== 2. 准备 backend/.env ==="
       if [ ! -f backend/.env ]; then
-        echo "⚠️  backend/.env 不存在，检查 CI 变量..."
-        dbg STEP3 "backend/.env 不存在，逐个检查 CI 变量"
-        MISSING_VARS=""
-        for var in GITLAB_BOT_TOKEN WEBHOOK_SECRET; do
-          if [ -z "${!var:-}" ]; then
-            MISSING_VARS="${MISSING_VARS} ${var}"
-            dbg STEP3 "缺失: ${var}"
-          else
-            dbg STEP3 "存在: ${var}"
-          fi
-        done
-        if [ -n "${MISSING_VARS}" ]; then
-          dbg STEP3 "FAIL: 凭据缺失 ${MISSING_VARS}"
-          echo "❌ 凭据缺失：backend/.env 不存在，且 CI 变量未提供：${MISSING_VARS}"
+        dbg STEP2 "backend/.env 不存在，尝试用 CI 变量生成"
+        if [ -z "${GITLAB_BOT_TOKEN:-}" ] && [ -z "${WEBHOOK_SECRET:-}" ]; then
+          dbg STEP2 "FAIL: 凭据缺失"
+          echo "❌ 凭据缺失：backend/.env 不存在，且 CI 变量未提供"
+          echo "   GITLAB_BOT_TOKEN / WEBHOOK_SECRET"
           echo "   配置方法（推荐）：GitLab 项目 Settings > CI/CD > Variables 添加"
           echo "     GITLAB_BOT_TOKEN — bot 账号 PAT（scope 至少 api + write_repository）"
           echo "     WEBHOOK_SECRET   — webhook 校验 secret（如 openssl rand -hex 32）"
           echo "   或首次手动部署时在 backend/ 创建 .env（参考 backend/.env.example）"
           exit 1
         fi
-        dbg STEP3 "OK: CI 变量已提供全部凭据"
-        echo "✓ CI 变量已提供全部凭据（load_dotenv 不覆盖环境变量，无需 .env 文件）"
+        : > backend/.env
+        for var in GITLAB_BOT_TOKEN WEBHOOK_SECRET ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL; do
+          [ -n "${!var:-}" ] && echo "${var}=${!var}" >> backend/.env
+        done
+        chmod 600 backend/.env
+        echo "✓ 已用 CI 变量生成 backend/.env（变量：$(cut -d= -f1 backend/.env | paste -sd ',' -)）"
+        dbg STEP2 "OK: CI 变量生成"
       else
-        dbg STEP3 "OK: backend/.env 存在"
-        echo "✓ backend/.env 存在"
+        echo "✓ backend/.env 已存在（保留服务器配置）"
+        dbg STEP2 "OK: 已存在"
       fi
       if [ ! -f backend/config.yaml ]; then
         echo "⚠️  backend/config.yaml 不存在，用示例配置兜底"
@@ -305,34 +293,74 @@ deploy_to_code01:
       fi
 
       # ================================================================
-      # 第 4 步：确保 pm2 可用（未安装则全局安装）
+      # 第 3 步：准备容器内 git 凭据（执行器 clone/push 仓库依赖）
+      # 容器内无 libsecret/D-Bus，宿主 credential.helper 不可用；镜像
+      # 以 root 运行，凭据文件统一挂载为 /root/.git-credentials，容器内
+      # 用 GIT_CONFIG 强制 store helper 读取。优先复用宿主凭据文件，
+      # 否则用 GITLAB_BOT_TOKEN 生成（GitLab PAT，oauth2 用户名）。
       # ================================================================
-      dbg STEP4 "确保 pm2 可用"
-      echo "=== 4. 确保 pm2 可用 ==="
-      export PATH="$(npm config get prefix 2>/dev/null || echo "$HOME/.local"):$PATH"
-      if ! command -v pm2 >/dev/null 2>&1; then
-        echo "pm2 未安装，全局安装（${NPM_REGISTRY_URL}）..."
-        dbg STEP4 "安装 pm2..."
-        npm install -g pm2 --registry=${NPM_REGISTRY_URL} || { dbg STEP4 "FAIL: pm2 安装失败"; echo "错误：pm2 安装失败"; exit 1; }
+      dbg STEP3 "准备容器 git 凭据"
+      echo "=== 3. 准备容器内 git 凭据 ==="
+      GIT_CRED_FILE="$CI_PROJECT_DIR/.git-credentials"
+      if [ -f "$HOME/.git-credentials" ]; then
+        cp "$HOME/.git-credentials" "$GIT_CRED_FILE" && chmod 600 "$GIT_CRED_FILE"
+        echo "✓ 已复用宿主 git 凭据文件"
+        dbg STEP3 "OK: 复用宿主 .git-credentials"
+      elif [ -n "${GITLAB_BOT_TOKEN:-}" ]; then
+        printf 'https://oauth2:%s@home.chenkaidi.top:509\n' "$GITLAB_BOT_TOKEN" > "$GIT_CRED_FILE"
+        chmod 600 "$GIT_CRED_FILE"
+        echo "✓ 已用 GITLAB_BOT_TOKEN 生成 git 凭据（仅 home.chenkaidi.top:509）"
+        dbg STEP3 "OK: GITLAB_BOT_TOKEN 生成"
+      else
+        touch "$GIT_CRED_FILE"
+        echo "⚠️  宿主无 git 凭据且无 GITLAB_BOT_TOKEN，容器内执行器 clone/push 将失败"
+        dbg STEP3 "WARN: 无 git 凭据可用"
       fi
-      echo "pm2: $(pm2 --version)"
-      dbg STEP4 "OK: $(pm2 --version)"
+      export GIT_CREDENTIALS_FILE="$GIT_CRED_FILE"
 
       # ================================================================
-      # 第 5 步：启动/重启 botler（pm2，配置见 deploy/botler.config.js）
-      # ⚠️ 不用 pm2 restart：restart 保留旧配置（进程信息在 pm2 守护
-      # 进程里），botler.config.js 的修改不会生效。delete + start 确保
-      # 每次部署都加载最新配置。
+      # 第 4 步：停止旧 pm2 服务（部署方式切换，防 8000 端口冲突）
+      # pm2 / systemd 仍保留为手动部署备选，互斥运行
       # ================================================================
-      dbg STEP5 "pm2 delete + start"
-      echo "=== 5. 启动 botler 服务 ==="
-      pm2 delete ${APP_NAME} >/dev/null 2>&1 || true
-      # ⚠️ 配置文件必须是 .cjs：job 目录在 dify 项目下（package.json 含
-      # type: module），.js 会被当作 ESM 解析导致 require 未定义
-      pm2 start deploy/botler.config.cjs >> "$DBG_LOG" 2>&1 || { dbg STEP5 "FAIL: pm2 start"; echo "错误：pm2 start 失败"; exit 1; }
-      pm2 save >/dev/null 2>&1 || true
-      dbg STEP5 "OK"
-      sleep 3
+      dbg STEP4 "停止旧 pm2 服务"
+      echo "=== 4. 停止旧 pm2 服务 ==="
+      if command -v pm2 >/dev/null 2>&1 && pm2 describe ${APP_NAME} >/dev/null 2>&1; then
+        pm2 delete ${APP_NAME} >/dev/null 2>&1 && echo "✓ 已停止 pm2 botler（旧部署方式）" || echo "⚠️ pm2 delete 失败（继续）"
+        pm2 save >/dev/null 2>&1 || true
+        dbg STEP4 "OK: pm2 已停止"
+      else
+        echo "✓ 无运行中的 pm2 botler（或 pm2 未安装），无需停止"
+        dbg STEP4 "OK: 无需停止"
+      fi
+
+      # ================================================================
+      # 第 5 步：构建镜像并启动容器（docker compose up -d --build）
+      # 前端/后端/依赖全部打进镜像（Dockerfile 多阶段构建）；配置与
+      # 数据挂载自工作目录（BOTLER_DATA_DIR 默认 "."），容器重建不丢
+      # 数据；NODE_IMAGE / RUNTIME_IMAGE 可用 CI 变量覆盖（国内源）。
+      # ⚠️ 默认官方源构建失败时（国内网络访问 Docker Hub 超时），
+      # 自动改用国内镜像源 docker.m.daocloud.io 重试一次。
+      # ================================================================
+      dbg STEP5 "docker compose up -d --build"
+      echo "=== 5. 构建镜像并启动容器 ==="
+      export NODE_IMAGE="${NODE_IMAGE:-node:20-alpine}"
+      export RUNTIME_IMAGE="${RUNTIME_IMAGE:-node:20-bookworm-slim}"
+      if ! docker compose -p botler up -d --build >> "$DBG_LOG" 2>&1; then
+        echo "⚠️  默认镜像源构建失败（可能是 Docker Hub 不可达），改用国内镜像源重试..."
+        dbg STEP5 "WARN: 默认源失败，改用 docker.m.daocloud.io"
+        export NODE_IMAGE=docker.m.daocloud.io/library/node:20-alpine
+        export RUNTIME_IMAGE=docker.m.daocloud.io/library/node:20-bookworm-slim
+        if ! docker compose -p botler up -d --build >> "$DBG_LOG" 2>&1; then
+          dbg STEP5 "FAIL: docker compose up（国内源也失败）"
+          echo "❌ docker compose up 失败，最近日志："
+          tail -40 "$DBG_LOG"
+          exit 1
+        fi
+        echo "✓ 国内镜像源构建成功"
+      fi
+      dbg STEP5 "OK: 容器已启动"
+      echo "✓ 容器已启动："
+      docker compose -p botler ps --format "table {{.Name}}\t{{.Status}}"
 
       # ================================================================
       # 第 6 步：等待服务就绪（健康检查，失败必须 exit 1 不能假绿）
@@ -340,19 +368,19 @@ deploy_to_code01:
       dbg STEP6 "健康检查 http://localhost:${DEPLOY_PORT}/api/health"
       echo "=== 6. 等待服务就绪（http://localhost:${DEPLOY_PORT}）==="
       HEALTHY=false
-      for i in $(seq 1 ${HEALTHCHECK_RETRIES:-15}); do
+      for i in $(seq 1 ${HEALTHCHECK_RETRIES:-45}); do
         if curl -sf "http://localhost:${DEPLOY_PORT}/api/health" >/dev/null 2>&1; then
-          echo "✓ 后端健康检查通过 (${i}s)"
-          dbg STEP6 "OK: 健康检查通过 (${i}s)"
+          echo "✓ 后端健康检查通过 ($((i * 2))s)"
+          dbg STEP6 "OK: 健康检查通过 ($((i * 2))s)"
           HEALTHY=true
           break
         fi
-        echo "  等待中... (${i}s)"
-        sleep 1
+        echo "  等待中... ($((i * 2))s)"
+        sleep 2
       done
       if [ "$HEALTHY" = false ]; then
-        dbg STEP6 "FAIL: 健康检查 15 次全部失败"
-        dbg STEP6 "pm2 状态: $(pm2 describe ${APP_NAME} 2>/dev/null | grep -E 'status|restarts' | tr '\n' ' ')"
+        dbg STEP6 "FAIL: 健康检查 ${HEALTHCHECK_RETRIES:-45} 次全部失败"
+        dbg STEP6 "容器状态: $(docker compose -p botler ps --format '{{.Status}}' 2>/dev/null | tr '\n' ' ')"
       fi
 
       # ================================================================
@@ -364,23 +392,23 @@ deploy_to_code01:
         curl -sf "http://localhost:${DEPLOY_PORT}/api/health" && echo "" && echo "✓ /api/health OK"
         echo "--- 前端页面检查 ---"
         if curl -sf "http://localhost:${DEPLOY_PORT}/" | grep -q '<div id="root">'; then
-          echo "✓ 前端页面可达（index.html 渲染）"
+          echo "✓ 前端页面可达（镜像内 dist 渲染）"
         else
-          echo "⚠️  前端页面未返回预期内容（dist 可能未更新，检查 pm2 工作目录）"
+          echo "⚠️  前端页面未返回预期内容（镜像内 dist 可能异常，检查容器日志）"
         fi
         echo ""
-        echo "=== pm2 进程状态 ==="
-        pm2 describe ${APP_NAME} | grep -E "status|restarts|uptime" || pm2 ls | grep ${APP_NAME}
+        echo "=== docker compose 状态 ==="
+        docker compose -p botler ps
         echo ""
-        echo "✓ 部署成功！应用运行在 http://10.0.0.122:${DEPLOY_PORT}"
+        echo "✓ 部署成功！应用运行在 http://10.0.0.122:${DEPLOY_PORT}（Docker 容器 botler）"
       else
         echo "错误：服务健康检查未通过（${DEPLOY_PORT} 端口无响应）"
         echo ""
-        echo "=== 服务状态 ==="
-        pm2 ls | grep ${APP_NAME} || echo "  （进程未找到）"
+        echo "=== 容器状态 ==="
+        docker compose -p botler ps 2>/dev/null || echo "  （容器未找到）"
         echo ""
-        echo "=== 最近日志 ==="
-        tail -30 logs/pm2-error.log 2>/dev/null || pm2 logs ${APP_NAME} --nostream --lines 30 2>/dev/null || true
+        echo "=== 容器日志（尾部 80 行）==="
+        docker compose -p botler logs --tail 80 2>/dev/null || true
         echo ""
         echo "错误：部署验证失败，Job 标记为失败"
         exit 1

@@ -89,6 +89,11 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 # 或 Docker（见下方「Docker 部署」）
 ```
 
+> 💡 **CI/CD 自动部署**：推送 main 分支后，GitLab CI 自动执行 Docker 部署
+> （`deploy_to_code01`：构建镜像 → compose 启动 → 健康检查），无需手动操作。
+> 部署前会自动停止旧 pm2 服务，凭据优先用服务器上 `backend/.env`（缺失时用
+> CI 变量生成）。
+
 冒烟测试：浏览器打开 `http://10.0.0.122:8000` → 添加仓库（自动注册 webhook）→
 在 GitLab 建一个测试 issue 指派给 bot → 观察任务列表，验证代码推上 main、issue 自动关闭。
 
@@ -127,6 +132,7 @@ curl http://localhost:8000/api/health      # {"ok":true,...}
 | `BOTLER_HTTP_PORT` | `8000` | 宿主机映射端口 |
 | `BOTLER_DATA_DIR` | `.` | 数据目录前缀（换目录时 config.yaml / botler.db 需一并迁移） |
 | `NODE_IMAGE` / `RUNTIME_IMAGE` | 官方镜像 | 构建基础镜像覆盖（国内镜像源） |
+| `GIT_CREDENTIALS_FILE` | `/dev/null` | 容器内 git 凭据文件（挂载为 `/root/.git-credentials`，执行器 clone/push 仓库依赖；CI 部署自动用宿主凭据或 `GITLAB_BOT_TOKEN` 生成，手动部署可指向任意格式的 `.git-credentials` 文件） |
 
 自定义镜像：`docker build -t botler:latest .`（见 Dockerfile 头部注释）。
 停止：`docker compose down`（数据保留）；删除数据：`docker compose down -v`。

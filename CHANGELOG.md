@@ -14,6 +14,18 @@
 
 ### Changed
 
+- CI/CD 部署阶段改为 **Docker 部署**（issue #7）：`deploy_to_code01` 不再用 pm2
+  直接部署，改为 `docker compose up -d --build`（前端已打进镜像，Dockerfile
+  多阶段构建，不再依赖 frontend:build 的 dist 产物）；部署前自动停止旧 pm2
+  服务避免 8000 端口冲突；`backend/.env` 缺失时用 CI 变量生成
+  （GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHROPIC_*）；容器内 git 凭据
+  （执行器 clone/push 依赖）通过挂载 `.git-credentials` + `GIT_CONFIG` 强制
+  store helper 提供（优先复用宿主凭据，否则用 GITLAB_BOT_TOKEN 生成）；
+  默认镜像源（Docker Hub）不可达时自动改用国内源
+  `docker.m.daocloud.io` 重试；`docker-compose.yml` 新增 `GIT_CREDENTIALS_FILE`
+  可调挂载、`deploy/verify-docker.sh` 同步适配。pm2 / systemd 仍保留为手动
+  部署备选。
+
 - 「添加仓库」默认方式改为**本地文件夹方式**：打开仓库管理页时默认选中「本地文件夹
   （读取 git remote）」，而非 GitLab URL 方式；切换方式仍可随时手动选择。涉及
   `frontend/src/pages/Repos.jsx`。

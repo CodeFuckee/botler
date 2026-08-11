@@ -17,3 +17,5 @@ frontend/dist/
 workspace/
 logs/
 *.log
+# 容器内 git 凭据（CI 部署生成，含 token，严禁入库）
+.git-credentials

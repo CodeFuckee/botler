@@ -39,6 +39,12 @@ services:
       BOTLER_CONFIG: /app/backend/config.yaml
       BOTLER_DB: /app/backend/botler.db
       PYTHONPATH: /app/backend
+      # 容器内 git（执行器 clone/push 仓库）凭据：强制 store helper 读取
+      # 挂载的凭据文件（容器内无 libsecret/D-Bus，宿主 credential.helper
+      # 配置不可用；镜像以 root 运行，凭据文件固定挂载为 /root/.git-credentials）
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: credential.helper
+      GIT_CONFIG_VALUE_0: store --file=/root/.git-credentials
     volumes:
       # 配置与凭据（挂载文件，改动即生效；.env 只读）
       - ${BOTLER_DATA_DIR:-.}/backend/config.yaml:/app/backend/config.yaml
@@ -48,6 +54,11 @@ services:
       # 仓库工作区与任务执行日志
       - ${BOTLER_DATA_DIR:-.}/workspace:/app/workspace
       - ${BOTLER_DATA_DIR:-.}/logs:/app/logs
+      # 容器内 git 凭据（执行器 clone/push 用）。默认挂载 /dev/null 兜底
+      # （docker 对不存在的源路径会创建目录导致挂载错位，空凭据无害）；
+      # 部署脚本 / verify 脚本 export GIT_CREDENTIALS_FILE 指向真实凭据
+      # 文件（优先宿主 ~/.git-credentials 或 CI 生成的 .git-credentials）
+      - ${GIT_CREDENTIALS_FILE:-/dev/null}:/root/.git-credentials:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
       interval: 30s

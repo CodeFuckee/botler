@@ -55,6 +55,10 @@ if [[ "${1:-}" == "--full" ]]; then
   cp backend/config.example.yaml "$TMP/backend/config.yaml"
   printf 'GITLAB_BOT_TOKEN=fake-token-for-smoke\nWEBHOOK_SECRET=fake-secret-for-smoke\n' > "$TMP/backend/.env"
   touch "$TMP/backend/botler.db"   # 空 db，SQLite 首次运行自动建表
+  # 容器内 git 凭据占位（冒烟不涉及真实 git 操作，空凭据文件即可；
+  # 不 export 的话 compose 会挂载 /dev/null 兜底，此处显式指定更贴近真实部署）
+  touch "$TMP/.git-credentials"
+  export GIT_CREDENTIALS_FILE="$TMP/.git-credentials"
 
   # 用假凭据起容器
   BOTLER_DATA_DIR="$TMP" BOTLER_HTTP_PORT=18000 \
