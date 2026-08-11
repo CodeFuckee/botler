@@ -8,8 +8,8 @@ export default function Repos() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // 添加表单（method: 'url' = GitLab URL 方式，'local' = 本地文件夹方式）
-  const [method, setMethod] = useState('url')
+  // 添加表单（method: 'url' = GitLab URL 方式，'local' = 本地文件夹方式；默认本地文件夹方式）
+  const [method, setMethod] = useState('local')
   const [form, setForm] = useState({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '' })
   const [remotes, setRemotes] = useState([])
   const [addError, setAddError] = useState('')
