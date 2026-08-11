@@ -103,6 +103,21 @@ def list_repos(request: Request):
     return {"repos": [_repo_row_to_dict(r) for r in rows]}
 
 
+@router.get("/browse")
+def browse_directories(path: str = "/"):
+    """列出服务器上指定路径的子目录（前端目录选择对话框逐级浏览用）。
+
+    返回当前路径、父路径与子目录列表；每个子目录标记是否为 git 仓库、
+    是否可读。伪文件系统（/proc、/sys 等）不展示。
+    """
+    from ..dir_browse import DirBrowseError, list_subdirectories
+
+    try:
+        return list_subdirectories(path.strip() or "/")
+    except DirBrowseError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/discover")
 def discover_remote(request: Request, body: LocalPathBody):
     """读取本地 git 仓库的 remote 列表（前端展示，供用户选择）。"""

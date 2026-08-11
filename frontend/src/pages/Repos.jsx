@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api.js'
+import FolderPicker from '../components/FolderPicker.jsx'
 
 export default function Repos() {
   const [repos, setRepos] = useState([])
@@ -12,6 +13,8 @@ export default function Repos() {
   const [form, setForm] = useState({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '' })
   const [remotes, setRemotes] = useState([])
   const [addError, setAddError] = useState('')
+  // 服务器目录选择对话框
+  const [pickerOpen, setPickerOpen] = useState(false)
   // 测试结果: repoId -> {token/project/webhook}
   const [testResults, setTestResults] = useState({})
 
@@ -53,12 +56,13 @@ export default function Repos() {
   }
 
   // 本地文件夹方式：读取该文件夹 git remote -v 的 remote 列表
-  const discover = async () => {
+  const discover = async (path) => {
     setAddError('')
-    if (!form.local_path.trim()) { setAddError('请填写本地文件夹路径'); return }
+    const target = (path ?? form.local_path).trim()
+    if (!target) { setAddError('请填写本地文件夹路径'); return }
     setBusy(true)
     try {
-      const res = await api.post('/api/repos/discover', { local_path: form.local_path.trim() })
+      const res = await api.post('/api/repos/discover', { local_path: target })
       setRemotes(res.remotes)
       setForm((f) => ({ ...f, remote_name: res.remotes.length === 1 ? res.remotes[0].name : '' }))
     } catch (e) {
@@ -67,6 +71,14 @@ export default function Repos() {
     } finally {
       setBusy(false)
     }
+  }
+
+  // 目录选择对话框选中：回填路径并自动读取 remote
+  const handlePickFolder = (path) => {
+    setPickerOpen(false)
+    setForm((f) => ({ ...f, local_path: path, remote_name: '' }))
+    setRemotes([])
+    discover(path)
   }
 
   const toggle = async (repo) => {
@@ -132,7 +144,10 @@ export default function Repos() {
                 value={form.local_path}
                 onChange={(e) => setForm({ ...form, local_path: e.target.value })}
               />
-              <button className="btn" disabled={busy} onClick={discover}>
+              <button className="btn" disabled={busy} onClick={() => setPickerOpen(true)}>
+                浏览…
+              </button>
+              <button className="btn" disabled={busy} onClick={() => discover()}>
                 {busy ? '读取中…' : '读取 remote'}
               </button>
             </div>
@@ -173,6 +188,13 @@ export default function Repos() {
         </div>
         {addError && <div className="alert alert-error">{addError}</div>}
       </div>
+
+      <FolderPicker
+        open={pickerOpen}
+        initialPath={form.local_path || '/'}
+        onSelect={handlePickFolder}
+        onClose={() => setPickerOpen(false)}
+      />
 
       <div className="card">
         <h2>仓库列表（{repos.length}）</h2>

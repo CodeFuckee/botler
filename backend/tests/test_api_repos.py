@@ -144,3 +144,57 @@ class TestAddRepoWithLocalPath:
         tc, stub, tmp_path = client
         resp = tc.post("/api/repos", json={"name": "无来源"})
         assert resp.status_code == 400
+
+
+class TestBrowseDirectories:
+    """目录浏览 API（供前端目录选择对话框使用）。"""
+
+    def test_browse_returns_subdirs(self, client):
+        tc, stub, tmp_path = client
+        (tmp_path / "repo").mkdir()
+        (tmp_path / "plain").mkdir()
+        (tmp_path / "file.txt").write_text("x")
+        resp = tc.get("/api/repos/browse", params={"path": str(tmp_path)})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["path"] == str(tmp_path)
+        assert data["parent"] == str(tmp_path.parent)
+        names = [d["name"] for d in data["subdirs"]]
+        assert names == ["plain", "repo"]
+        assert all(d["is_git"] is False for d in data["subdirs"])
+        assert all(d["readable"] is True for d in data["subdirs"])
+
+    def test_browse_marks_git_repo(self, client):
+        tc, stub, tmp_path = client
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        resp = tc.get("/api/repos/browse", params={"path": str(tmp_path)})
+        assert resp.status_code == 200
+        by_name = {d["name"]: d for d in resp.json()["subdirs"]}
+        assert by_name["repo"]["is_git"] is True
+
+    def test_browse_default_path_is_root(self, client):
+        tc, stub, tmp_path = client
+        resp = tc.get("/api/repos/browse")
+        assert resp.status_code == 200
+        assert resp.json()["path"] == "/"
+
+    def test_browse_blank_path_uses_root(self, client):
+        """空 path 参数不应解析到服务进程工作目录，回退到根目录。"""
+        tc, stub, tmp_path = client
+        resp = tc.get("/api/repos/browse", params={"path": "  "})
+        assert resp.status_code == 200
+        assert resp.json()["path"] == "/"
+
+    def test_browse_missing_path_returns_400(self, client):
+        tc, stub, tmp_path = client
+        resp = tc.get("/api/repos/browse", params={"path": str(tmp_path / "nope")})
+        assert resp.status_code == 400
+        assert "路径" in resp.json()["detail"]
+
+    def test_browse_file_path_returns_400(self, client):
+        tc, stub, tmp_path = client
+        f = tmp_path / "file.txt"
+        f.write_text("x")
+        resp = tc.get("/api/repos/browse", params={"path": str(f)})
+        assert resp.status_code == 400

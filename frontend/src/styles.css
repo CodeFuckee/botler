@@ -294,3 +294,91 @@ code {
   font-family: var(--mono);
   font-size: 12px;
 }
+
+/* ---- 模态框 / 目录选择对话框 ---- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 16, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 640px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 12px;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.modal-close {
+  padding: 2px 10px;
+  font-size: 18px;
+  line-height: 1.2;
+}
+.folder-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.folder-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-hidden-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.folder-list {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-height: 220px;
+  max-height: 46vh;
+}
+.folder-empty { padding: 24px; text-align: center; }
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(42, 53, 80, 0.5);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.folder-item:hover:not(:disabled) { background: var(--bg-hover); }
+.folder-item:disabled { opacity: 0.45; cursor: not-allowed; }
+.folder-icon { font-size: 14px; }
+.folder-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge-git {
+  background: rgba(52, 201, 123, 0.15);
+  color: var(--ok);
+  border: 1px solid rgba(52, 201, 123, 0.4);
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
