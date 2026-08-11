@@ -8,8 +8,9 @@
 
 - 「添加仓库」按钮移到表单底部单独一行并水平居中（issue #6）：原按钮与「显示名称」
   「webhook 回调地址」输入框挤在同一行，紧挨 webhook 字段易被误解为 webhook 专属
-  操作；现拆为两行，按钮独占一行（水平居中）并附说明文字。涉及
-  `frontend/src/pages/Repos.jsx`、`frontend/src/styles.css`。
+  操作；现拆为两行，按钮独占一行（水平居中，追加需求 note 158 后移除旁侧说明文字
+  并加宽按钮——新增 `.btn-wide` 样式）。涉及 `frontend/src/pages/Repos.jsx`、
+  `frontend/src/styles.css`。
 - CI 健壮性修复：`sync_to_github` 的 git push 加 `timeout 60` 秒超时——git 自身
   无连接超时，github.com 直连被阻断时单次 push 会挂数分钟，既有 10 次重试循环
   演变成无限挂起（实测流水线卡死 20+ 分钟）；加超时后单次尝试快速失败进入

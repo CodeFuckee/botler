@@ -184,10 +184,9 @@ export default function Repos() {
           />
         </div>
         <div className="form-row center">
-          <button className="btn btn-primary" disabled={busy} onClick={addRepo}>
+          <button className="btn btn-primary btn-wide" disabled={busy} onClick={addRepo}>
             {busy ? '添加中…' : '添加'}
           </button>
-          <span className="muted small">添加后平台会自动注册 webhook 并开始监控该仓库的 issue</span>
         </div>
         {addError && <div className="alert alert-error">{addError}</div>}
       </div>
