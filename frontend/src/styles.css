@@ -92,6 +92,16 @@ body {
 .navlink.active { color: var(--primary); background: var(--primary-weak); }
 .navlink:focus-visible { box-shadow: var(--focus-ring); }
 
+/* ---- 版本徽标（构建产物 version.json 注入，导航栏右侧）---- */
+.version-badge {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .content {
   width: 100%;
   max-width: 1100px;

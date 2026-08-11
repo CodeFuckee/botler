@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "gen:version": "node scripts/gen-version.mjs",
+    "build": "node scripts/gen-version.mjs && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

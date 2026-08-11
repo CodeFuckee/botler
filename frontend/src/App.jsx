@@ -4,6 +4,7 @@ import Templates from './pages/Templates.jsx'
 import Tasks from './pages/Tasks.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
+import VersionBadge from './components/VersionBadge.jsx'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           设置
         </NavLink>
+        <VersionBadge />
       </nav>
       <main className="content">
         <Routes>

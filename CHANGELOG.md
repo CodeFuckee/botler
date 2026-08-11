@@ -6,6 +6,21 @@
 
 ### Added
 
+- **前端版本号与构建时间显示**（issue #9）：每次构建（CI/CD `frontend:build` 或
+  本地 `npm run build`）自动自增版本号（patch 位 +1，如 1.0.0 → 1.0.1）并记录
+  构建时间，前端导航栏右侧显示 `v1.0.1 · 2026-08-11 22:19` 徽标（悬停显示构建
+  时间）。版本号持久化在 `data/version.txt`（数据目录跨构建/部署持久，构建目录
+  被清理不丢）；`frontend/scripts/gen-version.mjs`（新增）在 vite 构建前自增版本
+  号并生成 `frontend/public/version.json`（含 version + buildTime），vite 构建时
+  自动复制进 dist/；前端新增 `VersionBadge` 组件 fetch 渲染，开发模式（无该文件）
+  自动隐藏。
+  - 涉及 `frontend/scripts/gen-version.mjs`（新增）、
+    `frontend/src/components/VersionBadge.jsx`（新增）、`frontend/package.json`
+    （build 前置 gen:version）、`frontend/src/App.jsx`（导航栏挂载徽标）、
+    `frontend/src/styles.css`（`.version-badge` 样式）、`.gitlab-ci.yml`
+    （frontend:build 注入 `BOTLER_DATA_DIR` 指向持久数据目录，构建后输出
+    `dist/version.json` 验证）、`.gitignore`（忽略生成的 version.json）。
+
 - **任务断点续跑**（issue #8）：CI/CD 频繁重新部署导致正在执行的任务进程被杀后，
   重启不再从头重跑——executor 每次执行后把 claude 会话 id（`claude -p` JSON 输出
   的 `session_id`）持久化到 `tasks.claude_session_id`；重试或平台重启恢复
