@@ -79,15 +79,20 @@ export default function Tasks() {
           <thead>
             <tr>
               <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
-              <th>状态</th><th>尝试</th><th>来源</th><th>创建时间</th>
+              <th>状态</th><th>尝试</th><th>来源</th><th>失败原因</th><th>创建时间</th>
             </tr>
           </thead>
           <tbody>
             {data.tasks.length === 0 && (
-              <tr><td colSpan={8} className="muted">暂无任务</td></tr>
+              <tr><td colSpan={9} className="muted">暂无任务</td></tr>
             )}
             {data.tasks.map((t) => {
               const meta = STATUS_META[t.status] || { label: t.status, cls: '' }
+              // 仅失败/中断的任务展示失败原因
+              const failedReason =
+                (t.status === 'failed' || t.status === 'interrupted') && t.error_message
+                  ? t.error_message
+                  : ''
               return (
                 <tr key={t.id}>
                   <td><Link to={`/tasks/${t.id}`}>#{t.id}</Link></td>
@@ -97,6 +102,9 @@ export default function Tasks() {
                   <td><span className={'badge ' + meta.cls}>{meta.label}</span></td>
                   <td>{t.attempt_count}</td>
                   <td>{t.triggered_by === 'reconcile' ? '对账' : 'webhook'}</td>
+                  <td className="ellipsis" title={failedReason}>
+                    {failedReason || <span className="muted">—</span>}
+                  </td>
                   <td>{fmtTime(t.created_at)}</td>
                 </tr>
               )

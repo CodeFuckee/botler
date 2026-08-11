@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- 任务列表新增**失败原因**列（issue #4）：failed / interrupted 状态直接展示后端
+  `error_message`（重试耗尽、Claude 无法解决、获取 issue 失败、平台中断等），
+  长文本省略号截断、悬浮显示完整内容；其余状态显示 `—`。后端 `/api/tasks` 原有
+  数据契约不变，新增 `backend/tests/test_api_tasks.py`（13 个用例）覆盖列表字段、
+  状态过滤、搜索、分页、统计与活跃任务去重。涉及 `frontend/src/pages/Tasks.jsx`。
+
 ### Changed
 
 - 「添加仓库」默认方式改为**本地文件夹方式**：打开仓库管理页时默认选中「本地文件夹
