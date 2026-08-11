@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import time
 from urllib.parse import urlparse, unquote
@@ -19,6 +20,27 @@ logger = logging.getLogger(__name__)
 HOOK_URL_PATH = "/webhook/gitlab"
 # 超过该延迟即丢弃 webhook 事件（GitLab 默认超时 10s）
 HOOK_TIMEOUT_SECONDS = 5
+
+
+def _is_private_url(url: str) -> bool:
+    """URL 是否指向本地/私有网络地址（GitLab 默认拒绝注册这类 webhook）。
+
+    只判断字面 IP（含 localhost / loopback / 私有网段）；域名不做 DNS 解析，
+    视为外部地址——域名是否解析到内网由 GitLab 侧判断。
+    """
+    try:
+        host = urlparse(url).hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host.rstrip(".").lower() == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback
 
 
 def _looks_like_scp_url(value: str) -> bool:
@@ -163,13 +185,24 @@ class GitLabClient:
                 assert isinstance(updated, dict)
                 logger.info("更新已有 webhook: project=%s hook=%s", project_id, hook["id"])
                 return updated
-        created = self._request(
-            "POST", f"/projects/{project_id}/hooks",
-            json={
-                "url": url, "issues_events": True,
-                "push_events": False, "token": secret,
-                "enable_ssl_verification": False,
-            })
+        try:
+            created = self._request(
+                "POST", f"/projects/{project_id}/hooks",
+                json={
+                    "url": url, "issues_events": True,
+                    "push_events": False, "token": secret,
+                    "enable_ssl_verification": False,
+                })
+        except GitLabError as e:
+            if e.status_code == 422 and _is_private_url(url):
+                raise GitLabError(
+                    f"{e}。GitLab 默认禁止向本地/私有网络地址注册 webhook，请在 "
+                    "GitLab Admin → Settings → Network → Outbound requests 勾选 "
+                    "「Allow requests to the local network from webhooks and "
+                    "integrations」，或用公网可达的回调地址（添加仓库时的 "
+                    "webhook_url 字段）。",
+                    e.status_code)
+            raise
         assert isinstance(created, dict)
         logger.info("注册 webhook: project=%s hook=%s", project_id, created["id"])
         return created

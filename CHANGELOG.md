@@ -22,6 +22,14 @@
 
 ### Fixed
 
+- 修复添加仓库时 webhook 注册报错「注册 webhook 失败: GitLab API 错误 422: Invalid url given」
+  （webhook_url 留空时必现，URL 方式添加同样受影响）：根因是 Botler 部署在内网
+  （10.0.0.122），GitLab 默认禁止向本地/私有网络地址注册 webhook（SSRF 防护，
+  `allow_local_requests_from_web_hooks_and_services` 默认 false）。修复方案：
+  ① GitLab 侧在 Admin → Settings → Network → Outbound requests 勾选「Allow requests
+  to the local network from webhooks and integrations」；② Botler 侧
+  `register_webhook` 检测到 422 + 内网回调地址时，错误信息自动追加可操作提示
+  （新增 `_is_private_url` 判定 + 15 个测试用例），涉及 `backend/botler/gitlab_client.py`。
 - 修复 `GitLabClient.resolve_project` 无法识别 scp-like SSH URL（`git@host:group/project.git`，
   `git remote -v` 最常见形态）：此前 urlparse 解析不出 scheme，整串被当作项目路径导致 404；
   现按最后一个 `:` 之后的仓库路径解析，并补充 `.git` 后缀剥离与嵌套 group 支持。
