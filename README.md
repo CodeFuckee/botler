@@ -116,6 +116,8 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 GET    /api/health                    健康检查
 GET    /api/repos                     仓库列表
 POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook）
+GET    /api/repos/browse              浏览服务器目录（目录选择对话框逐级浏览用）
+POST   /api/repos/discover            读取本地文件夹的 git remote 列表
 PUT    /api/repos/{id}                更新仓库（启用/停用/模版覆盖）
 DELETE /api/repos/{id}                删除仓库
 POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook）
