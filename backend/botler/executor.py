@@ -13,7 +13,9 @@
 接续上次会话，且工作区只 fetch 不清空（保留 Claude 已做的修改），
 从上次中断处继续而非从头重跑。会话文件丢失时自动降级为全新会话。
 
-git 凭据通过 GIT_ASKPASS 注入，token 不落盘（askpass 脚本在每次 clean 时被清除）。
+git 凭据通过 GIT_ASKPASS 注入：askpass 脚本（0700）保留在工作区根目录，
+每次 prepare 覆盖刷新（token 轮换自动生效）。保留不删除，避免并发/重试时
+脚本缺失导致 fetch 回退 credential helper 旧凭据（issue #12）。
 """
 
 from __future__ import annotations
@@ -146,12 +148,12 @@ class ClaudeExecutor:
         cfg = self.config.get()
         workdir = self._repo_workdir(repo)
         askpass = self._askpass_script(repo["name"])
-        git_env = {
-            "GIT_ASKPASS": str(askpass),
-            "GIT_TERMINAL_PROMPT": "0",
-            "HOME": str(Path.home()),
-        }
-        git_env.update(os.environ)
+        # 先并入 os.environ 再设置关键项，防止外部环境变量（如 GIT_ASKPASS
+        # 指向别处）覆盖凭据注入
+        git_env = dict(os.environ)
+        git_env["GIT_ASKPASS"] = str(askpass)
+        git_env["GIT_TERMINAL_PROMPT"] = "0"
+        git_env["HOME"] = str(Path.home())
 
         if not (workdir / ".git").exists():
             if _row_get(repo, "local_path"):
@@ -175,16 +177,22 @@ class ClaudeExecutor:
         remote = _row_get(repo, "remote_name") or "origin"
         self._git(workdir, "fetch", remote, "--prune", env=git_env)
         if not resume:
+            # checkout 实际所在的分支（main → master），reset 跟随同一分支。
+            # 不依赖 {remote}/HEAD 符号引用：手工加 remote 的仓库无 origin/HEAD，
+            # reset --hard origin/HEAD 必现 ambiguous argument（issue #12）
+            branch = "main"
             try:
                 self._git(workdir, "checkout", "main", env=git_env)
             except ExecutorError:
                 logger.warning("%s: 无 main 分支，尝试 checkout master", repo["name"])
+                branch = "master"
                 self._git(workdir, "checkout", "master", env=git_env)
-            self._git(workdir, "reset", "--hard", f"{remote}/HEAD", env=git_env)
+            self._git(workdir, "reset", "--hard", f"{remote}/{branch}", env=git_env)
             self._git(workdir, "clean", "-fd", env=git_env)
-        # askpass 脚本被 clean -fd 清除（.botler-askpass.sh 不受 .gitignore 保护时会被删；
-        # 保险起见再显式删除，避免 token 残留）
-        askpass.unlink(missing_ok=True)
+        # askpass 脚本保留不删除（issue #12）：并发任务/重试时序下脚本被删 →
+        # fetch 回退 credential helper 旧凭据 → HTTP Basic: Access denied。
+        # 脚本内容每次 prepare 覆盖刷新（token 轮换自动生效），权限 0700，
+        # 且在工作区父目录，不受 clean -fd 波及。
         return workdir, git_env
 
     # ---- 提示词与环境 ----

@@ -171,6 +171,19 @@
 
 ### Fixed
 
+- **修复运行任务失败——origin/HEAD 缺失与 fetch 凭据间歇失败**（issue #12）：
+  任务重试耗尽后退出码 -1。根因有二：(1) `prepare_workspace` 每次执行
+  `git reset --hard origin/HEAD`，依赖 `origin/HEAD` 符号引用——手工添加
+  remote 的仓库（如 local_path 方式注册的 botler 自身）无此引用，报
+  `ambiguous argument 'origin/HEAD'` **必现失败**；修复为 reset 跟随实际
+  checkout 的分支（main → master），不再依赖 origin/HEAD。(2) askpass
+  凭据脚本在每次 prepare 结束后被删除，并发任务/重试时序下脚本不存在 →
+  git 回退 credential helper 旧凭据 → `HTTP Basic: Access denied` **间歇性
+  失败**；修复为保留脚本（每次 prepare 覆盖刷新，0700 权限，token 轮换自动
+  生效），并调整 `git_env` 构造顺序防止外部环境变量覆盖凭据注入。涉及
+  `backend/botler/executor.py`。测试：新增 2 个用例（origin/HEAD 缺失时
+  prepare 应成功；prepare 后 askpass 脚本保留），本地全量 154 passed。
+
 - **修复运行任务必现失败**（issue #11）：任务每次执行都在 `prepare_workspace` 抛
   `AttributeError: 'sqlite3.Row' object has no attribute 'get'`，重试耗尽后退出码
   -1。根因：`database` 层查询返回 `sqlite3.Row`（无 `.get()` 方法），而 `executor`

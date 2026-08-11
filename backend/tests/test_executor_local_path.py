@@ -108,3 +108,38 @@ class TestPrepareWorkspaceLocalPath:
         d["remote_name"] = None  # 老数据没有 remote_name，应回退 origin
         workdir, _env = executor.prepare_workspace(d)
         assert Path(workdir) == repo
+
+
+# ---- issue #12 复现：origin/HEAD 缺失必现失败 + askpass 脚本被删致 fetch 凭据间歇失败 ----
+
+class TestPrepareWorkspaceIssue12:
+    """issue #12：运行任务失败日志——
+    第 1 次 `git fetch` HTTP Basic: Access denied（askpass 脚本被上次执行 unlink，
+    并发/重试时脚本不存在 → git 回退 credential helper 旧凭据 → 间歇性失败）；
+    第 2、3 次 `git reset --hard origin/HEAD` → ambiguous argument（工作区
+    origin/HEAD 符号引用不存在（手工加 remote 的仓库无此引用），必现失败）。
+    """
+
+    def test_reset_without_origin_head(self, executor, tmp_path):
+        """origin/HEAD 符号引用缺失时 prepare_workspace 不应失败。
+
+        修复前：reset --hard origin/HEAD → 'ambiguous argument' → ExecutorError；
+        修复后：reset 目标跟随实际 checkout 的分支（origin/main）。
+        """
+        repo = _make_local_repo(tmp_path)
+        # 模拟手工加 remote 的仓库：删除 origin/HEAD 符号引用
+        subprocess.run(["git", "-C", str(repo), "remote", "set-head", "origin", "-d"],
+                       check=True)
+        workdir, _env = executor.prepare_workspace(_repo_dict(str(repo)))
+        assert Path(workdir) == repo
+
+    def test_askpass_script_kept_after_prepare(self, executor, tmp_path):
+        """prepare 结束后 askpass 脚本应保留（供后续 fetch 复用）。
+
+        修复前：prepare 末尾 unlink 脚本 → 并发任务/下次重试 fetch 时脚本
+        不存在 → git 回退 credential helper 旧凭据 → HTTP Basic: Access denied。
+        """
+        repo = _make_local_repo(tmp_path)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        script = executor.workspace_root / ".botler-askpass-project.sh"
+        assert script.exists(), "askpass 脚本在 prepare 后被删除，fetch 凭据间歇失败"
