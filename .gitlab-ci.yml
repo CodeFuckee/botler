@@ -430,9 +430,22 @@ deploy_to_code01:
         echo "  等待中... (${i}s)"
         sleep 1
       done
+      # ⚠️ 假绿防御：健康检查可能打到被旧进程占用的端口（如手动部署
+      # /旧部署方式未停止，EADDRINUSE 导致 uvicorn 崩溃重启循环）。
+      # pm2 restarts ≥ 3 即判定健康检查并非来自本进程，标记失败。
+      if [ "$HEALTHY" = true ]; then
+        PM2_RESTARTS=$(pm2 jlist 2>/dev/null | python3 -c "import json,sys;apps=json.load(sys.stdin);print(next((a['pm2_env'].get('restart_time',0) for a in apps if a.get('name')=='$APP_NAME'),0))")
+        dbg STEP7 "pm2 restarts=${PM2_RESTARTS}"
+        if [ "${PM2_RESTARTS:-0}" -ge 3 ]; then
+          echo "❌ 假绿检测：pm2 进程 restarts=${PM2_RESTARTS}（崩溃重启循环）"
+          echo "   健康检查可能打到了其他进程占用的 8000 端口（旧部署方式/手动进程未停止）"
+          HEALTHY=false
+        fi
+      fi
       if [ "$HEALTHY" = false ]; then
-        dbg STEP7 "FAIL: 健康检查 ${HEALTHCHECK_RETRIES:-30} 次全部失败"
+        dbg STEP7 "FAIL: 健康检查 ${HEALTHCHECK_RETRIES:-30} 次全部失败或假绿"
         dbg STEP7 "pm2 状态: $(pm2 describe ${APP_NAME} 2>/dev/null | grep -E 'status|restarts' | tr '\n' ' ')"
+        dbg STEP7 "8000 端口: $(ss -tlnp 2>/dev/null | grep ':8000' | tr '\n' ' ')"
       fi
 
       # ================================================================
