@@ -182,9 +182,12 @@ export default function Repos() {
             value={form.webhook_url}
             onChange={(e) => setForm({ ...form, webhook_url: e.target.value })}
           />
+        </div>
+        <div className="form-row">
           <button className="btn btn-primary" disabled={busy} onClick={addRepo}>
             {busy ? '添加中…' : '添加'}
           </button>
+          <span className="muted small">添加后平台会自动注册 webhook 并开始监控该仓库的 issue</span>
         </div>
         {addError && <div className="alert alert-error">{addError}</div>}
       </div>

@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 「添加仓库」按钮移到表单底部单独一行（issue #6）：原按钮与「显示名称」「webhook
+  回调地址」输入框挤在同一行，紧挨 webhook 字段易被误解为 webhook 专属操作；
+  现拆为两行，按钮独占一行并附说明文字。涉及 `frontend/src/pages/Repos.jsx`。
+
 ### Added
 
 - 新增**备份与恢复**功能（issue #5）：备份范围为 `config.yaml` + `botler.db`
