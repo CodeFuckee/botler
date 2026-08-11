@@ -558,9 +558,13 @@ sync_to_github:
       # 否则空仓库首次推送时 git 无法推断 main 是分支还是 tag
       # 失败自动重试：最多 10 次、间隔 10 秒，规避网络抖动/代理波动
       # 等暂时性故障
+      # ⚠️ timeout 60 必须：git 自身无连接超时，github.com 直连被阻断时
+      # 单次 push 会挂数分钟，10 次循环会演变成无限挂起（2026-08-11
+      # issue #6 流水线实测卡死 20+ 分钟）；加 60s 超时后单次尝试快速
+      # 失败进入下一次重试，10 次 ≈ 11 分钟必然收敛
       pushed=false
       for attempt in $(seq 1 10); do
-        if git push --quiet --force \
+        if timeout 60 git push --quiet --force \
           "https://x-access-token:${GITHUB_PUSH_TOKEN}@github.com/CodeFuckee/botler.git" \
           HEAD:refs/heads/main; then
           pushed=true
