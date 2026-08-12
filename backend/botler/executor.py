@@ -351,7 +351,8 @@ class ClaudeExecutor:
 
     def _build_prompt(self, repo: dict, issue: dict) -> str:
         template = self.renderer.resolve_template(repo)
-        variables = self.renderer.build_variables(repo["name"], issue)
+        variables = self.renderer.build_variables(
+            repo["name"], issue, repo_url=_row_get(repo, "url") or "")
         return self.renderer.render(template, variables)
 
     def _build_env(self, repo: dict, issue: dict) -> dict:
@@ -404,7 +405,8 @@ class ClaudeExecutor:
 
     def _resume_prompt(self, repo: dict, issue: dict) -> str:
         """恢复执行引导语：基于上次会话继续，不重复已完成的工作。"""
-        variables = self.renderer.build_variables(repo["name"], issue)
+        variables = self.renderer.build_variables(
+            repo["name"], issue, repo_url=_row_get(repo, "url") or "")
         return self.renderer.render(RESUME_PROMPT, variables)
 
     # ---- 单次执行 ----

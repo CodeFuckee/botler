@@ -22,6 +22,22 @@
 
 ### Fixed
 
+- **全局模板写死单仓库路径，任务收到错误指令**（issue #18 诊断发现）：用户
+  `data/backend/config.yaml` 的全局模板采用跨会话 issue-agent 模式，但模板
+  硬编码 `chenkaidi/shipyard`、`https://home.chenkaidi.top:509`、共享进度文件
+  ——botler 对任意仓库执行任务时 Claude 收到「处理 shipyard 队列」指令，
+  不处理当前指派的 issue（exit 0 但 issue 不关，任务反复失败）。修复：
+  - `backend/botler/templates.py`：新增 `{project_path}`（group/repo，从仓库
+    URL 提取）、`{project_path_encoded}`（URL 编码 chenkaidi%2Fbotler）、
+    `{gitlab_host}`（host:port 去 scheme）占位符；`build_variables` 支持
+    `repo_url` 参数（无 URL 时兜底用仓库名）；executor 渲染时传入仓库 URL。
+  - `data/backend/config.yaml`：全局模板中硬编码的仓库路径 / GitLab 地址 /
+    进度文件路径参数化为占位符（`~/gitlab_issue_agent/progress.md` →
+    `~/{repo_name}_issue_agent/progress.md`，多仓库进度文件隔离）。
+  - 测试：`tests/test_config_template.py` 新增 4 个用例（URL 提取、无 .git
+    后缀、无 URL 兜底、参数化模板渲染无残留占位符/无 shipyard）。全量
+    190 passed + 前端 2 passed。
+
 - **部署后任务频繁 git fetch 失败（403 job token）**（issue #18 任务失败根因）：
   executor 的 git/claude 子进程环境直接继承 `os.environ`——CI 部署在
   gitlab-runner 构建目录里 `pm2 start`，作业环境（`CI_JOB_TOKEN` 等）被继承，

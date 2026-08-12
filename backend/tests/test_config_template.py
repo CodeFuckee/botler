@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from botler.config import ConfigManager
+from botler.templates import TemplateRenderer
 
 
 @pytest.fixture(autouse=True)
@@ -66,3 +67,71 @@ class TestDefaultTemplate:
         assert "测试 issue" in rendered
         assert "git push origin main" in rendered
         assert "state_event=close" in rendered
+
+
+class TestProjectPathPlaceholder:
+    """{project_path} 占位符渲染（issue-agent 参数化模板）。
+
+    背景：用户全局模板采用跨会话 issue-agent 模式，但模板写死了
+    chenkaidi/shipyard——botler 对任何仓库的任务都收到「处理 shipyard
+    队列」指令，不处理当前指派的 issue（任务反复失败的根因之一）。
+    修复：新增 {project_path} / {project_path_encoded} 占位符，渲染时从
+    仓库 URL 提取（如 chenkaidi/botler），模板不再写死单仓库。
+    """
+
+    ISSUE = {"state": "opened", "title": "标题", "description": "正文",
+             "web_url": "https://gitlab.example.com/x/-/issues/7",
+             "project_id": 42, "iid": 7}
+
+    def _renderer(self, tmp_path) -> TemplateRenderer:
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "gitlab:\n  url: https://gitlab.example.com\n  bot_token: t\n"
+            "worker: {}\nclaude: {}\ntemplates: {}\nrepos: []\n",
+            encoding="utf-8")
+        return TemplateRenderer(ConfigManager(str(config_path)))
+
+    def test_project_path_extracted_from_repo_url(self, tmp_path):
+        """渲染 {project_path} 时替换为仓库路径（去 scheme/host/.git）。"""
+        r = self._renderer(tmp_path)
+        tpl = "项目: `{project_path}`；API: {project_path_encoded}"
+        v = r.build_variables("botler", self.ISSUE,
+                              repo_url="https://home.chenkaidi.top:509/chenkaidi/botler.git")
+        rendered = r.render(tpl, v)
+        assert "chenkaidi/botler" in rendered
+        assert "chenkaidi%2Fbotler" in rendered
+        assert "home.chenkaidi.top" not in rendered
+
+    def test_project_path_without_git_suffix(self, tmp_path):
+        """URL 无 .git 后缀同样正确提取。"""
+        r = self._renderer(tmp_path)
+        v = r.build_variables("demo", self.ISSUE,
+                              repo_url="https://gitlab.example.com/group/sub/demo")
+        assert v["project_path"] == "group/sub/demo"
+
+    def test_project_path_fallback_to_repo_name(self, tmp_path):
+        """无 repo_url（如恢复执行）时兜底用仓库名。"""
+        r = self._renderer(tmp_path)
+        v = r.build_variables("botler", self.ISSUE)
+        assert v["project_path"] == "botler"
+        assert v["project_path_encoded"] == "botler"
+
+    def test_issue_agent_template_no_hardcoded_repo(self, tmp_path):
+        """参数化后的 issue-agent 模板：渲染后不含 {project_path} 残留占位符，
+        且不再写死单仓库路径（如 chenkaidi/shipyard 应被 {project_path} 替换）。"""
+        r = self._renderer(tmp_path)
+        # 模拟参数化后的全局模板关键片段（与 data/backend/config.yaml 同步）
+        tpl = ("项目路径: `{project_path}`（当前仓库根目录即项目）\n"
+               "glab issue list --repo {project_path} --state opened\n"
+               "curl -k -H \"PRIVATE-TOKEN: $GITLAB_TOKEN\" "
+               "\"{gitlab_url}/api/v4/projects/{project_path_encoded}/issues\"\n"
+               "export GITLAB_HOST={gitlab_host}")
+        v = r.build_variables("botler", self.ISSUE,
+                              repo_url="https://home.chenkaidi.top:509/chenkaidi/botler.git")
+        rendered = r.render(tpl, v)
+        assert "chenkaidi/botler" in rendered
+        assert "chenkaidi%2Fbotler" in rendered
+        assert "GITLAB_HOST=gitlab.example.com" in rendered  # gitlab_host 去 scheme
+        assert "{project_path" not in rendered
+        assert "{gitlab_host" not in rendered
+        assert "shipyard" not in rendered
