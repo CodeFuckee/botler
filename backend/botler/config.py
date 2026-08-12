@@ -73,6 +73,7 @@ class Settings:
     browse_default_path: str | None = None
     backup_enabled: bool = True
     backup_retention_days: int = 30
+    ui_timezone: str = ""  # 页面显示时区（IANA 名，空 = 跟随浏览器本机时区；issue #14）
     repos: list[RepoConfig] = field(default_factory=list)
 
 
@@ -83,6 +84,7 @@ KNOWN_FIELDS = {
     "templates": {"default"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
+    "ui": {"timezone"},
 }
 
 DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以下指派给你的 issue：
@@ -132,6 +134,7 @@ class ConfigManager:
         tpl = data.get("templates", {})
         browse = data.get("browse", {})
         backup = data.get("backup", {})
+        ui = data.get("ui", {})
         repos_raw = data.get("repos", []) or []
 
         repos = []
@@ -164,6 +167,7 @@ class ConfigManager:
             browse_default_path=browse.get("default_path") or None,
             backup_enabled=bool(backup.get("enabled", True)),
             backup_retention_days=int(backup.get("retention_days", 30)),
+            ui_timezone=(ui.get("timezone") or "").strip(),
             repos=repos,
         )
 
@@ -222,6 +226,17 @@ class ConfigManager:
         for key in KNOWN_FIELDS["backup"]:
             if key in patch:
                 backup[key] = patch[key]
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_ui(self, patch: dict[str, Any]) -> Settings:
+        """更新 ui 配置并写回（页面显示时区，空 = 跟随浏览器本机时区；issue #14）。"""
+        self.get()  # 确保 _data 已加载（避免未 load 时写盘覆盖配置）
+        ui = self._data.setdefault("ui", {})
+        for key in KNOWN_FIELDS["ui"]:
+            if key in patch:
+                ui[key] = patch[key]
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

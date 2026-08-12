@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "gen:version": "node scripts/gen-version.mjs",
+    "test": "node --test 'tests/**/*.test.mjs'",
     "build": "node scripts/gen-version.mjs && vite build",
     "preview": "vite preview"
   },

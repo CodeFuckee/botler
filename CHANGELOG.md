@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **任务时间时区与浏览器不一致**（issue #14）：后端 SQLite `datetime('now')` 存
+  UTC（如 `2026-08-12 01:25:54`），前端 `fmtTime` 原样拼接 `' UTC'` 直接展示，
+  浏览器在本机（UTC+8）看到的任务创建/开始/完成时间与执行日志时间戳比本机慢
+  8 小时。修复：前端 `fmtTime` 把 UTC 字符串补 `Z` 解析为时刻后，用
+  `Intl.DateTimeFormat` 按配置时区格式化（`YYYY-MM-DD HH:mm:ss`，`hourCycle: h23`
+  避免午夜 24:00:00）；设置页新增「界面显示 → 显示时区」选项（`ui.timezone`，
+  IANA 时区名，可下拉选择常用时区或手动输入，留空 = 跟随浏览器本机时区，即
+  "默认和本机一致"），写回 config.yaml 全局持久化，保存后立即生效无需刷新。
+  后端 `GET/PUT /api/settings` 支持 `ui` 段并用 `zoneinfo` 校验非法时区名（400）。
+  - 涉及 `frontend/src/api.js`（fmtTime 重构 + `setDisplayTz`）、
+    `frontend/src/App.jsx`（启动加载时区）、`frontend/src/pages/Settings.jsx`
+    （时区输入 + datalist）、`frontend/package.json`（新增 `npm test`）、
+    `frontend/tests/fmt-time.test.mjs`（新增，node:test）、
+    `backend/botler/config.py`（`ui_timezone` 字段 + `update_ui`）、
+    `backend/botler/api/settings.py`（`ui` 段读写 + 校验）、`.gitlab-ci.yml`
+    （frontend:build 构建前跑 `npm test`）。
+  - 测试：前端新增 2 个用例（Asia/Shanghai +8h 转换、空值占位符，修复前失败
+    复现 bug）；后端新增 4 个用例（timezone 默认空、持久化写回 config.yaml、
+    清空回退、非法时区名 400）。全量 158 passed + 前端 2 passed。
+
 ### Added
 
 - **前端版本号与构建时间显示**（issue #9）：每次构建（CI/CD `frontend:build` 或

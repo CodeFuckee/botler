@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from '../api.js'
+import { api, setDisplayTz } from '../api.js'
 import BackupManager from '../components/BackupManager.jsx'
 
 const FIELD_LABELS = {
@@ -8,6 +8,12 @@ const FIELD_LABELS = {
   max_retries: '失败重试次数',
   reconcile_interval_seconds: '对账扫描间隔（秒）',
 }
+
+// 常用显示时区（issue #14）；支持手动输入任意 IANA 时区名
+const COMMON_TZ = [
+  'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Asia/Singapore', 'Asia/Seoul',
+  'UTC', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles',
+]
 
 export default function Settings() {
   const [settings, setSettings] = useState(null)
@@ -35,7 +41,9 @@ export default function Settings() {
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
+        ui: { timezone: settings.ui?.timezone || '' },
       })
+      setDisplayTz(settings.ui?.timezone) // 立即生效，无需刷新页面
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) { setError(e.message) } finally { setBusy(false) }
@@ -82,6 +90,33 @@ export default function Settings() {
           <button className="btn" onClick={reconcileNow}>立即对账一次</button>
           {reconcileNote && <span className="saved-hint">{reconcileNote}</span>}
         </div>
+      </div>
+
+      <div className="card">
+        <h2>界面显示</h2>
+        <table className="table kv">
+          <tbody>
+            <tr>
+              <th>显示时区 <code>ui.timezone</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  list="timezone-options"
+                  placeholder="留空 = 跟随本机（浏览器时区）"
+                  value={settings.ui?.timezone || ''}
+                  onChange={(e) => setSettings((s) => ({ ...s, ui: { timezone: e.target.value.trim() } }))}
+                />
+                <datalist id="timezone-options">
+                  {COMMON_TZ.map((tz) => <option key={tz} value={tz} />)}
+                </datalist>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="muted small">
+          任务创建/开始/完成时间与执行日志时间戳按此时区显示；留空则跟随本机浏览器时区（默认与访问者本机一致），
+          修改后点击上方「保存」立即生效，无需刷新。
+        </p>
       </div>
 
       <div className="card">

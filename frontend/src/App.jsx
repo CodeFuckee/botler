@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import Repos from './pages/Repos.jsx'
 import Templates from './pages/Templates.jsx'
@@ -5,8 +6,17 @@ import Tasks from './pages/Tasks.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
 import VersionBadge from './components/VersionBadge.jsx'
+import { api, setDisplayTz } from './api.js'
 
 export default function App() {
+  // 启动时加载页面显示时区（issue #14）；未设置前 fmtTime 跟随浏览器本机时区
+  const [, setTzLoaded] = useState(false)
+  useEffect(() => {
+    api.get('/api/settings')
+      .then((s) => { setDisplayTz(s.ui?.timezone); setTzLoaded(true) })
+      .catch(() => {})
+  }, [])
+
   return (
     <div className="app">
       <nav className="topnav">

@@ -68,8 +68,26 @@ export const STATUS_META = {
   interrupted: { label: '已中断', cls: 'status-interrupted' },
 }
 
-export function fmtTime(ts) {
+// 页面时间显示时区（IANA 名，null = 跟随浏览器本机时区）。由 App 启动时从
+// /api/settings 的 ui.timezone 加载、设置页保存时更新（issue #14）。
+let displayTz = null
+
+export function setDisplayTz(tz) {
+  displayTz = tz || null
+}
+
+export function fmtTime(ts, tz = displayTz) {
   if (!ts) return '—'
-  // SQLite datetime('now') 是 UTC，本地展示
-  return ts.replace('T', ' ').slice(0, 19) + ' UTC'
+  // 后端 SQLite datetime('now') 存 UTC 无时区后缀（如 '2026-08-12 01:25:54'），
+  // 补 Z 解析为 UTC 时刻，再按配置时区（缺省 = 浏览器本机）格式化
+  const date = new Date(String(ts).replace(' ', 'T') + 'Z')
+  if (Number.isNaN(date.getTime())) return String(ts) // 非标准格式原样兜底
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: tz || undefined,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
 }

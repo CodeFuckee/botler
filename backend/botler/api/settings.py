@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -68,6 +69,10 @@ def get_settings(request: Request):
             "enabled": s.backup_enabled,
             "retention_days": s.backup_retention_days,
         },
+        "ui": {
+            # 页面时间显示时区（IANA 名，空 = 跟随浏览器本机时区）
+            "timezone": s.ui_timezone,
+        },
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -104,6 +109,11 @@ def update_settings(request: Request, body: dict):
     if backup is not None:
         _validate_backup(backup)
         c.config.update_backup(backup)
+
+    ui = body.get("ui")
+    if ui is not None:
+        _validate_ui(ui)
+        c.config.update_ui(ui)
 
     return get_settings(request)
 
@@ -161,6 +171,21 @@ def _validate_backup(patch: dict) -> None:
         val = patch["retention_days"]
         if not isinstance(val, int) or isinstance(val, bool) or not 1 <= val <= 365:
             raise HTTPException(400, "backup.retention_days 必须是 1~365 的整数（天）")
+
+
+def _validate_ui(patch: dict) -> None:
+    """校验 ui 段：timezone 为空串（跟随浏览器）或合法 IANA 时区名（issue #14）。"""
+    if "timezone" in patch:
+        val = patch["timezone"]
+        if not isinstance(val, str):
+            raise HTTPException(400, "ui.timezone 必须是字符串（IANA 时区名，空 = 跟随本机）")
+        val = val.strip()
+        patch["timezone"] = val
+        if val:
+            try:
+                ZoneInfo(val)
+            except ZoneInfoNotFoundError:
+                raise HTTPException(400, f"ui.timezone 不是有效的 IANA 时区名: {val}") from None
 
 
 def ctx_of(request: Request):

@@ -69,3 +69,38 @@ class TestBrowseSettings:
         resp = tc.put("/api/settings", json={"browse": {"default_path": 123}})
         assert resp.status_code == 400
         assert "必须是字符串" in resp.json()["detail"]
+
+
+class TestTimezoneSettings:
+    """ui.timezone 段：显示时区设置（issue #14，页面任务时间与本机时区不一致）。"""
+
+    def test_get_settings_includes_timezone_empty(self, client):
+        """未配置时 timezone 返回空串（前端默认跟随浏览器本机时区）。"""
+        tc, tmp_path = client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["timezone"] == ""
+
+    def test_update_timezone_persists(self, client):
+        """PUT ui.timezone 写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ui": {"timezone": "Asia/Shanghai"}})
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["timezone"] == "Asia/Shanghai"
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "timezone: Asia/Shanghai" in config_text
+
+    def test_update_timezone_empty_clears(self, client):
+        """清空 = 跟随浏览器本机时区。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"ui": {"timezone": "Asia/Shanghai"}})
+        resp = tc.put("/api/settings", json={"ui": {"timezone": ""}})
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["timezone"] == ""
+
+    def test_update_timezone_rejects_invalid(self, client):
+        """非法 IANA 时区名拒绝保存（400）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ui": {"timezone": "Mars/Olympus"}})
+        assert resp.status_code == 400
+        assert "时区" in resp.json()["detail"]
