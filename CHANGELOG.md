@@ -49,6 +49,16 @@
   无连接超时，github.com 直连被阻断时单次 push 会挂数分钟，既有 10 次重试循环
   演变成无限挂起（实测流水线卡死 20+ 分钟）；加超时后单次尝试快速失败进入
   下一次重试，最多 10 次 ≈ 11 分钟必然收敛。涉及 `.gitlab-ci.yml`。
+- CI 部署残留容器清理（issue #13）：检查发现 code01 的 docker 存在 rootful
+  （`/var/run/docker.sock`）与 rootless（`/run/user/$(id -u)/docker.sock`）两个
+  daemon，历史 Docker 部署容器落在 rootless 侧而 CI 清理只查 rootful，且 runner
+  构建目录被清理后 `docker compose down` 依赖配置文件会失败——导致 4 个临时
+  容器（botler compose 孤儿 + 3 个 apt 安装中途失败容器）残留数周未被清理。
+  修复：deploy job 第 4 步改为**双 daemon** 按容器 label（`com.docker.compose.
+  project=botler`）/名称过滤直接 `docker rm -f`（不依赖 compose 配置文件），并
+  新增 `after_script` 兜底清理——无论部署成功/失败都会执行；只清理 botler
+  项目容器，不误删其他容器（如 shipyard）。已有残留已手动清理（本机 docker
+  现存容器：rootful 侧 shipyard 正常运行中）。涉及 `.gitlab-ci.yml`。
 
 ### Added
 

@@ -369,18 +369,33 @@ deploy_to_code01:
       echo "✓ symlink: backend/.env → data/backend/.env，backend/workspace → data/workspace"
 
       # ================================================================
-      # 第 4 步：停止旧部署（Docker 容器 + 旧 pm2，防 8000 端口冲突）
+      # 第 4 步：停止旧部署（Docker 残留容器 + 旧 pm2，防 8000 端口冲突）
       # Docker / systemd 仍保留为手动部署备选，互斥运行
+      # ⚠️ code01 同时存在 rootful（/var/run/docker.sock）与 rootless
+      # （/run/user/$(id -u)/docker.sock）两个 daemon，历史 Docker 部署
+      # 容器可能落在任一 daemon（issue #13 曾发现 rootless 侧残留）；
+      # 且 runner 构建目录可能已被清理，compose down 依赖配置文件会
+      # 失败，故用容器 label/名称过滤直接删除，两个 daemon 都处理。
       # ================================================================
-      dbg STEP4 "停止旧部署（docker compose down + pm2 delete）"
-      echo "=== 4. 停止旧部署（Docker + pm2）==="
-      if command -v docker >/dev/null 2>&1 && [ -n "$(docker compose -p botler ps -q 2>/dev/null)" ]; then
-        export DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock}"
-        docker compose -p botler down >/dev/null 2>&1 && echo "✓ 已停止 Docker 容器 botler（旧部署方式）" || echo "⚠️ docker compose down 失败（继续）"
-        dbg STEP4 "OK: Docker 已停止"
+      dbg STEP4 "停止旧部署（双 daemon docker 残留清理 + pm2 delete）"
+      echo "=== 4. 停止旧部署（Docker 双 daemon 残留清理 + pm2）==="
+      if command -v docker >/dev/null 2>&1; then
+        for DAEMON in "unix:///var/run/docker.sock" "unix:///run/user/$(id -u)/docker.sock"; do
+          DOCKER_HOST=$DAEMON docker info >/dev/null 2>&1 || continue
+          DEAD=$( { DOCKER_HOST=$DAEMON docker ps -aq --filter label=com.docker.compose.project=botler; \
+                    DOCKER_HOST=$DAEMON docker ps -aq --filter name=^/botler$; } 2>/dev/null | sort -u )
+          if [ -n "$DEAD" ]; then
+            for c in $DEAD; do
+              DOCKER_HOST=$DAEMON docker rm -f "$c" >/dev/null 2>&1 && echo "✓ [$DAEMON] 已删除旧部署残留容器 $c" || echo "⚠️ [$DAEMON] 删除容器 $c 失败（继续）"
+            done
+          else
+            echo "✓ [$DAEMON] 无 botler 残留容器"
+          fi
+        done
+        dbg STEP4 "OK: Docker 双 daemon 已检查"
       else
-        echo "✓ 无运行中的 Docker 容器 botler（或 docker 不可用），无需停止"
-        dbg STEP4 "OK: 无需停 Docker"
+        echo "✓ docker 不可用，无需停止"
+        dbg STEP4 "OK: docker 不可用"
       fi
       if command -v pm2 >/dev/null 2>&1 && pm2 describe ${APP_NAME} >/dev/null 2>&1; then
         pm2 delete ${APP_NAME} >/dev/null 2>&1 && echo "✓ 已停止旧 pm2 botler" || echo "⚠️ pm2 delete 失败（继续）"
@@ -491,6 +506,29 @@ deploy_to_code01:
       echo "========================================="
       echo "⏱️  [deploy_to_code01] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
       echo "========================================="
+  # after_script（issue #13）：无论部署成功/失败都会执行，兜底清理
+  # botler 相关 docker 容器残留（rootful + rootless 双 daemon）。
+  # 只清理 botler 项目容器（compose label 或容器名），不误删其他
+  # 项目容器（如 shipyard）。构建目录可能已被清理，compose down
+  # 依赖配置文件会失败，故直接用 docker rm 按 label/名称删除。
+  after_script:
+    - |
+      set +e
+      echo "=== [after_script] 清理 botler Docker 容器残留（双 daemon）==="
+      command -v docker >/dev/null 2>&1 || { echo "docker 不可用，跳过清理"; exit 0; }
+      for DAEMON in "unix:///var/run/docker.sock" "unix:///run/user/$(id -u)/docker.sock"; do
+        DOCKER_HOST=$DAEMON docker info >/dev/null 2>&1 || { echo "daemon 不可达: $DAEMON，跳过"; continue; }
+        DEAD=$( { DOCKER_HOST=$DAEMON docker ps -aq --filter label=com.docker.compose.project=botler; \
+                  DOCKER_HOST=$DAEMON docker ps -aq --filter name=^/botler$; } 2>/dev/null | sort -u )
+        if [ -n "$DEAD" ]; then
+          for c in $DEAD; do
+            DOCKER_HOST=$DAEMON docker rm -f "$c" >/dev/null 2>&1 && echo "✓ [$DAEMON] 已清理残留容器 $c"
+          done
+        else
+          echo "✓ [$DAEMON] 无 botler 残留容器"
+        fi
+      done
+      echo "=== [after_script] 清理完成 ==="
 
 # ================================================================
 # Stage: sync —— GitHub 镜像同步（剔除 .gitlab-ci.yml + 内部信息脱敏）
