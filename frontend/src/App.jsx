@@ -28,18 +28,14 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  if (!auth) return <p className="muted">加载中…</p>
-  if (auth.enabled && !auth.user) return <Login />
-
-  const logout = async () => {
-    try { await api.post('/api/auth/logout') } catch { /* 忽略 */ }
-    window.location.href = '/login'
-  }
-
   // 网页通知轮询（issue #21）：每 10s 拉取新事件弹系统通知。
   // 设置开关在每次轮询时实时读取 → 设置页修改立即生效，无需刷新。
   // 首次拉取只记录游标不弹，避免历史事件轰炸。
+  // 注意：本 effect 必须声明在所有条件 return 之前（React Hooks 规则，
+  // 否则 auth 加载前后 hook 数量不一致会触发 error #310 整树崩溃白屏）；
+  // auth 未就绪或 SSO 启用未登录时跳过启动（避免登录页轮询 401 反复刷新）。
   useEffect(() => {
+    if (!auth || (auth.enabled && !auth.user)) return
     const poller = createNotifyPoller({
       getEvents: (after) => api.get(`/api/notifications/events?after=${after}`),
       getSettings: () => api.get('/api/settings'),
@@ -47,7 +43,15 @@ export default function App() {
     poller.poll()
     const timer = setInterval(poller.poll, POLL_INTERVAL_MS)
     return () => clearInterval(timer)
-  }, [])
+  }, [auth])
+
+  if (!auth) return <p className="muted">加载中…</p>
+  if (auth.enabled && !auth.user) return <Login />
+
+  const logout = async () => {
+    try { await api.post('/api/auth/logout') } catch { /* 忽略 */ }
+    window.location.href = '/login'
+  }
 
   return (
     <div className="app">

@@ -30,6 +30,20 @@
 
 ### Fixed
 
+- **启用 SSO 后 Web UI 打开白屏**（issue #27 第二轮）：`App.jsx` 中网页通知轮询的
+  `useEffect` 被声明在两个条件 `return`（auth 检测中、SSO 启用未登录）之后——auth
+  加载前后组件执行的 hooks 数量不一致（4 → 5），触发 React error #310
+  「Rendered more hooks than during the previous render」，整棵组件树崩溃白屏
+  （生产构建下即控制台的 Minified React error #310）。
+  - 修复：通知轮询 effect 移到所有条件 `return` 之前声明（hooks 数量恒定），effect
+    内部按 auth 状态跳过启动——auth 未就绪或 SSO 启用未登录时不轮询（同时避免登录页
+    每 10s 轮询受保护接口 401 反复刷新）。
+  - 涉及 `frontend/src/App.jsx`。
+  - 测试：新增 `tests/app-hooks.test.mjs`（vite SSR 转译 + react-test-renderer 渲染
+    App，驱动 auth 状态流转，断言主界面正常出现；修复前该测试稳定复现 #310）。
+    新增 devDependency `react-test-renderer@18.3.1`。前端全量 47 passed + 后端
+    全量 330 passed + build 通过。
+
 - **手动编辑 config.yaml 后模板不生效 / 被 UI 保存覆盖**（issue #25）：`ConfigManager`
   只在进程启动时加载一次 config.yaml 并缓存——用户直接编辑 config.yaml（文档约定它
   是唯一事实来源）修改全局模板后，运行中的 botler 仍用旧模板渲染（"修改了全局模版，
