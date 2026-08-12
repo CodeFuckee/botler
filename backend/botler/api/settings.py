@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..config import KNOWN_FIELDS
+from ..templates import PLACEHOLDERS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -61,6 +62,9 @@ def get_settings(request: Request):
         },
         "templates": {
             "default": s.default_template,
+            # 全局模板也可用全部占位符（issue #25：模板页全局视图
+            # 占位符表格此前为空，用户误以为占位符未生效）
+            "placeholders": PLACEHOLDERS,
         },
         "browse": {
             "default_path": s.browse_default_path or "",

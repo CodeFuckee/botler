@@ -6,6 +6,7 @@ export default function Templates() {
   const [params, setParams] = useSearchParams()
   const [repos, setRepos] = useState([])
   const [globalTemplate, setGlobalTemplate] = useState('')
+  const [globalPlaceholders, setGlobalPlaceholders] = useState({})
   const [placeholders, setPlaceholders] = useState({})
   const [selected, setSelected] = useState(null) // {repoId|null, isOverride}
   const [text, setText] = useState('')
@@ -19,11 +20,16 @@ export default function Templates() {
     ])
     setRepos(reposData.repos)
     setGlobalTemplate(settings.templates.default)
+    // 全局模板同样支持占位符（issue #25：此前全局视图占位符表格为空，
+    // 用户误以为占位符未生效）
+    const phs = settings.templates.placeholders || {}
+    setGlobalPlaceholders(phs)
     const repoParam = Number(params.get('repo')) || null
     if (repoParam) {
       await selectRepo(repoParam)
     } else {
       setSelected({ repoId: null, isOverride: false })
+      setPlaceholders(phs)
       setText(settings.templates.default)
     }
   }
@@ -68,7 +74,7 @@ export default function Templates() {
   const selectGlobal = () => {
     setSelected({ repoId: null, isOverride: false })
     setText(globalTemplate)
-    setPlaceholders({})
+    setPlaceholders(globalPlaceholders)
   }
 
   return (

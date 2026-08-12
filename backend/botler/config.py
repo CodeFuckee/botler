@@ -9,6 +9,7 @@ config.yaml 是唯一事实来源，Web UI 是编辑它的外壳。
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -17,6 +18,8 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
+
+logger = logging.getLogger("botler.config")
 
 # 自动加载 backend/.env（凭据引用 ${ENV} 时使用）
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -138,6 +141,7 @@ class ConfigManager:
         self.path = path
         self._data: dict[str, Any] = {}
         self.settings: Settings | None = None
+        self._loaded_mtime: float = 0.0
 
     def load(self) -> Settings:
         if not os.path.exists(self.path):
@@ -148,7 +152,25 @@ class ConfigManager:
             raw = yaml.safe_load(f) or {}
         self._data = _expand_env(raw)
         self.settings = self._to_settings(self._data)
+        try:
+            self._loaded_mtime = os.path.getmtime(self.path)
+        except OSError:
+            self._loaded_mtime = 0.0
         return self.settings
+
+    def _reload_from_disk(self) -> bool:
+        """重新读取磁盘 config.yaml（保留用户手动编辑的内容，issue #25）。
+
+        update_* 写盘前调用：以磁盘最新内容为基底，避免 save() 用内存旧值
+        覆盖用户直接编辑 config.yaml 的修改。失败（文件缺失/损坏）时保留
+        内存状态降级，不中断流程。
+        """
+        try:
+            self.load()
+            return True
+        except (OSError, yaml.YAMLError, ValueError, KeyError) as e:
+            logger.warning("config.yaml 重载失败，沿用当前配置: %s", e)
+            return False
 
     def _to_settings(self, data: dict[str, Any]) -> Settings:
         gitlab = data.get("gitlab", {})
@@ -204,8 +226,20 @@ class ConfigManager:
         """将内存数据写回 config.yaml。"""
         with open(self.path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self._data, f, allow_unicode=True, sort_keys=False)
+        try:
+            self._loaded_mtime = os.path.getmtime(self.path)
+        except OSError:
+            pass
 
     def get(self) -> Settings:
+        # 磁盘 mtime 变化（用户直接编辑 config.yaml）→ 自动重载，无需重启
+        # 进程、无需再走一遍 Web UI（issue #25「修改了全局模版，但是没有生效」）
+        if self.settings is not None:
+            try:
+                if os.path.getmtime(self.path) > self._loaded_mtime:
+                    self._reload_from_disk()
+            except OSError:
+                pass  # 文件不可读/被临时移走：沿用当前配置
         if self.settings is None:
             self.load()
         return self.settings
@@ -213,7 +247,8 @@ class ConfigManager:
     # ---- settings API 支持 ----
 
     def update_worker(self, patch: dict[str, Any]) -> Settings:
-        """更新 worker 配置并写回。"""
+        """更新 worker 配置并写回（写盘前重读磁盘，保留手动编辑，issue #25）。"""
+        self._reload_from_disk()
         worker = self._data.setdefault("worker", {})
         for key in KNOWN_FIELDS["worker"]:
             if key in patch:
@@ -223,6 +258,7 @@ class ConfigManager:
         return self.settings
 
     def update_claude(self, patch: dict[str, Any]) -> Settings:
+        self._reload_from_disk()
         claude = self._data.setdefault("claude", {})
         for key in KNOWN_FIELDS["claude"]:
             if key in patch:
@@ -232,6 +268,7 @@ class ConfigManager:
         return self.settings
 
     def update_default_template(self, text: str) -> Settings:
+        self._reload_from_disk()
         self._data.setdefault("templates", {})["default"] = text
         self.save()
         self.settings = self._to_settings(self._data)
@@ -239,7 +276,7 @@ class ConfigManager:
 
     def update_browse(self, patch: dict[str, Any]) -> Settings:
         """更新 browse 配置并写回（目录选择对话框初始定位目录）。"""
-        self.get()  # 确保 _data 已加载（避免未 load 时写盘覆盖配置）
+        self._reload_from_disk()
         browse = self._data.setdefault("browse", {})
         for key in KNOWN_FIELDS["browse"]:
             if key in patch:
@@ -250,7 +287,7 @@ class ConfigManager:
 
     def update_backup(self, patch: dict[str, Any]) -> Settings:
         """更新 backup 配置并写回（定时备份开关 / 保留天数）。"""
-        self.get()  # 确保 _data 已加载（避免未 load 时写盘覆盖配置）
+        self._reload_from_disk()
         backup = self._data.setdefault("backup", {})
         for key in KNOWN_FIELDS["backup"]:
             if key in patch:
@@ -261,7 +298,7 @@ class ConfigManager:
 
     def update_ui(self, patch: dict[str, Any]) -> Settings:
         """更新 ui 配置并写回（页面显示时区，空 = 跟随浏览器本机时区；issue #14）。"""
-        self.get()  # 确保 _data 已加载（避免未 load 时写盘覆盖配置）
+        self._reload_from_disk()
         ui = self._data.setdefault("ui", {})
         for key in KNOWN_FIELDS["ui"]:
             if key in patch:
@@ -272,7 +309,7 @@ class ConfigManager:
 
     def update_notifications(self, patch: dict[str, Any]) -> Settings:
         """更新 notifications 配置并写回（网页通知开关；issue #21）。"""
-        self.get()  # 确保 _data 已加载（避免未 load 时写盘覆盖配置）
+        self._reload_from_disk()
         notify = self._data.setdefault("notifications", {})
         for key in KNOWN_FIELDS["notifications"]:
             if key in patch:
@@ -283,6 +320,7 @@ class ConfigManager:
 
     def update_repos(self, repos: list[dict[str, Any]]) -> None:
         """整体替换 repos 列表（增删改仓库后的落盘）。"""
+        self._reload_from_disk()
         self._data["repos"] = repos
         self.save()
         self.settings = self._to_settings(self._data)

@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **手动编辑 config.yaml 后模板不生效 / 被 UI 保存覆盖**（issue #25）：`ConfigManager`
+  只在进程启动时加载一次 config.yaml 并缓存——用户直接编辑 config.yaml（文档约定它
+  是唯一事实来源）修改全局模板后，运行中的 botler 仍用旧模板渲染（"修改了全局模版，
+  但是没有生效"）；更糟的是之后在 Web UI 保存任意设置，`save()` 用内存旧值整体覆盖
+  写回 config.yaml，手动修改被静默丢弃。
+  - 修复：`get()` 增加磁盘 mtime 检测，config.yaml 被外部修改后自动重载（无需重启、
+  无需再走 Web UI）；所有 `update_*` 写盘前重新读取磁盘、以磁盘最新内容为基底，UI
+  保存不再覆盖手动编辑；`update_worker`/`update_claude`/`update_default_template`/
+  `update_repos` 此前未先加载 `_data` 就写盘（未 load 时保存会写坏整个配置），统一
+  加 `_reload_from_disk()` 保护；磁盘文件缺失/损坏时降级保留当前配置不中断。
+  - 涉及 `backend/botler/config.py`（`_loaded_mtime`、`_reload_from_disk`、`get()`
+    mtime 检测、全部 `update_*`）。
+  - 测试：新增 `tests/test_config_reload.py` 6 个用例（手动编辑后 `get()` 自动生效、
+    连续 `get()` 稳定、UI 保存保留手动编辑、UI 保存模板本身回归、损坏/缺失文件降级）。
+    后端全量 307 passed + 前端 46 passed + build 通过。
+
 ### Added
 
 - **任务页面显示完成 issue 所用时长**（issue #23）：任务列表新增「用时」列、
