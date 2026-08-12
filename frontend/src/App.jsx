@@ -8,7 +8,7 @@ import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
 import Login from './pages/Login.jsx'
 import VersionBadge from './components/VersionBadge.jsx'
-import { api, setDisplayTz } from './api.js'
+import { api, setDisplayTz, setSsoEnabled } from './api.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 
 export default function App() {
@@ -17,17 +17,21 @@ export default function App() {
   const [auth, setAuth] = useState(null)
   useEffect(() => {
     api.get('/api/auth/status')
-      .then(setAuth)
+      .then((a) => { setSsoEnabled(a.enabled); setAuth(a) })
       .catch(() => setAuth({ enabled: false, user: null }))
   }, [])
 
-  // 启动时加载页面显示时区（issue #14）；未设置前 fmtTime 跟随浏览器本机时区
+  // 启动时加载页面显示时区（issue #14）；未设置前 fmtTime 跟随浏览器本机时区。
+  // SSO 启用未登录时跳过（登录页不应发起受保护请求——401 兜底跳 /login 会
+  // 整页重载，与登录页形成无限刷新循环，issue #27 第五轮）；登录成功后
+  // auth 变化重新触发加载。
   const [, setTzLoaded] = useState(false)
   useEffect(() => {
+    if (!auth || (auth.enabled && !auth.user)) return
     api.get('/api/settings')
       .then((s) => { setDisplayTz(s.ui?.timezone); setTzLoaded(true) })
       .catch(() => {})
-  }, [])
+  }, [auth])
 
   // 网页通知轮询（issue #21）：每 10s 拉取新事件弹系统通知。
   // 设置开关在每次轮询时实时读取 → 设置页修改立即生效，无需刷新。

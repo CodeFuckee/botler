@@ -57,6 +57,21 @@
 
 ### Fixed
 
+- **配置（启用）Synology SSO 后页面无限刷新**（issue #27 第五轮）：`App.jsx` 的
+  「时区加载」effect 无条件请求 `/api/settings`（未像通知轮询那样加 auth 守卫）——
+  SSO 启用后（配置即时生效）未登录访问该接口被 `SsoGuardMiddleware` 返回 401，
+  `api.js` 的 401 兜底跳 `/login` 整页重载；重载后渲染登录页时该 effect 再次无条件
+  发起 `/api/settings` → 又 401 → 又重载，**无限刷新循环**（页面停在登录页仍不停刷新）。
+  - 修复（双保险）：① `App.jsx` 时区加载 effect 增加 auth 守卫（SSO 启用未登录时
+    跳过，登录成功后 auth 变化重新触发加载），登录页不再发起任何受保护请求；
+    ② `api.js` 401 兜底增加 SSO 启用判断（新增 `setSsoEnabled()` 由 App 从
+    `/api/auth/status` 探测后设置）——仅 SSO 启用时未登录访问才跳登录页，非 SSO
+    场景（或探测完成前）的 401 不跳转，杜绝类似循环。
+  - 涉及 `frontend/src/App.jsx`、`frontend/src/api.js`。
+  - 测试：新增 `tests/app-sso-refresh-loop.test.mjs`（模拟后端 SSO 启用未登录 +
+    其余 API 401，断言登录页不得发起受保护请求/不得触发跳转；修复前稳定复现
+    `/api/settings` 请求）。前端全量 66 passed + build 通过 + 后端全量 353 passed。
+
 - **设置页 SSO 配置卡片无保存按钮**（issue #27 第四轮）：Synology SSO 登录卡片
   （设置页第一个卡片）内只有表单字段，全局「保存」按钮位于下方「任务调度」卡片中
   ——用户首屏只看到 SSO 卡片，找不到保存按钮，误以为无法保存配置。

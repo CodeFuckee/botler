@@ -1,5 +1,14 @@
 // 后端 API 封装
 
+// SSO 是否启用（issue #27 第五轮）：由 App 从 /api/auth/status 探测后设置。
+// 401 兜底仅在 SSO 启用时跳登录页——非 SSO 场景（或探测完成前）的 401 不应
+// 跳转，否则与页面重载叠加会形成无限刷新循环。
+let ssoEnabled = false
+
+export function setSsoEnabled(v) {
+  ssoEnabled = !!v
+}
+
 async function request(method, path, body) {
   const opts = { method, headers: {} }
   if (body !== undefined) {
@@ -12,7 +21,7 @@ async function request(method, path, body) {
   if (!resp.ok) {
     // 会话失效兜底（issue #27）：SSO 启用时未登录访问受保护 API → 401，
     // 跳登录页（登录流程自身端点除外，避免死循环）
-    if (resp.status === 401 && !path.startsWith('/api/auth/')) {
+    if (resp.status === 401 && ssoEnabled && !path.startsWith('/api/auth/')) {
       window.location.href = '/login'
     }
     const msg = data?.error || data?.detail || `HTTP ${resp.status}`
