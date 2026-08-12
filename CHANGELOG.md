@@ -6,6 +6,25 @@
 
 ### Added
 
+- **任务页面「查看任务执行」按钮，实时查看 agent 进度与聊天记录**（issue #20）：
+  任务列表每行新增「操作」列「执行」按钮，点击跳转详情页实时面板——聊天记录
+  （Claude Code 会话中的用户/助手文本、工具调用与结果，气泡式展示）每 3 秒
+  自动刷新；实时输出（claude stdout 日志流）按字节偏移增量续读、自动滚底，
+  任务运行中即可查看（session_id 在读循环里首次出现即提前落库，此前只在
+  执行结束后才落库）。
+  - 涉及 `backend/botler/executor.py`（新增 `find_session_file` /
+    `parse_transcript` / `read_log_delta` 与 `_persist_session_from_chunk`
+    读循环接入：运行中落库 session_id）、`backend/botler/api/tasks.py`
+    （新增 `GET /api/tasks/{id}/execution`：`log_delta`/`log_offset` 增量
+    日志 + `transcript` 聊天消息 + `session_id`）、`frontend/src/pages/
+    Tasks.jsx`（「执行」按钮）、`TaskDetail.jsx`（实时执行面板：聊天气泡
+    + 实时输出，终态/出错自动停止轮询）、`api.js`（`summarizeToolInput`
+    工具调用摘要）、`styles.css`（聊天面板样式）。
+  - 测试：后端新增 25 个用例（`parse_transcript` 解析/边界 7 个、
+    `read_log_delta` 增量/半行回退/对齐 6 个、`find_session_file` 2 个、
+    运行中落库 4 个、`/execution` API 契约 6 个），前端新增
+    `summarizeToolInput` 6 个用例。全量 234 passed + 前端 12 passed +
+    build 通过。
 - **任务页面展示对应任务提交的链接**（issue #19）：任务成功时 executor 用 GitLab
   commits API 按提交信息（模板固定含 `issue #N`）匹配 Claude 推送的提交，完整 sha
   落库 `tasks.commit_sha`；列表页新增「提交」列、详情页新增「提交」行，点击跳转

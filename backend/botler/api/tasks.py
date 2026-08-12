@@ -1,12 +1,15 @@
-"""任务 API：列表（分页/过滤）、详情（含日志）、日志。"""
+"""任务 API：列表（分页/过滤）、详情（含日志）、日志、实时执行（issue #20）。"""
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from botler.executor import format_display_line
+from botler.executor import (
+    find_session_file, format_display_line, parse_transcript, read_log_delta,
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -113,6 +116,47 @@ def task_logs(request: Request, task_id: int, limit: int = Query(500, ge=1, le=5
     if c.db.get_task(task_id) is None:
         raise HTTPException(404, "任务不存在")
     return {"logs": [dict(l) for l in c.db.list_logs(task_id, limit=limit)]}
+
+
+@router.get("/{task_id}/execution")
+def task_execution(request: Request, task_id: int,
+                   after_byte: int = Query(0, ge=0)):
+    """实时查看任务执行（issue #20）：日志增量 + 聊天记录。
+
+    - log_delta：执行日志文件（claude stdout 实时追加）从 after_byte 起的
+      新增行（每行经 format_display_line 解码为可读文本），log_offset 为
+      下一轮应传的字节偏移（尾部半行自动回退，等补全后再返回）。
+    - transcript：claude 会话文件解析出的聊天消息（user/assistant/
+      tool_use/tool_result），任务运行中即可实时读取（executor 已提前
+      落库 session_id）。会话文件缺失/解析失败返回空列表不报错。
+    """
+    c = ctx_of(request)
+    row = c.db.get_task(task_id)
+    if row is None:
+        raise HTTPException(404, "任务不存在")
+
+    log_delta: list[str] = []
+    log_offset = after_byte
+    if row["log_path"]:
+        lines, log_offset = read_log_delta(Path(row["log_path"]), after_byte)
+        log_delta = [format_display_line(l) for l in lines]
+
+    transcript: list[dict] = []
+    truncated = False
+    session_id = row["claude_session_id"]
+    if session_id:
+        session_file = find_session_file(session_id)
+        if session_file:
+            transcript, truncated = parse_transcript(session_file)
+
+    return {
+        "status": row["status"],
+        "session_id": session_id,
+        "log_offset": log_offset,
+        "log_delta": log_delta,
+        "transcript": transcript,
+        "transcript_truncated": truncated,
+    }
 
 
 def ctx_of(request: Request):

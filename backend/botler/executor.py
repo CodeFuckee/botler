@@ -194,6 +194,164 @@ def format_display_line(line: str) -> str:
     return "\n".join(parts)
 
 
+# ---- 实时查看任务执行（issue #20）----
+
+_TRANSCRIPT_MAX_MESSAGES = 500
+_TRANSCRIPT_MAX_TEXT = 5000
+
+
+def find_session_file(session_id: str, claude_home: Path | None = None) -> Path | None:
+    """按 session_id 查找 claude 会话文件 <claude_home>/projects/*/<sid>.jsonl。
+
+    实时查看聊天记录（issue #20）与断点续跑降级判定共用；找不到返回 None。
+    claude_home 缺省为 ~/.claude（测试可注入）。
+    """
+    base = claude_home if claude_home is not None else Path.home() / ".claude"
+    projects = base / "projects"
+    if not projects.is_dir():
+        return None
+    try:
+        for proj in projects.iterdir():
+            f = proj / f"{session_id}.jsonl"
+            if f.is_file():
+                return f
+    except OSError:
+        return None
+    return None
+
+
+def _transcript_text(content, default: str = "") -> str:
+    """从消息 content 提取纯文本（str 或 text 片段拼接），非文本返回 default。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [c.get("text", "") for c in content
+                 if isinstance(c, dict) and c.get("type") == "text" and c.get("text")]
+        return "\n".join(parts)
+    return default
+
+
+def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
+    """截断长文本，返回 (text, truncated)。"""
+    if len(text) > max_chars:
+        return text[:max_chars], True
+    return text, False
+
+
+def parse_transcript(session_file: Path, max_messages: int = _TRANSCRIPT_MAX_MESSAGES,
+                     max_text_chars: int = _TRANSCRIPT_MAX_TEXT) -> tuple[list[dict], bool]:
+    """解析 claude 会话 jsonl 为结构化聊天消息（issue #20 实时查看）。
+
+    只保留 user / assistant 两类行（跳过 system / result 与杂讯），
+    拆分为四类消息：
+      {"role": "user", "text", "ts", "truncated"}
+      {"role": "assistant", "text", "ts", "truncated"}
+      {"role": "tool", "tool", "input", "ts"}                （工具调用）
+      {"role": "tool_result", "tool_use_id", "text", "tool_error", "ts", "truncated"}
+    返回 (messages, truncated)：消息过多时保留最后 max_messages 条并置
+    truncated=True；文件不存在 / 无有效行返回空列表。
+    """
+    if session_file is None or not session_file.is_file():
+        return [], False
+    try:
+        lines = session_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return [], False
+    if len(lines) > max_messages:
+        lines = lines[-max_messages:]
+        truncated = True
+    else:
+        truncated = False
+
+    messages: list[dict] = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("type") not in ("user", "assistant"):
+            continue
+        msg = record.get("message")
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        content = msg.get("content")
+        ts = msg.get("timestamp") or record.get("timestamp")
+        if role == "assistant" and isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text":
+                    text, cut = _truncate_text(part.get("text", ""), max_text_chars)
+                    if text:
+                        messages.append({"role": "assistant", "text": text,
+                                         "ts": ts, "truncated": cut})
+                elif part.get("type") == "tool_use":
+                    messages.append({"role": "tool", "tool": part.get("name", "?"),
+                                     "input": part.get("input"), "ts": ts})
+        elif role == "user" and isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text":
+                    text, cut = _truncate_text(part.get("text", ""), max_text_chars)
+                    if text:
+                        messages.append({"role": "user", "text": text,
+                                         "ts": ts, "truncated": cut})
+                elif part.get("type") == "tool_result":
+                    result_text, cut = _truncate_text(
+                        _transcript_text(part.get("content")), max_text_chars)
+                    messages.append({
+                        "role": "tool_result",
+                        "tool_use_id": part.get("tool_use_id"),
+                        "text": result_text, "tool_error": bool(part.get("is_error")),
+                        "ts": ts, "truncated": cut,
+                    })
+        elif role == "user" and isinstance(content, str):
+            text, cut = _truncate_text(content, max_text_chars)
+            if text:
+                messages.append({"role": "user", "text": text, "ts": ts, "truncated": cut})
+    return messages, truncated
+
+
+def read_log_delta(path: Path, after_byte: int = 0,
+                   max_lines: int = 500) -> tuple[list[str], int]:
+    """从日志文件 after_byte 字节处读取增量行，返回 (lines, new_offset)。
+
+    日志文件被 executor 逐行实时追加（append-only）。offset 落在行中间时
+    自动对齐到最近的行首（保证只返回完整行）；尾部若为写入中的半行
+    （无换行结尾）则回退到该行开头（offset 回退），等下一轮补全，
+    避免撕裂行；文件不存在 / offset 超界返回空增量。
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return [], after_byte
+    if after_byte >= size:
+        return [], size
+    start = after_byte
+    if start > 0:
+        # 对齐行首：回读一段窗口找最近的换行符
+        lookback = min(start, 4096)
+        with open(path, "rb") as f:
+            f.seek(start - lookback)
+            window = f.read(lookback)
+        idx = window.rfind(b"\n")
+        start = start - lookback + idx + 1
+    with open(path, "rb") as f:
+        f.seek(start)
+        raw = f.read()
+    new_offset = start + len(raw)
+    if raw and not raw.endswith(b"\n") and not raw.endswith(b"\r"):
+        line_start = raw.rfind(b"\n") + 1
+        new_offset -= len(raw[line_start:])
+        raw = raw[:line_start]
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+    return lines, new_offset
+
+
 class ClaudeExecutor:
     def __init__(self, config: ConfigManager, db: Database,
                  gitlab: GitLabClient, renderer: TemplateRenderer,
@@ -391,17 +549,7 @@ class ClaudeExecutor:
 
     def _session_file(self, session_id: str) -> Path | None:
         """查找 session 文件 ~/.claude/projects/*/<sid>.jsonl；不存在返回 None。"""
-        projects = self._claude_home() / "projects"
-        if not projects.is_dir():
-            return None
-        try:
-            for proj in projects.iterdir():
-                f = proj / f"{session_id}.jsonl"
-                if f.is_file():
-                    return f
-        except OSError:
-            return None
-        return None
+        return find_session_file(session_id, self._claude_home())
 
     def _resume_prompt(self, repo: dict, issue: dict) -> str:
         """恢复执行引导语：基于上次会话继续，不重复已完成的工作。"""
@@ -455,6 +603,7 @@ class ClaudeExecutor:
         deadline = time.time() + cfg.task_timeout_seconds
         chunks: list[str] = []
         timed_out = False
+        session_known = False
 
         # 边读边写日志文件，避免内存堆积；超时则杀整个进程组
         with open(log_path, "w", encoding="utf-8", errors="replace") as f:
@@ -474,6 +623,10 @@ class ClaudeExecutor:
                     chunks.append(chunk)
                     if len(chunks) > 20000:  # 约 20MB 上限
                         chunks.pop(0)
+                    # 运行中即把 session_id 落库（issue #20 实时查看），
+                    # 只落首次：进程未结束时 API 就能定位当前会话文件
+                    if not session_known and self._persist_session_from_chunk(task_id, chunk):
+                        session_known = True
                 if time.time() >= deadline and proc.poll() is None:
                     timed_out = True
                     break
@@ -502,6 +655,19 @@ class ClaudeExecutor:
         session_id = self._extract_session_id(output)
         if session_id:
             self.db.set_task_status(task_id, None, claude_session_id=session_id)
+
+    def _persist_session_from_chunk(self, task_id: int, chunk: str) -> bool:
+        """运行中首次发现 session_id 即落库（issue #20 实时查看聊天记录）。
+
+        此前 session_id 只在执行完全结束后才落库，任务 running 期间 API
+        拿不到当前会话，无法实时读聊天记录；这里在读循环里每行检测，
+        首次解析到即落库（幂等，与结束后落库同一值）。
+        """
+        session_id = self._extract_session_id(chunk)
+        if session_id:
+            self.db.set_task_status(task_id, None, claude_session_id=session_id)
+            return True
+        return False
 
     def _log_file(self, task_id: int) -> Path:
         base = Path(__file__).resolve().parents[1] / "logs"

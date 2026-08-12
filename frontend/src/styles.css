@@ -518,3 +518,81 @@ code {
   font-size: 12px;
   background: var(--bg-card);
 }
+
+/* ============================================================
+   实时执行面板（issue #20）：任务详情页聊天记录 + 实时输出
+   ============================================================ */
+.live-session {
+  margin-left: 8px;
+  font-size: 12px;
+}
+.chat-list {
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-msg {
+  max-width: 88%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.chat-user {
+  align-self: flex-end;
+  background: var(--primary-weak);
+  border: 1px solid rgba(0, 112, 243, 0.15);
+}
+.chat-assistant {
+  align-self: flex-start;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.chat-ts {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.chat-tool {
+  align-self: flex-start;
+  max-width: 100%;
+  background: var(--bg-hover);
+  border: 1px dashed var(--border-hover);
+  font-size: 12px;
+}
+.chat-tool-name {
+  font-weight: 600;
+  margin-right: 8px;
+}
+.chat-tool-result {
+  align-self: flex-start;
+  max-width: 100%;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.chat-tool-error {
+  border-color: rgba(229, 72, 77, 0.4);
+  background: var(--err-weak);
+}
+.chat-err-badge {
+  margin-right: 6px;
+  font-size: 11px;
+}
+.live-log-block {
+  margin-top: 10px;
+  font-size: 13px;
+}
+.live-log {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-top: 8px;
+  font-size: 12px;
+}

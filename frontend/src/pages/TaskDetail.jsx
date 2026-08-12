@@ -1,13 +1,49 @@
-import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { api, fmtTime, shortSha, STATUS_META } from '../api.js'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useParams } from 'react-router-dom'
+import { api, fmtTime, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
+
+// 任务仍可能产出新日志/聊天的状态（活跃期间持续轮询）
+const LIVE_STATUSES = ['queued', 'running', 'retrying']
+
+function LiveMsg({ m }) {
+  // 聊天消息渲染：用户 / 助手文本 / 工具调用 / 工具结果（issue #20）
+  if (m.role === 'tool') {
+    return (
+      <div className="chat-msg chat-tool">
+        <span className="chat-tool-name">🔧 {m.tool}</span>
+        <code>{summarizeToolInput(m.input, m.tool)}</code>
+      </div>
+    )
+  }
+  if (m.role === 'tool_result') {
+    return (
+      <div className={'chat-msg chat-tool-result' + (m.tool_error ? ' chat-tool-error' : '')}>
+        {m.tool_error && <span className="badge chat-err-badge">失败</span>}
+        <span className="pre-wrap">{m.text || '（无输出）'}</span>
+      </div>
+    )
+  }
+  const cls = m.role === 'assistant' ? 'chat-assistant' : 'chat-user'
+  return (
+    <div className={'chat-msg ' + cls}>
+      <span className="pre-wrap">{m.text}</span>
+      {m.ts && <span className="chat-ts">{fmtTime(m.ts)}</span>}
+    </div>
+  )
+}
 
 export default function TaskDetail() {
   const { id } = useParams()
+  const location = useLocation()
   const [task, setTask] = useState(null)
   const [error, setError] = useState('')
   const [showPrompt, setShowPrompt] = useState(false)
   const [showFileLog, setShowFileLog] = useState(true)
+  // 实时执行面板（issue #20）：live 为 null 表示尚未拉取过
+  const [live, setLive] = useState(null)
+  const [liveDone, setLiveDone] = useState(false)
+  const liveRef = useRef({ offset: 0, lines: [], transcript: [], sessionId: null })
+  const logRef = useRef(null)
 
   const load = async () => {
     try {
@@ -20,6 +56,42 @@ export default function TaskDetail() {
     const t = setInterval(load, 5000) // 执行中自动刷新
     return () => clearInterval(t)
   }, [id])
+
+  // 实时执行轮询（3s）：日志增量（字节偏移续读）+ 聊天记录（全量替换）
+  const pollLive = useCallback(async () => {
+    const cur = liveRef.current
+    try {
+      const d = await api.get(`/api/tasks/${id}/execution?after_byte=${cur.offset}`)
+      cur.offset = d.log_offset
+      cur.lines = cur.lines.concat(d.log_delta)
+      if (d.transcript?.length) cur.transcript = d.transcript
+      if (d.session_id) cur.sessionId = d.session_id
+      setLive({ ...cur })
+      if (!LIVE_STATUSES.includes(d.status)) setLiveDone(true)
+    } catch {
+      setLiveDone(true) // 拉取失败停止轮询（不阻塞页面其他内容）
+    }
+  }, [id])
+
+  useEffect(() => {
+    if (liveDone) return
+    pollLive()
+    const t = setInterval(pollLive, 3000)
+    return () => clearInterval(t)
+  }, [id, liveDone, pollLive])
+
+  // 实时日志自动滚动到底部
+  useEffect(() => {
+    const el = logRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [live?.lines])
+
+  // 从列表页「执行」按钮跳转（?live=1）时滚动到实时面板
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('live') === '1' && live) {
+      document.getElementById('live-panel')?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [location.search, live])
 
   if (error) return <div className="alert alert-error">{error}</div>
   if (!task) return <p className="muted">加载中…</p>
@@ -73,6 +145,34 @@ export default function TaskDetail() {
         </button>
         {showPrompt && (
           <pre className="log-view">{task.prompt || '（提示词未持久化，见执行日志）'}</pre>
+        )}
+      </div>
+
+      <div className="card" id="live-panel">
+        <h2>
+          实时执行
+          {live?.sessionId && <code className="muted small live-session">session {live.sessionId.slice(0, 8)}…</code>}
+          {!liveDone && live && <span className="muted small">（每 3 秒自动刷新）</span>}
+        </h2>
+        {!live ? (
+          <p className="muted">加载中…</p>
+        ) : (
+          <>
+            <div className="chat-list">
+              {live.transcript.length === 0 && (
+                <p className="muted">
+                  {live.sessionId ? '暂无聊天消息' : '暂无聊天记录（会话尚未开始或会话文件不可读）'}
+                </p>
+              )}
+              {live.transcript.map((m, i) => <LiveMsg key={i} m={m} />)}
+            </div>
+            <details className="live-log-block">
+              <summary>实时输出（{live.lines.length} 行）</summary>
+              <pre className="log-view live-log" ref={logRef}>
+                {live.lines.join('\n') || '（暂无输出）'}
+              </pre>
+            </details>
+          </>
         )}
       </div>
 

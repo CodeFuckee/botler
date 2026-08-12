@@ -97,3 +97,23 @@ export function shortSha(sha) {
   if (!sha || typeof sha !== 'string') return '—'
   return sha.length > 8 ? sha.slice(0, 8) : sha
 }
+
+// 实时执行面板文本截断（issue #20）：超长文本截断到 max 字符并加省略号
+export function truncateText(text, max = 120) {
+  if (!text) return ''
+  const s = typeof text === 'string' ? text : JSON.stringify(text)
+  return s.length > max ? s.slice(0, max) + '…' : s
+}
+
+// 工具调用输入一行式摘要（issue #20）：Bash 命令显示 `$ cmd`，
+// 其余对象/数组序列化为单行 JSON；空值返回占位符
+export function summarizeToolInput(input, tool) {
+  if (input == null || input === '') return '—'
+  if (typeof input === 'object') {
+    if (tool === 'Bash' && typeof input.command === 'string' && input.command) {
+      return truncateText('$ ' + input.command, 120)
+    }
+    return truncateText(input, 120)
+  }
+  return truncateText(String(input), 120)
+}

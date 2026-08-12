@@ -80,12 +80,12 @@ export default function Tasks() {
           <thead>
             <tr>
               <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
-              <th>状态</th><th>尝试</th><th>来源</th><th>失败原因</th><th>提交</th><th>创建时间</th>
+              <th>状态</th><th>尝试</th><th>来源</th><th>失败原因</th><th>提交</th><th>创建时间</th><th>操作</th>
             </tr>
           </thead>
           <tbody>
             {data.tasks.length === 0 && (
-              <tr><td colSpan={10} className="muted">暂无任务</td></tr>
+              <tr><td colSpan={11} className="muted">暂无任务</td></tr>
             )}
             {data.tasks.map((t) => {
               const meta = STATUS_META[t.status] || { label: t.status, cls: '' }
@@ -125,6 +125,10 @@ export default function Tasks() {
                     )}
                   </td>
                   <td>{fmtTime(t.created_at)}</td>
+                  <td>
+                    <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
+                          title="实时查看 agent 执行进度与聊天记录（issue #20）">执行</Link>
+                  </td>
                 </tr>
               )
             })}

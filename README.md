@@ -184,6 +184,7 @@ POST   /api/settings/reconcile-now    手动触发对账
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url）
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url）
 GET    /api/tasks/{id}/logs           任务日志
+GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 

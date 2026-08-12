@@ -330,3 +330,106 @@ class TestTaskCommitFields:
         assert _commit_url("", "abc") is None
         assert _commit_url("https://x.example/a/b.git", "") is None
         assert _commit_url(None, "abc") is None
+
+
+class TestTaskExecution:
+    """GET /api/tasks/{id}/execution：实时查看任务执行的日志增量与聊天记录（issue #20）。"""
+
+    def _mk_session(self, tmp_path, sid: str, lines: list[str]) -> None:
+        """在 ~/.claude/projects/<proj>/ 下写一个 session jsonl 文件。"""
+        proj = tmp_path / ".claude" / "projects" / "proj-a"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / f"{sid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _mk_running_task(self, db, tmp_path, log_text: str = "",
+                         session_id: str | None = None) -> int:
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=9, title="实时查看任务",
+                           status="running")
+        log_path = tmp_path / "logs" / f"task_{task_id}.log"
+        log_path.parent.mkdir(exist_ok=True)
+        if log_text:
+            log_path.write_text(log_text, encoding="utf-8")
+        db.set_task_status(task_id, None, log_path=str(log_path),
+                           claude_session_id=session_id)
+        return task_id
+
+    def test_execution_basic_contract(self, api_app, monkeypatch):
+        """无日志文件、无会话时返回空增量与空 transcript（不 500）。"""
+        app, db, tmp_path = api_app
+        monkeypatch.setattr("botler.executor.Path.home", lambda: tmp_path)
+        task_id = self._mk_running_task(db, tmp_path)
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["status"] == "running"
+        assert body["session_id"] is None
+        assert body["log_offset"] == 0
+        assert body["log_delta"] == []
+        assert body["transcript"] == []
+        assert body["transcript_truncated"] is False
+
+    def test_execution_log_delta_and_offset(self, api_app):
+        """日志增量按 after_byte 读取，claude JSON 行解码为可读文本。"""
+        app, db, tmp_path = api_app
+        line1 = '{"type":"result","session_id":"sid-1","result":"开始执行","exit_code":null}'
+        line2 = '{"type":"result","session_id":"sid-1","result":"完成任务"}'
+        task_id = self._mk_running_task(db, tmp_path, log_text=line1 + "\n" + line2 + "\n")
+        c = TestClient(app)
+
+        body = c.get(f"/api/tasks/{task_id}/execution").json()
+        assert len(body["log_delta"]) == 2
+        assert "开始执行" in body["log_delta"][0]  # result 嵌套转义已解码
+        assert "完成任务" in body["log_delta"][1]
+        assert body["log_offset"] == len((line1 + "\n" + line2 + "\n").encode("utf-8"))
+
+        # 增量续读：after_byte 传上次 offset → 无新增
+        body2 = c.get(f"/api/tasks/{task_id}/execution",
+                      params={"after_byte": body["log_offset"]}).json()
+        assert body2["log_delta"] == []
+        assert body2["log_offset"] == body["log_offset"]
+
+    def test_execution_log_half_line_rewind(self, api_app, tmp_path):
+        """日志文件尾部未写完的半行不返回，offset 回退到行首。"""
+        app, db, tmp_path = api_app
+        task_id = self._mk_running_task(db, tmp_path, log_text="line1\nline2")
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["log_delta"] == ["line1"]
+        assert body["log_offset"] == len("line1\n".encode("utf-8"))
+
+    def test_execution_transcript_from_session_file(self, api_app, monkeypatch):
+        """有 claude_session_id 且会话文件存在 → 返回解析后的聊天消息。"""
+        app, db, tmp_path = api_app
+        monkeypatch.setattr("botler.executor.Path.home", lambda: tmp_path)
+        session_lines = [
+            json.dumps({"type": "user", "message": {"role": "user",
+                        "content": [{"type": "text", "text": "请修复 bug"}],
+                        "timestamp": "2026-08-12T10:00:00Z"}}),
+            json.dumps({"type": "assistant", "message": {"role": "assistant",
+                        "content": [{"type": "tool_use", "id": "toolu_1",
+                                     "name": "Bash", "input": {"command": "git status"}}],
+                        "timestamp": "2026-08-12T10:00:01Z"}}),
+        ]
+        self._mk_session(tmp_path, "sid-live", session_lines)
+        task_id = self._mk_running_task(db, tmp_path, session_id="sid-live")
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["session_id"] == "sid-live"
+        assert [m["role"] for m in body["transcript"]] == ["user", "tool"]
+        assert body["transcript"][1]["tool"] == "Bash"
+        assert body["transcript_truncated"] is False
+
+    def test_execution_transcript_empty_when_file_missing(self, api_app, monkeypatch):
+        """session_id 有值但会话文件已丢失 → transcript 空，不 500。"""
+        app, db, tmp_path = api_app
+        monkeypatch.setattr("botler.executor.Path.home", lambda: tmp_path)
+        task_id = self._mk_running_task(db, tmp_path, session_id="lost-sid")
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["session_id"] == "lost-sid"
+        assert body["transcript"] == []
+
+    def test_execution_404_and_param_bounds(self, api_app):
+        app, db, tmp_path = api_app
+        c = TestClient(app)
+        assert c.get("/api/tasks/9999/execution").status_code == 404
+        task_id = self._mk_running_task(db, tmp_path)
+        # after_byte 参数约束（ge=0）在业务逻辑前校验 → 422
+        assert c.get(f"/api/tasks/{task_id}/execution",
+                     params={"after_byte": -1}).status_code == 422
