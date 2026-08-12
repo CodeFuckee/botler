@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, setDisplayTz } from '../api.js'
+import { api, setDisplayTz, fmtTime } from '../api.js'
 import { sendTestNotification } from '../notify.js'
 import BackupManager from '../components/BackupManager.jsx'
 
@@ -31,6 +31,9 @@ export default function Settings() {
   const [busy, setBusy] = useState(false)
   const [reconcileNote, setReconcileNote] = useState('')
   const [testNote, setTestNote] = useState(null) // {ok, text}，测试通知结果提示
+  const [env, setEnv] = useState(null) // 本地环境检测结果（issue #22）
+  const [envError, setEnvError] = useState('')
+  const [envBusy, setEnvBusy] = useState(false)
 
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
@@ -46,8 +49,26 @@ export default function Settings() {
     )
   }
 
+  // 本地环境检测（issue #22）：进入设置页自动检测一次，可点「重新检测」刷新
+  const loadEnv = async () => {
+    setEnvBusy(true); setEnvError('')
+    try {
+      setEnv(await api.get('/api/environment'))
+    } catch (e) { setEnvError(e.message) } finally { setEnvBusy(false) }
+  }
+
+  // 单工具状态提示：未安装 / 无法获取最新版本 / 已是最新 / 可升级
+  const envStatus = (t) => {
+    if (!t.installed) return <span className="muted">未安装</span>
+    if (!t.latest) return <span className="muted">无法获取最新版本</span>
+    return t.up_to_date
+      ? <span className="ok-text">✓ 已是最新</span>
+      : <span className="err-hint">⚠ 可升级</span>
+  }
+
   useEffect(() => {
     api.get('/api/settings').then(setSettings).catch((e) => setError(e.message))
+    loadEnv()
   }, [])
 
   if (!settings) return <p className="muted">加载中…</p>
@@ -243,6 +264,46 @@ export default function Settings() {
             ? <> <code>ANTHROPIC_BASE_URL={settings.env.anthropic_base_url}</code> · <code>ANTHROPIC_MODEL={settings.env.anthropic_model}</code></>
             : '（未配置 ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY，请检查 .env）'}
         </p>
+      </div>
+
+      <div className="card">
+        <h2>本地环境检测</h2>
+        <p className="muted small">
+          检测 botler 服务器上常见 AI agent 与基础工具是否安装及其版本；
+          最新版本来自 npm registry / GitHub API（网络不可达时显示 "—"）。
+        </p>
+        {envError && <div className="alert alert-error" onClick={() => setEnvError('')}>{envError}</div>}
+        {!env && !envError && <p className="muted">检测中…</p>}
+        {env && (
+          <table className="table">
+            <thead>
+              <tr><th>工具</th><th>状态</th><th>已装版本</th><th>最新版本</th><th>提示</th></tr>
+            </thead>
+            <tbody>
+              {env.tools.map((t) => (
+                <tr key={t.key}>
+                  <td>{t.name} <code>{t.key}</code></td>
+                  <td>{t.installed
+                    ? <span className="ok-text">✓ 已安装</span>
+                    : <span className="muted">未安装</span>}</td>
+                  <td>{t.version || <span className="muted">未知</span>}</td>
+                  <td>{t.latest || <span className="muted">—</span>}</td>
+                  <td>{envStatus(t)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="form-row">
+          <button className="btn" disabled={envBusy} onClick={loadEnv}>
+            {envBusy ? '检测中…' : '重新检测'}
+          </button>
+          {env && (
+            <span className="muted small">
+              {env.hostname} · {env.platform} · {fmtTime(env.detected_at)} 检测
+            </span>
+          )}
+        </div>
       </div>
 
       <BackupManager />

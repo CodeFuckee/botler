@@ -6,6 +6,21 @@
 
 ### Added
 
+- **设置页增加本地环境检测功能**（issue #22）：新增「本地环境检测」卡片，检测
+  botler 服务器上常见 AI agent（claude/codex/gemini/aider/gh）与基础工具
+  （git/docker/node/npm/python3/uv）是否安装、已装版本与最新版本；最新版本
+  已安装且带发布源的工具并发查询（npm registry / GitHub API，网络不可达显示
+  "—"），版本落后高亮提示「可升级」。进入设置页自动检测，可点「重新检测」刷新。
+  - 涉及 `backend/botler/environment.py`（新增：工具清单 + which/`--version`
+    版本解析 + 最新版本查询，线程池并发 + 整体超时，全部容错）、
+    `backend/botler/api/environment.py`（新增 `GET /api/environment`）、
+    `backend/botler/api/__init__.py`（注册路由）、`frontend/src/pages/
+    Settings.jsx`（新增「本地环境检测」卡片）、`README.md`（API 一览）。
+  - 测试：后端新增 28 个用例（版本解析 10 个：v 前缀/文本前缀/多行/无版本/
+    空值/4 段取前三；工具检测 7 个：未安装/版本读取失败/超时/异常；最新版本
+    查询 8 个：npm/GitHub 正常、404/网络异常/非法 JSON/缺字段/无发布源/未知
+    源；整体检测 3 个：全流程/版本一致/网络失败）。后端全量 289 passed +
+    前端 30 passed + build 通过。
 - **设置页「弹出测试通知」按钮**（issue #21 增量）：通知卡片新增「测试通知」行，
   点击立即弹出一条浏览器系统通知（标题「Botler 测试通知」），用于验证网页通知
   功能是否正常。纯前端实现：`notify.js` 新增 `sendTestNotification()`——绕过设置
