@@ -16,7 +16,7 @@ import pytest
 from botler.config import ConfigManager
 from botler.database import Database
 from botler.executor import ClaudeExecutor, format_display_line
-from botler.gitlab_client import GitLabClient
+from botler.gitlab_client import GitLabClient, GitLabError
 from botler.templates import TemplateRenderer
 
 CONFIG_TEXT = """\
@@ -366,6 +366,7 @@ class TestSessionResume:
             get_issue=lambda pid, iid: _issue_dict("closed"),  # 一次尝试即成功
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
+            find_commit_for_issue=lambda pid, iid: None,
         )
 
         executor.run_task(task_id)
@@ -442,6 +443,7 @@ class TestRepoSqlite3RowCompat:
             get_issue=lambda pid, iid: _issue_dict("closed"),
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
+            find_commit_for_issue=lambda pid, iid: None,
         )
 
         executor.run_task(task_id)
@@ -451,3 +453,93 @@ class TestRepoSqlite3RowCompat:
         assert "未预期异常" not in (task["error_message"] or "")
         logs = [l["message"] for l in db.list_logs(task_id)]
         assert not any("sqlite3.Row" in m for m in logs)
+
+
+# ---- issue #19：任务成功时记录对应提交（任务页面 commit 链接） ----
+
+class TestCommitRecording:
+    """_finish_succeeded 成功后应查询并落库对应提交的 sha（issue #19）。
+
+    任务页面展示 commit 链接依赖 tasks.commit_sha：Claude 按模板提交
+    （message 含 "issue #N"）并关闭 issue 后，executor 用 GitLab commits
+    API 匹配该提交。查询失败/找不到不应阻塞任务成功（页面不显示链接即可）。
+    """
+
+    def _commit_sha(self) -> str:
+        return "deadbeef000111222333444555666777888999aa"
+
+    def test_success_records_commit_sha(self, executor, tmp_path):
+        """找到对应提交 → sha 落库，任务保持 succeeded。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        executor.gitlab = SimpleNamespace(
+            find_commit_for_issue=lambda pid, iid: self._commit_sha())
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+
+        executor._finish_succeeded(task_id, "ok")
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        assert task["commit_sha"] == self._commit_sha()
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("已记录任务提交" in m for m in logs)
+
+    def test_no_commit_found_keeps_success(self, executor, tmp_path):
+        """查询不到对应提交（模板被改/提交信息不含 issue 号）→ 不落库、任务仍成功。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        executor.gitlab = SimpleNamespace(find_commit_for_issue=lambda pid, iid: None)
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+
+        executor._finish_succeeded(task_id, "ok")
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        assert task["commit_sha"] is None
+
+    def test_commit_query_error_keeps_success(self, executor, tmp_path):
+        """GitLab API 查询失败（网络/权限）→ 记 warn 日志，任务仍成功。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        executor.gitlab = SimpleNamespace(
+            find_commit_for_issue=lambda pid, iid: (_ for _ in ()).throw(
+                GitLabError("GitLab API 错误 500: boom", 500)))
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+
+        executor._finish_succeeded(task_id, "ok")
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        assert task["commit_sha"] is None
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("查询任务提交失败" in m for m in logs)
+
+    def test_run_task_success_records_commit(self, executor, monkeypatch, tmp_path):
+        """端到端：run_task 成功路径（exit 0 + issue closed）应记录对应提交。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        (tmp_path / "workspace" / "demo" / ".git").mkdir(parents=True)
+        monkeypatch.setattr(executor, "_git", lambda *a, **k: None)
+        monkeypatch.setattr(executor, "_askpass_script", lambda n: tmp_path / "askpass.sh")
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+
+        def fake_popen(cmd, **kwargs):
+            return _FakeProc(json.dumps({"result": "ok", "session_id": "sid-commit"}), 0)
+
+        monkeypatch.setattr("botler.executor.subprocess.Popen", fake_popen)
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda pid, iid: _issue_dict("closed"),
+            add_comment=lambda *a, **k: None,
+            add_labels=lambda *a, **k: None,
+            find_commit_for_issue=lambda pid, iid: self._commit_sha(),
+        )
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        assert task["commit_sha"] == self._commit_sha()

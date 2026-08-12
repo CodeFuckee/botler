@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, fmtTime, STATUS_META } from '../api.js'
+import { api, fmtTime, shortSha, STATUS_META } from '../api.js'
 
 export default function Tasks() {
   const [data, setData] = useState({ tasks: [], total: 0, stats: {} })
@@ -80,12 +80,12 @@ export default function Tasks() {
           <thead>
             <tr>
               <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
-              <th>状态</th><th>尝试</th><th>来源</th><th>失败原因</th><th>创建时间</th>
+              <th>状态</th><th>尝试</th><th>来源</th><th>失败原因</th><th>提交</th><th>创建时间</th>
             </tr>
           </thead>
           <tbody>
             {data.tasks.length === 0 && (
-              <tr><td colSpan={9} className="muted">暂无任务</td></tr>
+              <tr><td colSpan={10} className="muted">暂无任务</td></tr>
             )}
             {data.tasks.map((t) => {
               const meta = STATUS_META[t.status] || { label: t.status, cls: '' }
@@ -114,6 +114,14 @@ export default function Tasks() {
                     {failedReason || <span className="muted">—</span>}
                     {hasDetail && (
                       <button className="btn btn-mini" onClick={() => setDetailTask(t)}>详情</button>
+                    )}
+                  </td>
+                  <td>
+                    {t.commit_url ? (
+                      <a href={t.commit_url} target="_blank" rel="noreferrer"
+                         title={`查看提交 ${t.commit_sha}`}>{shortSha(t.commit_sha)}</a>
+                    ) : (
+                      <span className="muted">—</span>
                     )}
                   </td>
                   <td>{fmtTime(t.created_at)}</td>

@@ -136,3 +136,94 @@ class TestRegisterWebhookErrorHint:
         with pytest.raises(GitLabError) as ei:
             client.register_webhook(123, "secret")
         assert "Allow requests to the local network" not in str(ei.value)
+
+
+class TestFindCommitForIssue:
+    """find_commit_for_issue：按提交信息匹配引用指定 issue 的提交（issue #19）。
+
+    任务页面的 commit 链接依赖该查询：Claude 按模板提交（message 含
+    "issue #N"）后关闭 issue，成功路径据此把对应提交 sha 落库。
+    """
+
+    @staticmethod
+    def _commits(messages: list[str]) -> list[dict]:
+        """构造 commits 列表（id 为完整 sha，列表按 GitLab 返回顺序=新→旧）。"""
+        return [{"id": f"deadbeef000{i}", "title": m.splitlines()[0],
+                 "message": m} for i, m in enumerate(messages)]
+
+    def _stub(self, client: GitLabClient, result, error=None) -> dict:
+        """用桩替换 _request，记录请求参数。"""
+        captured: dict = {}
+
+        def fake_request(method, path, **kwargs):
+            captured["method"] = method
+            captured["path"] = path
+            captured["params"] = kwargs.get("params")
+            if error:
+                raise error
+            return result
+
+        client._request = fake_request
+        return captured
+
+    def test_matches_message_with_issue_iid(self):
+        """提交信息含 "issue #7" 时返回该提交的完整 sha（取最近的匹配）。"""
+        client = make_client()
+        commits = self._commits(
+            ["chore: 清理无用代码", "fix: 解决 issue #7", "feat: 新增登录功能"])
+        captured = self._stub(client, commits)
+        sha = client.find_commit_for_issue(42, 7)
+        assert sha == "deadbeef0001"
+        assert captured["path"] == "/projects/42/repository/commits"
+        assert captured["params"]["per_page"] == 100
+        # 不指定 ref_name：查询默认分支（HEAD），与模板 push 的 main 一致
+        assert "ref_name" not in captured["params"]
+
+    def test_matches_case_insensitive(self):
+        client = make_client()
+        commits = self._commits(["fix: 解决 ISSUE #7 的问题", "feat: 首页"])
+        self._stub(client, commits)
+        assert client.find_commit_for_issue(42, 7) == "deadbeef0000"
+
+    def test_matches_whitespace_variant(self):
+        """"issue#7"（无空格）与 "issue # 7"（多空格）都应匹配。"""
+        client = make_client()
+        commits = self._commits(["fix: 解决 issue#7", "feat: 首页"])
+        self._stub(client, commits)
+        assert client.find_commit_for_issue(42, 7) == "deadbeef0000"
+        commits2 = self._commits(["fix: 解决 issue #  7", "feat: 首页"])
+        self._stub(client, commits2)
+        assert client.find_commit_for_issue(42, 7) == "deadbeef0000"
+
+    def test_no_false_match_for_longer_iid(self):
+        """提交信息引用 issue #70 时，查 issue #7 不应误匹配。"""
+        client = make_client()
+        commits = self._commits(["fix: 解决 issue #70", "feat: 首页"])
+        self._stub(client, commits)
+        assert client.find_commit_for_issue(42, 7) is None
+        assert client.find_commit_for_issue(42, 70) == "deadbeef0000"
+
+    def test_no_match_returns_none(self):
+        client = make_client()
+        commits = self._commits(["chore: 无 issue 引用的提交"])
+        self._stub(client, commits)
+        assert client.find_commit_for_issue(42, 7) is None
+
+    def test_empty_list_returns_none(self):
+        client = make_client()
+        self._stub(client, [])
+        assert client.find_commit_for_issue(42, 7) is None
+
+    def test_api_error_propagates(self):
+        """GitLab API 报错应向上抛 GitLabError，由调用方决定是否降级。"""
+        client = make_client()
+        self._stub(client, None, error=GitLabError("GitLab API 错误 500: boom", 500))
+        with pytest.raises(GitLabError):
+            client.find_commit_for_issue(42, 7)
+
+    def test_commit_without_id_field_is_skipped(self):
+        """异常数据结构（无 id 字段）不应使查询崩溃。"""
+        client = make_client()
+        client._request = lambda method, path, **kwargs: [
+            {"title": "x", "message": "fix: 解决 issue #7"}]
+        assert client.find_commit_for_issue(42, 7) is None

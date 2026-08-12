@@ -6,6 +6,21 @@
 
 ### Added
 
+- **任务页面展示对应任务提交的链接**（issue #19）：任务成功时 executor 用 GitLab
+  commits API 按提交信息（模板固定含 `issue #N`）匹配 Claude 推送的提交，完整 sha
+  落库 `tasks.commit_sha`；列表页新增「提交」列、详情页新增「提交」行，点击跳转
+  GitLab 查看对应 commit（新标签页）。查询失败/找不到不阻塞任务成功（页面显示
+  占位符）。历史任务不回填，无提交信息时显示 `—`。
+  - 涉及 `backend/botler/gitlab_client.py`（新增 `find_commit_for_issue`：
+    message 按 `issue #N` 大小写/空格不敏感、数字边界精确匹配）、
+    `backend/botler/database.py`（`tasks.commit_sha` 列 + 旧库迁移）、
+    `backend/botler/executor.py`（`_finish_succeeded` 成功后 `_record_commit`
+    查询落库）、`backend/botler/api/tasks.py`（透出 `commit_sha` / `commit_url`，
+    仓库 URL 去 `.git` 后缀拼接）、`frontend/src/pages/Tasks.jsx` /
+    `TaskDetail.jsx`（链接展示，`shortSha` 短 sha 显示）。
+  - 测试：后端新增 19 个用例（`find_commit_for_issue` 匹配/边界/异常 9 个、
+    executor 落库/降级/端到端 4 个、API 字段契约 4 个、数据库迁移 2 个），
+    前端新增 `shortSha` 4 个用例。全量 209 passed + 前端 6 passed。
 - **仓库页「对账」按钮**（issue #17）：仓库列表每行右侧按钮区新增「对账」按钮，
   点击后立即扫描该仓库，把「assignee 是 bot 但任务表无活跃记录」的 open issues
   补入队，行内直接显示结果——发现 N 个待处理已入队 / 无需处理（并显示扫描的

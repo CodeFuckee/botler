@@ -91,3 +91,9 @@ export function fmtTime(ts, tz = displayTz) {
   const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
 }
+
+// commit sha 短显示（issue #19）：完整 sha 截断为前 8 位，空值返回占位符
+export function shortSha(sha) {
+  if (!sha || typeof sha !== 'string') return '—'
+  return sha.length > 8 ? sha.slice(0, 8) : sha
+}

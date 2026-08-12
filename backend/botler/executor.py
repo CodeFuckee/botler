@@ -660,7 +660,28 @@ class ClaudeExecutor:
             finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         self.db.add_log(task_id, "info", "任务成功：issue 已由 Claude Code 关闭")
         self._write_log_tail(task_id, output)
+        self._record_commit(task_id)
         logger.info("任务 %s 成功", task_id)
+
+    def _record_commit(self, task_id: int) -> None:
+        """任务成功时查询对应提交并落库（issue #19：任务页面 commit 链接）。
+
+        Claude 按模板提交（message 含 "issue #N"）并关闭 issue 后，用
+        GitLab commits API 匹配该提交，完整 sha 落库供前端拼链接。
+        查询失败/找不到不阻塞任务成功（页面不显示链接即可）。
+        """
+        task = self.db.get_task(task_id)
+        if task is None:
+            return
+        try:
+            sha = self.gitlab.find_commit_for_issue(
+                task["project_id"], task["issue_iid"])
+        except GitLabError as e:
+            self.db.add_log(task_id, "warn", f"查询任务提交失败: {e}")
+            return
+        if sha:
+            self.db.set_task_status(task_id, None, commit_sha=sha)
+            self.db.add_log(task_id, "info", f"已记录任务提交 {sha[:8]}")
 
     def _finish_failed(self, task_id: int, reason: str, output: str = "",
                        error_detail: str | None = None) -> None:

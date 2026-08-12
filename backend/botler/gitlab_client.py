@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import time
 from urllib.parse import urlparse, unquote
 
@@ -289,3 +290,30 @@ class GitLabClient:
                 pass
             time.sleep(2)
         return False
+
+    # ---- commits ----
+
+    def find_commit_for_issue(self, project_id: int, issue_iid: int,
+                              limit: int = 100) -> str | None:
+        """在仓库提交历史中查找引用指定 issue 的最近提交，返回完整 sha。
+
+        任务页面 commit 链接依赖此查询（issue #19）：Claude 按模板提交
+        （message 含 "issue #N"，如 "fix: 解决 issue #7"）后关闭 issue，
+        executor 成功路径据此把对应提交 sha 落库。
+
+        默认查询分支 HEAD（GitLab 默认分支）最近 limit 条提交，按信息
+        "issue #N"（大小写/空格不敏感，数字边界精确匹配）取最近一条；
+        找不到返回 None（不抛错，由调用方决定页面是否显示链接）。
+        """
+        commits = self._request(
+            "GET", f"/projects/{project_id}/repository/commits",
+            params={"per_page": limit})
+        if not isinstance(commits, list):
+            return None
+        pattern = re.compile(rf"issue\s*#\s*{issue_iid}\b", re.IGNORECASE)
+        for commit in commits:
+            message = (commit or {}).get("message") or ""
+            if pattern.search(message):
+                sha = commit.get("id")
+                return sha if isinstance(sha, str) and sha else None
+        return None

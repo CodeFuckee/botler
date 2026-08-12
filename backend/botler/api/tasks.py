@@ -13,11 +13,24 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 STATUSES = {"queued", "running", "retrying", "succeeded", "failed", "interrupted"}
 
 
-def _task_to_dict(row, repo_name: str | None = None) -> dict:
+def _commit_url(repo_url: str | None, sha: str | None) -> str | None:
+    """拼接任务提交的 GitLab 页面地址（issue #19）。
+
+    仓库 URL 为 http_url_to_repo（如 https://host/group/proj.git），
+    去掉 .git 后缀后接 /-/commit/<sha>；URL 或 sha 缺失返回 None。
+    """
+    if not repo_url or not sha:
+        return None
+    base = repo_url[:-4] if repo_url.endswith(".git") else repo_url
+    return f"{base}/-/commit/{sha}"
+
+
+def _task_to_dict(row, repo: dict | None = None) -> dict:
     """把任务行转为 API 字典。
 
     error_detail 为 executor 写入的 JSON 字符串（每次尝试的失败详情），
     这里解析成结构化对象供前端「查看详细原因」按钮使用；解析失败返回 None。
+    repo 为仓库信息 dict（含 name/url），用于拼接 repo_name 与 commit_url。
     """
     detail = None
     if row["error_detail"]:
@@ -25,10 +38,11 @@ def _task_to_dict(row, repo_name: str | None = None) -> dict:
             detail = json.loads(row["error_detail"])
         except ValueError:
             detail = None
+    repo_url = repo.get("url") if repo else None
     return {
         "id": row["id"],
         "repo_id": row["repo_id"],
-        "repo_name": repo_name,
+        "repo_name": repo.get("name") if repo else None,
         "project_id": row["project_id"],
         "issue_iid": row["issue_iid"],
         "issue_title": row["issue_title"],
@@ -39,6 +53,8 @@ def _task_to_dict(row, repo_name: str | None = None) -> dict:
         "error_message": row["error_message"],
         "error_detail": detail,
         "resumed": bool(row["claude_session_id"]),  # 会话断点续跑标记（issue #8）
+        "commit_sha": row["commit_sha"],
+        "commit_url": _commit_url(repo_url, row["commit_sha"]),  # issue #19
         "log_path": row["log_path"],
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
@@ -60,9 +76,9 @@ def list_tasks(
         raise HTTPException(400, f"未知状态: {status}（可选: {sorted(STATUSES)}）")
     rows = c.db.list_tasks(status=status, repo_id=repo_id, search=search,
                            limit=limit, offset=offset)
-    repo_names = {r["id"]: r["name"] for r in c.db.list_repos()}
+    repos = {r["id"]: {"name": r["name"], "url": r["url"]} for r in c.db.list_repos()}
     return {
-        "tasks": [_task_to_dict(r, repo_names.get(r["repo_id"])) for r in rows],
+        "tasks": [_task_to_dict(r, repos.get(r["repo_id"])) for r in rows],
         "total": c.db.count_tasks(status=status),
         "stats": c.db.task_stats(),
     }
@@ -75,7 +91,7 @@ def get_task(request: Request, task_id: int):
     if row is None:
         raise HTTPException(404, "任务不存在")
     repo = c.db.get_repo(row["repo_id"])
-    task = _task_to_dict(row, repo["name"] if repo else None)
+    task = _task_to_dict(row, dict(repo) if repo else None)
     task["logs"] = [dict(l) for l in c.db.list_logs(task_id)]
     # 附上完整执行日志文件尾部（stdout/stderr）
     file_tail = None

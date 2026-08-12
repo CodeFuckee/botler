@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, fmtTime, STATUS_META } from '../api.js'
+import { api, fmtTime, shortSha, STATUS_META } from '../api.js'
 
 export default function TaskDetail() {
   const { id } = useParams()
@@ -47,6 +47,19 @@ export default function TaskDetail() {
             <tr><th>创建时间</th><td>{fmtTime(task.created_at)}</td></tr>
             <tr><th>开始时间</th><td>{fmtTime(task.started_at)}</td></tr>
             <tr><th>完成时间</th><td>{fmtTime(task.finished_at)}</td></tr>
+            <tr>
+              <th>提交</th>
+              <td>
+                {task.commit_url ? (
+                  <a href={task.commit_url} target="_blank" rel="noreferrer"
+                     title={`完整 sha: ${task.commit_sha}`}>
+                    {shortSha(task.commit_sha)} ↗
+                  </a>
+                ) : (
+                  <span className="muted">—</span>
+                )}
+              </td>
+            </tr>
             {task.error_message && (
               <tr><th>错误信息</th><td className="pre-wrap">{task.error_message}</td></tr>
             )}

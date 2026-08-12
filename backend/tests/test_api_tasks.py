@@ -57,11 +57,11 @@ def _mk_repo(db, project_id: int = 42, name: str = "demo") -> int:
 
 def _mk_task(db, repo_id: int, issue_iid: int = 1, title: str = "修复登录问题",
              status: str = "succeeded", error_message: str | None = None,
-             error_detail: str | None = None) -> int:
+             error_detail: str | None = None, commit_sha: str | None = None) -> int:
     """创建任务并按需更新状态，返回 task_id。"""
     task_id = db.create_task(repo_id, 42, issue_iid, title, triggered_by="webhook")
     db.set_task_status(task_id, status, error_message=error_message,
-                       error_detail=error_detail)
+                       error_detail=error_detail, commit_sha=commit_sha)
     return task_id
 
 
@@ -271,3 +271,62 @@ class TestStatsAndDedup:
         # 失败（终态）后允许重新创建
         db.set_task_status(first, "failed", error_message="原因")
         assert db.create_task(repo_id, 42, 1, "重复任务") is not None
+
+
+# ---- issue #19：任务 commit 链接字段契约 ----
+
+class TestTaskCommitFields:
+    """列表/详情必须透出 commit_sha 与 commit_url（任务页面 commit 链接的数据契约）。
+
+    commit_sha 由 executor 成功路径从 GitLab commits API 查询落库；
+    commit_url 由后端按仓库 URL 拼出（repo url 去 .git 后缀 + /-/commit/<sha>），
+    前端零拼接逻辑。
+    """
+
+    def test_list_returns_commit_url(self, client):
+        """有 commit_sha 的任务，列表返回完整 sha 与可跳转的 commit_url。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)  # url: https://gitlab.example.com/group/demo.git
+        _mk_task(db, repo_id, issue_iid=1, title="成功任务",
+                 commit_sha="deadbeef000111222333444555666777888999aa")
+        _mk_task(db, repo_id, issue_iid=2, title="无提交任务")
+
+        body = app_client.get("/api/tasks").json()
+        by_iid = {t["issue_iid"]: t for t in body["tasks"]}
+        assert by_iid[1]["commit_sha"] == "deadbeef000111222333444555666777888999aa"
+        assert by_iid[1]["commit_url"] == (
+            "https://gitlab.example.com/group/demo/-/commit/deadbeef000111222333444555666777888999aa")
+        # 无提交的任务两个字段都为 None（前端显示占位符）
+        assert by_iid[2]["commit_sha"] is None
+        assert by_iid[2]["commit_url"] is None
+
+    def test_detail_returns_commit_url(self, client):
+        """详情返回 commit_url；仓库 URL 无 .git 后缀时拼接不受影响。"""
+        app_client, db = client
+        repo_id = db.upsert_repo(43, "plain", "https://gitlab.example.com/group/plain")
+        task_id = _mk_task(db, repo_id, issue_iid=3, title="成功任务",
+                           commit_sha="abc12345")
+        task = app_client.get(f"/api/tasks/{task_id}").json()
+        assert task["commit_sha"] == "abc12345"
+        assert task["commit_url"] == "https://gitlab.example.com/group/plain/-/commit/abc12345"
+
+    def test_detail_commit_none_when_repo_deleted(self, api_app):
+        """仓库记录被删除时（repo_name 显示占位符），commit_url 应为 None 而非 500。"""
+        app, db, tmp_path = api_app
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=4, title="成功任务",
+                           commit_sha="deadbeef00")
+        db.delete_repo(repo_id)
+        task = TestClient(app).get(f"/api/tasks/{task_id}").json()
+        assert task["repo_name"] is None
+        assert task["commit_sha"] == "deadbeef00"
+        assert task["commit_url"] is None
+
+    def test_commit_url_helper_edge_cases(self):
+        """_commit_url 拼接函数边界：空 URL / 空 sha → None。"""
+        from botler.api.tasks import _commit_url
+        assert _commit_url("https://x.example/a/b.git", "abc") == "https://x.example/a/b/-/commit/abc"
+        assert _commit_url("https://x.example/a/b", "abc") == "https://x.example/a/b/-/commit/abc"
+        assert _commit_url("", "abc") is None
+        assert _commit_url("https://x.example/a/b.git", "") is None
+        assert _commit_url(None, "abc") is None

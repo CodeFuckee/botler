@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   log_path TEXT,
   started_at TEXT,
   finished_at TEXT,
+  commit_sha TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -98,6 +99,9 @@ class Database:
             # issue #8：claude --resume 会话断点续跑——记录上次执行的 claude 会话，
             # 重启/重试后用于接续对话（从上次结束的地方继续）
             conn.execute("ALTER TABLE tasks ADD COLUMN claude_session_id TEXT")
+        if "commit_sha" not in task_cols:
+            # issue #19：任务成功时记录对应提交的完整 sha（任务页面 commit 链接）
+            conn.execute("ALTER TABLE tasks ADD COLUMN commit_sha TEXT")
 
     @contextmanager
     def _conn(self):
@@ -220,12 +224,14 @@ class Database:
 
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:
         """更新任务状态及附加字段（attempt_count / exit_code / error_message /
-        error_detail / log_path / started_at / finished_at / claude_session_id）。
+        error_detail / log_path / started_at / finished_at / claude_session_id /
+        commit_sha）。
 
         status 传 None 时只更新附加字段，不改状态。
         """
         allowed = {"attempt_count", "exit_code", "error_message", "error_detail",
-                   "log_path", "started_at", "finished_at", "claude_session_id"}
+                   "log_path", "started_at", "finished_at", "claude_session_id",
+                   "commit_sha"}
         cols: list[str] = []
         vals: list = []
         if status is not None:
