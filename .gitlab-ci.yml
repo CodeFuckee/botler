@@ -122,14 +122,16 @@ frontend:build:
     - JOB_START_TIME=$(date +%s)
     - echo "=== 1. 安装依赖（npm ci）==="
     - npm ci --registry=${NPM_REGISTRY_URL}
-    - echo "=== 2. 构建前端（vite build）==="
+    - echo "=== 2. 前端测试（node --test，issue #14 时区修复起引入）==="
+    - npm test
+    - echo "=== 3. 构建前端（vite build）==="
     # 版本自增（issue #9）：BOTLER_DATA_DIR 指向持久数据目录（构建目录
     # 可能被清理，版本号不能存那里），gen-version.mjs 读取/自增
     # data/version.txt（patch 位 +1）并生成 public/version.json
     # （含构建时间），vite 构建时自动复制进 dist/
     - export BOTLER_DATA_DIR=/home/ckd/codes/botler/data
     - npm run build
-    - echo "=== 3. 验证构建产物 ==="
+    - echo "=== 4. 验证构建产物 ==="
     - ls -la dist/index.html
     - echo "--- dist/version.json（版本号 + 构建时间）---"
     - cat dist/version.json
