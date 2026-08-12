@@ -92,6 +92,29 @@ export function fmtTime(ts, tz = displayTz) {
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
 }
 
+// 任务执行时长人类可读（issue #23）：start → end 的时长换算为 秒/分钟/小时/天。
+// 与 fmtTime 同规则解析后端 UTC 时间串；缺字段、解析失败或结束早于开始
+// （时钟异常）返回 null（页面显示占位符）。
+export function fmtDuration(startTs, endTs) {
+  if (!startTs || !endTs) return null
+  const start = new Date(String(startTs).replace(' ', 'T') + 'Z')
+  const end = new Date(String(endTs).replace(' ', 'T') + 'Z')
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null
+  const totalSec = Math.floor((end - start) / 1000)
+  if (totalSec < 0) return null
+  if (totalSec < 60) return `${totalSec} 秒`
+  const totalMin = Math.floor(totalSec / 60)
+  if (totalMin < 60) return `${totalMin} 分钟`
+  const hours = Math.floor(totalMin / 60)
+  if (hours < 24) {
+    const mins = totalMin % 60
+    return mins ? `${hours} 小时 ${mins} 分钟` : `${hours} 小时`
+  }
+  const days = Math.floor(hours / 24)
+  const restHours = hours % 24
+  return restHours ? `${days} 天 ${restHours} 小时` : `${days} 天`
+}
+
 // commit sha 短显示（issue #19）：完整 sha 截断为前 8 位，空值返回占位符
 export function shortSha(sha) {
   if (!sha || typeof sha !== 'string') return '—'

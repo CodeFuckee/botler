@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { api, fmtTime, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
+import { api, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 
 // 任务仍可能产出新日志/聊天的状态（活跃期间持续轮询）
 const LIVE_STATUSES = ['queued', 'running', 'retrying']
@@ -119,6 +119,7 @@ export default function TaskDetail() {
             <tr><th>创建时间</th><td>{fmtTime(task.created_at)}</td></tr>
             <tr><th>开始时间</th><td>{fmtTime(task.started_at)}</td></tr>
             <tr><th>完成时间</th><td>{fmtTime(task.finished_at)}</td></tr>
+            <tr><th>执行用时</th><td>{fmtDuration(task.started_at || task.created_at, task.finished_at) || <span className="muted">—</span>}</td></tr>
             <tr>
               <th>提交</th>
               <td>

@@ -6,6 +6,16 @@
 
 ### Added
 
+- **任务页面显示完成 issue 所用时长**（issue #23）：任务列表新增「用时」列、
+  任务详情新增「执行用时」行——从任务开始执行（`started_at`，未开始则退回
+  创建时间）到完成（`finished_at`）的耗时，自动换算为 秒/分钟/小时/天；
+  未完成或时间缺失显示占位符。纯前端实现：`api.js` 新增 `fmtDuration()`
+  （与 `fmtTime` 同规则解析后端 UTC 时间串，非法日期/结束早于开始返回 null）。
+  - 涉及 `frontend/src/api.js`（新增 `fmtDuration`）、`pages/Tasks.jsx`
+    （新增「用时」列）、`pages/TaskDetail.jsx`（新增「执行用时」行）。
+  - 测试：前端新增 11 个用例（秒/分钟/小时/天换算、取整、0 秒、缺字段、
+    非法日期、时钟异常负值）。前端全量 46 passed + 后端 289 passed
+    （零改动）+ build 通过。
 - **设置页增加本地环境检测功能**（issue #22）：新增「本地环境检测」卡片，检测
   botler 服务器上常见 AI agent（claude/codex/gemini/aider/gh）与基础工具
   （git/docker/node/npm/python3/uv）是否安装、已装版本与最新版本；最新版本
