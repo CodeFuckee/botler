@@ -76,13 +76,15 @@ export default function Tasks() {
           />
         </div>
 
-        <table className="table">
-          <thead>
-            <tr>
-              <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
-              <th>状态</th><th>尝试</th><th>来源</th><th>失败原因</th><th>提交</th><th>创建时间</th><th>用时</th><th>操作</th>
-            </tr>
-          </thead>
+        {/* 12 列表格最小宽度超容器，外包滚动容器防止窄视口下内容溢出卡片（issue #28） */}
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
+                <th>状态</th><th>尝试</th><th>来源</th><th>失败原因</th><th>提交</th><th>创建时间</th><th>用时</th><th>操作</th>
+              </tr>
+            </thead>
           <tbody>
             {data.tasks.length === 0 && (
               <tr><td colSpan={12} className="muted">暂无任务</td></tr>
@@ -134,7 +136,8 @@ export default function Tasks() {
               )
             })}
           </tbody>
-        </table>
+          </table>
+        </div>
         <p className="muted small">共 {data.total} 条（最多显示 50 条）</p>
       </div>
 

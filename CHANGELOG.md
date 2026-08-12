@@ -30,6 +30,17 @@
 
 ### Fixed
 
+- **任务列表页面宽度缩小时数据行内容超出白色底**（issue #28）：任务列表为 12 列表格，
+  各列内容最小宽度之和约 1306px，窄视口下 `.table` 的 min-content 宽度超过 `.card`
+  容器可用宽度，表格直接撑破白色卡片（浏览器实测 1400px 视口溢出 266px，760px 视口
+  超出视口 586px），`.card` 无 overflow 处理导致行内容画出卡片边缘。
+  - 修复：表格外包一层 `.table-wrap` 滚动容器（`overflow-x: auto`），窄视口下表格在
+    容器内横向滚动查看全部列，不再溢出卡片、页面不再整体横向滚动。
+  - 涉及 `frontend/src/pages/Tasks.jsx`、`frontend/src/styles.css`。
+  - 测试：新增 `tests/table-wrap.test.mjs`（断言 `.table-wrap` 滚动规则存在 + 任务
+    表格被包裹；修复前该测试稳定失败）+ chromium 无头实测 1400/1100/900/760 四档
+    视口全部无溢出。前端全量 49 passed + 后端全量 330 passed + build 通过。
+
 - **启用 SSO 后 Web UI 打开白屏**（issue #27 第二轮）：`App.jsx` 中网页通知轮询的
   `useEffect` 被声明在两个条件 `return`（auth 检测中、SSO 启用未登录）之后——auth
   加载前后组件执行的 hooks 数量不一致（4 → 5），触发 React error #310
