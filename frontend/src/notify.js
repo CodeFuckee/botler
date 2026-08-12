@@ -48,6 +48,29 @@ export function showNotification(event) {
   }
 }
 
+// 主动发送一条测试通知（设置页「弹出测试通知」按钮，issue #21 增量）：
+// 绕过事件过滤——用户主动点击就是要验证通知能力本身。权限未决（default）
+// 时先请求授权；返回 {ok, reason} 供 UI 提示结果
+// （reason: browser-unsupported / denied / error）。
+export async function sendTestNotification() {
+  if (!canNotify()) return { ok: false, reason: 'browser-unsupported' }
+  if (Notification.permission === 'denied') return { ok: false, reason: 'denied' }
+  if (Notification.permission === 'default') {
+    if ((await Notification.requestPermission()) !== 'granted') {
+      return { ok: false, reason: 'denied' }
+    }
+  }
+  try {
+    new Notification('Botler 测试通知', {
+      body: '这是一条测试通知，网页通知功能正常 ✅',
+      tag: 'botler-test', // 固定 tag：连续点击不重复堆积
+    })
+    return { ok: true }
+  } catch {
+    return { ok: false, reason: 'error' }
+  }
+}
+
 // 创建轮询器：opts = { getEvents(after), getSettings(), onError?, show? }
 // show 默认用 showNotification（测试可注入收集函数）。
 // 返回 { poll, getCursor }；poll 一次 = 拉取 → 过滤 → 弹通知 → 推进游标。

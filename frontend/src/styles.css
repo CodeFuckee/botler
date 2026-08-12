@@ -242,6 +242,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .checkbox-label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 
 .saved-hint { color: var(--ok); }
+.err-hint { color: var(--err); }
 
 /* ---- 仓库列表 ---- */
 .repo-item {

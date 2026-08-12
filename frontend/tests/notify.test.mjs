@@ -6,6 +6,7 @@ import {
   NOTIFY_TYPE_MAP,
   filterNotifyEvents,
   createNotifyPoller,
+  sendTestNotification,
 } from '../src/notify.js'
 
 const DEFAULT_SETTINGS = {
@@ -135,4 +136,91 @@ test('createNotifyPoller：拉取失败不中断（onError 收到错误，游标
   assert.equal(poller.getCursor(), 0)
   await poller.poll()
   assert.equal(poller.getCursor(), 1)
+})
+
+// ---- 测试通知（设置页「弹出测试通知」按钮，issue #21 增量）----
+
+// 构造可测环境：mock window/Notification 全局，返回构造过的通知参数。
+// useSupport=false 模拟浏览器不支持 Notification（window 存在但无 Notification）。
+function mockNotifyEnv({ permission = 'granted', requestResult = 'granted', useSupport = true } = {}) {
+  const constructed = []
+  const prev = { window: globalThis.window, Notification: globalThis.Notification }
+  if (useSupport) {
+    globalThis.window = globalThis
+    globalThis.Notification = class {
+      static permission = permission
+      static requestPermission = async () => requestResult
+      constructor(title, opts) { constructed.push({ title, ...opts }) }
+    }
+  } else {
+    delete globalThis.Notification
+    globalThis.window = globalThis
+  }
+  return {
+    constructed,
+    restore() {
+      if (prev.window === undefined) delete globalThis.window
+      else globalThis.window = prev.window
+      if (prev.Notification === undefined) delete globalThis.Notification
+      else globalThis.Notification = prev.Notification
+    },
+  }
+}
+
+test('sendTestNotification：已授权 → 弹一条测试通知并返回 ok', async () => {
+  const env = mockNotifyEnv({ permission: 'granted' })
+  try {
+    const res = await sendTestNotification()
+    assert.deepEqual(res, { ok: true })
+    assert.equal(env.constructed.length, 1)
+    assert.equal(env.constructed[0].title, 'Botler 测试通知')
+    assert.match(env.constructed[0].body, /测试通知/)
+  } finally { env.restore() }
+})
+
+test('sendTestNotification：权限未决（default）→ 先请求授权，同意后弹通知', async () => {
+  const env = mockNotifyEnv({ permission: 'default', requestResult: 'granted' })
+  try {
+    const res = await sendTestNotification()
+    assert.deepEqual(res, { ok: true })
+    assert.equal(env.constructed.length, 1)
+  } finally { env.restore() }
+})
+
+test('sendTestNotification：请求授权被拒 → 不弹通知返回 denied', async () => {
+  const env = mockNotifyEnv({ permission: 'default', requestResult: 'denied' })
+  try {
+    const res = await sendTestNotification()
+    assert.deepEqual(res, { ok: false, reason: 'denied' })
+    assert.equal(env.constructed.length, 0)
+  } finally { env.restore() }
+})
+
+test('sendTestNotification：已拒绝（denied）→ 不弹通知返回 denied', async () => {
+  const env = mockNotifyEnv({ permission: 'denied' })
+  try {
+    const res = await sendTestNotification()
+    assert.deepEqual(res, { ok: false, reason: 'denied' })
+    assert.equal(env.constructed.length, 0)
+  } finally { env.restore() }
+})
+
+test('sendTestNotification：浏览器不支持通知 → browser-unsupported', async () => {
+  const env = mockNotifyEnv({ useSupport: false })
+  try {
+    const res = await sendTestNotification()
+    assert.deepEqual(res, { ok: false, reason: 'browser-unsupported' })
+  } finally { env.restore() }
+})
+
+test('sendTestNotification：构造通知抛异常 → 返回 error 不崩溃', async () => {
+  const env = mockNotifyEnv({ permission: 'granted' })
+  const Base = globalThis.Notification
+  globalThis.Notification = class extends Base {
+    constructor() { throw new Error('boom') }
+  }
+  try {
+    const res = await sendTestNotification()
+    assert.deepEqual(res, { ok: false, reason: 'error' })
+  } finally { env.restore() }
 })

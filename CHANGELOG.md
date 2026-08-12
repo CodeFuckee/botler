@@ -6,6 +6,16 @@
 
 ### Added
 
+- **设置页「弹出测试通知」按钮**（issue #21 增量）：通知卡片新增「测试通知」行，
+  点击立即弹出一条浏览器系统通知（标题「Botler 测试通知」），用于验证网页通知
+  功能是否正常。纯前端实现：`notify.js` 新增 `sendTestNotification()`——绕过设置
+  开关直接弹（用户主动点击即验证通知能力本身），权限未决（default）时先请求授权，
+  已拒绝/浏览器不支持/弹窗异常时返回原因，设置页按钮旁给出成功或失败提示。
+  - 涉及 `frontend/src/notify.js`（新增 `sendTestNotification`）、
+    `Settings.jsx`（通知卡片新增测试按钮与结果提示）、`styles.css`（`err-hint`）。
+  - 测试：前端新增 6 个用例（已授权直接弹、default 先请求授权、授权被拒、
+    已拒绝、浏览器不支持、构造异常），前端全量 30 passed + 后端 261 passed
+    （后端零改动）+ build 通过。
 - **网页端通知功能**（issue #21）：通过浏览器 Notification API 在用户电脑上弹
   系统通知，通知时机可在设置页「网页通知」卡片配置（总开关 + 4 个时机开关，
   存 `config.yaml notifications` 段，改设置立即生效无需重启）：

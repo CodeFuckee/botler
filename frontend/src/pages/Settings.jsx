@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, setDisplayTz } from '../api.js'
+import { sendTestNotification } from '../notify.js'
 import BackupManager from '../components/BackupManager.jsx'
 
 const FIELD_LABELS = {
@@ -29,6 +30,21 @@ export default function Settings() {
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
   const [reconcileNote, setReconcileNote] = useState('')
+  const [testNote, setTestNote] = useState(null) // {ok, text}，测试通知结果提示
+
+  // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
+  // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
+  const handleTestNotify = async () => {
+    setTestNote(null)
+    const res = await sendTestNotification()
+    setTestNote(
+      res.ok
+        ? { ok: true, text: '✓ 已弹出测试通知，请查看系统通知' }
+        : res.reason === 'denied'
+          ? { ok: false, text: '✗ 浏览器已拒绝通知，请先授权系统通知（见上行）' }
+          : { ok: false, text: '✗ 当前浏览器不支持系统通知' }
+    )
+  }
 
   useEffect(() => {
     api.get('/api/settings').then(setSettings).catch((e) => setError(e.message))
@@ -172,6 +188,15 @@ export default function Settings() {
                   <button className="btn" onClick={() => Notification.requestPermission()}>
                     授权系统通知
                   </button>
+                )}
+              </td>
+            </tr>
+            <tr>
+              <th>测试通知</th>
+              <td>
+                <button className="btn" onClick={handleTestNotify}>弹出测试通知</button>
+                {testNote && (
+                  <span className={testNote.ok ? 'saved-hint' : 'err-hint'}>{testNote.text}</span>
                 )}
               </td>
             </tr>
