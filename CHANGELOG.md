@@ -57,6 +57,16 @@
 
 ### Fixed
 
+- **设置页 SSO 配置卡片无保存按钮**（issue #27 第四轮）：Synology SSO 登录卡片
+  （设置页第一个卡片）内只有表单字段，全局「保存」按钮位于下方「任务调度」卡片中
+  ——用户首屏只看到 SSO 卡片，找不到保存按钮，误以为无法保存配置。
+  - 修复：SSO 卡片内新增独立「保存 SSO 配置」按钮（只提交 `sso` 段，后端
+    `PUT /api/settings` 支持部分更新，不影响其他设置）；sso 段构建逻辑提取为
+    `buildSsoPatch()` 供全局 save 与卡片内 saveSso 共用（client_secret 留空 =
+    保持现有凭据）；卡片说明文字改为指向卡片内按钮。
+  - 涉及 `frontend/src/pages/Settings.jsx`；新增前端测试
+    `tests/settings-sso-save-button.test.mjs` 5 用例（修复前 4 个稳定失败）。
+
 - **agent 重复处理已打 bot-done / bot-failed 的 issue**（issue #30）：对账兜底
   （reconciler）与 webhook 入队只按「assignee 是 bot + issue 未关闭」判定，不检查
   标签——平台重启、任务表清理或手动「对账」后，已完成（bot-done，等用户确认关闭）

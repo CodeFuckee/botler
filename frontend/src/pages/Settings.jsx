@@ -36,6 +36,10 @@ export default function Settings() {
   const [envBusy, setEnvBusy] = useState(false)
   // SSO client_secret 输入（issue #27）：留空 = 保持现有凭据（后端掩码不覆盖）
   const [ssoSecretInput, setSsoSecretInput] = useState('')
+  // SSO 卡片内独立保存（issue #27 第四轮）：用户反馈「SSO 配置没有保存按钮」——
+  // 全局「保存」按钮在下方「任务调度」卡片，SSO 卡片（第一位）内需可独立保存
+  const [ssoBusy, setSsoBusy] = useState(false)
+  const [ssoSaved, setSsoSaved] = useState(false)
 
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
@@ -86,6 +90,33 @@ export default function Settings() {
   const setSsoField = (key, val) =>
     setSettings((s) => ({ ...s, sso: { ...s.sso, [key]: val } }))
 
+  // sso 段构建（issue #27）：client_secret 留空 = 保持现有凭据；全局 save 与
+  // 卡片内 saveSso 共用，保证两处保存行为一致
+  const buildSsoPatch = () => {
+    const sso = {
+      enabled: settings.sso.enabled,
+      well_known_url: settings.sso.well_known_url,
+      client_id: settings.sso.client_id,
+      scope: settings.sso.scope,
+      session_days: Number(settings.sso.session_days),
+      redirect_uri: settings.sso.redirect_uri,
+      verify_ssl: settings.sso.verify_ssl,
+    }
+    if (ssoSecretInput.trim()) sso.client_secret = ssoSecretInput.trim()
+    return sso
+  }
+
+  // SSO 卡片内独立保存（issue #27 第四轮）：只提交 sso 段，
+  // 后端 PUT /api/settings 支持部分更新，不影响其他设置
+  const saveSso = async () => {
+    setSsoBusy(true); setError(''); setSsoSaved(false)
+    try {
+      await api.put('/api/settings', { sso: buildSsoPatch() })
+      setSsoSaved(true)
+      setTimeout(() => setSsoSaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setSsoBusy(false) }
+  }
+
   const save = async () => {
     setBusy(true); setError(''); setSaved(false)
     try {
@@ -93,23 +124,12 @@ export default function Settings() {
       for (const k of Object.keys(FIELD_LABELS)) {
         worker[k] = Number(settings.worker[k])
       }
-      // sso 段（issue #27）：client_secret 留空 = 保持现有凭据
-      const sso = {
-        enabled: settings.sso.enabled,
-        well_known_url: settings.sso.well_known_url,
-        client_id: settings.sso.client_id,
-        scope: settings.sso.scope,
-        session_days: Number(settings.sso.session_days),
-        redirect_uri: settings.sso.redirect_uri,
-        verify_ssl: settings.sso.verify_ssl,
-      }
-      if (ssoSecretInput.trim()) sso.client_secret = ssoSecretInput.trim()
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
         ui: { timezone: settings.ui?.timezone || '' },
         notifications: { ...settings.notifications },
-        sso,
+        sso: buildSsoPatch(),
       })
       setDisplayTz(settings.ui?.timezone) // 立即生效，无需刷新页面
       setSaved(true)
@@ -232,11 +252,17 @@ export default function Settings() {
             </tr>
           </tbody>
         </table>
+        <div className="form-row">
+          <button className="btn btn-primary" disabled={ssoBusy} onClick={saveSso}>
+            {ssoBusy ? '保存中…' : '保存 SSO 配置'}
+          </button>
+          {ssoSaved && <span className="saved-hint">✓ SSO 配置已保存（已写回 config.yaml）</span>}
+        </div>
         <p className="muted small">
           接入群晖 SSO Server（OIDC 协议）：先在群晖「SSO Server → 应用程序」新增 OIDC 应用，
           填写回调地址并记下 Application ID / Secret，再回此页填写并保存。
           群晖侧详细步骤见 <code>docs/Synology-SSO-配置指南.md</code>。
-          修改后点击上方「保存」生效；启用后当前会话不受影响，下次访问需登录。
+          修改后点击下方「保存 SSO 配置」生效；启用后当前会话不受影响，下次访问需登录。
         </p>
       </div>
 
