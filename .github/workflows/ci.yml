@@ -8,12 +8,12 @@
 #   backend-test   （uv 装依赖 → pytest）
 #
 # 触发方式：
-#   - workflow_dispatch：主要入口。GitLab 的 sync_to_github job 在镜像
-#     同步成功后调用 GitHub API 显式触发（镜像 push 的 commit 含
-#     [skip ci]，GitHub 会跳过 push 事件，必须显式 dispatch，
-#     见 .gitlab-ci.yml 中 sync_to_github 的说明）
-#   - push（main）：保留，历史 commit 含跳过标记时 GitHub 跳过，
-#     无副作用
+#   - push（main）：主入口。镜像同步 commit 不含跳过标记（见
+#     .gitlab-ci.yml sync_to_github），GitHub 会在每次镜像同步后
+#     自动运行本工作流
+#   - workflow_dispatch：手动补充入口（GitHub 网页 Run workflow；
+#     GitLab sync_to_github 也会调用 API 补充触发一次，需要 token
+#     含 workflow scope，失败仅警告，不影响 push 触发）
 #
 # 与 GitLab 的差异说明：
 #   - runner 为 GitHub 托管环境（ubuntu-latest），海外网络：npm 用

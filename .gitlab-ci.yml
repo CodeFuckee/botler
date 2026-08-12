@@ -560,8 +560,10 @@ sync_to_github:
   variables:
     # 本 job 用完整克隆（CI_REPOSITORY_URL）重新检出，不需要 runner 的 checkout
     GIT_STRATEGY: none
-  # 仅 main 分支的 push 流水线触发；同步 commit 带 [skip ci]，
-  # 不触发流水线，不会造成同步循环
+  # 仅 main 分支的 push 流水线触发；同步 commit 不带跳过标记，
+  # 镜像 push 到 GitHub 后由其 push 事件自动触发 GitHub Actions
+  #（.github/workflows/ci.yml，issue #10）；GitHub 侧无反向同步
+  # 动作，不会造成同步循环
   rules:
     - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
   script:
@@ -617,7 +619,9 @@ sync_to_github:
 
       git config user.name "CI Bot"
       git config user.email "ci-bot@botler.local"
-      git commit --quiet -am "chore: GitHub 镜像——剔除 .gitlab-ci.yml 并脱敏内部信息 [skip ci]"
+      # 注意：commit 消息不得含跳过标记（GitHub 会据此跳过 push 事件
+      # 触发的 Actions，而 push 触发正是本镜像的 CI 主入口，issue #10）
+      git commit --quiet -am "chore: GitHub 镜像——剔除 .gitlab-ci.yml 并脱敏内部信息"
 
       # force push 到 GitHub main（镜像历史由本 job 全权维护）。
       # -q 抑制成功输出（push URL 不落日志；token 若配置 Masked，
@@ -649,12 +653,13 @@ sync_to_github:
       echo "✓ 已同步到 https://github.com/CodeFuckee/botler（main 分支）"
 
       # ----------------------------------------------------------
-      # 触发 GitHub Actions CI（workflow_dispatch，issue #10）
-      # GitHub 对 push 事件做 skip 判断：镜像同步 commit 含 [skip ci]
-      # 标记，push 触发会被 GitHub 跳过；改为在同步成功后调用
-      # workflow_dispatch API 显式触发 .github/workflows/ci.yml
-      # （GITHUB_PUSH_TOKEN 需含 workflow scope；失败仅警告，不影响
-      # 镜像同步）。
+      # 触发 GitHub Actions CI（issue #10）
+      # 主触发：镜像 commit 不含跳过标记，push 到 GitHub 后由其 push
+      # 事件自动运行 .github/workflows/ci.yml。此处再调用
+      # workflow_dispatch API 补充触发一次（双保险：当前
+      # GITHUB_PUSH_TOKEN 无 workflow scope 时会 403，仅警告，不影响
+      # 镜像同步与 push 触发；若日后升级 token 权限，push 与 dispatch
+      # 会各触发一次运行，属预期）。
       # ----------------------------------------------------------
       echo "=== 触发 GitHub Actions workflow ==="
       set +e
