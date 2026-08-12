@@ -298,7 +298,7 @@ class GitLabClient:
         """在仓库提交历史中查找引用指定 issue 的最近提交，返回完整 sha。
 
         任务页面 commit 链接依赖此查询（issue #19）：Claude 按模板提交
-        （message 含 "issue #N"，如 "fix: 解决 issue #7"）后关闭 issue，
+        （message 含 "issue #N"，如 "fix: 解决 issue #7"）后完成任务，
         executor 成功路径据此把对应提交 sha 落库。
 
         默认查询分支 HEAD（GitLab 默认分支）最近 limit 条提交，按信息

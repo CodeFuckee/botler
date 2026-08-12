@@ -247,6 +247,85 @@ class TestRunTaskErrorDetail:
         assert sum(1 for kind, _ in calls if kind == "labels") == 1
 
 
+class TestRunTaskSuccessCriteria:
+    """成功判定（issue #25 第二轮）：完成任务即成功，不再要求关闭 issue。
+
+    模版库规范（docs/labels.md）：任务完成后不关闭 issue——留结果评论、
+    打 bot-done，等用户确认后手动关闭。旧逻辑以 issue closed 为成功
+    标志，exit 0 但 issue 仍 open 时判失败并重试，迫使 Claude 违规关闭
+    issue（生产日志 task_30/31：#28 完成开发后 issue 被关闭）。新判定：
+    Claude exit 0 且输出为正常 JSON result（非「无法解决」）即成功，
+    issue 是否关闭不参与判定。
+    """
+
+    def _install(self, executor, monkeypatch, tmp_path, run_once,
+                 issue_state="opened"):
+        calls = []
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda pid, iid: {"state": issue_state},
+            add_comment=lambda *a, **k: calls.append(("comment", a)),
+            add_labels=lambda *a, **k: calls.append(("labels", a)),
+            find_commit_for_issue=lambda pid, iid: None,
+        )
+        monkeypatch.setattr(executor, "_run_once", run_once)
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+        return calls
+
+    def test_success_when_issue_stays_open(self, executor, monkeypatch, tmp_path):
+        """exit 0 + 正常完成输出 + issue 未关闭 → 一次尝试即成功（修复前：判失败重试）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "开发完成，已推送代码，打了 bot-done 标签"},
+                            ensure_ascii=False)
+        calls = self._install(executor, monkeypatch, tmp_path,
+                              run_once=lambda *a: (0, output), issue_state="opened")
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        assert task["attempt_count"] == 1  # 未因 issue 未关闭而重试
+        assert task["exit_code"] == 0
+        # 成功路径不打失败标签；失败评论（bot-failed）不应出现
+        assert sum(1 for kind, _ in calls if kind == "labels") == 0
+        assert "无法完成此 issue" not in "".join(
+            a[2] for kind, a in calls if kind == "comment")
+
+    def test_success_when_issue_already_closed(self, executor, monkeypatch, tmp_path):
+        """issue 已被关闭（兼容旧流程 / 用户指示关闭）：同样判成功。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "完成，issue 已关闭"}, ensure_ascii=False)
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=lambda *a: (0, output), issue_state="closed")
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        assert task["attempt_count"] == 1
+
+    def test_unresolvable_still_fails_without_retry(self, executor, monkeypatch, tmp_path):
+        """「无法解决」仍是失败终态（不重试），不受成功判定放宽影响。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "抱歉，我无法解决该 issue，原因：权限不足"},
+                            ensure_ascii=False)
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=lambda *a: (0, output), issue_state="opened")
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert task["error_message"] == "Claude Code 报告无法解决该 issue"
+        assert task["attempt_count"] == 1
+
+
 # ---- issue #8 会话断点续跑 ----
 
 class _FakeStdout:
@@ -392,6 +471,7 @@ class TestSessionResume:
             get_issue=lambda pid, iid: _issue_dict("opened"),
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
+            find_commit_for_issue=lambda pid, iid: None,
         )
 
         executor.run_task(task_id)

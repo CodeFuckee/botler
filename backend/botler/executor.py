@@ -783,16 +783,23 @@ class ClaudeExecutor:
             if exit_code == 0:
                 state = self._issue_state(project_id, issue_iid)
                 self.db.add_log(task_id, "info", f"执行结束，issue 当前状态: {state}")
-                if state == "closed":
-                    self._finish_succeeded(task_id, output)
-                    return
-                # exit 0 但 issue 未关：Claude 可能自认无法解决（不重试）或 API 调用失败（可重试）
+                # exit 0 但 Claude 自认无法解决 → 失败终态（不重试）
                 if self._is_unresolvable(output):
                     detail = {"attempt": attempt, "exit_code": exit_code,
                               "error": self._extract_error(output)}
                     self._finish_failed(task_id, "Claude Code 报告无法解决该 issue", output,
                                         error_detail=self._dump_error_detail(
                                             [*attempt_details, detail], last_exit))
+                    return
+                # 成功判定（issue #25 第二轮）：完成任务即成功，不再要求关闭 issue。
+                # 模版库规范（docs/labels.md）：任务完成后不关闭 issue——留结果评论、
+                # 打 bot-done，等用户确认后手动关闭。旧逻辑以 issue closed 为成功
+                # 标志，exit 0 但 issue 仍 open 时判失败并重试，迫使 Claude 在完成
+                # 开发后违规关闭 issue（生产日志 task_30/31：issue #28 完成即被关）。
+                # 新判定：正常完成输出（JSON result，非「无法解决」）即成功，
+                # 无论 issue 是否仍 open。
+                if _load_json_output(output) is not None:
+                    self._finish_succeeded(task_id, output)
                     return
 
             # 记录本次失败详情（含 trace 提取），供界面「查看详细原因」按钮展示
@@ -853,7 +860,7 @@ class ClaudeExecutor:
                 finished_at=time.strftime("%Y-%m-%d %H:%M:%S")):
             logger.info("任务 %s 成功收尾被跳过（状态已非运行中，可能已被其他实例收尾）", task_id)
             return
-        self.db.add_log(task_id, "info", "任务成功：issue 已由 Claude Code 关闭")
+        self.db.add_log(task_id, "info", "任务成功：Claude Code 已完成处理（issue 保持打开，等用户确认后手动关闭）")
         self._write_log_tail(task_id, output)
         self._record_commit(task_id)
         # 网页通知：issue 完成（issue #21）

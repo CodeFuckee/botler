@@ -41,6 +41,21 @@
 
 ### Fixed
 
+- **任务完成后 issue 被自动关闭，模版库「不关闭」规范不生效**（issue #25 第二轮）：
+  运行进程已加载新版全局模版（含「任务完成后不关闭 issue，打 bot-done 等用户确认」），
+  但 `executor.run_task` 的成功判定仍是「issue 已被关闭」——exit 0 且 issue 仍打开时
+  判失败并重试（最多 2 次），**迫使 Claude 在完成任务后违规调用 API 关闭 issue**
+  （生产日志 task_30/31：issue #28 完成开发即被关闭，与用户 20:37 反馈的现象吻合）。
+  - 修复：成功判定改为「Claude 正常完成（exit 0 且输出为 JSON result，非『无法解决』
+    报告）」即成功，**issue 是否关闭不再参与判定**；「无法解决」仍为失败终态不重试。
+  - 同步更新 `config.py` 的 `DEFAULT_TEMPLATE` 兜底模版：删除「调用 API 关闭 issue」
+    指令，改为「留结果评论 + 打 bot-done，关闭留给用户确认后手动执行」。
+  - 涉及 `backend/botler/executor.py`、`backend/botler/config.py`、
+    `backend/botler/gitlab_client.py`（docstring）。
+  - 测试：新增 `TestRunTaskSuccessCriteria` 3 用例（修复前 `test_success_when_issue_
+    stays_open` 稳定失败：exit 0 + 完成输出 + issue 未关闭 → 旧逻辑重试耗尽判失败）。
+    后端全量 333 passed + 前端全量通过。
+
 - **设置页找不到 Synology SSO 配置入口**（issue #27 第三轮）：SSO 配置卡片位于设置页
   第 4 位（实测 1440×1000 视口下在第 1267px 处），被 577px 高的「网页通知」卡片压到
   首屏（1000px）之下，用户打开设置页首屏只能看到「任务调度/界面显示/网页通知」三个
