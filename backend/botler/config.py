@@ -44,6 +44,12 @@ def _expand_env(value: Any) -> Any:
     return value
 
 
+def _notify_default(notify: dict, key: str, default: bool) -> bool:
+    """读取通知开关配置：缺省或非布尔值回退默认（issue #21）。"""
+    val = notify.get(key, default)
+    return val if isinstance(val, bool) else default
+
+
 @dataclass
 class RepoConfig:
     project_id: int
@@ -74,6 +80,12 @@ class Settings:
     backup_enabled: bool = True
     backup_retention_days: int = 30
     ui_timezone: str = ""  # 页面显示时区（IANA 名，空 = 跟随浏览器本机时区；issue #14）
+    # 网页通知（issue #21）：总开关 + 各通知时机开关，前端按此过滤弹系统通知
+    notifications_enabled: bool = True
+    notify_task_needs_interaction: bool = True
+    notify_issue_completed: bool = True
+    notify_queue_empty: bool = True
+    notify_queue_no_work: bool = True
     repos: list[RepoConfig] = field(default_factory=list)
 
 
@@ -85,6 +97,17 @@ KNOWN_FIELDS = {
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
     "ui": {"timezone"},
+    "notifications": {"enabled", "task_needs_interaction", "issue_completed",
+                      "queue_empty", "queue_no_work"},
+}
+
+# 网页通知开关 → Settings 字段映射（issue #21）
+_NOTIFY_FIELD_MAP = {
+    "enabled": "notifications_enabled",
+    "task_needs_interaction": "notify_task_needs_interaction",
+    "issue_completed": "notify_issue_completed",
+    "queue_empty": "notify_queue_empty",
+    "queue_no_work": "notify_queue_no_work",
 }
 
 DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以下指派给你的 issue：
@@ -135,6 +158,7 @@ class ConfigManager:
         browse = data.get("browse", {})
         backup = data.get("backup", {})
         ui = data.get("ui", {})
+        notify = data.get("notifications", {})
         repos_raw = data.get("repos", []) or []
 
         repos = []
@@ -168,6 +192,11 @@ class ConfigManager:
             backup_enabled=bool(backup.get("enabled", True)),
             backup_retention_days=int(backup.get("retention_days", 30)),
             ui_timezone=(ui.get("timezone") or "").strip(),
+            notifications_enabled=_notify_default(notify, "enabled", True),
+            notify_task_needs_interaction=_notify_default(notify, "task_needs_interaction", True),
+            notify_issue_completed=_notify_default(notify, "issue_completed", True),
+            notify_queue_empty=_notify_default(notify, "queue_empty", True),
+            notify_queue_no_work=_notify_default(notify, "queue_no_work", True),
             repos=repos,
         )
 
@@ -237,6 +266,17 @@ class ConfigManager:
         for key in KNOWN_FIELDS["ui"]:
             if key in patch:
                 ui[key] = patch[key]
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_notifications(self, patch: dict[str, Any]) -> Settings:
+        """更新 notifications 配置并写回（网页通知开关；issue #21）。"""
+        self.get()  # 确保 _data 已加载（避免未 load 时写盘覆盖配置）
+        notify = self._data.setdefault("notifications", {})
+        for key in KNOWN_FIELDS["notifications"]:
+            if key in patch:
+                notify[key] = patch[key]
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

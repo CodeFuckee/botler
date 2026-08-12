@@ -363,6 +363,9 @@ class ClaudeExecutor:
         base = Path(workspace_root) if workspace_root else Path(__file__).resolve().parents[1] / "workspace"
         self.workspace_root = base.resolve()
         self.workspace_root.mkdir(parents=True, exist_ok=True)
+        # 网页通知事件（issue #21）：任务收尾时记录，前端轮询弹系统通知
+        from .notifier import Notifier
+        self.notifier = Notifier(db)
 
     # ---- 工作区管理 ----
 
@@ -806,6 +809,21 @@ class ClaudeExecutor:
 
     # ---- 收尾 ----
 
+    def _emit_task_event(self, task_id: int, event: str, reason: str = "") -> None:
+        """任务收尾产生网页通知事件（issue #21）。查库失败不阻塞收尾。"""
+        try:
+            task = self.db.get_task(task_id)
+            if task is None:
+                return
+            repo = self.db.get_repo(task["repo_id"])
+            repo_name = repo["name"] if repo else None
+            if event == "task_succeeded":
+                self.notifier.task_succeeded(dict(task), repo_name)
+            elif event == "task_failed":
+                self.notifier.task_failed(dict(task), reason, repo_name)
+        except Exception:  # noqa: BLE001 通知失败不影响任务收尾
+            logger.exception("任务 %s 通知事件记录失败", task_id)
+
     def _dump_error_detail(self, attempts: list[dict], last_exit: int) -> str:
         """把每次尝试的失败详情序列化为 error_detail（JSON 字符串，界面「详情」按钮展示）。"""
         return json.dumps(
@@ -827,6 +845,8 @@ class ClaudeExecutor:
         self.db.add_log(task_id, "info", "任务成功：issue 已由 Claude Code 关闭")
         self._write_log_tail(task_id, output)
         self._record_commit(task_id)
+        # 网页通知：issue 完成（issue #21）
+        self._emit_task_event(task_id, "task_succeeded")
         logger.info("任务 %s 成功", task_id)
 
     def _record_commit(self, task_id: int) -> None:
@@ -875,6 +895,8 @@ class ClaudeExecutor:
                 self.db.add_log(task_id, "info", "已在 issue 上留失败评论并打 bot-failed 标签")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"留失败评论失败: {e}")
+            # 网页通知：任务需要人工介入（issue #21）
+            self._emit_task_event(task_id, "task_failed", reason)
         logger.warning("任务 %s 失败: %s", task_id, reason)
 
     def _write_log_tail(self, task_id: int, output: str) -> None:

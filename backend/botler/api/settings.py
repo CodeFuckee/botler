@@ -73,6 +73,14 @@ def get_settings(request: Request):
             # 页面时间显示时区（IANA 名，空 = 跟随浏览器本机时区）
             "timezone": s.ui_timezone,
         },
+        "notifications": {
+            # 网页通知（issue #21）：总开关 + 各通知时机开关
+            "enabled": s.notifications_enabled,
+            "task_needs_interaction": s.notify_task_needs_interaction,
+            "issue_completed": s.notify_issue_completed,
+            "queue_empty": s.notify_queue_empty,
+            "queue_no_work": s.notify_queue_no_work,
+        },
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -114,6 +122,11 @@ def update_settings(request: Request, body: dict):
     if ui is not None:
         _validate_ui(ui)
         c.config.update_ui(ui)
+
+    notify = body.get("notifications")
+    if notify is not None:
+        _validate_notifications(notify)
+        c.config.update_notifications(notify)
 
     return get_settings(request)
 
@@ -186,6 +199,14 @@ def _validate_ui(patch: dict) -> None:
                 ZoneInfo(val)
             except ZoneInfoNotFoundError:
                 raise HTTPException(400, f"ui.timezone 不是有效的 IANA 时区名: {val}") from None
+
+
+def _validate_notifications(patch: dict) -> None:
+    """校验 notifications 段：所有开关必须是布尔值（issue #21）。"""
+    for key in ("enabled", "task_needs_interaction", "issue_completed",
+                "queue_empty", "queue_no_work"):
+        if key in patch and not isinstance(patch[key], bool):
+            raise HTTPException(400, f"notifications.{key} 必须是布尔值")
 
 
 def ctx_of(request: Request):

@@ -163,6 +163,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
 | `claude.command` / `args` | `claude -p --output-format json` | 执行命令 |
 | `browse.default_path` | 空（服务器用户主目录 `~`） | 目录选择对话框的初始定位目录；支持 `~` 展开，路径不存在时自动回退主目录 |
+| `notifications.enabled` | true | 网页通知总开关（任务需交互 / issue 完成 / 队列空 / 无新任务，逐项可关） |
 
 提示词模版支持变量占位符：`{repo_name}` `{issue_title}` `{issue_body}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}`。
 全局默认模版 + 仓库级覆盖可在 Web UI「模版」页编辑。
@@ -185,6 +186,7 @@ GET    /api/tasks                     任务列表（分页/过滤，含 commit_
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url）
 GET    /api/tasks/{id}/logs           任务日志
 GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
+GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 

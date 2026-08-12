@@ -6,6 +6,25 @@
 
 ### Added
 
+- **网页端通知功能**（issue #21）：通过浏览器 Notification API 在用户电脑上弹
+  系统通知，通知时机可在设置页「网页通知」卡片配置（总开关 + 4 个时机开关，
+  存 `config.yaml notifications` 段，改设置立即生效无需重启）：
+  ① 任务需要交互（任务失败，需人工介入）② issue 完成（任务成功）③ issue
+  列表为空（对账扫描无待处理 issue）④ 无 issue 可处理（有 issue 但均在处理中）。
+  后端新增 `notification_events` 表 + `GET /api/notifications/events` 增量拉取
+  接口（游标 after，任务类事件以 task_id 唯一幂等，队列类事件同仓库同类型
+  1 小时内节流去重）；前端 `notify.js` 全局轮询（10s）按设置过滤弹通知，
+  首次拉取只记游标不弹历史事件。
+  - 涉及 `backend/botler/notifier.py`（新增事件记录器）、`database.py`
+    （事件表 + 迁移 + 查询）、`executor.py`（成功/失败收尾产生事件）、
+    `reconciler.py`（对账扫描产生队列事件）、`api/notifications.py`（新增
+    接口）、`api/settings.py` + `config.py`（notifications 段读写与布尔校验）、
+    `frontend/src/notify.js`（新增：过滤/弹窗/轮询）、`App.jsx`（挂载轮询）、
+    `Settings.jsx`（通知卡片 + 授权按钮）、`styles.css`。
+  - 测试：后端新增 27 个用例（事件落库/游标/幂等/节流、executor 收尾事件、
+    对账队列事件、notifications API、设置段校验），前端新增 12 个用例
+    （开关过滤/未知类型/轮询游标/失败容错）。后端全量 261 passed + 前端
+    24 passed + build 通过。
 - **任务页面「查看任务执行」按钮，实时查看 agent 进度与聊天记录**（issue #20）：
   任务列表每行新增「操作」列「执行」按钮，点击跳转详情页实时面板——聊天记录
   （Claude Code 会话中的用户/助手文本、工具调用与结果，气泡式展示）每 3 秒

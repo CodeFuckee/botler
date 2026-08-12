@@ -73,6 +73,23 @@ CREATE TABLE IF NOT EXISTS task_logs (
   level TEXT,
   message TEXT
 );
+
+-- 网页通知事件（issue #21）：前端轮询增量拉取后弹系统通知。
+-- 任务类事件以 task_id 唯一（同一任务收尾只记一次，幂等）；
+-- 队列类事件（queue_empty/queue_no_work）task_id 为 NULL，靠 notifier 节流去重。
+CREATE TABLE IF NOT EXISTS notification_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  repo_name TEXT,
+  task_id INTEGER,
+  data TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_task
+  ON notification_events(task_id) WHERE task_id IS NOT NULL;
 """
 
 
@@ -294,3 +311,35 @@ class Database:
             rows = conn.execute(
                 "SELECT status, COUNT(*) AS c FROM tasks GROUP BY status").fetchall()
         return {r["status"]: r["c"] for r in rows}
+
+    # ---- notification_events（issue #21）----
+
+    def add_notification(self, type_: str, title: str, body: str = "",
+                         repo_name: str | None = None, task_id: int | None = None,
+                         data: str | None = None) -> int | None:
+        """记录一条通知事件，返回 id；同一 task_id 重复记录返回 None（幂等）。"""
+        with self._conn() as conn:
+            try:
+                cur = conn.execute(
+                    """INSERT INTO notification_events (type, title, body, repo_name, task_id, data)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (type_, title, body, repo_name, task_id, data))
+            except sqlite3.IntegrityError:
+                return None
+            return cur.lastrowid
+
+    def list_notifications(self, after_id: int = 0, limit: int = 50) -> list[sqlite3.Row]:
+        """增量拉取：返回 id > after_id 的事件（按 id 升序），最多 limit 条。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT * FROM notification_events WHERE id > ?
+                   ORDER BY id ASC LIMIT ?""", (after_id, limit)).fetchall()
+
+    def last_notification(self, repo_name: str, type_: str) -> sqlite3.Row | None:
+        """节流查询：同仓库同类型最近一条事件（无则 None）。"""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT * FROM notification_events
+                   WHERE repo_name=? AND type=?
+                   ORDER BY id DESC LIMIT 1""", (repo_name, type_)).fetchone()
+            return row

@@ -596,3 +596,15 @@ code {
   margin-top: 8px;
   font-size: 12px;
 }
+
+/* 网页通知设置（issue #21） */
+.check-input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.ok-text {
+  color: var(--ok);
+  font-weight: 600;
+}

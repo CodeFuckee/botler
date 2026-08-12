@@ -51,6 +51,15 @@ backup:
   enabled: true            # 定时备份开关（每天 03:00 Asia/Shanghai 自动备份）
   retention_days: 30       # 保留策略：只保留最近 N 天的备份（清理更旧的）
 
+notifications:
+  # 网页通知（issue #21）：浏览器 Notification API 弹系统通知，时机可在设置页配置。
+  # 前端按开关过滤，改设置立即生效无需重启；需浏览器授权且页面保持打开。
+  enabled: true                     # 总开关
+  task_needs_interaction: true      # 任务需要交互（任务失败，需人工介入）
+  issue_completed: true             # issue 完成（任务成功，issue 已关闭）
+  queue_empty: true                 # issue 列表为空（无待处理 issue）
+  queue_no_work: true               # 无 issue 可处理（有 issue 但均在处理中）
+
 # 仓库列表（在 Web UI 添加仓库时会自动写入这里）
 repos: []
 

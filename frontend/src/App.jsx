@@ -7,6 +7,7 @@ import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
 import VersionBadge from './components/VersionBadge.jsx'
 import { api, setDisplayTz } from './api.js'
+import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 
 export default function App() {
   // 启动时加载页面显示时区（issue #14）；未设置前 fmtTime 跟随浏览器本机时区
@@ -15,6 +16,19 @@ export default function App() {
     api.get('/api/settings')
       .then((s) => { setDisplayTz(s.ui?.timezone); setTzLoaded(true) })
       .catch(() => {})
+  }, [])
+
+  // 网页通知轮询（issue #21）：每 10s 拉取新事件弹系统通知。
+  // 设置开关在每次轮询时实时读取 → 设置页修改立即生效，无需刷新。
+  // 首次拉取只记录游标不弹，避免历史事件轰炸。
+  useEffect(() => {
+    const poller = createNotifyPoller({
+      getEvents: (after) => api.get(`/api/notifications/events?after=${after}`),
+      getSettings: () => api.get('/api/settings'),
+    })
+    poller.poll()
+    const timer = setInterval(poller.poll, POLL_INTERVAL_MS)
+    return () => clearInterval(timer)
   }, [])
 
   return (

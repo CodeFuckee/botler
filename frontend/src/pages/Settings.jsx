@@ -15,6 +15,14 @@ const COMMON_TZ = [
   'UTC', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles',
 ]
 
+// 网页通知时机开关（issue #21）：与后端通知事件类型一一对应
+const NOTIFY_LABELS = {
+  task_needs_interaction: '任务需要交互（任务失败，需人工介入）',
+  issue_completed: 'issue 完成（任务成功，issue 已关闭）',
+  queue_empty: 'issue 列表为空（无待处理 issue）',
+  queue_no_work: '无 issue 可处理（有 issue 但均在处理中）',
+}
+
 export default function Settings() {
   const [settings, setSettings] = useState(null)
   const [error, setError] = useState('')
@@ -31,6 +39,9 @@ export default function Settings() {
   const setWorkerField = (key, val) =>
     setSettings((s) => ({ ...s, worker: { ...s.worker, [key]: val } }))
 
+  const setNotifyField = (key, val) =>
+    setSettings((s) => ({ ...s, notifications: { ...s.notifications, [key]: val } }))
+
   const save = async () => {
     setBusy(true); setError(''); setSaved(false)
     try {
@@ -42,6 +53,7 @@ export default function Settings() {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
         ui: { timezone: settings.ui?.timezone || '' },
+        notifications: { ...settings.notifications },
       })
       setDisplayTz(settings.ui?.timezone) // 立即生效，无需刷新页面
       setSaved(true)
@@ -116,6 +128,58 @@ export default function Settings() {
         <p className="muted small">
           任务创建/开始/完成时间与执行日志时间戳按此时区显示；留空则跟随本机浏览器时区（默认与访问者本机一致），
           修改后点击上方「保存」立即生效，无需刷新。
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>网页通知</h2>
+        <table className="table kv">
+          <tbody>
+            <tr>
+              <th>启用通知 <code>notifications.enabled</code></th>
+              <td>
+                <input
+                  type="checkbox"
+                  className="check-input"
+                  checked={settings.notifications?.enabled !== false}
+                  onChange={(e) => setNotifyField('enabled', e.target.checked)}
+                />
+              </td>
+            </tr>
+            {Object.entries(NOTIFY_LABELS).map(([key, label]) => (
+              <tr key={key}>
+                <th>{label} <code>{key}</code></th>
+                <td>
+                  <input
+                    type="checkbox"
+                    className="check-input"
+                    checked={settings.notifications?.[key] !== false}
+                    onChange={(e) => setNotifyField(key, e.target.checked)}
+                  />
+                </td>
+              </tr>
+            ))}
+            <tr>
+              <th>浏览器授权</th>
+              <td>
+                {typeof Notification === 'undefined' ? (
+                  <span className="muted">当前浏览器不支持通知</span>
+                ) : Notification.permission === 'granted' ? (
+                  <span className="ok-text">✓ 已授权</span>
+                ) : Notification.permission === 'denied' ? (
+                  <span className="muted">已拒绝（需在浏览器地址栏重新允许通知）</span>
+                ) : (
+                  <button className="btn" onClick={() => Notification.requestPermission()}>
+                    授权系统通知
+                  </button>
+                )}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="muted small">
+          通过浏览器在电脑上弹出系统通知：任务需要交互（失败）、issue 完成、队列清空、无新任务可处理。
+          修改后点击上方「保存」立即生效；需保持本页面打开（浏览器限制），首次启用时请授权系统通知。
         </p>
       </div>
 

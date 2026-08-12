@@ -28,6 +28,9 @@ class Reconciler:
         self.gitlab = gitlab
         self.scheduler = scheduler
         self._aps = BackgroundScheduler(timezone="UTC")
+        # 网页通知事件（issue #21）：对账扫描后产生队列状态通知
+        from .notifier import Notifier
+        self.notifier = Notifier(db)
 
     def start(self) -> None:
         cfg = self.config.get()
@@ -74,10 +77,12 @@ class Reconciler:
                 logger.warning("对账失败：%s", msg)
                 errors.append(msg)
                 continue
+            active_count = 0
             for issue in issues:
                 scanned += 1
                 if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
-                    continue  # 已有活跃任务（含排队中）
+                    active_count += 1  # 已有活跃任务（含排队中）
+                    continue
                 task_id = self.db.create_task(
                     repo["id"], repo["gitlab_project_id"], issue["iid"],
                     issue.get("title") or f"issue #{issue['iid']}",
@@ -87,6 +92,11 @@ class Reconciler:
                     enqueued += 1
                     logger.info("对账补入队: 任务 %s (%s#%s)",
                                 task_id, repo["gitlab_project_id"], issue["iid"])
+            # 网页通知：队列状态（issue #21，节流由 notifier 负责）
+            if not issues:
+                self.notifier.queue_empty(repo["name"])
+            elif active_count == len(issues) and enqueued == 0:
+                self.notifier.queue_no_work(repo["name"], active_count)
         result: dict = {"scanned": scanned, "enqueued": enqueued}
         if errors:
             result["errors"] = errors
