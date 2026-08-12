@@ -29,6 +29,11 @@ STATUS_INTERRUPTED = "interrupted"
 # 活跃状态（去重索引覆盖范围）
 ACTIVE_STATUSES = (STATUS_QUEUED, STATUS_RUNNING, STATUS_RETRYING)
 
+# set_task_status / finish_task 可写的附加字段白名单
+_TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
+                "log_path", "started_at", "finished_at", "claude_session_id",
+                "commit_sha"}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -246,16 +251,13 @@ class Database:
 
         status 传 None 时只更新附加字段，不改状态。
         """
-        allowed = {"attempt_count", "exit_code", "error_message", "error_detail",
-                   "log_path", "started_at", "finished_at", "claude_session_id",
-                   "commit_sha"}
         cols: list[str] = []
         vals: list = []
         if status is not None:
             cols.append("status=?")
             vals.append(status)
         for k, v in fields.items():
-            if k in allowed:
+            if k in _TASK_FIELDS:
                 cols.append(f"{k}=?")
                 vals.append(v)
         if not cols:
@@ -263,6 +265,39 @@ class Database:
         vals.append(task_id)
         with self._conn() as conn:
             conn.execute(f"UPDATE tasks SET {', '.join(cols)} WHERE id=?", vals)
+
+    def claim_task(self, task_id: int) -> bool:
+        """原子抢占任务（防多实例并发执行同一任务，issue #24）。
+
+        仅当任务处于 queued/retrying 时置为 running（条件 UPDATE），返回
+        是否抢到；已是 running（其他实例已领取）或已终态时抢不到。
+        跨实例安全：SQLite 写事务串行化保证条件判断与更新原子。
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status=? WHERE id=? AND status IN (?, ?)",
+                (STATUS_RUNNING, task_id, STATUS_QUEUED, STATUS_RETRYING))
+            return cur.rowcount > 0
+
+    def finish_task(self, task_id: int, status: str, **fields) -> bool:
+        """条件终态更新（issue #24）：仅当任务仍处于 running/retrying 时生效。
+
+        多实例并发执行同一任务时先完成者生效，后完成者返回 False 且不改
+        状态——避免慢实例把已成功/已失败的任务覆盖成相反结果。附加字段
+        白名单与 set_task_status 一致。
+        """
+        cols: list[str] = ["status=?"]
+        vals: list = [status]
+        for k, v in fields.items():
+            if k in _TASK_FIELDS:
+                cols.append(f"{k}=?")
+                vals.append(v)
+        vals.extend([task_id, STATUS_RUNNING, STATUS_RETRYING])
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"UPDATE tasks SET {', '.join(cols)} WHERE id=? AND status IN (?, ?)",
+                vals)
+            return cur.rowcount > 0
 
     def requeue_interrupted(self) -> list[int]:
         """重启恢复：queued 保持不变，running/retrying 标记 interrupted 后重新入队。"""

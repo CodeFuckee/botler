@@ -110,6 +110,25 @@
 
 ### Fixed
 
+- **issue 实际状态与页面不一致：任务卡在排队/运行**（issue #24）：平台同时存在
+  两个 botler 实例（历史遗留 supervisord/uvicorn 实例 + pm2 实例）时，两个
+  实例的调度器各自从内存队列领取任务、并发执行同一任务（同秒内「任务成功」
+  与「重新执行」并存），互踩同一工作区导致 claude 挂起、任务卡在 running
+  占住执行槽，后续任务永久排队——issue 实际已实现但任务页面仍显示排队。
+  修复（状态流转原子化，多实例并存时只有首个实例生效）：
+  - `backend/botler/database.py`：新增 `claim_task()`（条件 UPDATE
+    queued/retrying → running，原子抢占，抢不到即跳过）与 `finish_task()`
+    （仅 running/retrying 可流转终态，先完成者生效，慢实例不覆盖）；
+    附加字段白名单抽为模块级 `_TASK_FIELDS`
+  - `backend/botler/executor.py`：`run_task` 开头原子抢占（已被其他实例
+    领取/已终态的任务直接跳过），`_finish_succeeded`/`_finish_failed`
+    改为条件终态（收尾被抢先时不再覆盖状态、不重复评论/通知）
+  - 测试：新增 `tests/test_task_status.py` 10 个用例（抢占成功/已 running
+    抢不到/终态抢不到/双连接只一个赢、条件终态/慢实例不覆盖）+ executor
+    并发跳过 2 个用例；既有测试按真实状态流转补齐 claim 前置。
+    后端全量 301 passed（+12）。
+  - 部署提示（运维层面，非代码）：请停掉历史遗留的 supervisord/uvicorn
+    实例，只保留 pm2 实例；`--reload` 模式仅限开发。
 - **设置页「弹出测试通知」按钮不弹授权对话框**（issue #21 第三轮）：点击
   测试按钮期望弹出浏览器授权对话框，但 http 访问或自签名证书不受信任时
   页面处于非安全上下文（`isSecureContext === false`），浏览器规范规定此时

@@ -719,6 +719,13 @@ class ClaudeExecutor:
                                     error_message="仓库记录不存在")
             return
 
+        # 原子抢占（issue #24）：多实例并存时同一任务可能被多次领取，
+        # 只有状态为 queued/retrying 的任务能抢到 running；抢不到说明
+        # 其他实例已领取或任务已结束，直接跳过避免重复执行/状态错乱。
+        if not self.db.claim_task(task_id):
+            logger.info("任务 %s 已被其他实例领取或已结束（状态非 queued/retrying），跳过", task_id)
+            return
+
         project_id, issue_iid = task["project_id"], task["issue_iid"]
         self.db.set_task_status(task_id, None, log_path=str(self._log_file(task_id)))
         try:
@@ -838,10 +845,14 @@ class ClaudeExecutor:
         return "\n".join(lines)
 
     def _finish_succeeded(self, task_id: int, output: str) -> None:
-        self.db.set_task_status(
-            task_id, STATUS_SUCCEEDED,
-            exit_code=0,
-            finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        # 条件终态（issue #24）：任务已被其他实例先收尾时不再覆盖状态、
+        # 不重复评论/通知
+        if not self.db.finish_task(
+                task_id, STATUS_SUCCEEDED,
+                exit_code=0,
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S")):
+            logger.info("任务 %s 成功收尾被跳过（状态已非运行中，可能已被其他实例收尾）", task_id)
+            return
         self.db.add_log(task_id, "info", "任务成功：issue 已由 Claude Code 关闭")
         self._write_log_tail(task_id, output)
         self._record_commit(task_id)
@@ -872,12 +883,16 @@ class ClaudeExecutor:
     def _finish_failed(self, task_id: int, reason: str, output: str = "",
                        error_detail: str | None = None) -> None:
         task = self.db.get_task(task_id)
-        self.db.set_task_status(
-            task_id, STATUS_FAILED,
-            exit_code=None,
-            error_message=reason,
-            error_detail=error_detail,
-            finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        # 条件终态（issue #24）：任务已被其他实例先收尾时不再覆盖状态、
+        # 不重复评论/通知
+        if not self.db.finish_task(
+                task_id, STATUS_FAILED,
+                exit_code=None,
+                error_message=reason,
+                error_detail=error_detail,
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S")):
+            logger.info("任务 %s 失败收尾被跳过（状态已非运行中，可能已被其他实例收尾）", task_id)
+            return
         self.db.add_log(task_id, "error", f"任务失败: {reason}")
         self._write_log_tail(task_id, output)
 

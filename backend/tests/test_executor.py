@@ -357,7 +357,7 @@ class TestSessionResume:
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id)
         session_id = "requeue-sid"
-        db.set_task_status(task_id, "running", claude_session_id=session_id)
+        db.set_task_status(task_id, "retrying", claude_session_id=session_id)
         self._mk_session_file(tmp_path / "claude-home", session_id)
         captured = self._session_toolkit(
             executor, monkeypatch, tmp_path,
@@ -384,7 +384,7 @@ class TestSessionResume:
         db = executor.db
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id)
-        db.set_task_status(task_id, "running", claude_session_id="ghost-sid")
+        db.set_task_status(task_id, "retrying", claude_session_id="ghost-sid")
         captured = self._session_toolkit(
             executor, monkeypatch, tmp_path,
             json.dumps({"result": "ok", "session_id": "s-fresh"}))
@@ -477,6 +477,7 @@ class TestCommitRecording:
             find_commit_for_issue=lambda pid, iid: self._commit_sha())
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
+        db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
         executor._finish_succeeded(task_id, "ok")
 
         task = db.get_task(task_id)
@@ -493,6 +494,7 @@ class TestCommitRecording:
         executor.gitlab = SimpleNamespace(find_commit_for_issue=lambda pid, iid: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
+        db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
         executor._finish_succeeded(task_id, "ok")
 
         task = db.get_task(task_id)
@@ -509,6 +511,7 @@ class TestCommitRecording:
                 GitLabError("GitLab API 错误 500: boom", 500)))
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
+        db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
         executor._finish_succeeded(task_id, "ok")
 
         task = db.get_task(task_id)
@@ -543,3 +546,47 @@ class TestCommitRecording:
         task = db.get_task(task_id)
         assert task["status"] == "succeeded"
         assert task["commit_sha"] == self._commit_sha()
+
+
+class TestRunTaskConcurrency:
+    """issue #24：任务已被其他实例领取（running）时 run_task 直接跳过。
+
+    双实例并存时同一任务可能被两个 worker 同时领取执行，修复后只有
+    第一个成功 claim（queued/retrying → running）的实例继续，其余跳过。
+    """
+
+    def test_skip_when_already_claimed(self, executor, monkeypatch, tmp_path):
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        db.claim_task(task_id)  # 模拟其他实例已领取（任务已 running）
+
+        called = []
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda *a: called.append("get_issue") or {"state": "opened"})
+        monkeypatch.setattr(executor, "_run_once",
+                            lambda *a: called.append("run_once") or (0, "x"))
+
+        executor.run_task(task_id)
+
+        # 未获取 issue、未执行 claude，任务状态保持 running 不被扰动
+        assert called == []
+        assert db.get_task(task_id)["status"] == "running"
+
+    def test_terminal_task_skipped(self, executor, monkeypatch, tmp_path):
+        """任务已终态（succeeded）→ 跳过，不覆盖成失败。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        db.set_task_status(task_id, "succeeded")
+
+        called = []
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda *a: called.append("get_issue") or {"state": "opened"})
+        monkeypatch.setattr(executor, "_run_once",
+                            lambda *a: called.append("run_once") or (0, "x"))
+
+        executor.run_task(task_id)
+
+        assert called == []
+        assert db.get_task(task_id)["status"] == "succeeded"
