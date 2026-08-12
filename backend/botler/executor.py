@@ -67,6 +67,23 @@ class ExecutorError(Exception):
     pass
 
 
+def _strip_credential_sections(text: str) -> str:
+    """从 gitconfig 文本中剥离 [credential] section（含子键，如 [credential "https://x"]）。
+
+    返回去除 credential 配置后的文本；无 credential section 时原样返回。
+    用于生成净化版全局 gitconfig（见 ClaudeExecutor._git_global_config）。
+    """
+    out: list[str] = []
+    skip = False
+    for line in text.splitlines():
+        if line.startswith("["):
+            section = line.strip("[]").split()[0].split('"')[0].strip()
+            skip = section == "credential"
+        if not skip:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _row_get(row, key, default=None):
     """兼容 sqlite3.Row 与 dict 的字段读取。
 
@@ -212,6 +229,41 @@ class ClaudeExecutor:
                 f"git {args[0]} 失败 (exit {result.returncode}): "
                 f"{(result.stderr or result.stdout).strip()[-500:]}")
 
+    def _clean_process_env(self) -> dict:
+        """剔除 gitlab-runner CI 环境变量，避免污染 git/claude 子进程。
+
+        CI 部署在构建目录里 pm2 start，作业环境（CI_JOB_TOKEN、GITLAB_CI、
+        GIT_CONFIG_* 等）被 pm2 进程继承；git 子进程凭据流程可能经 runner
+        注入的 GIT_CONFIG_* 或 credential store 误用 CI_JOB_TOKEN → GitLab
+        403（"Authentication by CI/CD job token not allowed..."）→ 403 不
+        触发凭据重试 → fetch/push 必失败（issue #18 部署后任务频繁失败根因）。
+        """
+        return {k: v for k, v in os.environ.items()
+                if not (k.startswith("CI_") or k == "GITLAB_CI"
+                        or k.startswith("GIT_CONFIG_"))}
+
+    def _git_global_config(self) -> Path:
+        """净化版全局 gitconfig 路径：剥离 [credential] section，其余原样保留。
+
+        直接 GIT_CONFIG_GLOBAL=/dev/null 会连带丢失 user.name/email
+        （claude 子进程 commit 报错）、http.sslVerify（自签名 GitLab 握手
+        失败）等全局设置；这里复制 ~/.gitconfig 并仅剥离 [credential]——
+        其中失效的 gitlab-ci-token store 条目会被 git 优先于 GIT_ASKPASS
+        选用（store helper 先于 askpass，且 403 不重试），是任务失败的
+        直接来源。原文件无 credential 配置时直接复用原路径；无全局配置
+        时返回 /dev/null（等价于无全局配置）。
+        """
+        src = Path.home() / ".gitconfig"
+        if not src.is_file():
+            return Path(os.devnull)
+        text = src.read_text(encoding="utf-8", errors="replace")
+        cleaned = _strip_credential_sections(text)
+        if cleaned == text:
+            return src
+        out = self.workspace_root / ".gitconfig-sanitized"
+        out.write_text(cleaned, encoding="utf-8")
+        return out
+
     def _askpass_script(self, repo_name: str) -> Path:
         """生成 GIT_ASKPASS 脚本（用户名 oauth2，密码 = bot token）。
 
@@ -244,12 +296,16 @@ class ClaudeExecutor:
         cfg = self.config.get()
         workdir = self._repo_workdir(repo)
         askpass = self._askpass_script(repo["name"])
-        # 先并入 os.environ 再设置关键项，防止外部环境变量（如 GIT_ASKPASS
-        # 指向别处）覆盖凭据注入
-        git_env = dict(os.environ)
+        # 先剔除 CI 环境变量再设置关键项：gitlab-runner 的 CI_JOB_TOKEN 等
+        # 会被 git 凭据流程误用（经 store 优先于 GIT_ASKPASS → 403 不重试），
+        # 且外部 GIT_ASKPASS 可能指向别处覆盖凭据注入
+        git_env = self._clean_process_env()
         git_env["GIT_ASKPASS"] = str(askpass)
         git_env["GIT_TERMINAL_PROMPT"] = "0"
         git_env["HOME"] = str(Path.home())
+        # 禁用全局 credential store（失效 job token 条目优先于 askpass 被选用）
+        git_env["GIT_CONFIG_GLOBAL"] = str(self._git_global_config())
+        git_env["GIT_CONFIG_SYSTEM"] = os.devnull
 
         if not (workdir / ".git").exists():
             if _row_get(repo, "local_path"):
@@ -300,11 +356,19 @@ class ClaudeExecutor:
 
     def _build_env(self, repo: dict, issue: dict) -> dict:
         cfg = self.config.get()
-        env = dict(os.environ)
+        env = self._clean_process_env()
         env["GITLAB_TOKEN"] = cfg.gitlab_token
         env["GITLAB_URL"] = cfg.gitlab_url
         env["PROJECT_ID"] = str(issue["project_id"])
         env["ISSUE_IID"] = str(issue["iid"])
+        # git 凭据统一走 GIT_ASKPASS（bot token）：claude 内部 git push/fetch
+        # 同样受全局 credential store 中失效 job token 污染（issue #16 推送时
+        # 已遇 403），此处一并净化，保证 push 凭据与 API 一致
+        askpass = self._askpass_script(repo["name"])
+        env["GIT_ASKPASS"] = str(askpass)
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_CONFIG_GLOBAL"] = str(self._git_global_config())
+        env["GIT_CONFIG_SYSTEM"] = os.devnull
         return env
 
     # ---- 会话断点续跑（issue #8）----

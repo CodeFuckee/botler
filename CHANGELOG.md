@@ -22,6 +22,28 @@
 
 ### Fixed
 
+- **部署后任务频繁 git fetch 失败（403 job token）**（issue #18 任务失败根因）：
+  executor 的 git/claude 子进程环境直接继承 `os.environ`——CI 部署在
+  gitlab-runner 构建目录里 `pm2 start`，作业环境（`CI_JOB_TOKEN` 等）被继承，
+  且 `~/.gitconfig` 的 credential store（`~/.git-credentials`）中失效的
+  `gitlab-ci-token` 条目排在有效 `oauth2` 之前。git 凭据顺序中 store 优先于
+  `GIT_ASKPASS`：失效 job token 被选用 → GitLab 403
+  （`Authentication by CI/CD job token not allowed from shipyard to project
+  #123`）→ 403 不触发凭据重试 → askpass 的 bot token 永远用不上 →
+  fetch/push 必失败 → 重试耗尽 → `bot-failed` 标签。修复：
+  - `backend/botler/executor.py`：新增 `_clean_process_env`（剔除 `CI_*` /
+    `GITLAB_CI` / `GIT_CONFIG_*` 环境变量）、`_git_global_config`（生成净化版
+    全局 gitconfig——仅剥离 `[credential]` section，保留 `user` / `http` /
+    `safe.directory` 等，避免 `/dev/null` 连带丢失 user.name 致 commit 失败、
+    自签证书握手失败），`prepare_workspace` 与 `_build_env` 统一使用；claude
+    子进程同样注入 `GIT_ASKPASS`（bot token）并禁用 credential store，
+    push 凭据与 API 保持一致。
+  - 测试：新增 `tests/test_executor_credentials.py` 3 个用例（本地 http 服务器
+    + git http-backend 代理模拟 GitLab 认证时序：无凭据 401 → job token 403 /
+    bot token 200；断言修复后 fetch 使用 askpass 的 bot token、旧行为对照
+    复现 store 抢先用 job token、`_build_env` 净化）。全量 186 passed + 前端
+    2 passed。
+
 - **失败详细原因中转义符未格式化**（issue #16）：任务「详情」弹窗与详情页
   「claude 输出尾部」直接展示 claude JSON 输出的 `result` 字段——该字段内嵌
   工具调用记录（再次序列化的 JSON 文本），`\n` `\"` 等转义按字面量存放，
