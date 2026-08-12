@@ -6,6 +6,17 @@
 
 ### Added
 
+- **标记库规范**（issue #29）：统一 chenkaidi 名下全部仓库（botler / shipyard / patio /
+  graph2plan / daymark / glimmer）的 issue 标签，解决命名不统一（shipyard 用 `ci`、
+  daymark 用 `gitlab-ci`）与部分仓库缺标签的问题。
+  - 新增 `docs/labels.md` 标记库规范：类型标签 8 个（bug / feature / optimize / ui /
+    docs / test / gitlab-ci / chore）+ 流程标签 5 个（in-progress / review / blocked /
+    bot-done / bot-failed），含颜色、说明与使用约定。
+  - 新增 `scripts/sync_labels.py` 批量同步脚本：枚举命名空间下全部项目，创建缺失
+    标签、更新已有标签的颜色/描述，**不删除任何旧标签**（旧 `ci` 等保留）。
+  - 已通过脚本将 13 个标签同步至全部 6 个仓库（创建 48 / 更新 30，重跑幂等验证
+    全部"不变"）。
+
 - **Synology SSO 登录**（issue #27）：接入群晖 SSO Server（OIDC / OAuth2 授权码
   模式）作为管理界面登录身份源。设置页新增「Synology SSO 登录」卡片（Well-known
   URL / Application ID / Secret / Scope / 登录有效期 / 回调地址 / 证书校验开关），
