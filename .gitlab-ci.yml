@@ -557,6 +557,14 @@ sync_to_github:
   tags:
     - linux
     - code01
+  # ⚠️ 不下载任何前序 stage 的 artifacts（issue #29 第三轮）：runner 默认
+  # 会下载前序 stage 中有 artifacts 的 job（此处为 frontend:build 的 dist），
+  # 解压到构建目录会覆盖 pm2 进程正在托管的 dist（FastAPI 静态目录）。
+  # 旧 pipeline 的 sync job 若延迟排队运行（2026-08-12 实测 #674 sync 在
+  # #675 deploy 之后 4 分钟才执行），会把旧版 dist 覆盖回去 → 线上前端
+  # 静默回退旧版，用户看不到新功能（本次标记库页面不可见即此根因）。
+  # 本 job 用完整克隆（CI_REPOSITORY_URL）工作，不需要任何构建产物。
+  dependencies: []
   variables:
     # 本 job 用完整克隆（CI_REPOSITORY_URL）重新检出，不需要 runner 的 checkout
     GIT_STRATEGY: none

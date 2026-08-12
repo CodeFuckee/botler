@@ -57,6 +57,16 @@
 
 ### Fixed
 
+- **线上前端静默回退旧版，标记库页面「看不到」**（issue #29 第三轮）：`sync_to_github`
+  job 未声明 `dependencies`，runner 默认下载前序 stage 中 frontend:build 的 dist
+  artifacts 并解压到构建目录，而 pm2 进程（FastAPI 静态托管）的工作目录就在构建目录。
+  旧 pipeline 的 sync job 若延迟排队运行（实测 #674 的 sync 在 #675 部署成功 4 分钟后
+  才执行，把 #675 部署的新版 dist/index.html 覆盖回 #674 旧版），线上前端即被静默
+  降级——CI 显示 success、后端 API 正常，但用户看不到新功能页面。
+  - 修复：`sync_to_github` 添加 `dependencies: []`（该 job 用完整克隆到 /tmp 工作，
+    不需要任何构建产物），杜绝旧 artifacts 解压覆盖 dist。
+  - 涉及 `.gitlab-ci.yml`；本修复推送触发的新流水线将重新部署新版 dist 恢复线上。
+
 - **任务完成后 issue 被自动关闭，模版库「不关闭」规范不生效**（issue #25 第二轮）：
   运行进程已加载新版全局模版（含「任务完成后不关闭 issue，打 bot-done 等用户确认」），
   但 `executor.run_task` 的成功判定仍是「issue 已被关闭」——exit 0 且 issue 仍打开时
