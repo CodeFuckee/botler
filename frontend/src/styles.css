@@ -656,3 +656,68 @@ code {
   font-size: 13px;
   color: var(--muted);
 }
+
+/* ---- 标记库页（issue #29）---- */
+.label-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.label-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.label-color {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.label-name {
+  font-weight: 600;
+  font-family: var(--mono, monospace);
+  white-space: nowrap;
+}
+
+.label-desc {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge-default {
+  background: var(--primary-weak);
+  color: var(--primary);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.btn-small {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.input-color {
+  width: 110px;
+  font-family: var(--mono, monospace);
+}
+
+.input-desc {
+  flex: 1;
+  min-width: 160px;
+}

@@ -100,6 +100,9 @@ class Settings:
     sso_redirect_uri: str = ""  # 回调地址；留空 = 按浏览器访问地址动态生成
     sso_verify_ssl: bool = True  # 群晖自签名证书时设 false
     repos: list[RepoConfig] = field(default_factory=list)
+    # 自定义标签（issue #29 标记库）：默认清单见 labels.DEFAULT_LABELS（内置不可删），
+    # 用户通过 Web UI 添加的自定义标签存 config.yaml 的 labels.custom
+    custom_labels: list[dict] = field(default_factory=list)
 
 
 # settings API 可写字段（写回 config.yaml 用）
@@ -193,6 +196,7 @@ class ConfigManager:
         notify = data.get("notifications", {})
         sso = data.get("sso", {})
         repos_raw = data.get("repos", []) or []
+        labels_raw = (data.get("labels", {}) or {}).get("custom", []) or []
 
         repos = []
         for r in repos_raw:
@@ -239,6 +243,13 @@ class ConfigManager:
             sso_redirect_uri=sso.get("redirect_uri", ""),
             sso_verify_ssl=bool(sso.get("verify_ssl", True)),
             repos=repos,
+            custom_labels=[
+                {"name": str(l.get("name", "")).strip(),
+                 "color": str(l.get("color", "")).strip(),
+                 "description": str(l.get("description") or "").strip()}
+                for l in labels_raw
+                if l.get("name")
+            ],
         )
 
     def save(self) -> None:
@@ -361,6 +372,14 @@ class ConfigManager:
         self._data["repos"] = repos
         self.save()
         self.settings = self._to_settings(self._data)
+
+    def update_custom_labels(self, labels: list[dict[str, Any]]) -> Settings:
+        """整体替换自定义标签列表（标记库页增删后落盘，issue #29）。"""
+        self._reload_from_disk()
+        self._data.setdefault("labels", {})["custom"] = labels
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
 
     @staticmethod
     def repo_to_config_dict(repo: RepoConfig) -> dict[str, Any]:

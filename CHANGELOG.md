@@ -6,6 +6,22 @@
 
 ### Added
 
+- **标记库页面**（issue #29 第二轮）：用户澄清需求为「在 botler 项目上增加一个标记库，
+  用户可以手动添加删除，上面的建议清单作为默认选项不可删除」——第一轮只交付了
+  `docs/labels.md` + 同步脚本（无 UI），本轮补齐 Web UI 管理页面。
+  - 新增「标记库」页面（导航入口 + `/labels` 路由）：默认清单 13 个标签
+    （类型 8 + 流程 5，与 `docs/labels.md` 一致）展示为内置选项、标记「默认」徽标
+    **不可删除**；用户可添加/删除自定义标签（名称/颜色/说明，名称与默认清单或
+    已有自定义标签重复、格式非法均被拒绝）。
+  - 后端：新增 `botler/labels.py`（默认清单 + 校验）、`api/labels.py`
+    （GET 列表 / POST 添加 / DELETE 删除，默认标签删除返回 400）；
+    `config.py` 新增 `labels.custom` 段（`update_custom_labels` 写盘前重读磁盘，
+    与其它 update_* 一致）。
+  - 测试：后端 `tests/test_api_labels.py` 12 用例（含默认清单与
+    `scripts/sync_labels.py` 一致性校验）+ 前端 `tests/labels-page.test.mjs` 7 用例
+    （页面结构/接口路径/样式类静态断言）。后端全量 345 passed + 前端全量 60 passed
+    + build 通过。
+
 - **标记库规范**（issue #29）：统一 chenkaidi 名下全部仓库（botler / shipyard / patio /
   graph2plan / daymark / glimmer）的 issue 标签，解决命名不统一（shipyard 用 `ci`、
   daymark 用 `gitlab-ci`）与部分仓库缺标签的问题。

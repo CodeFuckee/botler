@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import Repos from './pages/Repos.jsx'
 import Templates from './pages/Templates.jsx'
+import Labels from './pages/Labels.jsx'
 import Tasks from './pages/Tasks.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
@@ -68,6 +69,9 @@ export default function App() {
         <NavLink to="/templates" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           模版
         </NavLink>
+        <NavLink to="/labels" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+          标记库
+        </NavLink>
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           设置
         </NavLink>
@@ -85,6 +89,7 @@ export default function App() {
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/tasks/:id" element={<TaskDetail />} />
           <Route path="/templates" element={<Templates />} />
+          <Route path="/labels" element={<Labels />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
