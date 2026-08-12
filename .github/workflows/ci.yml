@@ -45,8 +45,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # 与 Dockerfile 的基础镜像（node:20-alpine）同一版本线
-          node-version: "20"
+          # 与 GitLab runner 实际版本一致（v22：node --test 的 glob
+          # 参数需 Node 21+，npm test 脚本依赖此特性）；Dockerfile 的
+          # node:20 为部署运行时，与此无关
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

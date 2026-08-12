@@ -45,7 +45,11 @@ def _make_local_repo(tmp_path) -> Path:
     subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
     (seed / "file.txt").write_text("hello\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(seed), "commit", "-q", "-m", "init"], check=True)
+    # -c 显式提供 git 身份：GitHub Actions runner 无全局身份配置，
+    # 测试不依赖环境（issue #10 镜像 CI 实测 git commit 失败）
+    subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                    "-c", "user.email=test@botler.local",
+                    "commit", "-q", "-m", "init"], check=True)
     subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(bare)], check=True)
     subprocess.run(["git", "-C", str(seed), "push", "-q", "-u", "origin", "main"], check=True)
     # git init --bare 的 HEAD 默认指向 master（不存在），push 不会更新它；

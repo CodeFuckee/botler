@@ -71,7 +71,7 @@ class TestIsPrivateUrl:
     """webhook URL 是否指向本地/私有网络（GitLab 默认拒绝注册这类地址）。"""
 
     @pytest.mark.parametrize("url", [
-        "http://10.0.0.122:8000/webhook/gitlab",   # 内网 10.x（用户现场）
+        "http://10.10.10.10:8000/webhook/gitlab",  # 内网 10.x（用户现场）；避开镜像脱敏精确替换的那个 10.x 地址，否则断言数据被改写
         "http://192.168.1.5/webhook/gitlab",        # 内网 192.168.x
         "http://172.16.0.1/webhook/gitlab",         # 内网 172.16-31.x
         "http://127.0.0.1:8000/webhook/gitlab",     # loopback
@@ -110,7 +110,7 @@ class TestRegisterWebhookErrorHint:
         return client
 
     def test_private_ip_422_has_actionable_hint(self):
-        client = self._client_with_422("http://10.0.0.122:8000")
+        client = self._client_with_422("http://10.10.10.10:8000")
         with pytest.raises(GitLabError) as ei:
             client.register_webhook(123, "secret")
         msg = str(ei.value)
@@ -126,7 +126,7 @@ class TestRegisterWebhookErrorHint:
 
     def test_other_error_no_hint(self):
         client = GitLabClient("https://gitlab.example.com", "test-token",
-                              verify_ssl=False, webhook_base_url="http://10.0.0.122:8000")
+                              verify_ssl=False, webhook_base_url="http://10.10.10.10:8000")
         client.list_webhooks = lambda project_id: []
 
         def boom(method, path, **kwargs):
