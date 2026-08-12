@@ -198,3 +198,7 @@ POST   /webhook/gitlab                GitLab webhook 入口
 - 工作区每次执行前 `reset --hard` + `clean -fd`，不同仓库互相隔离
 - 风险认知：main 不保护 + bot 直接推，单点失误可能破坏 main；
   缓解：同仓库串行、干净工作区、模版强调「自测通过才推」。个人自用可接受，如需保护请对 main 加 push 保护。
+
+## License
+
+[MIT](LICENSE) © 2026 chenkaidi

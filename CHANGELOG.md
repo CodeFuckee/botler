@@ -24,6 +24,8 @@
 
 ### Added
 
+- **添加 MIT License**（issue #26）：新增 `LICENSE` 文件（MIT 协议，© 2026
+  chenkaidi），README 末尾补充 License 小节。纯文档改动，不涉及代码。
 - **任务页面显示完成 issue 所用时长**（issue #23）：任务列表新增「用时」列、
   任务详情新增「执行用时」行——从任务开始执行（`started_at`，未开始则退回
   创建时间）到完成（`finished_at`）的耗时，自动换算为 秒/分钟/小时/天；
