@@ -85,6 +85,17 @@ def get_settings(request: Request):
             "queue_empty": s.notify_queue_empty,
             "queue_no_work": s.notify_queue_no_work,
         },
+        "sso": {
+            # Synology SSO 登录（issue #27）：凭据只返回掩码
+            "enabled": s.sso_enabled,
+            "well_known_url": s.sso_well_known_url,
+            "client_id": s.sso_client_id,
+            "client_secret_masked": _mask(s.sso_client_secret),
+            "scope": s.sso_scope,
+            "session_days": s.sso_session_days,
+            "redirect_uri": s.sso_redirect_uri,
+            "verify_ssl": s.sso_verify_ssl,
+        },
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -131,6 +142,11 @@ def update_settings(request: Request, body: dict):
     if notify is not None:
         _validate_notifications(notify)
         c.config.update_notifications(notify)
+
+    sso = body.get("sso")
+    if sso is not None:
+        _validate_sso(sso, current=c.config.get())
+        c.config.update_sso(sso)
 
     return get_settings(request)
 
@@ -211,6 +227,50 @@ def _validate_notifications(patch: dict) -> None:
                 "queue_empty", "queue_no_work"):
         if key in patch and not isinstance(patch[key], bool):
             raise HTTPException(400, f"notifications.{key} 必须是布尔值")
+
+
+def _validate_sso(patch: dict, current) -> None:
+    """校验 sso 段（issue #27）：类型、URL 格式、启用时必填项。
+
+    current 为当前 Settings：启用校验看"补丁后的最终值"而不是补丁本身，
+    保证单独提交 enabled=true 也能正确拒绝缺参。
+    """
+    enabled = patch.get("enabled", current.sso_enabled)
+    if "enabled" in patch and not isinstance(patch["enabled"], bool):
+        raise HTTPException(400, "sso.enabled 必须是布尔值")
+    if "verify_ssl" in patch and not isinstance(patch["verify_ssl"], bool):
+        raise HTTPException(400, "sso.verify_ssl 必须是布尔值")
+
+    for key in ("well_known_url", "client_id", "client_secret", "scope", "redirect_uri"):
+        if key in patch and patch[key] is not None and not isinstance(patch[key], str):
+            raise HTTPException(400, f"sso.{key} 必须是字符串")
+
+    for key in ("well_known_url", "redirect_uri"):
+        if key in patch and patch[key]:
+            val = patch[key]
+            if not val.startswith(("http://", "https://")):
+                raise HTTPException(400, f"sso.{key} 必须以 http(s):// 开头")
+
+    if "session_days" in patch:
+        val = patch["session_days"]
+        if not isinstance(val, int) or isinstance(val, bool) or not 1 <= val <= 365:
+            raise HTTPException(400, "sso.session_days 必须是 1~365 的整数（天）")
+
+    if enabled:
+        # 启用 SSO 时关键配置必填（掩码占位视为已有值）
+        has_secret = bool(current.sso_client_secret) or (
+            "client_secret" in patch and patch["client_secret"]
+            and "*" not in str(patch["client_secret"])
+        )
+        missing = []
+        if not (patch.get("well_known_url") or current.sso_well_known_url):
+            missing.append("well_known_url")
+        if not (patch.get("client_id") or current.sso_client_id):
+            missing.append("client_id")
+        if not has_secret:
+            missing.append("client_secret")
+        if missing:
+            raise HTTPException(400, f"启用 SSO 前请先填写: {', '.join(missing)}")
 
 
 def ctx_of(request: Request):

@@ -104,3 +104,60 @@ class TestTimezoneSettings:
         resp = tc.put("/api/settings", json={"ui": {"timezone": "Mars/Olympus"}})
         assert resp.status_code == 400
         assert "时区" in resp.json()["detail"]
+
+
+class TestSsoSettings:
+    """sso 段：Synology SSO 登录配置（issue #27）。"""
+
+    def test_get_settings_includes_sso_defaults(self, client):
+        """未配置时 sso 段返回默认值，client_secret 只返回掩码。"""
+        tc, tmp_path = client
+        data = tc.get("/api/settings").json()["sso"]
+        assert data["enabled"] is False
+        assert data["well_known_url"] == ""
+        assert data["client_id"] == ""
+        assert data["client_secret_masked"] == ""
+        assert data["session_days"] == 7
+
+    def test_update_sso_persists(self, client):
+        """PUT sso 段写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"sso": {
+            "enabled": True,
+            "well_known_url": "https://nas.example.com/.well-known/openid-configuration",
+            "client_id": "app-123",
+            "client_secret": "secret-abc",
+            "session_days": 14,
+        }})
+        assert resp.status_code == 200
+        sso = resp.json()["sso"]
+        assert sso["enabled"] is True
+        assert sso["client_secret_masked"] != "secret-abc"
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "client_secret: secret-abc" in config_text
+
+    def test_update_sso_masked_secret_not_overwritten(self, client):
+        """前端回传掩码值（含 *）不覆盖真实 secret。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"sso": {"client_secret": "secret-abc"}})
+        resp = tc.put("/api/settings", json={"sso": {"client_secret": "secr****c"}})
+        assert resp.status_code == 200
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "client_secret: secret-abc" in config_text
+
+    def test_update_sso_rejects_invalid_url(self, client):
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"sso": {"well_known_url": "not-a-url"}})
+        assert resp.status_code == 400
+
+    def test_update_sso_rejects_bad_session_days(self, client):
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"sso": {"session_days": 0}})
+        assert resp.status_code == 400
+
+    def test_update_sso_enable_requires_key_fields(self, client):
+        """启用 SSO 时 well_known_url / client_id / client_secret 必填。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"sso": {"enabled": True}})
+        assert resp.status_code == 400
+        assert "client_id" in resp.json()["detail"]

@@ -89,6 +89,16 @@ class Settings:
     notify_issue_completed: bool = True
     notify_queue_empty: bool = True
     notify_queue_no_work: bool = True
+    # Synology SSO 登录（issue #27）：OIDC 授权码模式接入群晖 SSO Server；
+    # 启用后访问 Web UI 需用群晖账号登录，会话有效期 sso_session_days 天
+    sso_enabled: bool = False
+    sso_well_known_url: str = ""
+    sso_client_id: str = ""
+    sso_client_secret: str = ""
+    sso_scope: str = "openid profile email"
+    sso_session_days: int = 7
+    sso_redirect_uri: str = ""  # 回调地址；留空 = 按浏览器访问地址动态生成
+    sso_verify_ssl: bool = True  # 群晖自签名证书时设 false
     repos: list[RepoConfig] = field(default_factory=list)
 
 
@@ -102,6 +112,8 @@ KNOWN_FIELDS = {
     "ui": {"timezone"},
     "notifications": {"enabled", "task_needs_interaction", "issue_completed",
                       "queue_empty", "queue_no_work"},
+    "sso": {"enabled", "well_known_url", "client_id", "client_secret", "scope",
+            "session_days", "redirect_uri", "verify_ssl"},
 }
 
 # 网页通知开关 → Settings 字段映射（issue #21）
@@ -181,6 +193,7 @@ class ConfigManager:
         backup = data.get("backup", {})
         ui = data.get("ui", {})
         notify = data.get("notifications", {})
+        sso = data.get("sso", {})
         repos_raw = data.get("repos", []) or []
 
         repos = []
@@ -219,6 +232,14 @@ class ConfigManager:
             notify_issue_completed=_notify_default(notify, "issue_completed", True),
             notify_queue_empty=_notify_default(notify, "queue_empty", True),
             notify_queue_no_work=_notify_default(notify, "queue_no_work", True),
+            sso_enabled=bool(sso.get("enabled", False)),
+            sso_well_known_url=sso.get("well_known_url", ""),
+            sso_client_id=sso.get("client_id", ""),
+            sso_client_secret=sso.get("client_secret", ""),
+            sso_scope=(sso.get("scope") or "openid profile email").strip(),
+            sso_session_days=int(sso.get("session_days", 7)),
+            sso_redirect_uri=sso.get("redirect_uri", ""),
+            sso_verify_ssl=bool(sso.get("verify_ssl", True)),
             repos=repos,
         )
 
@@ -314,6 +335,24 @@ class ConfigManager:
         for key in KNOWN_FIELDS["notifications"]:
             if key in patch:
                 notify[key] = patch[key]
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_sso(self, patch: dict[str, Any]) -> Settings:
+        """更新 sso 配置并写回（Synology SSO 登录；issue #27）。
+
+        前端回传的 client_secret 掩码值（含 *）视为"未修改"，不覆盖真实凭据。
+        """
+        self._reload_from_disk()
+        sso = self._data.setdefault("sso", {})
+        for key in KNOWN_FIELDS["sso"]:
+            if key not in patch:
+                continue
+            val = patch[key]
+            if key == "client_secret" and (val is None or "*" in str(val)):
+                continue  # 掩码占位符：保持现有凭据
+            sso[key] = val
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

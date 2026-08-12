@@ -16,6 +16,7 @@ from .settings import router as settings_router  # noqa: E402
 from .backup import router as backup_router  # noqa: E402
 from .notifications import router as notifications_router  # noqa: E402
 from .environment import router as environment_router  # noqa: E402
+from .auth import router as auth_router  # noqa: E402
 
 router.include_router(repos_router)
 router.include_router(tasks_router)
@@ -23,3 +24,4 @@ router.include_router(settings_router)
 router.include_router(backup_router)
 router.include_router(notifications_router)
 router.include_router(environment_router)
+router.include_router(auth_router)

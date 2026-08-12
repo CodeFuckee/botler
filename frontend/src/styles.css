@@ -609,3 +609,29 @@ code {
   color: var(--ok);
   font-weight: 600;
 }
+
+/* Synology SSO 登录页（issue #27） */
+.login-page {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+}
+.login-card {
+  width: 380px;
+  max-width: 100%;
+  text-align: center;
+}
+.login-card .alert {
+  text-align: left;
+  margin-bottom: 14px;
+}
+/* 导航栏当前登录用户（issue #27） */
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}

@@ -10,6 +10,11 @@ async function request(method, path, body) {
   let data = null
   try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
   if (!resp.ok) {
+    // 会话失效兜底（issue #27）：SSO 启用时未登录访问受保护 API → 401，
+    // 跳登录页（登录流程自身端点除外，避免死循环）
+    if (resp.status === 401 && !path.startsWith('/api/auth/')) {
+      window.location.href = '/login'
+    }
     const msg = data?.error || data?.detail || `HTTP ${resp.status}`
     throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
   }

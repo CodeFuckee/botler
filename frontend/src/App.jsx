@@ -5,11 +5,21 @@ import Templates from './pages/Templates.jsx'
 import Tasks from './pages/Tasks.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
+import Login from './pages/Login.jsx'
 import VersionBadge from './components/VersionBadge.jsx'
 import { api, setDisplayTz } from './api.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 
 export default function App() {
+  // SSO 登录状态（issue #27）：null = 检测中；{enabled, user} = 结果。
+  // SSO 启用且未登录 → 只渲染登录页，不加载主界面。
+  const [auth, setAuth] = useState(null)
+  useEffect(() => {
+    api.get('/api/auth/status')
+      .then(setAuth)
+      .catch(() => setAuth({ enabled: false, user: null }))
+  }, [])
+
   // 启动时加载页面显示时区（issue #14）；未设置前 fmtTime 跟随浏览器本机时区
   const [, setTzLoaded] = useState(false)
   useEffect(() => {
@@ -17,6 +27,14 @@ export default function App() {
       .then((s) => { setDisplayTz(s.ui?.timezone); setTzLoaded(true) })
       .catch(() => {})
   }, [])
+
+  if (!auth) return <p className="muted">加载中…</p>
+  if (auth.enabled && !auth.user) return <Login />
+
+  const logout = async () => {
+    try { await api.post('/api/auth/logout') } catch { /* 忽略 */ }
+    window.location.href = '/login'
+  }
 
   // 网页通知轮询（issue #21）：每 10s 拉取新事件弹系统通知。
   // 设置开关在每次轮询时实时读取 → 设置页修改立即生效，无需刷新。
@@ -49,6 +67,12 @@ export default function App() {
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           设置
         </NavLink>
+        {auth.user && (
+          <span className="navlink user-chip" title="当前登录的群晖账号">
+            👤 {auth.user.username || auth.user.name || auth.user.sub}
+            <button className="btn btn-sm" onClick={logout}>退出</button>
+          </span>
+        )}
         <VersionBadge />
       </nav>
       <main className="content">

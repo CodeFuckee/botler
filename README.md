@@ -39,10 +39,12 @@ backend/
     scheduler.py     任务调度器（每仓库 FIFO 串行、跨仓库并行）
     executor.py      Claude Code 执行器（干净工作区 / 超时 / 重试 / 失败评论）
     reconciler.py    对账兜底（APScheduler 定时扫描补漏）
-    api/             REST API（repos / tasks / settings）
+    auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
+    api/             REST API（repos / tasks / settings / auth）
   config.example.yaml
   requirements.txt
 frontend/            React (Vite) Web UI，构建产物由 FastAPI 托管
+docs/                文档（设计方案 / Synology SSO 配置指南）
 deploy/              pm2 与 systemd 配置
 workspace/           仓库工作区（运行时生成）
 logs/                任务执行日志（运行时生成）
@@ -164,6 +166,11 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `claude.command` / `args` | `claude -p --output-format json` | 执行命令 |
 | `browse.default_path` | 空（服务器用户主目录 `~`） | 目录选择对话框的初始定位目录；支持 `~` 展开，路径不存在时自动回退主目录 |
 | `notifications.enabled` | true | 网页通知总开关（任务需交互 / issue 完成 / 队列空 / 无新任务，逐项可关） |
+| `sso.enabled` | false | Synology SSO 登录总开关：启用后访问 Web UI 需用群晖账号登录（issue #27） |
+| `sso.well_known_url` / `client_id` / `client_secret` | — | 群晖 SSO Server 的 OIDC 接入参数（Well-known URL / Application ID / Secret） |
+| `sso.session_days` | 7 | 登录有效期（天，1~365） |
+| `sso.redirect_uri` | 空（自动生成） | 回调地址，须与群晖侧注册一致 |
+| `sso.verify_ssl` | true | 群晖为自签名证书时设 false |
 
 提示词模版支持变量占位符：`{repo_name}` `{issue_title}` `{issue_body}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}`。
 全局默认模版 + 仓库级覆盖可在 Web UI「模版」页编辑。
@@ -188,14 +195,31 @@ GET    /api/tasks/{id}/logs           任务日志
 GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
+GET    /api/auth/status               登录状态探测（SSO 是否启用 + 当前用户，issue #27）
+GET    /api/auth/login                跳转群晖 SSO 登录页（302）
+GET    /api/auth/callback             OIDC 回调（换 token 建会话，302 回首页）
+POST   /api/auth/logout               退出登录
+GET    /api/auth/me                   当前登录用户
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
+
+## Synology SSO 登录
+
+可接入群晖 **SSO Server**（OIDC）作为登录身份源（issue #27）：设置页「Synology
+SSO 登录」卡片填写 Well-known URL / Application ID / Secret 并启用后，访问管理
+界面需使用群晖账号登录（未启用时保持开放访问）。
+
+群晖侧创建 OIDC 应用的完整步骤、Botler 侧配置与常见问题见
+[`docs/Synology-SSO-配置指南.md`](docs/Synology-SSO-配置指南.md)。
 
 ## 安全说明
 
 - 凭据全部走环境变量，token 只通过子进程环境变量注入 Claude Code（不进提示词 transcript）
 - webhook 用 `X-Gitlab-Token` 校验，防伪造请求
 - 工作区每次执行前 `reset --hard` + `clean -fd`，不同仓库互相隔离
+- SSO 启用后 `/api/*` 除登录流程与健康检查外均需登录（会话为签名 cookie，
+  密钥自动生成于 `backend/data/session_secret.key`，已 gitignore；Docker 部署
+  由 compose 挂载持久化）
 - 风险认知：main 不保护 + bot 直接推，单点失误可能破坏 main；
   缓解：同仓库串行、干净工作区、模版强调「自测通过才推」。个人自用可接受，如需保护请对 main 加 push 保护。
 

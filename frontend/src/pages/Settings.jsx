@@ -34,6 +34,8 @@ export default function Settings() {
   const [env, setEnv] = useState(null) // 本地环境检测结果（issue #22）
   const [envError, setEnvError] = useState('')
   const [envBusy, setEnvBusy] = useState(false)
+  // SSO client_secret 输入（issue #27）：留空 = 保持现有凭据（后端掩码不覆盖）
+  const [ssoSecretInput, setSsoSecretInput] = useState('')
 
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
@@ -81,6 +83,9 @@ export default function Settings() {
   const setNotifyField = (key, val) =>
     setSettings((s) => ({ ...s, notifications: { ...s.notifications, [key]: val } }))
 
+  const setSsoField = (key, val) =>
+    setSettings((s) => ({ ...s, sso: { ...s.sso, [key]: val } }))
+
   const save = async () => {
     setBusy(true); setError(''); setSaved(false)
     try {
@@ -88,11 +93,23 @@ export default function Settings() {
       for (const k of Object.keys(FIELD_LABELS)) {
         worker[k] = Number(settings.worker[k])
       }
+      // sso 段（issue #27）：client_secret 留空 = 保持现有凭据
+      const sso = {
+        enabled: settings.sso.enabled,
+        well_known_url: settings.sso.well_known_url,
+        client_id: settings.sso.client_id,
+        scope: settings.sso.scope,
+        session_days: Number(settings.sso.session_days),
+        redirect_uri: settings.sso.redirect_uri,
+        verify_ssl: settings.sso.verify_ssl,
+      }
+      if (ssoSecretInput.trim()) sso.client_secret = ssoSecretInput.trim()
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
         ui: { timezone: settings.ui?.timezone || '' },
         notifications: { ...settings.notifications },
+        sso,
       })
       setDisplayTz(settings.ui?.timezone) // 立即生效，无需刷新页面
       setSaved(true)
@@ -230,6 +247,119 @@ export default function Settings() {
         <p className="muted small">
           通过浏览器在电脑上弹出系统通知：任务需要交互（失败）、issue 完成、队列清空、无新任务可处理。
           修改后点击上方「保存」立即生效；需保持本页面打开（浏览器限制），首次启用时请授权系统通知。
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>Synology SSO 登录</h2>
+        <table className="table kv">
+          <tbody>
+            <tr>
+              <th>启用 SSO <code>sso.enabled</code></th>
+              <td>
+                <input
+                  type="checkbox"
+                  className="check-input"
+                  checked={settings.sso?.enabled === true}
+                  onChange={(e) => setSsoField('enabled', e.target.checked)}
+                />
+                <span className="muted small">
+                  {settings.sso?.enabled
+                    ? '启用后访问本界面需用群晖账号登录'
+                    : '未启用时保持开放访问（无需登录）'}
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <th>Well-known URL <code>well_known_url</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  placeholder="https://群晖地址/.well-known/openid-configuration"
+                  value={settings.sso?.well_known_url || ''}
+                  onChange={(e) => setSsoField('well_known_url', e.target.value.trim())}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>Application ID（Client ID）<code>client_id</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  placeholder="群晖 SSO Server 应用配置中的 Application ID"
+                  value={settings.sso?.client_id || ''}
+                  onChange={(e) => setSsoField('client_id', e.target.value.trim())}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>Application Secret <code>client_secret</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  type="password"
+                  placeholder={settings.sso?.client_secret_masked
+                    ? `已配置（${settings.sso.client_secret_masked}），留空 = 保持现有`
+                    : '群晖 SSO Server 应用配置中的 Application Secret'}
+                  value={ssoSecretInput}
+                  onChange={(e) => setSsoSecretInput(e.target.value)}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>Scope <code>scope</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  placeholder="openid profile email"
+                  value={settings.sso?.scope || ''}
+                  onChange={(e) => setSsoField('scope', e.target.value.trim())}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>登录有效期（天）<code>session_days</code></th>
+              <td>
+                <input
+                  className="input num-input"
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={settings.sso?.session_days ?? 7}
+                  onChange={(e) => setSsoField('session_days', e.target.value)}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>回调地址 <code>redirect_uri</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  placeholder="留空 = 按浏览器访问地址自动生成（https://主机/api/auth/callback）"
+                  value={settings.sso?.redirect_uri || ''}
+                  onChange={(e) => setSsoField('redirect_uri', e.target.value.trim())}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>校验群晖证书 <code>verify_ssl</code></th>
+              <td>
+                <input
+                  type="checkbox"
+                  className="check-input"
+                  checked={settings.sso?.verify_ssl !== false}
+                  onChange={(e) => setSsoField('verify_ssl', e.target.checked)}
+                />
+                <span className="muted small">群晖为自签名证书时取消勾选</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="muted small">
+          接入群晖 SSO Server（OIDC 协议）：先在群晖「SSO Server → 应用程序」新增 OIDC 应用，
+          填写回调地址并记下 Application ID / Secret，再回此页填写并保存。
+          群晖侧详细步骤见 <code>docs/Synology-SSO-配置指南.md</code>。
+          修改后点击上方「保存」生效；启用后当前会话不受影响，下次访问需登录。
         </p>
       </div>
 

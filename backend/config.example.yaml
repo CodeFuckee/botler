@@ -60,6 +60,21 @@ notifications:
   queue_empty: true                 # issue 列表为空（无待处理 issue）
   queue_no_work: true               # 无 issue 可处理（有 issue 但均在处理中）
 
+sso:
+  # Synology SSO 登录（issue #27）：OIDC 授权码模式接入群晖 SSO Server。
+  # 启用后访问 Web UI 需用群晖账号登录（未启用时保持开放访问）；
+  # 配置步骤见 docs/Synology-SSO-配置指南.md。
+  enabled: false                    # 总开关：启用后强制登录
+  well_known_url: ""                # 群晖 SSO Server 的 OIDC well-known URL
+                                    #   （SSO Server → 服务 → OIDC → Well-known URL，
+  #    形如 https://<群晖地址>:<端口>/.well-known/openid-configuration）
+  client_id: ""                     # Application ID（SSO Server → 应用程序 → 编辑）
+  client_secret: ""                 # Application Secret（同上，建议用 ${ENV} 引用）
+  scope: "openid profile email"     # 授权范围
+  session_days: 7                   # 登录有效期（天）
+  redirect_uri: ""                  # 回调地址；留空 = 按浏览器访问地址自动生成
+  verify_ssl: true                  # 群晖为自签名证书时设 false
+
 # 仓库列表（在 Web UI 添加仓库时会自动写入这里）
 repos: []
 

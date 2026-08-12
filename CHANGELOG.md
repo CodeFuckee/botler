@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Synology SSO 登录**（issue #27）：接入群晖 SSO Server（OIDC / OAuth2 授权码
+  模式）作为管理界面登录身份源。设置页新增「Synology SSO 登录」卡片（Well-known
+  URL / Application ID / Secret / Scope / 登录有效期 / 回调地址 / 证书校验开关），
+  启用后访问 Web UI 需用群晖账号登录（未启用时保持开放访问），会话为签名 cookie
+  （HMAC-SHA256，默认 7 天，密钥懒生成于 `backend/data/session_secret.key`，
+  Docker 部署由 compose 挂载持久化）。
+  - 后端：新增 `botler/auth.py`（`OidcClient` discovery/token/userinfo、
+    `create_session`/`verify_session` 签名会话、`SsoGuardMiddleware` 保护
+    `/api/*`——登录流程与健康检查除外，webhook 天然放行）；新增 `api/auth.py`
+    （`/api/auth/status|login|callback|logout|me`）；`config.py` 新增 `sso` 段
+    （白名单 + `update_sso`，掩码 secret 不覆盖）；`main.py` 挂载中间件与路由。
+  - 前端：新增 `pages/Login.jsx` 登录页；`App.jsx` 启动探测登录状态、未登录渲染
+    登录页、导航栏显示当前账号与退出；`Settings.jsx` 新增 SSO 配置卡片；
+    `api.js` 401 兜底跳登录页。
+  - 文档：README 新增「Synology SSO 登录」小节与配置表；
+    新增 `docs/Synology-SSO-配置指南.md`（群晖侧创建 OIDC 应用步骤 + Botler 侧
+    配置 + 常见问题）。
+  - 测试：新增 `tests/test_auth.py` 19 个用例（OIDC 全流程 mock：登录 302 参数、
+    state 防回放、换 token/userinfo、签名校验、篡改/过期 cookie、401 保护、
+    webhook/health 放行）+ `test_api_settings.py` 追加 sso 段 6 个用例。
+    后端全量 330 passed + 前端 46 passed + build 通过。
+
 ### Fixed
 
 - **手动编辑 config.yaml 后模板不生效 / 被 UI 保存覆盖**（issue #25）：`ConfigManager`

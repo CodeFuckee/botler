@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import router as api_router
+from .auth import SsoAuth, SsoGuardMiddleware
 from .backup import BotlerBackup
 from .config import ConfigManager
 from .database import Database
@@ -56,6 +57,7 @@ class AppContext:
     reconciler: Reconciler
     webhook: WebhookHandler
     backup: BotlerBackup
+    sso: SsoAuth
     config_path: str = ""
 
 
@@ -73,10 +75,11 @@ def build_context(config_path: str | None = None) -> AppContext:
     reconciler = Reconciler(config, db, gitlab, scheduler)
     webhook = WebhookHandler(config, db, gitlab, scheduler)
     backup = BotlerBackup(config.path, db.path, config=config)
+    sso = SsoAuth(config)
     return AppContext(
         config=config, db=db, gitlab=gitlab, renderer=renderer,
         executor=executor, scheduler=scheduler, reconciler=reconciler,
-        webhook=webhook, backup=backup, config_path=config.path,
+        webhook=webhook, backup=backup, sso=sso, config_path=config.path,
     )
 
 
@@ -137,6 +140,8 @@ def create_app(config_path: str | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # SSO 登录保护（issue #27）：启用后 /api/* 除登录流程/健康检查外需登录
+    app.add_middleware(SsoGuardMiddleware)
     app.state.ctx = build_context(config_path)
     app.include_router(api_router)
 
