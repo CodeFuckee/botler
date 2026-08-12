@@ -57,6 +57,22 @@
 
 ### Fixed
 
+- **agent 重复处理已打 bot-done / bot-failed 的 issue**（issue #30）：对账兜底
+  （reconciler）与 webhook 入队只按「assignee 是 bot + issue 未关闭」判定，不检查
+  标签——平台重启、任务表清理或手动「对账」后，已完成（bot-done，等用户确认关闭）
+  的 issue 会被重复入队重新开发；处理失败（bot-failed，需人工介入）的 issue 因失败
+  任务不再活跃，会被再次领取→再失败→再入队，**无限重试循环**。
+  - 修复：两条入队路径统一过滤终态标签——`reconciler.reconcile_once` 跳过带
+    bot-done / bot-failed 标签的 issue（新增模块级常量 `TERMINAL_LABELS`）；
+    `webhook` 入队前一律以 API 最新状态确认 assignee 与标签（事件快照 labels 格式
+    不可靠，快照干净但 API 已打 bot-done 时同样拒绝），打 bot-done / bot-failed 的
+    issue 返回「跳过」不创建任务。
+  - 涉及 `backend/botler/reconciler.py`、`backend/botler/webhook.py`。
+  - 测试：新增 `tests/test_reconciler.py`（4 用例：bot-done / bot-failed 跳过、
+    混合队列只入队干净 issue、普通 issue 回归）+ `tests/test_webhook.py`
+    （4 用例：bot-done / bot-failed 拒绝、快照标签不可靠以 API 为准、干净 issue
+    回归）。修复前 6 个过滤用例稳定失败。后端全量 353 passed + 前端全量 60 passed。
+
 - **线上前端静默回退旧版，标记库页面「看不到」**（issue #29 第三轮）：`sync_to_github`
   job 未声明 `dependencies`，runner 默认下载前序 stage 中 frontend:build 的 dist
   artifacts 并解压到构建目录，而 pm2 进程（FastAPI 静态托管）的工作目录就在构建目录。

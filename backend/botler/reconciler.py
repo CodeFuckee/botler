@@ -19,6 +19,11 @@ from .scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
 
+# 终态标签（issue #30）：agent 只处理「没有 bot-done / bot-failed 标签且未关闭」的
+# issue。bot-done = 已完成待用户确认关闭；bot-failed = 处理失败待人工介入。
+# 带这两个标签的 issue 不再补入队，避免重复处理已完成的 issue、失败 issue 无限重试。
+TERMINAL_LABELS = ("bot-done", "bot-failed")
+
 
 class Reconciler:
     def __init__(self, config: ConfigManager, db: Database,
@@ -80,6 +85,12 @@ class Reconciler:
             active_count = 0
             for issue in issues:
                 scanned += 1
+                labels = set(issue.get("labels") or [])
+                if labels & set(TERMINAL_LABELS):
+                    hit = sorted(labels & set(TERMINAL_LABELS))
+                    logger.info("对账跳过终态标签 issue %s#%s（%s）",
+                                repo["gitlab_project_id"], issue["iid"], hit)
+                    continue
                 if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
                     active_count += 1  # 已有活跃任务（含排队中）
                     continue

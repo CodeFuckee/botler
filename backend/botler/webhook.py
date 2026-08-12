@@ -66,28 +66,32 @@ class WebhookHandler:
         if not project_id or not issue_iid:
             raise WebhookError("事件缺少 project_id / issue_iid")
 
-        # 3. assignee 判定：事件里找 bot id，找不到则查 API 确认
+        # 3. assignee 判定：事件快照可能不可靠，一律以 API 最新状态为准
+        #    （顺带取最新标签供终态过滤，见步骤 4）
         issue = body.get("issue") or {}
         bot_id = cfg.bot_id or self.gitlab.get_bot_id()
-        assignee_ids = [a.get("id") for a in (issue.get("assignees") or [])]
-        attr_ids = attrs.get("assignee_ids") or []
-        is_for_bot = bot_id in assignee_ids or bot_id in attr_ids
+        try:
+            current = self.gitlab.get_issue(project_id, issue_iid)
+        except GitLabError as e:
+            logger.warning("webhook 查询 issue %s#%s 失败: %s", project_id, issue_iid, e)
+            current = None
 
-        if not is_for_bot and action in ("assignee", "open", "opened"):
-            # 事件快照可能不可靠，以 API 为准（open 事件也可能直接指派给 bot）
-            try:
-                current = self.gitlab.get_issue(project_id, issue_iid)
-            except GitLabError as e:
-                logger.warning("webhook 查询 issue %s#%s 失败: %s", project_id, issue_iid, e)
-                current = None
-            if current is None:
-                is_for_bot = False
-            else:
-                cur_assignees = [a.get("id") for a in (current.get("assignees") or [])]
-                is_for_bot = bot_id in cur_assignees
+        if current is None:
+            return {"accepted": False, "reason": "查询 issue 失败，拒绝入队"}
 
-        if not is_for_bot:
+        cur_assignees = [a.get("id") for a in (current.get("assignees") or [])]
+        if bot_id not in cur_assignees:
             return {"accepted": False, "reason": "issue 未指派给 bot 账号"}
+
+        # 4. 终态标签过滤（issue #30）：bot-done（完成待用户确认）/ bot-failed
+        #    （失败待人工介入）的 issue 不入队——用户重新指派也不再重复处理。
+        #    以 API 最新标签为准（事件快照 labels 格式不可靠）
+        cur_labels = current.get("labels") or []
+        for label in ("bot-done", "bot-failed"):
+            if label in cur_labels:
+                logger.info("webhook 忽略已打 %s 的 issue %s#%s",
+                            label, project_id, issue_iid)
+                return {"accepted": False, "reason": f"issue 已打 {label} 标签，跳过"}
 
         # 4. 入队（去重由 scheduler 保证）
         repo = self.db.get_repo_by_project_id(project_id)
