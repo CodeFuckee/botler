@@ -22,6 +22,22 @@
 
 ### Fixed
 
+- **失败详细原因中转义符未格式化**（issue #16）：任务「详情」弹窗与详情页
+  「claude 输出尾部」直接展示 claude JSON 输出的 `result` 字段——该字段内嵌
+  工具调用记录（再次序列化的 JSON 文本），`\n` `\"` 等转义按字面量存放，
+  展示时 `\n` 显示为反斜杠+n 而非换行，可读性差。修复：新增
+  `format_display_line` / `_decode_escapes` 逐层解码（先严格 `json.loads`
+  展开内嵌 JSON 结构，失败则宽松解码常见转义 `\n \r \t \\ \' \"` 等后递归），
+  JSON 行重排时只保留 `type / subtype / session_id / exit_code / error`
+  等排查字段，丢弃 `ttft_ms / uuid` 等机器噪音。
+  - 涉及 `backend/botler/executor.py`（`_extract_error` 解码 result 后再提取
+    trace、`_tail_output` 逐行格式化——失败评论与日志摘要同步受益）、
+    `backend/botler/api/tasks.py`（详情页 `log_file_tail` 逐行格式化）。
+  - 测试：`tests/test_executor.py` 新增 7 个用例（嵌套工具调用记录解码、混合
+    文本 + JSON 片段、纯文本不误伤、JSON 行重排、非 JSON 行原样、`_tail_output`
+    解码）、`tests/test_api_tasks.py` 新增 1 个用例（log_file_tail 解码且丢弃
+    机器字段）。全量 183 passed + 前端 2 passed。
+
 - **部署后任务一直运行失败**（permission_denials）：`data/backend/config.yaml`
   的 `templates.default` 曾被替换为 gitlab-issue-agent 提示词（跨会话领取队列），
   executor 渲染后 Claude 收到错误指令，不处理当前指派的 issue；且 `claude -p`

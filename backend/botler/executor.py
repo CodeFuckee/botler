@@ -103,6 +103,80 @@ def _load_json_output(output: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# 宽松转义解码（issue #16）：claude result 内嵌工具调用记录时，\n \" \'
+# 等转义按字面量存放，直接展示可读性差。json.loads 对 \' 等 Python 风格
+# 转义会抛 Invalid \escape，这里用正则宽松解码常见转义，其余 \X 保留原样。
+_ESCAPE_MAP = {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f",
+               "\\": "\\", "'": "'", '"': '"', "/": "/"}
+_ESCAPE_RE = re.compile(r"\\([nrtbf\\'\"\/])")
+
+
+def _format_struct(value, depth: int = 0) -> str:
+    """把解码后的 JSON 结构递归展开为可读文本（字符串值不再二次转义）。"""
+    pad = "  " * depth
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        lines = ["{"]
+        for k, v in value.items():
+            lines.append(f"{pad}  {k}: {_format_struct(v, depth + 1)}")
+        lines.append(pad + "}")
+        return "\n".join(lines)
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        lines = ["["]
+        for v in value:
+            lines.append(f"{pad}  {_format_struct(v, depth + 1)}")
+        lines.append(pad + "]")
+        return "\n".join(lines)
+    if isinstance(value, str):
+        return _decode_escapes(value, depth + 1)
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _decode_escapes(text: str, depth: int = 0) -> str:
+    """递归解码 result 中嵌套序列化的转义文本（issue #16）。
+
+    外层 json.loads 已解码一次 JSON 转义；result 内嵌的工具调用记录是
+    再次序列化的 JSON 文本（\\n \\" 等按字面量存放）。这里逐层解码：
+    先试严格 json.loads（标准 JSON → 结构展开），失败则宽松解码一层
+    常见转义后继续递归。普通可读文本（无转义）原样返回。
+    """
+    if depth > 4 or not text:
+        return text
+    try:
+        decoded = json.loads(text)
+    except (ValueError, TypeError):
+        decoded = None
+    if isinstance(decoded, str):
+        return _decode_escapes(decoded, depth + 1)
+    if isinstance(decoded, (dict, list)):
+        return _format_struct(decoded, depth + 1)
+    # 严格解码失败（含 \' 等非标准转义）→ 宽松解码一层后继续
+    unescaped = _ESCAPE_RE.sub(lambda m: _ESCAPE_MAP[m.group(1)], text)
+    if unescaped == text:
+        return text
+    return _decode_escapes(unescaped, depth + 1)
+
+
+def format_display_line(line: str) -> str:
+    """把 claude 输出行重排为可读文本（issue #16）。
+
+    JSON 行：解码 result 字段的嵌套转义（\\n → 换行等），只保留对排查
+    有用的核心字段，丢弃 ttft_ms / uuid 等机器噪音；非 JSON 行原样返回。
+    """
+    data = _load_json_output(line)
+    if data is None or not isinstance(data.get("result"), str):
+        return line
+    parts = []
+    for key in ("type", "subtype", "session_id", "exit_code", "error"):
+        if key in data:
+            parts.append(f"{key}: {json.dumps(data[key], ensure_ascii=False)}")
+    parts.append("result:\n" + _decode_escapes(data["result"]))
+    return "\n".join(parts)
+
+
 class ClaudeExecutor:
     def __init__(self, config: ConfigManager, db: Database,
                  gitlab: GitLabClient, renderer: TemplateRenderer,
@@ -378,13 +452,14 @@ class ClaudeExecutor:
 
         claude -p --output-format json 时输出为 JSON，核心内容在 result 字段；
         result 内若含 Python Traceback 则从其起始处截取（异常堆栈对调试最有价值）。
+        result 里嵌套序列化的转义（\\n 等字面量）先解码，保证展示可读（issue #16）。
         """
         if not output:
             return ""
         text = output
         data = _load_json_output(output)
         if data is not None and isinstance(data.get("result"), str):
-            text = data["result"]
+            text = _decode_escapes(data["result"])
         idx = text.rfind("Traceback (most recent call last)")
         if idx != -1:
             text = text[idx:]
@@ -506,7 +581,8 @@ class ClaudeExecutor:
             ensure_ascii=False)
 
     def _tail_output(self, output: str) -> str:
-        lines = output.strip().splitlines()
+        # 逐行重排 claude JSON 输出（result 嵌套转义解码，issue #16）
+        lines = [format_display_line(l) for l in output.strip().splitlines()]
         if len(lines) > LOG_TAIL_LINES:
             lines = lines[-LOG_TAIL_LINES:]
         return "\n".join(lines)

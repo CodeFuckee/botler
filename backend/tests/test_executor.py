@@ -15,7 +15,7 @@ import pytest
 
 from botler.config import ConfigManager
 from botler.database import Database
-from botler.executor import ClaudeExecutor
+from botler.executor import ClaudeExecutor, format_display_line
 from botler.gitlab_client import GitLabClient
 from botler.templates import TemplateRenderer
 
@@ -98,6 +98,63 @@ class TestExtractError:
     def test_truncated_to_max_chars(self, executor):
         long = "a" * 5000
         assert executor._extract_error(long, max_chars=100) == "a" * 100
+
+    def test_nested_tool_calls_unescaped(self, executor):
+        """result 内嵌工具调用记录（JSON 序列化文本）：\\n 等转义解码为真实字符（issue #16）。
+
+        失败详情展示时不应出现 \\n / \\" 等字面转义符，而应显示真实换行与引号。
+        """
+        inner = json.dumps({"tool_name": "Bash", "tool_use_id": "call_00_x",
+                            "tool_input": {"command": "cat <<EOF\nraise SystemExit\n"
+                                                      "for i in data:\n    print(i['iid'], '|', i['title'])\nEOF"}})
+        output = json.dumps({"result": inner, "session_id": "s1"})
+        err = executor._extract_error(output)
+        assert "print(i['iid'], '|', i['title'])" in err
+        assert "\\n" not in err, "转义符 \\n 不应按字面量残留"
+        assert "\\\"" not in err
+
+    def test_mixed_text_and_json_unescaped(self, executor):
+        """result = 普通文本 + JSON 片段（非纯 JSON）：宽松解码 \\n 字面量。"""
+        inner = json.dumps({"tool_name": "Write",
+                            "tool_input": {"content": "line1\nline2"}})
+        output = json.dumps({"result": "脚本输出:\n" + inner, "session_id": "s1"})
+        err = executor._extract_error(output)
+        assert "脚本输出:" in err
+        assert "line1\nline2" in err
+        assert "\\n" not in err
+
+    def test_plain_text_result_unchanged(self, executor):
+        """result 为普通可读文本（真实换行）：解码保持原样不误伤。"""
+        output = json.dumps({"result": "第一步…\n第二步失败: network error"})
+        err = executor._extract_error(output)
+        assert err == "第一步…\n第二步失败: network error"
+
+
+class TestFormatDisplayLine:
+    """format_display_line：claude 输出行重排（issue #16）。"""
+
+    def test_json_line_decoded_and_noisy_fields_dropped(self):
+        """JSON 行：result 解码换行，ttft_ms/uuid 等机器字段丢弃。"""
+        line = json.dumps({"type": "result", "subtype": "success",
+                           "session_id": "s1", "result": "a\\nb",
+                           "ttft_ms": 4270, "uuid": "09b7"})
+        out = format_display_line(line)
+        assert out.startswith('type: "result"')
+        assert 'session_id: "s1"' in out
+        assert "a\nb" in out
+        assert "ttft_ms" not in out and "uuid" not in out
+
+    def test_non_json_line_unchanged(self):
+        line = "Warning: no stdin data received... "
+        assert format_display_line(line) == line
+
+    def test_tail_output_decodes_lines(self, executor):
+        """_tail_output：claude JSON 行解码后展示（失败评论/日志摘要数据源）。"""
+        inner = json.dumps({"tool_name": "Bash", "tool_input": {"command": "a\nb"}})
+        output = json.dumps({"result": inner})
+        tail = executor._tail_output(output)
+        assert "a\nb" in tail
+        assert "\\n" not in tail
 
 
 class TestDumpErrorDetail:

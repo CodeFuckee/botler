@@ -226,6 +226,28 @@ class TestTaskDetail:
         app_client, db = client
         assert app_client.get("/api/tasks/99999/logs").status_code == 404
 
+    def test_log_file_tail_decodes_claude_json_lines(self, api_app):
+        """log_file_tail：claude JSON 输出行重排为可读文本（转义解码，issue #16）。
+
+        详情页「claude 输出尾部」直接展示日志文件内容，result 内嵌的
+        \\n 等转义必须解码为真实换行，而不是按字面量显示。
+        """
+        app, db, tmp_path = api_app
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=9, title="失败任务",
+                           status="failed", error_message="原因")
+        inner = json.dumps({"tool_name": "Bash",
+                            "tool_input": {"command": "echo hi\nraise SystemExit"}})
+        log_path = tmp_path / "task_9.log"
+        log_path.write_text(json.dumps({"type": "result", "result": inner,
+                                        "ttft_ms": 100}) + "\n", encoding="utf-8")
+        db.set_task_status(task_id, None, log_path=str(log_path))
+
+        task = TestClient(app).get(f"/api/tasks/{task_id}").json()
+        assert "raise SystemExit" in task["log_file_tail"]
+        assert "\\n" not in task["log_file_tail"]
+        assert "ttft_ms" not in task["log_file_tail"]
+
 
 class TestStatsAndDedup:
     """task_stats 统计与活跃任务去重。"""

@@ -6,6 +6,8 @@ import json
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from botler.executor import format_display_line
+
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 STATUSES = {"queued", "running", "retrying", "succeeded", "failed", "interrupted"}
@@ -81,7 +83,8 @@ def get_task(request: Request, task_id: int):
         try:
             with open(row["log_path"], "r", encoding="utf-8", errors="replace") as f:
                 lines = f.read().splitlines()
-            file_tail = "\n".join(lines[-200:])
+            # claude JSON 输出行重排为可读文本（result 嵌套转义解码，issue #16）
+            file_tail = "\n".join(format_display_line(l) for l in lines[-200:])
         except OSError:
             file_tail = None
     task["log_file_tail"] = file_tail
