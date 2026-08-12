@@ -22,6 +22,27 @@
 
 ### Fixed
 
+- **部署后任务一直运行失败**（permission_denials）：`data/backend/config.yaml`
+  的 `templates.default` 曾被替换为 gitlab-issue-agent 提示词（跨会话领取队列），
+  executor 渲染后 Claude 收到错误指令，不处理当前指派的 issue；且 `claude -p`
+  无人值守执行未跳过权限确认，Bash/curl/Read/MCP 等一切操作被权限系统拒绝
+  （task_7/8/9 日志 `permission_denials`），Claude 自行终止（exit 0）→ 重试耗尽 →
+  任务失败。修复：
+  - `backend/botler/executor.py`：claude 命令追加 `--dangerously-skip-permissions`
+    （无人值守无法交互授权，权限拒绝 → 任务必然失败）；
+    `_extract_session_id` / `_extract_error` 新增 `_load_json_output` 容错——
+    claude 无 stdin 时 stderr 打印 `Warning: no stdin data received...` 混入
+    stdout，整串 `json.loads` 失败导致 session_id 永不落库、断点续跑（--resume）
+    失效，现从首个 `{` 起用 `JSONDecoder.raw_decode` 只取首个 JSON 对象。
+  - `backend/config.example.yaml` + `data/backend/config.yaml`：恢复标准
+    「处理当前 issue」模板；关闭 issue 的 curl 加 `-k`（自建 GitLab 为自签
+    证书，不带 -k 时证书错误 → issue 永远关不上）。
+  - 测试：后端新增 `tests/test_executor_runtime.py` 5 个用例（cmd 含
+    --dangerously-skip-permissions 且 resume 时保留、stderr 前缀下 session_id/
+    错误提取/落库容错）、`tests/test_config_template.py` 4 个用例（模板面向
+    当前 issue、不含 issue-agent 特征、curl -k、渲染结果）。全量 176 passed +
+    前端 2 passed。
+
 - **任务时间时区与浏览器不一致**（issue #14）：后端 SQLite `datetime('now')` 存
   UTC（如 `2026-08-12 01:25:54`），前端 `fmtTime` 原样拼接 `' UTC'` 直接展示，
   浏览器在本机（UTC+8）看到的任务创建/开始/完成时间与执行日志时间戳比本机慢

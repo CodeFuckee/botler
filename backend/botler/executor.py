@@ -81,6 +81,28 @@ def _row_get(row, key, default=None):
         return default
 
 
+def _load_json_output(output: str) -> dict | None:
+    """从 claude 输出中解析首个 JSON 对象，失败返回 None。
+
+    容错两类污染：
+    - 前缀：claude 无 stdin 时 stderr 先打印 "Warning: no stdin data
+      received..."（executor 把 stderr 合并进 stdout），整串 json.loads
+      必失败，导致 session_id 永不落库（断点续跑失效）、错误提取落空；
+    - 尾随：同一次执行里 stderr 可能继续混入后续行。
+    用 JSONDecoder.raw_decode 只取首个完整 JSON 对象，忽略其余内容。
+    """
+    if not output:
+        return None
+    start = output.find("{")
+    if start == -1:
+        return None
+    try:
+        data, _ = json.JSONDecoder().raw_decode(output[start:])
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 class ClaudeExecutor:
     def __init__(self, config: ConfigManager, db: Database,
                  gitlab: GitLabClient, renderer: TemplateRenderer,
@@ -214,14 +236,14 @@ class ClaudeExecutor:
     # ---- 会话断点续跑（issue #8）----
 
     def _extract_session_id(self, output: str) -> str | None:
-        """从 claude JSON 输出解析 session_id（无 / 非法 JSON 返回 None）。"""
+        """从 claude JSON 输出解析 session_id（无 / 非法 JSON 返回 None）。
+
+        stderr 警告混入 stdout 时同样可解析（见 _load_json_output）。
+        """
         if not output:
             return None
-        try:
-            data = json.loads(output)
-        except (ValueError, TypeError):
-            return None
-        sid = data.get("session_id") if isinstance(data, dict) else None
+        data = _load_json_output(output)
+        sid = data.get("session_id") if data else None
         return sid or None
 
     def _claude_home(self) -> Path:
@@ -274,6 +296,10 @@ class ClaudeExecutor:
         log_path = self._log_file(task_id)
 
         cmd = [cfg.claude_command, *cfg.claude_args]
+        # 无人值守（-p）下跳过权限确认：GIT_ASKPASS/GITLAB_TOKEN 只解决
+        # 凭据，Bash/curl/Read/MCP 等操作仍会被权限系统拦截（task_7/8/9
+        # 的 permission_denials），且无人值守无法交互授权，任务必然失败。
+        cmd.append("--dangerously-skip-permissions")
         if resume_session:
             cmd.extend(["--resume", resume_session])
         cmd.append(prompt)
@@ -356,12 +382,9 @@ class ClaudeExecutor:
         if not output:
             return ""
         text = output
-        try:
-            data = json.loads(output)
-            if isinstance(data, dict) and isinstance(data.get("result"), str):
-                text = data["result"]
-        except (ValueError, TypeError):
-            pass
+        data = _load_json_output(output)
+        if data is not None and isinstance(data.get("result"), str):
+            text = data["result"]
         idx = text.rfind("Traceback (most recent call last)")
         if idx != -1:
             text = text[idx:]
