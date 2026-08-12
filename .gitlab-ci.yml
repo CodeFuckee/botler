@@ -122,7 +122,7 @@ frontend:build:
     - JOB_START_TIME=$(date +%s)
     - echo "=== 1. 安装依赖（npm ci）==="
     - npm ci --registry=${NPM_REGISTRY_URL}
-    - echo "=== 2. 前端测试（node --test，issue #14 时区修复起引入）==="
+    - echo "=== 2. 前端测试（node --test，issue 14 起引入）==="
     - npm test
     - echo "=== 3. 构建前端（vite build）==="
     # 版本自增（issue #9）：BOTLER_DATA_DIR 指向持久数据目录（构建目录
