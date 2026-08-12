@@ -78,7 +78,8 @@ export default function Tasks() {
 
         {/* 12 列表格最小宽度超容器，外包滚动容器防止窄视口下内容溢出卡片（issue #28） */}
         <div className="table-wrap">
-          <table className="table">
+          {/* table-layout: fixed 固定布局，表格宽度恒等于容器宽度，宽视口不出现水平滚动条（issue #28 第二轮） */}
+          <table className="table tasks-table">
             <thead>
               <tr>
                 <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
@@ -101,7 +102,7 @@ export default function Tasks() {
               return (
                 <tr key={t.id}>
                   <td><Link to={`/tasks/${t.id}`}>#{t.id}</Link></td>
-                  <td>{t.repo_name || '—'}</td>
+                  <td className="ellipsis" title={t.repo_name}>{t.repo_name || '—'}</td>
                   <td><Link to={`/tasks/${t.id}`}>#{t.issue_iid}</Link></td>
                   <td className="ellipsis" title={t.issue_title}>{t.issue_title || '—'}</td>
                   <td><span className={'badge ' + meta.cls}>{meta.label}</span></td>
@@ -118,7 +119,7 @@ export default function Tasks() {
                       <button className="btn btn-mini" onClick={() => setDetailTask(t)}>详情</button>
                     )}
                   </td>
-                  <td>
+                  <td className="ellipsis" title={t.commit_sha ? `查看提交 ${t.commit_sha}` : undefined}>
                     {t.commit_url ? (
                       <a href={t.commit_url} target="_blank" rel="noreferrer"
                          title={`查看提交 ${t.commit_sha}`}>{shortSha(t.commit_sha)}</a>

@@ -41,6 +41,24 @@
     表格被包裹；修复前该测试稳定失败）+ chromium 无头实测 1400/1100/900/760 四档
     视口全部无溢出。前端全量 49 passed + 后端全量 330 passed + build 通过。
 
+- **页面宽度足够时任务列表仍出现水平滚动条**（issue #28 第二轮）：`.table` 为
+  `table-layout: auto`，实际宽度被内容撑到 min-content（实测 1628px——≥1600px
+  视口下标题/失败原因两个 ellipsis 列各占 520px，其余 10 列共约 625px），而
+  `.content` 的 `--content-width` 封顶 1600px，`.table-wrap` 可用宽度最多 1520px，
+  任何桌面视口都装不下表格，滚动条必然出现（浏览器实测 1920px 视口溢出 108px、
+  1750px 溢出 348px，页面两侧却仍有空白）。
+  - 修复：任务表格启用 `table-layout: fixed` 固定布局（专用类
+  `.table.tasks-table`）+ 12 列显式分配宽度（固定列合计 800px，标题/失败原因列为
+  弹性 30%/22%），表格宽度恒等于容器宽度——宽视口下撑满容器不再滚动，窄视口列宽随
+  容器压缩、长文本由 ellipsis 列截断（仓库/提交列同步补上 ellipsis + title），
+  760px 以下极小视口保留容器内横向滚动兜底。
+  - 涉及 `frontend/src/pages/Tasks.jsx`、`frontend/src/styles.css`。
+  - 测试：`tests/table-wrap.test.mjs` 追加 2 个断言（`.table.tasks-table` 必须含
+    `table-layout: fixed` + 12 条 `th:nth-child(n)` 列宽规则；修复前稳定失败）。
+    chromium 无头实测 1920/1750/1600/1500/1366/1100/900 七档视口滚动条全部消失
+    （溢出 0），760px 保持滚动。前端全量 51 passed + 后端全量 330 passed + build
+    通过。
+
 - **启用 SSO 后 Web UI 打开白屏**（issue #27 第二轮）：`App.jsx` 中网页通知轮询的
   `useEffect` 被声明在两个条件 `return`（auth 检测中、SSO 启用未登录）之后——auth
   加载前后组件执行的 hooks 数量不一致（4 → 5），触发 React error #310

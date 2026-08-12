@@ -267,6 +267,24 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
    在容器内横向滚动而非溢出卡片白色底 */
 .table-wrap { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; }
+/* 任务列表固定布局（issue #28 第二轮）：table-layout: auto 下表格被内容撑到
+   min-content（实测 1628px），而 .content max-width 封顶 1600px，任何桌面视口
+   下容器都装不下表格，水平滚动条必然出现。改为 table-layout: fixed + 12 列
+   显式宽度，表格宽度恒等于容器宽度，宽视口下撑满容器不再滚动；
+   列内长文本由 ellipsis 列截断，窄视口列宽随容器压缩 */
+.table.tasks-table { table-layout: fixed; }
+.table.tasks-table th:nth-child(1) { width: 44px; }
+.table.tasks-table th:nth-child(2) { width: 110px; }
+.table.tasks-table th:nth-child(3) { width: 50px; }
+.table.tasks-table th:nth-child(4) { width: 30%; }
+.table.tasks-table th:nth-child(5) { width: 78px; }
+.table.tasks-table th:nth-child(6) { width: 68px; }
+.table.tasks-table th:nth-child(7) { width: 76px; }
+.table.tasks-table th:nth-child(8) { width: 22%; }
+.table.tasks-table th:nth-child(9) { width: 104px; }
+.table.tasks-table th:nth-child(10) { width: 135px; }
+.table.tasks-table th:nth-child(11) { width: 60px; }
+.table.tasks-table th:nth-child(12) { width: 65px; }
 .table th, .table td {
   text-align: left;
   padding: 9px 10px;
