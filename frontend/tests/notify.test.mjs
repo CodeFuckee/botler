@@ -6,6 +6,7 @@ import {
   NOTIFY_TYPE_MAP,
   filterNotifyEvents,
   createNotifyPoller,
+  notifyFailureReason,
   sendTestNotification,
 } from '../src/notify.js'
 
@@ -142,9 +143,15 @@ test('createNotifyPoller：拉取失败不中断（onError 收到错误，游标
 
 // 构造可测环境：mock window/Notification 全局，返回构造过的通知参数。
 // useSupport=false 模拟浏览器不支持 Notification（window 存在但无 Notification）。
-function mockNotifyEnv({ permission = 'granted', requestResult = 'granted', useSupport = true } = {}) {
+// isSecureContext=false 模拟非安全上下文（http/证书不受信任，issue #21 第三轮）。
+function mockNotifyEnv({
+  permission = 'granted', requestResult = 'granted', useSupport = true, isSecureContext = true,
+} = {}) {
   const constructed = []
-  const prev = { window: globalThis.window, Notification: globalThis.Notification }
+  const prev = {
+    window: globalThis.window, Notification: globalThis.Notification,
+    isSecureContext: globalThis.isSecureContext,
+  }
   if (useSupport) {
     globalThis.window = globalThis
     globalThis.Notification = class {
@@ -156,6 +163,7 @@ function mockNotifyEnv({ permission = 'granted', requestResult = 'granted', useS
     delete globalThis.Notification
     globalThis.window = globalThis
   }
+  if (isSecureContext === false) globalThis.isSecureContext = false
   return {
     constructed,
     restore() {
@@ -163,6 +171,8 @@ function mockNotifyEnv({ permission = 'granted', requestResult = 'granted', useS
       else globalThis.window = prev.window
       if (prev.Notification === undefined) delete globalThis.Notification
       else globalThis.Notification = prev.Notification
+      if (prev.isSecureContext === undefined) delete globalThis.isSecureContext
+      else globalThis.isSecureContext = prev.isSecureContext
     },
   }
 }
@@ -222,5 +232,56 @@ test('sendTestNotification：构造通知抛异常 → 返回 error 不崩溃', 
   try {
     const res = await sendTestNotification()
     assert.deepEqual(res, { ok: false, reason: 'error' })
+  } finally { env.restore() }
+})
+
+// ---- 非安全上下文判定（issue #21 第三轮）----
+// 根因：http/自签名证书不受信任时 Notification.permission 恒为 'denied' 且
+// requestPermission() 永不弹框——必须用 isSecureContext 区分，提示用户换 https。
+
+test('notifyFailureReason：非安全上下文 → insecure-context（即使 permission=denied）', () => {
+  const env = mockNotifyEnv({ permission: 'denied', isSecureContext: false })
+  try {
+    assert.equal(notifyFailureReason(), 'insecure-context')
+  } finally { env.restore() }
+})
+
+test('notifyFailureReason：安全上下文 + 已拒绝 → denied', () => {
+  const env = mockNotifyEnv({ permission: 'denied', isSecureContext: true })
+  try {
+    assert.equal(notifyFailureReason(), 'denied')
+  } finally { env.restore() }
+})
+
+test('notifyFailureReason：浏览器不支持 → browser-unsupported', () => {
+  const env = mockNotifyEnv({ useSupport: false })
+  try {
+    assert.equal(notifyFailureReason(), 'browser-unsupported')
+  } finally { env.restore() }
+})
+
+test('notifyFailureReason：可正常通知（granted/default）→ null', () => {
+  const env = mockNotifyEnv({ permission: 'granted' })
+  try {
+    assert.equal(notifyFailureReason(), null)
+  } finally { env.restore() }
+  const env2 = mockNotifyEnv({ permission: 'default' })
+  try {
+    assert.equal(notifyFailureReason(), null)
+  } finally { env2.restore() }
+})
+
+test('sendTestNotification：非安全上下文 → 不请求授权、不弹通知，返回 insecure-context', async () => {
+  let requested = false
+  const env = mockNotifyEnv({ permission: 'default', isSecureContext: false })
+  const Base = globalThis.Notification
+  globalThis.Notification = class extends Base {
+    static requestPermission = async () => { requested = true; return 'granted' }
+  }
+  try {
+    const res = await sendTestNotification()
+    assert.deepEqual(res, { ok: false, reason: 'insecure-context' })
+    assert.equal(env.constructed.length, 0)
+    assert.equal(requested, false) // 非安全上下文下不调 requestPermission（弹了也不会有对话框）
   } finally { env.restore() }
 })

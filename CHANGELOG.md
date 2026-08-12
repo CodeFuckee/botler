@@ -100,6 +100,22 @@
 
 ### Fixed
 
+- **设置页「弹出测试通知」按钮不弹授权对话框**（issue #21 第三轮）：点击
+  测试按钮期望弹出浏览器授权对话框，但 http 访问或自签名证书不受信任时
+  页面处于非安全上下文（`isSecureContext === false`），浏览器规范规定此时
+  `Notification.permission` 恒为 `'denied'` 且 `requestPermission()` 永不弹框
+  ——原实现只检查 `'Notification' in window`，无法区分「不支持」与「非安全
+  上下文」，用户只看到笼统的「已拒绝」提示，误以为是 bug。修复：
+  - `frontend/src/notify.js`：新增 `notifyFailureReason()`（browser-unsupported
+    / insecure-context / denied 三级原因判定），`canNotify()` 增加
+    `isSecureContext` 检查，`sendTestNotification()` 非安全上下文时不再
+    白调 `requestPermission()` 并返回 `insecure-context` 原因
+  - `Settings.jsx`：测试按钮与浏览器授权行区分提示——非安全上下文明确告知
+    「需 HTTPS 且证书受信任」；已拒绝时引导「点击地址栏左侧图标将通知权限
+    改为允许」。
+  - 测试：前端新增 5 个用例（`notifyFailureReason` 四态 + 非安全上下文不
+    请求授权不弹通知）。前端全量 35 passed + 后端 289 passed（零改动）+
+    build 通过。
 - **全局模板写死单仓库路径，任务收到错误指令**（issue #18 诊断发现）：用户
   `data/backend/config.yaml` 的全局模板采用跨会话 issue-agent 模式，但模板
   硬编码 `chenkaidi/shipyard`、`https://home.chenkaidi.top:509`、共享进度文件

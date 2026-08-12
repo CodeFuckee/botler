@@ -31,7 +31,21 @@ export function filterNotifyEvents(events, settings) {
 }
 
 export function canNotify() {
-  return typeof window !== 'undefined' && 'Notification' in window
+  return typeof window !== 'undefined' && 'Notification' in window &&
+    window.isSecureContext !== false // 非安全上下文（http/证书不受信任）下 Notification 受限不可用
+}
+
+// 通知不可用的原因（纯函数，可测）：
+//   browser-unsupported 浏览器不支持 Notification
+//   insecure-context     页面非安全上下文（http/证书不受信任）——此时 permission 恒为
+//                        'denied' 且 requestPermission() 永不弹框，只能换 https 访问
+//   denied               用户已拒绝授权（可在地址栏改回）
+//   可通知时返回 null
+export function notifyFailureReason() {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'browser-unsupported'
+  if (window.isSecureContext === false) return 'insecure-context'
+  if (Notification.permission === 'denied') return 'denied'
+  return null
 }
 
 // 弹一条系统通知；未授权/浏览器不支持时静默跳过（不影响游标推进）
@@ -51,10 +65,10 @@ export function showNotification(event) {
 // 主动发送一条测试通知（设置页「弹出测试通知」按钮，issue #21 增量）：
 // 绕过事件过滤——用户主动点击就是要验证通知能力本身。权限未决（default）
 // 时先请求授权；返回 {ok, reason} 供 UI 提示结果
-// （reason: browser-unsupported / denied / error）。
+// （reason: browser-unsupported / insecure-context / denied / error）。
 export async function sendTestNotification() {
-  if (!canNotify()) return { ok: false, reason: 'browser-unsupported' }
-  if (Notification.permission === 'denied') return { ok: false, reason: 'denied' }
+  const reason = notifyFailureReason()
+  if (reason) return { ok: false, reason }
   if (Notification.permission === 'default') {
     if ((await Notification.requestPermission()) !== 'granted') {
       return { ok: false, reason: 'denied' }

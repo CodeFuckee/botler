@@ -43,9 +43,11 @@ export default function Settings() {
     setTestNote(
       res.ok
         ? { ok: true, text: '✓ 已弹出测试通知，请查看系统通知' }
-        : res.reason === 'denied'
-          ? { ok: false, text: '✗ 浏览器已拒绝通知，请先授权系统通知（见上行）' }
-          : { ok: false, text: '✗ 当前浏览器不支持系统通知' }
+        : res.reason === 'insecure-context'
+          ? { ok: false, text: '✗ 当前页面非安全上下文（需 HTTPS 且证书受信任），浏览器通知不可用' }
+          : res.reason === 'denied'
+            ? { ok: false, text: '✗ 浏览器已拒绝通知授权：点击地址栏左侧图标将通知权限改为「允许」后再试' }
+            : { ok: false, text: '✗ 当前浏览器不支持系统通知' }
     )
   }
 
@@ -201,10 +203,12 @@ export default function Settings() {
               <td>
                 {typeof Notification === 'undefined' ? (
                   <span className="muted">当前浏览器不支持通知</span>
+                ) : window.isSecureContext === false ? (
+                  <span className="muted">当前页面非安全上下文（需 HTTPS 且证书受信任），通知不可用</span>
                 ) : Notification.permission === 'granted' ? (
                   <span className="ok-text">✓ 已授权</span>
                 ) : Notification.permission === 'denied' ? (
-                  <span className="muted">已拒绝（需在浏览器地址栏重新允许通知）</span>
+                  <span className="muted">已拒绝（点击地址栏左侧图标将通知权限改为「允许」）</span>
                 ) : (
                   <button className="btn" onClick={() => Notification.requestPermission()}>
                     授权系统通知
