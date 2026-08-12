@@ -17,6 +17,8 @@ export default function Repos() {
   const [pickerOpen, setPickerOpen] = useState(false)
   // 测试结果: repoId -> {token/project/webhook}
   const [testResults, setTestResults] = useState({})
+  // 对账结果: repoId -> {scanned/enqueued/note/error}（issue #17）
+  const [reconcileResults, setReconcileResults] = useState({})
 
   const load = async () => {
     try {
@@ -103,6 +105,17 @@ export default function Repos() {
       setTestResults((r) => ({ ...r, [repo.id]: res }))
     } catch (e) {
       setTestResults((r) => ({ ...r, [repo.id]: { error: e.message } }))
+    }
+  }
+
+  // 对账：立即扫描该仓库，把「分配给了 bot 但还没有任务」的 open issues 补入队
+  const reconcile = async (repo) => {
+    setReconcileResults((r) => ({ ...r, [repo.id]: { loading: true } }))
+    try {
+      const res = await api.post(`/api/repos/${repo.id}/reconcile`)
+      setReconcileResults((r) => ({ ...r, [repo.id]: res }))
+    } catch (e) {
+      setReconcileResults((r) => ({ ...r, [repo.id]: { error: e.message } }))
     }
   }
 
@@ -215,10 +228,16 @@ export default function Repos() {
               {testResults[repo.id] && (
                 <TestResult result={testResults[repo.id]} />
               )}
+              {reconcileResults[repo.id] && (
+                <ReconcileResult result={reconcileResults[repo.id]} />
+              )}
             </div>
             <div className="repo-actions">
               <button className="btn" onClick={() => test(repo)} disabled={testResults[repo.id]?.loading}>
                 {testResults[repo.id]?.loading ? '测试中…' : '测试连通性'}
+              </button>
+              <button className="btn" onClick={() => reconcile(repo)} disabled={reconcileResults[repo.id]?.loading}>
+                {reconcileResults[repo.id]?.loading ? '对账中…' : '对账'}
               </button>
               <Link className="btn" to={`/templates?repo=${repo.id}`}>模版</Link>
               <button className="btn" onClick={() => toggle(repo)}>
@@ -246,4 +265,18 @@ function TestResult({ result }) {
     )
   })
   return <div className="small">{items}</div>
+}
+
+// 对账结果（issue #17）：入队 N 个 = 发现待处理；0 个 = 无需处理
+function ReconcileResult({ result }) {
+  if (result.error) return <div className="alert alert-error small">{result.error}</div>
+  if (result.note) return <div className="small muted">{result.note}</div>
+  return (
+    <div className="small">
+      {result.enqueued > 0
+        ? <span className="test-chip ok">✓ {result.enqueued} 个待处理 issue 已入队</span>
+        : <span className="test-chip ok">✓ 无需处理</span>}
+      {result.scanned > 0 && <span className="muted">扫描 {result.scanned} 个 issue</span>}
+    </div>
+  )
 }

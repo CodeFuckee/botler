@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- **仓库页「对账」按钮**（issue #17）：仓库列表每行右侧按钮区新增「对账」按钮，
+  点击后立即扫描该仓库，把「assignee 是 bot 但任务表无活跃记录」的 open issues
+  补入队，行内直接显示结果——发现 N 个待处理已入队 / 无需处理（并显示扫描的
+  issue 数）。与设置页的全局异步对账（`/settings/reconcile-now`）互补：单仓库
+  对账同步执行、立即返回结果，用于"马上查看是否有需要处理的 issue"。
+  - 涉及 `backend/botler/reconciler.py`（`reconcile_once` 支持 `repo_id` 参数，
+    单仓库扫描，GitLab 报错记入 `errors`）、`backend/botler/api/repos.py`
+    （新增 `POST /api/repos/{id}/reconcile`：仓库不存在 404、停用仓库返回
+    `note` 提示、GitLab 故障 502）、`frontend/src/pages/Repos.jsx`（「对账」
+    按钮 + 行内结果展示）。
+  - 测试：后端新增 `tests/test_api_reconcile.py` 9 个用例（正常入队、无待处理、
+    已有活跃任务不重复入队、仓库不存在 404、停用仓库、GitLab 故障 502、
+    单仓库只扫指定仓库、未知仓库空结果、全量扫描回归）。全量 167 passed。
+
 ### Fixed
 
 - **任务时间时区与浏览器不一致**（issue #14）：后端 SQLite `datetime('now')` 存

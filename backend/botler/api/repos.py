@@ -246,6 +246,24 @@ def test_repo(request: Request, repo_id: int):
     return result
 
 
+@router.post("/{repo_id}/reconcile")
+def reconcile_repo(request: Request, repo_id: int):
+    """对账：立即扫描该仓库，把「assignee 是 bot 但任务表无活跃记录」的 open
+    issues 补入队（仓库页「对账」按钮，issue #17）。同步执行并直接返回结果，
+    与设置页的全局异步对账（/settings/reconcile-now）互补。
+    """
+    c = ctx_of(request)
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    if not row["enabled"]:
+        return {"ok": True, "scanned": 0, "enqueued": 0, "note": "仓库已停用，未扫描"}
+    result = c.reconciler.reconcile_once(repo_id=repo_id)
+    if result.get("errors"):
+        raise HTTPException(502, f"对账失败: {result['errors'][0]}")
+    return {"ok": True, "scanned": result["scanned"], "enqueued": result["enqueued"]}
+
+
 @router.get("/{repo_id}/template")
 def get_template(request: Request, repo_id: int):
     c = ctx_of(request)

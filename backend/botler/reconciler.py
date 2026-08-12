@@ -47,23 +47,32 @@ class Reconciler:
         if self._aps.running:
             self._aps.shutdown(wait=False)
 
-    def reconcile_once(self) -> dict:
-        """扫描一轮，返回补入队的任务数。"""
+    def reconcile_once(self, repo_id: int | None = None) -> dict:
+        """扫描一轮，返回补入队的任务数。
+
+        repo_id 为 None 时扫描全部启用仓库（定时兜底）；指定时只扫该仓库
+        （仓库页「对账」按钮，issue #17）。单仓库扫描时若 GitLab 报错，
+        错误信息记入返回值 errors 列表，由 API 层转成 HTTP 错误。
+        """
         cfg = self.config.get()
         try:
             bot_id = cfg.bot_id or self.gitlab.get_bot_id()
         except GitLabError as e:
             logger.warning("对账失败：无法获取 bot 身份: %s", e)
-            return {"scanned": 0, "enqueued": 0}
+            return {"scanned": 0, "enqueued": 0, "errors": [f"无法获取 bot 身份: {e}"]}
 
+        repos = [self.db.get_repo(repo_id)] if repo_id is not None else self.db.list_repos()
         scanned = enqueued = 0
-        for repo in self.db.list_repos():
-            if not repo["enabled"]:
+        errors: list[str] = []
+        for repo in repos:
+            if repo is None or not repo["enabled"]:
                 continue
             try:
                 issues = self.gitlab.list_open_issues(repo["gitlab_project_id"], assignee_id=bot_id)
             except GitLabError as e:
-                logger.warning("对账失败：仓库 %s: %s", repo["name"], e)
+                msg = f"仓库 {repo['name']}: {e}"
+                logger.warning("对账失败：%s", msg)
+                errors.append(msg)
                 continue
             for issue in issues:
                 scanned += 1
@@ -78,4 +87,7 @@ class Reconciler:
                     enqueued += 1
                     logger.info("对账补入队: 任务 %s (%s#%s)",
                                 task_id, repo["gitlab_project_id"], issue["iid"])
-        return {"scanned": scanned, "enqueued": enqueued}
+        result: dict = {"scanned": scanned, "enqueued": enqueued}
+        if errors:
+            result["errors"] = errors
+        return result
