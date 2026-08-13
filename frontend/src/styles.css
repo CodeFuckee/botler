@@ -728,3 +728,40 @@ code {
   flex: 1;
   min-width: 160px;
 }
+
+/* ---- 概览页（issue #32）：正在执行任务的 2 行 × 3 列网格 ---- */
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.overview-card {
+  min-width: 0; /* 允许网格列收缩，长仓库名/日志可截断而非撑破卡片 */
+}
+.overview-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.overview-repo {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overview-issue {
+  margin-bottom: 8px;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overview-log {
+  max-height: 220px;
+  margin: 0;
+  font-size: 12px;
+  background: var(--bg);
+}

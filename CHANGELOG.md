@@ -6,6 +6,23 @@
 
 ### Added
 
+- **概览页面**（issue #32）：导航栏新增「概览」tab（位于「仓库」tab 左边），实时展示
+  正在执行的任务（running + retrying）卡片：仓库名称、对应 issue（GitLab 链接）、
+  agent 实时输出（每 3 秒轮询增量刷新、卡片内滚动跟随最新）。多任务以网格排布，
+  最多 2 行 × 3 列（6 个卡片），超过 6 个保持 3 列自动换行、页面滚动；无任务时
+  显示空状态。
+  - 前端：新增 `frontend/src/pages/Overview.jsx`（`/overview` 路由 + 导航入口）；
+    列表一次拉取活跃任务（多值 status 过滤），每个任务独立轮询
+    `/api/tasks/{id}/execution?after_byte=` 增量续读日志（`trimLogTail` 截尾防
+    卡片无限增长）；`styles.css` 新增 `overview-grid` 3 列网格样式。
+  - 后端：`GET /api/tasks` 的 `status` 参数支持逗号分隔多值（如
+    `running,retrying`，单值行为不变）；任务列表/详情新增 `issue_url` 字段
+    （后端按仓库 URL 拼接 `/issues/<iid>`，前端零拼接）。
+  - 测试：后端 `tests/test_api_tasks.py` 新增 8 用例（多值过滤/边界 400/
+    issue_url 契约）+ 前端 `tests/overview-page.test.mjs` 14 用例（导航顺序/
+    数据流断言/trimLogTail 边界/组件渲染含字段缺失与 API 失败兜底）。
+    后端全量 361 passed + 前端全量 83 passed + build 通过。
+
 - **标记库页面**（issue #29 第二轮）：用户澄清需求为「在 botler 项目上增加一个标记库，
   用户可以手动添加删除，上面的建议清单作为默认选项不可删除」——第一轮只交付了
   `docs/labels.md` + 同步脚本（无 UI），本轮补齐 Web UI 管理页面。

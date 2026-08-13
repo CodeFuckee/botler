@@ -210,13 +210,18 @@ class Database:
         with self._conn() as conn:
             return conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
 
-    def list_tasks(self, status: str | None = None, repo_id: int | None = None,
+    def list_tasks(self, status: str | list[str] | None = None, repo_id: int | None = None,
                    search: str | None = None, limit: int = 50, offset: int = 0) -> list[sqlite3.Row]:
         sql = "SELECT * FROM tasks WHERE 1=1"
         params: list = []
         if status:
-            sql += " AND status=?"
-            params.append(status)
+            if isinstance(status, str):
+                sql += " AND status=?"
+                params.append(status)
+            else:
+                # 多值过滤（issue #32 概览页：running,retrying 一次拉取）
+                sql += f" AND status IN ({', '.join('?' * len(status))})"
+                params.extend(status)
         if repo_id:
             sql += " AND repo_id=?"
             params.append(repo_id)
@@ -228,12 +233,16 @@ class Database:
         with self._conn() as conn:
             return conn.execute(sql, params).fetchall()
 
-    def count_tasks(self, status: str | None = None) -> int:
+    def count_tasks(self, status: str | list[str] | None = None) -> int:
         sql = "SELECT COUNT(*) AS c FROM tasks"
         params: list = []
         if status:
-            sql += " WHERE status=?"
-            params.append(status)
+            if isinstance(status, str):
+                sql += " WHERE status=?"
+                params.append(status)
+            else:
+                sql += f" WHERE status IN ({', '.join('?' * len(status))})"
+                params.extend(status)
         with self._conn() as conn:
             return conn.execute(sql, params).fetchone()["c"]
 

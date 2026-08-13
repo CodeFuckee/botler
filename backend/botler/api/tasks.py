@@ -28,6 +28,18 @@ def _commit_url(repo_url: str | None, sha: str | None) -> str | None:
     return f"{base}/-/commit/{sha}"
 
 
+def _issue_url(repo_url: str | None, issue_iid: int | None) -> str | None:
+    """拼接任务对应 issue 的 GitLab 页面地址（issue #32 概览页）。
+
+    与 _commit_url 同理：仓库 URL 去 .git 后缀后接 /-/issues/<iid>；
+    URL 或 issue_iid 缺失返回 None。
+    """
+    if not repo_url or not issue_iid:
+        return None
+    base = repo_url[:-4] if repo_url.endswith(".git") else repo_url
+    return f"{base}/-/issues/{issue_iid}"
+
+
 def _task_to_dict(row, repo: dict | None = None) -> dict:
     """把任务行转为 API 字典。
 
@@ -49,6 +61,7 @@ def _task_to_dict(row, repo: dict | None = None) -> dict:
         "project_id": row["project_id"],
         "issue_iid": row["issue_iid"],
         "issue_title": row["issue_title"],
+        "issue_url": _issue_url(repo_url, row["issue_iid"]),  # issue #32 概览页
         "status": row["status"],
         "attempt_count": row["attempt_count"],
         "triggered_by": row["triggered_by"],
@@ -75,14 +88,22 @@ def list_tasks(
     offset: int = Query(0, ge=0),
 ):
     c = ctx_of(request)
-    if status and status not in STATUSES:
-        raise HTTPException(400, f"未知状态: {status}（可选: {sorted(STATUSES)}）")
-    rows = c.db.list_tasks(status=status, repo_id=repo_id, search=search,
+    # status 支持逗号分隔多值（issue #32 概览页一次拉取 running+retrying），
+    # 单值行为不变；多值会转为列表传给 db 层（list_tasks / count_tasks）。
+    statuses: str | list[str] | None = status
+    if status:
+        statuses = [s.strip() for s in status.split(",")]
+        unknown = [s for s in statuses if s not in STATUSES]
+        if unknown:
+            raise HTTPException(400, f"未知状态: {','.join(unknown)}（可选: {sorted(STATUSES)}）")
+        if len(statuses) == 1:
+            statuses = statuses[0]
+    rows = c.db.list_tasks(status=statuses, repo_id=repo_id, search=search,
                            limit=limit, offset=offset)
     repos = {r["id"]: {"name": r["name"], "url": r["url"]} for r in c.db.list_repos()}
     return {
         "tasks": [_task_to_dict(r, repos.get(r["repo_id"])) for r in rows],
-        "total": c.db.count_tasks(status=status),
+        "total": c.db.count_tasks(status=statuses),
         "stats": c.db.task_stats(),
     }
 

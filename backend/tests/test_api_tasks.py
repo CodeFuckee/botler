@@ -433,3 +433,101 @@ class TestTaskExecution:
         # after_byte 参数约束（ge=0）在业务逻辑前校验 → 422
         assert c.get(f"/api/tasks/{task_id}/execution",
                      params={"after_byte": -1}).status_code == 422
+
+
+# ---- issue #32：概览页数据源 ----
+
+class TestListMultiStatus:
+    """GET /api/tasks 多值 status 过滤（概览页一次拉取全部正在执行的任务）。
+
+    概览页需要同时展示 running（执行中）与 retrying（重试中）两类活跃任务，
+    status 参数支持逗号分隔多值（如 status=running,retrying），
+    单值调用行为保持不变（向后兼容）。
+    """
+
+    def test_multi_status_returns_both(self, client):
+        """status=running,retrying 返回两种状态的任务，不含其他状态。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        _mk_task(db, repo_id, issue_iid=1, title="执行中任务", status="running")
+        _mk_task(db, repo_id, issue_iid=2, title="重试中任务", status="retrying")
+        _mk_task(db, repo_id, issue_iid=3, title="排队任务", status="queued")
+        _mk_task(db, repo_id, issue_iid=4, title="成功任务", status="succeeded")
+
+        body = app_client.get("/api/tasks", params={"status": "running,retrying"}).json()
+        got = {t["issue_iid"] for t in body["tasks"]}
+        assert got == {1, 2}
+        assert body["total"] == 2
+
+    def test_multi_status_count_matches_tasks(self, client):
+        """多值过滤时 total 与返回数量一致（count_tasks 同步支持多值）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        for iid, status in [(1, "running"), (2, "running"), (3, "retrying"),
+                            (4, "succeeded"), (5, "failed")]:
+            _mk_task(db, repo_id, issue_iid=iid, title=f"任务{iid}", status=status)
+
+        body = app_client.get("/api/tasks", params={"status": "running,retrying"}).json()
+        assert len(body["tasks"]) == 3
+        assert body["total"] == 3
+
+    def test_single_status_unchanged(self, client):
+        """单值 status 过滤行为不变（向后兼容）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        _mk_task(db, repo_id, issue_iid=1, title="执行中任务", status="running")
+        _mk_task(db, repo_id, issue_iid=2, title="重试中任务", status="retrying")
+
+        body = app_client.get("/api/tasks", params={"status": "running"}).json()
+        assert [t["issue_iid"] for t in body["tasks"]] == [1]
+        assert body["total"] == 1
+
+    def test_multi_status_unknown_value_400(self, client):
+        """多值中混入未知状态 → 400（与单值校验一致）。"""
+        app_client, db = client
+        resp = app_client.get("/api/tasks", params={"status": "running,bogus"})
+        assert resp.status_code == 400
+
+    def test_multi_status_empty_element_treated_as_unknown_400(self, client):
+        """边界：逗号分隔产生空元素（如 running,）→ 400 而非静默忽略。"""
+        app_client, db = client
+        assert app_client.get("/api/tasks", params={"status": "running,"}).status_code == 400
+        assert app_client.get("/api/tasks", params={"status": ",running"}).status_code == 400
+
+
+class TestTaskIssueUrl:
+    """列表/详情透出 issue_url（概览页 issue 链接的数据契约）。
+
+    issue_url 由后端按仓库 URL 拼出（去 .git 后缀 + /-/issues/<iid>），
+    仓库缺失或 URL 无则返回 None，前端零拼接逻辑。
+    """
+
+    def test_list_returns_issue_url(self, client):
+        """列表项返回可跳转的 issue_url。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)  # url: https://gitlab.example.com/group/demo.git
+        _mk_task(db, repo_id, issue_iid=7, title="任务A", status="running")
+        _mk_task(db, repo_id, issue_iid=8, title="任务B", status="succeeded")
+
+        body = app_client.get("/api/tasks").json()
+        by_iid = {t["issue_iid"]: t for t in body["tasks"]}
+        assert by_iid[7]["issue_url"] == "https://gitlab.example.com/group/demo/-/issues/7"
+        assert by_iid[8]["issue_url"] == "https://gitlab.example.com/group/demo/-/issues/8"
+
+    def test_detail_issue_url_without_dot_git(self, client):
+        """仓库 URL 无 .git 后缀时拼接不受影响。"""
+        app_client, db = client
+        repo_id = db.upsert_repo(44, "plain", "https://gitlab.example.com/group/plain")
+        task_id = _mk_task(db, repo_id, issue_iid=3, title="任务", status="running")
+        task = app_client.get(f"/api/tasks/{task_id}").json()
+        assert task["issue_url"] == "https://gitlab.example.com/group/plain/-/issues/3"
+
+    def test_issue_url_none_when_repo_deleted(self, api_app):
+        """仓库记录被删除时 issue_url 为 None 而非 500。"""
+        app, db, tmp_path = api_app
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=4, title="任务", status="running")
+        db.delete_repo(repo_id)
+        task = TestClient(app).get(f"/api/tasks/{task_id}").json()
+        assert task["repo_name"] is None
+        assert task["issue_url"] is None

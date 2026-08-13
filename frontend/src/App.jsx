@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import Repos from './pages/Repos.jsx'
+import Overview from './pages/Overview.jsx'
 import Templates from './pages/Templates.jsx'
 import Labels from './pages/Labels.jsx'
 import Tasks from './pages/Tasks.jsx'
@@ -64,6 +65,9 @@ export default function App() {
         <div className="brand">
           <span className="brand-dot">🤖</span> Botler
         </div>
+        <NavLink to="/overview" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+          概览
+        </NavLink>
         <NavLink to="/" end className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           仓库
         </NavLink>
@@ -90,6 +94,7 @@ export default function App() {
       <main className="content">
         <Routes>
           <Route path="/" element={<Repos />} />
+          <Route path="/overview" element={<Overview />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/tasks/:id" element={<TaskDetail />} />
           <Route path="/templates" element={<Templates />} />
