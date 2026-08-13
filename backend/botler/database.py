@@ -32,7 +32,7 @@ ACTIVE_STATUSES = (STATUS_QUEUED, STATUS_RUNNING, STATUS_RETRYING)
 # set_task_status / finish_task 可写的附加字段白名单
 _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
-                "commit_sha"}
+                "hermes_history", "commit_sha"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   started_at TEXT,
   finished_at TEXT,
   commit_sha TEXT,
+  hermes_history TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -121,6 +122,11 @@ class Database:
             # issue #8：claude --resume 会话断点续跑——记录上次执行的 claude 会话，
             # 重启/重试后用于接续对话（从上次结束的地方继续）
             conn.execute("ALTER TABLE tasks ADD COLUMN claude_session_id TEXT")
+        if "hermes_history" not in task_cols:
+            # issue #47：hermes 引擎断点续跑——记录上次执行的会话消息历史
+            # （runner 输出的 messages JSON），重试/重启后作为
+            # conversation_history 传入接续对话（Q3-B 等价实现）
+            conn.execute("ALTER TABLE tasks ADD COLUMN hermes_history TEXT")
         if "commit_sha" not in task_cols:
             # issue #19：任务成功时记录对应提交的完整 sha（任务页面 commit 链接）
             conn.execute("ALTER TABLE tasks ADD COLUMN commit_sha TEXT")

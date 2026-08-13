@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### Added
+
+- **任务执行引擎支持 hermes-agent（issue #47）**：`worker.engine` 可切换
+  `claude`（Claude Code CLI，默认，现网行为不变）/ `hermes`（部署机已装好的
+  hermes-agent，直接调用，botler 不打包不管理 hermes 的 LLM 配置）。
+  - 后端 `hermes_runner.py`（新增）：独立 runner 脚本，由 hermes venv 的
+    python 运行（`hermes.command`/`args` 配置），stdin/stdout JSON 协议
+    （prompt/history/session_id → final_response/messages/session_id/error），
+    进程内 `run_agent.AIAgent(quiet_mode=True)` 执行一次任务；
+  - `executor.py`：`_run_once` 按引擎分派——hermes 引擎经 `TERMINAL_CWD`
+    在仓库工作区执行 terminal 命令、git 凭据沿用 `GIT_ASKPASS` 注入；
+    子进程读循环抽取 `_drain_process_output` 两引擎共用；结果判定
+    `_hermes_result`（success/unresolvable/failed，自认无法解决不重试）；
+  - 断点续跑等价实现（Q3-B）：执行结束把会话历史落库
+    `tasks.hermes_history`（新增列，轻量迁移），重试/重启恢复时作为
+    `conversation_history` 传入并保留工作区；损坏数据自动降级全新会话；
+  - 成功收尾共用 `_await_pipeline_and_finish_succeeded`（CI 流水线等待 +
+    bot-done + commit 记录，与 claude 引擎一致）；
+  - 设置页无 hermes 配置（配置只走 config.yaml 文件，hermes 的模型/Key
+    在 hermes 侧 `~/.hermes` 配好）；新增部署文档
+    `docs/hermes-engine-deployment.md`（挂载、配置、断点续跑、故障排查）。
+  - 测试：`test_hermes_runner.py` 17 用例（协议解析边界 / AIAgent 调用契约
+    / import 失败与 agent 异常降级）+ `test_executor_hermes.py` 22 用例
+    （引擎分派与非法值回退 / 命令与环境构造 / 历史落库与恢复 / 损坏降级 /
+    结果判定），runner 已在真实 hermes venv 冒烟验证；后端全量 521 passed +
+    前端全量 167 passed。
+
 ### Fixed
 
 - **概览页 CI/CD 流水线阶段顺序反转（sync→deploy→build）**（issue #44）：

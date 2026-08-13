@@ -596,15 +596,73 @@ class ClaudeExecutor:
         with self._proc_lock:
             return task_id in self._stop_requests
 
-    def _run_once(self, task_id: int, repo: dict, issue: dict,
-                  resume_session: str | None = None) -> tuple[int, str]:
-        """执行一次 claude -p。返回 (exit_code, output)。
+    def _engine(self, cfg) -> str:
+        """任务执行引擎（issue #47）：claude（默认）/ hermes；非法值回退 claude。"""
+        engine = str(getattr(cfg, "engine", "") or "claude").strip().lower()
+        return engine if engine in ("claude", "hermes") else "claude"
 
-        resume_session 非空时为断点续跑：claude --resume 接续上次会话，
-        工作区保留（不清空 Claude 已做的修改）；执行后解析 JSON 输出中的
-        session_id 落库，供下次重试 / 平台重启继续。
+    def _drain_process_output(self, proc, task_id: int, log_path: Path,
+                              deadline: float, on_chunk=None) -> tuple[bool, bool, list[str]]:
+        """边读子进程 stdout 边写日志文件，返回 (timed_out, stopped, chunks)。
+
+        issue #47 从 _run_once 抽取，claude 与 hermes 两引擎共用：
+        - 每轮检查停止请求（readline 阻塞时外部 request_stop 已 SIGKILL
+          进程组 → readline 返回 EOF 自然退出，此处兜底长期无输出时感知）
+        - 超时由调用方 kill 进程组后收尾（返回 timed_out=True）
+        - on_chunk：每读到一个 chunk 回调（claude 引擎用于运行中实时落
+          session_id，issue #20；hermes 引擎无此需求传 None）
+        """
+        chunks: list[str] = []
+        timed_out = False
+        stopped = False
+        with open(log_path, "w", encoding="utf-8", errors="replace") as f:
+            while not stopped:
+                if self._stop_requested(task_id) and proc.poll() is None:
+                    stopped = True
+                    break
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    chunk = proc.stdout.readline() if proc.stdout else b""
+                except Exception:
+                    chunk = ""
+                if chunk == "" and proc.poll() is not None:
+                    break
+                if chunk:
+                    f.write(chunk)
+                    chunks.append(chunk)
+                    if len(chunks) > 20000:  # 约 20MB 上限
+                        chunks.pop(0)
+                    if on_chunk is not None:
+                        on_chunk(chunk)
+                if time.time() >= deadline and proc.poll() is None:
+                    timed_out = True
+                    break
+                time.sleep(0.05)
+        return timed_out, stopped, chunks
+
+    def _run_once(self, task_id: int, repo: dict, issue: dict,
+                  resume_session: str | None = None,
+                  resume_history: list | None = None) -> tuple[int, str]:
+        """执行一次任务引擎（claude -p 或 hermes runner）。返回 (exit_code, output)。
+
+        claude 引擎：resume_session 非空时为断点续跑（claude --resume 接续
+        上次会话，工作区保留）；执行后解析 JSON 输出中的 session_id 落库。
+        hermes 引擎（issue #47）：resume_history 为断点续跑的历史消息
+        （工作区保留），显式传入优先；未传入时从任务落库的 hermes_history
+        解析（含会话 id），等价 Q3-B conversation_history 落库断点续跑。
         """
         cfg = self.config.get()
+        if self._engine(cfg) == "hermes":
+            task_row = self.db.get_task(task_id)
+            messages, sid = self._hermes_resume_data(
+                _row_get(task_row, "hermes_history") if task_row is not None else None)
+            if resume_history is not None:
+                messages = resume_history
+            return self._run_hermes_once(task_id, repo, issue, messages, sid)
+
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         if resume_session:
             prompt = self._resume_prompt(repo, issue)
@@ -642,47 +700,23 @@ class ClaudeExecutor:
             self._procs[task_id] = proc
         try:
             deadline = time.time() + cfg.task_timeout_seconds
-            chunks: list[str] = []
-            timed_out = False
-            stopped = False
             session_known = False
 
             # 停止请求先于进程创建到达（worker 准备阶段收到 stop）→ 立即终止
-            if self._stop_requested(task_id):
-                stopped = True
+            stopped = self._stop_requested(task_id)
 
-            # 边读边写日志文件，避免内存堆积；超时/被停止则杀整个进程组
-            with open(log_path, "w", encoding="utf-8", errors="replace") as f:
-                while not stopped:
-                    # 每轮检查停止请求：readline 阻塞等待输出时，外部
-                    # request_stop 已 SIGKILL 进程组 → readline 返回 EOF
-                    # 自然退出；此处兜底 readline 长期无输出时仍能感知停止
-                    if self._stop_requested(task_id) and proc.poll() is None:
-                        stopped = True
-                        break
-                    remaining = deadline - time.time()
-                    if remaining <= 0:
-                        timed_out = True
-                        break
-                    try:
-                        chunk = proc.stdout.readline() if proc.stdout else b""
-                    except Exception:
-                        chunk = ""
-                    if chunk == "" and proc.poll() is not None:
-                        break
-                    if chunk:
-                        f.write(chunk)
-                        chunks.append(chunk)
-                        if len(chunks) > 20000:  # 约 20MB 上限
-                            chunks.pop(0)
-                        # 运行中即把 session_id 落库（issue #20 实时查看），
-                        # 只落首次：进程未结束时 API 就能定位当前会话文件
-                        if not session_known and self._persist_session_from_chunk(task_id, chunk):
-                            session_known = True
-                    if time.time() >= deadline and proc.poll() is None:
-                        timed_out = True
-                        break
-                    time.sleep(0.05)
+            def _on_chunk(chunk: str) -> None:
+                nonlocal session_known
+                # 运行中即把 session_id 落库（issue #20 实时查看），
+                # 只落首次：进程未结束时 API 就能定位当前会话文件
+                if not session_known and self._persist_session_from_chunk(task_id, chunk):
+                    session_known = True
+
+            if not stopped:
+                timed_out, stopped, chunks = self._drain_process_output(
+                    proc, task_id, log_path, deadline, _on_chunk)
+            else:
+                timed_out, chunks = False, []
 
             if stopped:
                 self._kill_process_group(proc)
@@ -706,6 +740,156 @@ class ClaudeExecutor:
             output = "".join(chunks)
             self.db.add_log(task_id, "info", f"claude 退出码: {exit_code}")
             self._persist_session_id(task_id, output)
+            return exit_code, output
+        finally:
+            with self._proc_lock:
+                self._procs.pop(task_id, None)
+
+    # ---- hermes 引擎（issue #47）----
+
+    def _hermes_history_from_output(self, output: str) -> list:
+        """从 hermes runner 输出解析会话消息历史（messages 缺失/非列表 → 空列表）。"""
+        data = _load_json_output(output)
+        messages = data.get("messages") if data else None
+        return messages if isinstance(messages, list) else []
+
+    def _hermes_result(self, output: str) -> str:
+        """判定 hermes runner 输出：success / unresolvable / failed。
+
+        - success：JSON 合法、error 为空、final_response 非空、未自认无法解决
+        - unresolvable：final_response 命中「无法解决」表述（不重试）
+        - failed：非 JSON / error 非空 / 缺 final_response（按失败重试）
+        """
+        data = _load_json_output(output)
+        if data is None or data.get("error"):
+            return "failed"
+        final_response = data.get("final_response")
+        if not isinstance(final_response, str) or not final_response.strip():
+            return "failed"
+        if self._is_unresolvable(final_response):
+            return "unresolvable"
+        return "success"
+
+    def _hermes_resume_data(self, raw: str | None) -> tuple[list | None, str | None]:
+        """解析任务落库的 hermes_history（{"session_id", "messages"} JSON）。
+
+        解析失败 / 为空 / messages 非列表 → (None, None)（降级全新会话）。
+        """
+        if not raw or not raw.strip():
+            return None, None
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return None, None
+        if not isinstance(data, dict):
+            return None, None
+        messages = data.get("messages")
+        session_id = data.get("session_id")
+        return (messages if isinstance(messages, list) and messages else None,
+                session_id if isinstance(session_id, str) and session_id else None)
+
+    def _persist_hermes_history(self, task_id: int, output: str) -> None:
+        """执行结束后把 hermes 会话数据（session_id + messages）落库（Q3-B）。
+
+        messages 为空时不落库（无从恢复，保持上次值）；落库失败不影响任务收尾。
+        """
+        data = _load_json_output(output)
+        messages = self._hermes_history_from_output(output)
+        if data is None or not messages:
+            return
+        session_id = data.get("session_id")
+        raw = json.dumps(
+            {"session_id": session_id if isinstance(session_id, str) else "",
+             "messages": messages},
+            ensure_ascii=False)
+        try:
+            self.db.set_task_status(task_id, None, hermes_history=raw)
+        except Exception as e:  # noqa: BLE001 历史落库失败不阻塞任务收尾
+            self.db.add_log(task_id, "warn", f"hermes 会话历史落库失败: {e}")
+
+    def _run_hermes_once(self, task_id: int, repo: dict, issue: dict,
+                         resume_history: list | None,
+                         resume_session_id: str | None = None) -> tuple[int, str]:
+        """执行一次 hermes runner。返回 (exit_code, output)。
+
+        runner 协议：stdin 写 JSON 请求（prompt/history/session_id），
+        stdout 输出单行 JSON 结果（final_response/messages/session_id/error）。
+        terminal 工具经 TERMINAL_CWD 在 botler 仓库工作区执行，git 凭据
+        继承 _build_env 的 GIT_ASKPASS 注入（与 claude 引擎一致）。
+        """
+        cfg = self.config.get()
+        if not cfg.hermes_command:
+            raise ExecutorError(
+                "hermes 引擎未配置 hermes.command（部署机 hermes venv 的 python 路径）")
+        workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_history))
+        if resume_history:
+            prompt = self._resume_prompt(repo, issue)
+            self.db.add_log(
+                task_id, "info",
+                f"恢复上次 hermes 会话（{len(resume_history)} 条历史）… 继续执行"
+                f"（工作区保留，超时 {cfg.task_timeout_seconds}s）")
+        else:
+            prompt = self._build_prompt(repo, issue)
+            self.db.add_log(task_id, "info",
+                            f"执行 hermes runner（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
+        env = self._build_env(repo, issue)
+        # hermes 的 terminal 工具按 TERMINAL_CWD 在 botler 仓库工作区执行命令
+        env["TERMINAL_CWD"] = str(workdir)
+
+        log_path = self._log_file(task_id)
+        cmd = [cfg.hermes_command, *cfg.hermes_args]
+        request: dict = {"prompt": prompt}
+        if resume_history:
+            request["history"] = resume_history
+            if resume_session_id:
+                request["session_id"] = resume_session_id
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=workdir, env=env,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, start_new_session=True,
+            )
+        except FileNotFoundError:
+            raise ExecutorError(
+                f"找不到 hermes 命令: {cfg.hermes_command}"
+                f"（请确认部署机 hermes venv 的 python 路径）")
+
+        with self._proc_lock:
+            self._procs[task_id] = proc
+        try:
+            try:
+                proc.stdin.write(json.dumps(request, ensure_ascii=False))
+                proc.stdin.close()
+            except (BrokenPipeError, OSError) as e:
+                self.db.add_log(task_id, "warn", f"hermes runner stdin 写入失败: {e}")
+
+            deadline = time.time() + cfg.task_timeout_seconds
+            stopped = self._stop_requested(task_id)
+            if not stopped:
+                timed_out, stopped, chunks = self._drain_process_output(
+                    proc, task_id, log_path, deadline)
+            else:
+                timed_out, chunks = False, []
+
+            if stopped:
+                self._kill_process_group(proc)
+                proc.wait(timeout=10)
+                output = "".join(chunks)
+                self.db.add_log(task_id, "warn",
+                                "任务被用户停止，已强制终止 hermes 进程组")
+                return STOP_EXIT_CODE, output
+
+            if timed_out:
+                self._kill_process_group(proc)
+                proc.wait(timeout=10)
+                output = "".join(chunks)
+                self.db.add_log(task_id, "error",
+                                f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止进程组")
+                return 124, output  # 124 = timeout 约定退出码
+
+            exit_code = proc.wait(timeout=30)
+            output = "".join(chunks)
+            self.db.add_log(task_id, "info", f"hermes runner 退出码: {exit_code}")
             return exit_code, output
         finally:
             with self._proc_lock:
@@ -840,9 +1024,40 @@ class ClaudeExecutor:
         self.db.add_log(task_id, "info", f"等待任务提交 {sha[:8]} 触发的 CI 流水线到达终态…")
         return self._wait_pipeline_for_commit(task_id, project_id, sha)
 
+    def _await_pipeline_and_finish_succeeded(self, task_id: int, project_id: int,
+                                             issue_iid: int, output: str) -> None:
+        """成功收尾前的流水线等待与成功收尾（issue #40 + #47 抽取）。
+
+        claude 与 hermes 两引擎共用：等待任务提交触发的 CI 流水线终态，
+        failed/canceled/timeout → 失败收尾；success/skipped/no_pipeline →
+        成功收尾（打 bot-done、记录 commit、发通知）。
+        """
+        # issue #40：成功收尾前等待任务提交触发的 CI 流水线终态。
+        # 此前 claude exit 0 即判成功，流水线还在运行任务就显示
+        # 已完成（任务 #63 于 13:31:45 收尾，流水线到 13:48:34 才结束）。
+        pipeline_state = self._await_task_pipeline(task_id, project_id, issue_iid)
+        if pipeline_state == "stopped":
+            self._finish_stopped(task_id)
+            return
+        if pipeline_state in ("failed", "canceled"):
+            self._finish_failed(
+                task_id,
+                f"CI 流水线状态为 {pipeline_state}，任务视为失败",
+                output)
+            return
+        if pipeline_state == "timeout":
+            self._finish_failed(
+                task_id,
+                "CI 流水线超时未完成，任务视为失败",
+                output)
+            return
+        # success / skipped / no_pipeline → 成功收尾
+        self._finish_succeeded(task_id, output)
+
     def run_task(self, task_id: int) -> None:
         """任务主流程：单次或重试执行，写状态机与收尾评论。"""
         cfg = self.config.get()
+        engine = self._engine(cfg)  # issue #47：claude / hermes 引擎分派
         task = self.db.get_task(task_id)
         if task is None:
             logger.warning("任务 %s 不存在，跳过", task_id)
@@ -889,15 +1104,19 @@ class ClaudeExecutor:
                 return
             attempt += 1
             # issue #8 断点续跑：上次执行留过 claude 会话 → 接续（resume）；
-            # 会话文件丢失（如 ~/.claude 未持久化）→ 清除后降级全新会话
+            # 会话文件丢失（如 ~/.claude 未持久化）→ 清除后降级全新会话。
+            # hermes 引擎（issue #47）的断点续跑数据在 tasks.hermes_history，
+            # 由 _run_once 内部读取（session 文件机制仅 claude 有）。
             task = self.db.get_task(task_id)
-            resume_session = task["claude_session_id"] if task else None
-            if resume_session and not self._session_file(resume_session):
-                self.db.set_task_status(task_id, None, claude_session_id=None)
-                self.db.add_log(
-                    task_id, "warn",
-                    f"上次会话 {resume_session[:8]}… 的会话文件已不存在，降级为全新会话")
-                resume_session = None
+            resume_session = None
+            if engine != "hermes":
+                resume_session = task["claude_session_id"] if task else None
+                if resume_session and not self._session_file(resume_session):
+                    self.db.set_task_status(task_id, None, claude_session_id=None)
+                    self.db.add_log(
+                        task_id, "warn",
+                        f"上次会话 {resume_session[:8]}… 的会话文件已不存在，降级为全新会话")
+                    resume_session = None
             self.db.set_task_status(
                 task_id, STATUS_RUNNING,
                 attempt_count=attempt,
@@ -935,45 +1154,44 @@ class ClaudeExecutor:
             if exit_code == 0:
                 state = self._issue_state(project_id, issue_iid)
                 self.db.add_log(task_id, "info", f"执行结束，issue 当前状态: {state}")
-                # exit 0 但 Claude 自认无法解决 → 失败终态（不重试）
-                if self._is_unresolvable(output):
-                    detail = {"attempt": attempt, "exit_code": exit_code,
-                              "error": self._extract_error(output)}
-                    self._finish_failed(task_id, "Claude Code 报告无法解决该 issue", output,
-                                        error_detail=self._dump_error_detail(
-                                            [*attempt_details, detail], last_exit))
-                    return
-                # 成功判定（issue #25 第二轮）：完成任务即成功，不再要求关闭 issue。
-                # 模版库规范（docs/labels.md）：任务完成后不关闭 issue——留结果评论、
-                # 打 bot-done，等用户确认后手动关闭。旧逻辑以 issue closed 为成功
-                # 标志，exit 0 但 issue 仍 open 时判失败并重试，迫使 Claude 在完成
-                # 开发后违规关闭 issue（生产日志 task_30/31：issue #28 完成即被关）。
-                # 新判定：正常完成输出（JSON result，非「无法解决」）即成功，
-                # 无论 issue 是否仍 open。
-                if _load_json_output(output) is not None:
-                    # issue #40：成功收尾前等待任务提交触发的 CI 流水线终态。
-                    # 此前 claude exit 0 即判成功，流水线还在运行任务就显示
-                    # 已完成（任务 #63 于 13:31:45 收尾，流水线到 13:48:34 才结束）。
-                    pipeline_state = self._await_task_pipeline(
-                        task_id, project_id, issue_iid)
-                    if pipeline_state == "stopped":
-                        self._finish_stopped(task_id)
+                if engine == "hermes":
+                    # issue #47 hermes 引擎：成功判定看 runner 输出 JSON
+                    # （final_response + error 为空），非 JSON / error 非空
+                    # 落入下方重试分支（与 claude exit 0 无 JSON 一致）
+                    result = self._hermes_result(output)
+                    if result == "unresolvable":
+                        detail = {"attempt": attempt, "exit_code": exit_code,
+                                  "error": self._extract_error(output)}
+                        self._finish_failed(task_id, "hermes 报告无法解决该 issue", output,
+                                            error_detail=self._dump_error_detail(
+                                                [*attempt_details, detail], last_exit))
                         return
-                    if pipeline_state in ("failed", "canceled"):
-                        self._finish_failed(
-                            task_id,
-                            f"CI 流水线状态为 {pipeline_state}，任务视为失败",
-                            output)
+                    if result == "success":
+                        # Q3-B：会话数据落库（断点续跑），收尾流程与 claude 引擎一致
+                        self._persist_hermes_history(task_id, output)
+                        self._await_pipeline_and_finish_succeeded(
+                            task_id, project_id, issue_iid, output)
                         return
-                    if pipeline_state == "timeout":
-                        self._finish_failed(
-                            task_id,
-                            "CI 流水线超时未完成，任务视为失败",
-                            output)
+                else:
+                    # exit 0 但 Claude 自认无法解决 → 失败终态（不重试）
+                    if self._is_unresolvable(output):
+                        detail = {"attempt": attempt, "exit_code": exit_code,
+                                  "error": self._extract_error(output)}
+                        self._finish_failed(task_id, "Claude Code 报告无法解决该 issue", output,
+                                            error_detail=self._dump_error_detail(
+                                                [*attempt_details, detail], last_exit))
                         return
-                    # success / skipped / no_pipeline → 成功收尾
-                    self._finish_succeeded(task_id, output)
-                    return
+                    # 成功判定（issue #25 第二轮）：完成任务即成功，不再要求关闭 issue。
+                    # 模版库规范（docs/labels.md）：任务完成后不关闭 issue——留结果评论、
+                    # 打 bot-done，等用户确认后手动关闭。旧逻辑以 issue closed 为成功
+                    # 标志，exit 0 但 issue 仍 open 时判失败并重试，迫使 Claude 在完成
+                    # 开发后违规关闭 issue（生产日志 task_30/31：issue #28 完成即被关）。
+                    # 新判定：正常完成输出（JSON result，非「无法解决」）即成功，
+                    # 无论 issue 是否仍 open。
+                    if _load_json_output(output) is not None:
+                        self._await_pipeline_and_finish_succeeded(
+                            task_id, project_id, issue_iid, output)
+                        return
 
             # 记录本次失败详情（含 trace 提取），供界面「查看详细原因」按钮展示
             attempt_details.append({

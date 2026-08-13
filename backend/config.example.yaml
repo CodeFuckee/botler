@@ -13,11 +13,23 @@ worker:
   task_timeout_seconds: 1800          # 单任务超时 30 分钟
   max_retries: 2                      # 失败重试次数（"无法解决"不重试）
   reconcile_interval_seconds: 300     # 对账兜底扫描间隔
+  engine: claude                      # 任务执行引擎：claude（Claude Code CLI，
+                                      #   默认）/ hermes（部署机已装好的
+                                      #   hermes-agent，经 hermes_runner.py 调用）
 
 claude:
   command: claude
   args: ["-p", "--output-format", "json"]
   # Claude Code 认证继承自服务器环境变量（见 .env.example 注释）
+
+hermes:
+  # hermes 引擎（worker.engine: hermes 时生效）：部署机已装好的
+  # hermes-agent（源码 + venv，LLM 配置在 hermes 侧 ~/.hermes 已配好，
+  # botler 不管理）。command 填 hermes venv 的 python 绝对路径，
+  # args 填 botler 自带的 runner 脚本路径（容器内挂载后路径）。
+  # 部署细节见 docs/hermes-engine-deployment.md。
+  command: ""                         # 如 /opt/hermes/hermes-agent/venv/bin/python
+  args: ["/app/backend/hermes_runner.py"]
 
 templates:
   default: |

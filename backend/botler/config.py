@@ -85,6 +85,12 @@ class Settings:
     ci_wait_timeout_seconds: int = 1800
     claude_command: str = "claude"
     claude_args: list[str] = field(default_factory=lambda: ["-p", "--output-format", "json"])
+    # 任务执行引擎（issue #47）：claude = Claude Code CLI（默认，现网行为不变）；
+    # hermes = 部署机已装好的 hermes-agent（经 hermes_runner.py 进程内调用）。
+    # 非法值回退 claude（executor._engine 校验）。
+    engine: str = "claude"
+    hermes_command: str = ""
+    hermes_args: list[str] = field(default_factory=list)
     default_template: str = ""
     browse_default_path: str | None = None
     backup_enabled: bool = True
@@ -121,8 +127,10 @@ class Settings:
 KNOWN_FIELDS = {
     "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries",
                "reconcile_interval_seconds", "ci_wait_detect_seconds",
-               "ci_wait_interval_seconds", "ci_wait_timeout_seconds"},
+               "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
+               "engine"},
     "claude": {"command", "args"},
+    "hermes": {"command", "args"},
     "templates": {"default"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
@@ -203,6 +211,7 @@ class ConfigManager:
         gitlab = data.get("gitlab", {})
         worker = data.get("worker", {})
         claude = data.get("claude", {})
+        hermes = data.get("hermes", {})
         tpl = data.get("templates", {})
         browse = data.get("browse", {})
         backup = data.get("backup", {})
@@ -242,6 +251,9 @@ class ConfigManager:
             ci_wait_timeout_seconds=int(worker.get("ci_wait_timeout_seconds", 1800)),
             claude_command=claude.get("command", "claude"),
             claude_args=claude.get("args", ["-p", "--output-format", "json"]),
+            engine=str(worker.get("engine", "claude")).strip() or "claude",
+            hermes_command=str(hermes.get("command", "")).strip(),
+            hermes_args=hermes.get("args", []),
             default_template=tpl.get("default", DEFAULT_TEMPLATE),
             browse_default_path=browse.get("default_path") or None,
             backup_enabled=bool(backup.get("enabled", True)),
