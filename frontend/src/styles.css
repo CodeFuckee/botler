@@ -383,13 +383,14 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .status-dot.status-retrying { background: var(--warn); }
 
 /* ---- 日志 ---- */
+/* 任务详情页执行日志（issue #52）：无内部垂直滚动条，内容完整展示；
+   超长行仅横向滚动 */
 .log-list {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 10px 12px;
-  max-height: 420px;
-  overflow: auto;
+  overflow-x: auto;
   font-family: var(--mono);
   font-size: 12.5px;
 }
@@ -410,6 +411,12 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   font-size: 12.5px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+/* 任务详情页内嵌长文本（提示词 / claude 输出尾部，issue #52）：
+   取消内部滚动条完整展示，滚动交给页面最外层（概览页卡片不受影响） */
+.log-view-flat {
+  max-height: none;
+  overflow: visible;
 }
 
 /* ---- 提示 ---- */
@@ -587,9 +594,8 @@ code {
   margin-left: 8px;
   font-size: 12px;
 }
+/* 聊天记录（issue #52）：无内部垂直滚动条，消息完整展示 */
 .chat-list {
-  max-height: 420px;
-  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 10px;
@@ -647,25 +653,39 @@ code {
   margin-right: 6px;
   font-size: 11px;
 }
-.live-log-block {
-  margin-top: 10px;
-  font-size: 13px;
-}
-.live-log {
-  max-height: 300px;
-  overflow-y: auto;
-  margin-top: 8px;
-  font-size: 12px;
-}
-/* 事件流（SSE 实时输出）：虚拟滚动容器与各类事件行 */
+/* 事件流（SSE 实时输出，issue #52）：无内部垂直滚动条，事件完整展示 */
 .event-list {
-  height: 420px;
-  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 10px;
   margin-bottom: 16px;
   font-size: 13px;
+}
+/* 区块折叠标题按钮（issue #52）：事件流/聊天记录用 h3 级样式，
+   执行日志等卡片标题用 h2 级样式；点击切换展开/收起 */
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.section-toggle:hover { color: var(--primary); }
+.section-toggle .chevron { color: var(--muted); flex: 0 0 auto; }
+.section-toggle-h3 { font-size: 15px; font-weight: 600; margin: 14px 0 8px; }
+.section-toggle-h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 12px;
 }
 .event-row {
   margin-bottom: 6px;

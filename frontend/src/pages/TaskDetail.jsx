@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import { api, openTaskEventStream, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 
 // 任务仍可能产出新日志/聊天的状态（活跃期间持续轮询）
@@ -77,42 +76,25 @@ function EventRow({ e }) {
 }
 
 function EventList({ events }) {
-  // 长事件流虚拟滚动（@tanstack/react-virtual）：无真实 DOM 的测试/SSR
-  // 环境 parentRef 恒为 null，退化为全量渲染
-  const parentRef = useRef(null)
-  const [, force] = useState(0)
-  const setParent = useCallback((node) => {
-    parentRef.current = node
-    if (node) force((n) => n + 1) // ref 挂载后进入虚拟化渲染
-  }, [])
-  const virtualized = !!parentRef.current
-  const rowVirtualizer = useVirtualizer({
-    count: events.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 32,
-    overscan: 10,
-  })
-  const body = (() => {
-    if (!virtualized) {
-      return events.map((e, i) => <EventRow key={e.seq ?? i} e={e} />)
-    }
-    return (
-      <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
-        {rowVirtualizer.getVirtualItems().map((vi) => (
-          <div key={vi.key} data-index={vi.index} ref={rowVirtualizer.measureElement}
-               style={{ position: 'absolute', top: 0, left: 0, width: '100%',
-                        transform: `translateY(${vi.start}px)` }}>
-            <EventRow e={events[vi.index]} />
-          </div>
-        ))}
-      </div>
-    )
-  })()
+  // 事件流完整渲染（issue #52）：不做虚拟化、无内部垂直滚动条，
+  // 所有事件直线完整展示，滚动交给页面最外层
   return (
-    <div ref={setParent} className="event-list">
+    <div className="event-list">
       {events.length === 0 && <p className="muted">暂无事件（任务尚未开始执行）</p>}
-      {body}
+      {events.map((e, i) => <EventRow key={e.seq ?? i} e={e} />)}
     </div>
+  )
+}
+
+// 区块折叠标题（issue #52）：事件流/聊天记录/执行日志标题为可点击
+// 切换按钮，区块内容直线完整展示，滚动交给页面最外层
+function SectionToggle({ open, onClick, level, children }) {
+  return (
+    <button type="button" className={'section-toggle section-toggle-' + level}
+            aria-expanded={open} onClick={onClick}>
+      <span className="chevron">{open ? '▾' : '▸'}</span>
+      {children}
+    </button>
   )
 }
 
@@ -123,6 +105,10 @@ export default function TaskDetail() {
   const [error, setError] = useState('')
   const [showPrompt, setShowPrompt] = useState(false)
   const [showFileLog, setShowFileLog] = useState(true)
+  // 区块折叠状态（issue #52）：事件流/聊天记录/执行日志默认展开
+  const [showEvents, setShowEvents] = useState(true)
+  const [showChat, setShowChat] = useState(true)
+  const [showLogs, setShowLogs] = useState(true)
   // 实时执行面板（issue #20）：live 为 null 表示尚未拉取过
   const [live, setLive] = useState(null)
   const [liveDone, setLiveDone] = useState(false)
@@ -252,7 +238,7 @@ export default function TaskDetail() {
           {showPrompt ? '收起' : '查看'}提示词
         </button>
         {showPrompt && (
-          <pre className="log-view">{task.prompt || '（提示词未持久化，见执行日志）'}</pre>
+          <pre className="log-view log-view-flat">{task.prompt || '（提示词未持久化，见执行日志）'}</pre>
         )}
       </div>
 
@@ -260,45 +246,60 @@ export default function TaskDetail() {
         <h2>
           实时执行
           {live?.sessionId && <code className="muted small live-session">session {live.sessionId.slice(0, 8)}…</code>}
-          {!eventDone && <span className="muted small">（事件流实时推送）</span>}
         </h2>
-        <h3>事件流</h3>
-        <EventList events={events} />
-        <h3>聊天记录{!liveDone && live && <span className="muted small">（每 3 秒自动刷新）</span>}</h3>
-        {!live ? (
-          <p className="muted">加载中…</p>
-        ) : (
-          <div className="chat-list">
-            {live.transcript.length === 0 && (
-              <p className="muted">
-                {live.sessionId ? '暂无聊天消息' : '暂无聊天记录（会话尚未开始或会话文件不可读）'}
-              </p>
-            )}
-            {live.transcript.map((m, i) => <LiveMsg key={i} m={m} />)}
-          </div>
+        <SectionToggle open={showEvents} level="h3"
+                       onClick={() => setShowEvents(!showEvents)}>
+          事件流
+          {!eventDone && <span className="muted small">（实时推送）</span>}
+        </SectionToggle>
+        {showEvents && <EventList events={events} />}
+        <SectionToggle open={showChat} level="h3"
+                       onClick={() => setShowChat(!showChat)}>
+          聊天记录
+          {!liveDone && live && <span className="muted small">（每 3 秒自动刷新）</span>}
+        </SectionToggle>
+        {showChat && (
+          !live ? (
+            <p className="muted">加载中…</p>
+          ) : (
+            <div className="chat-list">
+              {live.transcript.length === 0 && (
+                <p className="muted">
+                  {live.sessionId ? '暂无聊天消息' : '暂无聊天记录（会话尚未开始或会话文件不可读）'}
+                </p>
+              )}
+              {live.transcript.map((m, i) => <LiveMsg key={i} m={m} />)}
+            </div>
+          )
         )}
       </div>
 
       <div className="card">
-        <h2>执行日志</h2>
-        <div className="log-list">
-          {task.logs.length === 0 && <p className="muted">暂无日志</p>}
-          {task.logs.map((l) => (
-            <div key={l.id} className={'log-line log-' + l.level}>
-              <span className="log-ts">{fmtTime(l.ts)}</span>
-              <span className="log-level">{l.level}</span>
-              <span>{l.message}</span>
-            </div>
-          ))}
-        </div>
+        <SectionToggle open={showLogs} level="h2"
+                       onClick={() => setShowLogs(!showLogs)}>
+          执行日志
+        </SectionToggle>
+        {showLogs && (
+          <div className="log-list">
+            {task.logs.length === 0 && <p className="muted">暂无日志</p>}
+            {task.logs.map((l) => (
+              <div key={l.id} className={'log-line log-' + l.level}>
+                <span className="log-ts">{fmtTime(l.ts)}</span>
+                <span className="log-level">{l.level}</span>
+                <span>{l.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {task.log_file_tail && (
         <div className="card">
-          <button className="btn" onClick={() => setShowFileLog(!showFileLog)}>
-            {showFileLog ? '收起' : '展开'} claude 输出尾部
+          <button className="btn" aria-expanded={showFileLog}
+                  onClick={() => setShowFileLog(!showFileLog)}>
+            {showFileLog ? '▾ 收起' : '▸ 展开'} claude 输出尾部
           </button>
-          {showFileLog && <pre className="log-view">{task.log_file_tail}</pre>}
+          {showFileLog && <pre className="log-view log-view-flat">{task.log_file_tail}</pre>}
         </div>
       )}
     </div>

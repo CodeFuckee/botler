@@ -84,6 +84,27 @@
     结果判定），runner 已在真实 hermes venv 冒烟验证；后端全量 521 passed +
     前端全量 167 passed。
 
+### Changed
+
+- **任务详情页滚动与折叠优化（issue #52）**：详情页只保留页面最外层的
+  垂直滚动条；事件流、聊天记录、执行日志、claude 输出尾部四个区块取消
+  各自内部的垂直滚动条、内容直线完整展示，标题改为可点击折叠/展开
+  （默认展开，事件流/聊天记录/执行日志为带 chevron 的标题按钮，
+  claude 输出尾部沿用「展开/收起」按钮）。
+  - 前端 `TaskDetail.jsx`：事件流移除 `@tanstack/react-virtual`
+    虚拟滚动改为全量渲染（与「完整展示」需求一致，长事件流不再受
+    420px 内部滚动窗限制）；新增 `SectionToggle` 折叠标题组件与
+    `showEvents/showChat/showLogs` 状态；提示词与 claude 输出尾部
+    加 `log-view-flat` 类取消内部滚动（概览页卡片不受影响）；
+  - 前端 `styles.css`：`.event-list`/`.chat-list` 移除固定高度与
+    `overflow-y`，`.log-list` 仅保留超长行横向滚动，新增
+    `.section-toggle` 系列样式；清理不再使用的 `.live-log` 死样式；
+  - 依赖：`@tanstack/react-virtual` 不再使用，已从 package.json 移除；
+  - 测试：新增 `task-detail-collapsible-sections.test.mjs` 6 用例
+    （三区块标题按钮默认展开 / 折叠隐藏后再次点击恢复 / claude 输出
+    尾部按钮切换 / 120 条事件全量渲染无截断）；前端全量 194 passed +
+    后端全量 591 passed。
+
 ### Fixed
 
 - **任务「用时」改为完整处理周期动态计算（issue #49）**：任务页「用时」
