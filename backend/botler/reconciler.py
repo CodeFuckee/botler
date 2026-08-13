@@ -15,13 +15,14 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .config import ConfigManager
 from .database import Database, STATUS_FAILED, STATUS_SUCCEEDED
 from .gitlab_client import GitLabClient, GitLabError
+from .labels import CLAIM_SKIP_LABELS
 from .scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
 
-# 终态标签（issue #30）：agent 只处理「没有 bot-done / bot-failed 标签且未关闭」的
-# issue。bot-done = 已完成待用户确认关闭；bot-failed = 处理失败待人工介入。
-# 带这两个标签的 issue 不再补入队，避免重复处理已完成的 issue、失败 issue 无限重试。
+# 终态标签（issue #30）：bot-done = 已完成待用户确认关闭；bot-failed = 处理失败
+# 待人工介入。用于终态标签对账（_backfill_terminal_labels）的补打判定。
+# 补入队过滤见 labels.CLAIM_SKIP_LABELS（终态标签 + need-verify，issue #41）。
 TERMINAL_LABELS = ("bot-done", "bot-failed")
 
 # 终态标签对账扫描的任务数上限（issue #40）：每次对账只回看每仓库最近
@@ -90,9 +91,11 @@ class Reconciler:
             for issue in issues:
                 scanned += 1
                 labels = set(issue.get("labels") or [])
-                if labels & set(TERMINAL_LABELS):
-                    hit = sorted(labels & set(TERMINAL_LABELS))
-                    logger.info("对账跳过终态标签 issue %s#%s（%s）",
+                # 领取过滤（issue #30 / #41）：终态标签 + need-verify
+                # （用户标记需人工验证，bot 不领取）一律不补入队
+                if labels & set(CLAIM_SKIP_LABELS):
+                    hit = sorted(labels & set(CLAIM_SKIP_LABELS))
+                    logger.info("对账跳过领取过滤标签 issue %s#%s（%s）",
                                 repo["gitlab_project_id"], issue["iid"], hit)
                     continue
                 # 最后发言人过滤（issue #34）：最后一条非系统评论是 bot 本人时

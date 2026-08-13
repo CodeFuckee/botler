@@ -34,6 +34,7 @@ LABELS = [
     # 流程/状态标签
     {"name": "in-progress", "color": "#6699cc", "description": "处理中（bot 领取 issue 时自动添加）"},
     {"name": "review",      "color": "#ff9800", "description": "待人工审查确认"},
+    {"name": "need-verify", "color": "#ffcc00", "description": "需要人工验证，bot 不领取"},
     {"name": "blocked",     "color": "#607d8b", "description": "等待补充信息/被阻塞"},
     {"name": "bot-done",    "color": "#6699cc", "description": "bot 已完成开发，待用户确认后关闭"},
     {"name": "bot-failed",  "color": "#6699cc", "description": "bot 处理失败，需人工介入"},

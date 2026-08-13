@@ -14,6 +14,7 @@ import logging
 from .config import ConfigManager
 from .database import Database
 from .gitlab_client import GitLabClient, GitLabError
+from .labels import CLAIM_SKIP_LABELS
 from .scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
@@ -83,11 +84,12 @@ class WebhookHandler:
         if bot_id not in cur_assignees:
             return {"accepted": False, "reason": "issue 未指派给 bot 账号"}
 
-        # 4. 终态标签过滤（issue #30）：bot-done（完成待用户确认）/ bot-failed
-        #    （失败待人工介入）的 issue 不入队——用户重新指派也不再重复处理。
+        # 4. 领取过滤标签（issue #30 / #41）：bot-done（完成待用户确认）/
+        #    bot-failed（失败待人工介入）/ need-verify（用户标记需人工验证，
+        #    bot 不领取）的 issue 不入队——用户重新指派也不再重复处理。
         #    以 API 最新标签为准（事件快照 labels 格式不可靠）
         cur_labels = current.get("labels") or []
-        for label in ("bot-done", "bot-failed"):
+        for label in CLAIM_SKIP_LABELS:
             if label in cur_labels:
                 logger.info("webhook 忽略已打 %s 的 issue %s#%s",
                             label, project_id, issue_iid)

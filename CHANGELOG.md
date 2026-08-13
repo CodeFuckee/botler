@@ -38,6 +38,21 @@
 
 ### Added
 
+- **标记库内置默认标签 need-verify + 领取任务过滤**（issue #41）：标记库默认
+  清单新增流程/状态标签 `need-verify`（黄色 `#ffcc00`，语义「需要人工验证，
+  bot 不领取」）；bot 领取任务（webhook 入队与对账补入队两处）时跳过带
+  need-verify 标签的 issue——用户给需人工验证的 issue 打上该标签后，bot
+  不再自动领取处理（沿用「以 API 最新标签为准」的既有过滤路径）。
+  - 后端：`labels.py` 默认清单新增 need-verify（内置 14 个）并新增统一常量
+    `CLAIM_SKIP_LABELS`（bot-done / bot-failed / need-verify）供领取过滤
+    引用；`webhook.py` 与 `reconciler.py` 的入队过滤改用该常量（终态标签
+    对账补打仍只看 bot-done / bot-failed，不受影响）。
+  - 文档/工具：`docs/labels.md` 与 `scripts/sync_labels.py` 同步新增
+    need-verify（GitLab 项目侧标签需运行 sync 脚本同步）。
+  - 测试：后端 `test_webhook.py` 新增 need-verify 拒绝入队 2 例、
+    `test_reconciler.py` 新增对账跳过 2 例、`test_api_labels.py` 默认清单
+    数量与包含断言更新；后端全量 453 passed + 前端全量 147 passed。
+
 - **概览页 CI/CD 流水线状态展示未启用仓库**（issue #39 第二轮）：流水线区块由
   「所有启用仓库」扩展为「所有配置仓库」——未启用（enabled=false）的仓库同样
   查询并展示最新流水线状态，卡片标题旁显示灰色「未启用」徽章（`badge-muted`）

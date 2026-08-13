@@ -47,11 +47,11 @@ class TestListLabels:
         r = api.get("/api/labels")
         assert r.status_code == 200
         data = r.json()
-        assert len(data["default"]) == 13
+        assert len(data["default"]) == 14
         assert data["default"][0]["name"] == "bug"
         # 默认清单含流程标签
         names = {l["name"] for l in data["default"]}
-        assert {"bug", "feature", "bot-done", "in-progress"} <= names
+        assert {"bug", "feature", "bot-done", "in-progress", "need-verify"} <= names
         assert data["custom"] == []
 
 

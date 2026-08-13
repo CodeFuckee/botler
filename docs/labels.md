@@ -23,13 +23,14 @@
 |---|---|---|
 | `in-progress` | `#6699cc` | 处理中（bot 领取 issue 时自动添加） |
 | `review` | `#ff9800` | 待人工审查确认 |
+| `need-verify` | `#ffcc00` | 需要人工验证，bot 不领取（由人工标记） |
 | `blocked` | `#607d8b` | 等待补充信息 / 被阻塞 |
 | `bot-done` | `#6699cc` | bot 已完成开发，待用户确认后关闭（**由 bot 添加，禁止 bot 移除**） |
 | `bot-failed` | `#6699cc` | bot 处理失败，需人工介入 |
 
 ## 使用约定
 
-1. **一个 issue 至少一个类型标签 + 至多一个流程标签**：类型标签描述工作性质，流程标签描述当前进展（通常为 `in-progress` 或 `blocked`；`bot-done` / `bot-failed` 由 bot 在收尾时打）。
+1. **一个 issue 至少一个类型标签 + 至多一个流程标签**：类型标签描述工作性质，流程标签描述当前进展（通常为 `in-progress` 或 `blocked`；`need-verify` 由人工标记、bot 领取任务时跳过；`bot-done` / `bot-failed` 由 bot 在收尾时打）。
 2. **优先级判定**（GitLab Issue Agent）：`test` > `bug` > `feature`；同优先级按 issue 更新时间升序处理。
 3. **禁止删除**：`bot-done` / `bot-failed` 由 bot 流程管理，人工不要移除；旧标签（如 `ci`）保留不删，仅新工作统一使用本规范标签。
 4. 新增标签需先更新本文件，再运行 `scripts/sync_labels.py` 同步到全部仓库。

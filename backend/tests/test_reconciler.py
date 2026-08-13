@@ -138,6 +138,44 @@ class TestReconcileSkipsTerminalLabeledIssues:
         assert task["triggered_by"] == "reconcile"
 
 
+class TestReconcileSkipsNeedVerifyIssues:
+    """issue #41：带 need-verify 标签（用户标记需人工验证）的 issue 不对账补入队。
+
+    与终态标签（bot-done/bot-failed）同理，对账扫描时若 issue 已打
+    need-verify，跳过不补入队——用户已明确该 issue 需要人工验证，
+    bot 不应领取处理。
+    """
+
+    def test_skips_need_verify_issue(self, ctx):
+        """已打 need-verify 的 issue 不补入队（需人工验证，bot 不领取）。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {42: [make_issue(7, labels=["bug", "need-verify"])]}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 0}
+        assert ctx.db.count_tasks() == 0
+
+    def test_need_verify_issue_skipped_among_clean_ones(self, ctx):
+        """混合队列：只有不带 need-verify 的 issue 被入队，带标签的全部跳过。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {
+            42: [
+                make_issue(1, labels=["bug"]),
+                make_issue(2, labels=["need-verify"]),
+                make_issue(3, labels=["feature", "need-verify"]),
+                make_issue(4),
+            ]}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 4, "enqueued": 2}
+        assert ctx.db.find_active_task(42, 1) is not None
+        assert ctx.db.find_active_task(42, 4) is not None
+        assert ctx.db.find_active_task(42, 2) is None
+        assert ctx.db.find_active_task(42, 3) is None
+
+
 class TestReconcileSkipsWhenBotLastSpoke:
     """issue #34：最后一个发言人（非系统评论）是 bot 时不对账补入队。
 

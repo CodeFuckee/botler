@@ -147,6 +147,36 @@ class TestWebhookSkipsTerminalLabeledIssues:
         assert ctx.db.count_tasks() == 0
 
 
+class TestWebhookSkipsNeedVerifyIssues:
+    """issue #41：带 need-verify 标签（用户标记需人工验证）的 issue 不领取。
+
+    与终态标签（bot-done/bot-failed）同理，webhook 收到 assignee / open
+    事件时若 issue 已打 need-verify，不得创建任务——用户已明确该 issue
+    需要人工验证，bot 不应领取处理。
+    """
+
+    def test_rejects_need_verify_issue(self, ctx):
+        """已打 need-verify：webhook 事件拒绝入队（需人工验证，bot 不领取）。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["bug", "need-verify"])
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert "need-verify" in result["reason"]
+        assert ctx.db.count_tasks() == 0
+
+    def test_snapshot_clean_but_api_need_verify(self, ctx):
+        """事件快照无 need-verify 但 API 已带：以 API 为准拒绝（快照不可靠）。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["need-verify"])
+
+        result = ctx.handler.handle(make_event(labels=["bug"]), "test-secret")
+
+        assert result["accepted"] is False
+        assert ctx.db.count_tasks() == 0
+
+
 class TestWebhookSkipsWhenBotLastSpoke:
     """issue #34：最后一个发言人（非系统评论）是 bot 时不重复领取。
 
