@@ -135,6 +135,26 @@ export function shortSha(sha) {
   return sha.length > 8 ? sha.slice(0, 8) : sha
 }
 
+// 相对时间人类可读（issue #43）：距今多久，供概览页流水线卡片展示
+// 提交时间用。与 fmtTime 同规则解析后端 UTC 无后缀时间串；60 秒内与
+// 未来时间（本地时钟偏差）统一按「刚刚」；空值/解析失败返回 null
+// （页面不渲染）。now 参数可注入固定时刻供测试。
+export function fmtAgo(ts, now = Date.now()) {
+  if (!ts) return null
+  const date = new Date(String(ts).replace(' ', 'T') + 'Z')
+  if (Number.isNaN(date.getTime())) return null
+  const sec = Math.floor((now - date.getTime()) / 1000)
+  if (sec < 60) return '刚刚'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min} 分钟前`
+  const hours = Math.floor(min / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days} 天前`
+  if (days < 365) return `${Math.floor(days / 30)} 个月前`
+  return `${Math.floor(days / 365)} 年前`
+}
+
 // 实时执行面板文本截断（issue #20）：超长文本截断到 max 字符并加省略号
 export function truncateText(text, max = 120) {
   if (!text) return ''

@@ -263,6 +263,18 @@ class GitLabClient:
         """流水线全部 jobs（含 stage / status / allow_failure，供概览页聚合 stage 状态）。"""
         return self._paged(f"/projects/{project_id}/pipelines/{pipeline_id}/jobs")
 
+    def get_commit(self, project_id: int, sha: str) -> dict | None:
+        """单条提交详情（issue #43：概览页取最近流水线对应提交的提交时间）。
+
+        返回 GitLab commit 对象（含 committed_date）；非 dict 返回 None。
+        commit 不存在（force-push 后 sha 失效）由 _request 抛 404 GitLabError，
+        由调用方决定降级策略。
+        """
+        commit = self._request("GET", f"/projects/{project_id}/repository/commits/{sha}")
+        if not isinstance(commit, dict):
+            return None
+        return commit
+
     # ---- issues ----
 
     def get_issue(self, project_id: int, iid: int) -> dict:

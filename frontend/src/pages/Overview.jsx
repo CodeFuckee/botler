@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, STATUS_META, shortSha } from '../api.js'
+import { api, STATUS_META, shortSha, fmtTime, fmtAgo } from '../api.js'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
 export const LIVE_STATUSES = ['running', 'retrying']
@@ -202,6 +202,12 @@ export default function Overview() {
                       <span className="pipeline-ref" title={`分支 ${pl.ref} · 提交 ${pl.sha}`}>
                         {pl.ref} · {shortSha(pl.sha)}
                       </span>
+                      {/* 最近流水线对应提交的提交时间 + 距今多久（issue #43） */}
+                      {p.commit_time && (
+                        <span className="pipeline-commit-time">
+                          {fmtTime(p.commit_time)}（{fmtAgo(p.commit_time) || '—'}）
+                        </span>
+                      )}
                       <div className="pipeline-stages">
                         {(p.stages || []).map((s, i) => (
                           <span key={i}

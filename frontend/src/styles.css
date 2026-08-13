@@ -846,6 +846,13 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 最近流水线对应提交的提交时间 + 距今多久（issue #43） */
+.pipeline-commit-time {
+  display: block;
+  margin: -6px 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
 .pipeline-stages {
   display: flex;
   gap: 12px;

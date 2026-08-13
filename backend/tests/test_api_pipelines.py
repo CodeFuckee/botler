@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from botler.api import router as api_router
-from botler.api.pipelines import aggregate_stages, _stage_status
+from botler.api.pipelines import aggregate_stages, _stage_status, _commit_time_utc
 from botler.config import ConfigManager
 from botler.database import Database
 from botler.gitlab_client import GitLabError
@@ -48,6 +48,9 @@ class StubGitLab:
         self.jobs_by_pipeline: dict[int, list[dict]] = {}
         self.fail_projects: set[int] = set()
         self.fail_jobs_pipelines: set[int] = set()
+        # commit 详情桩（issue #43）：按 (project_id, sha) 配置，默认 None（404 语义）
+        self.commits_by_sha: dict[tuple[int, str], dict | None] = {}
+        self.fail_commits: set[tuple[int, str]] = set()
         self.calls: list[str] = []
 
     def get_latest_pipeline(self, project_id):
@@ -61,6 +64,12 @@ class StubGitLab:
         if pipeline_id in self.fail_jobs_pipelines:
             raise GitLabError("模拟 jobs 查询故障")
         return self.jobs_by_pipeline.get(pipeline_id, [])
+
+    def get_commit(self, project_id, sha):
+        self.calls.append(f"commit:{project_id}:{sha}")
+        if (project_id, sha) in self.fail_commits:
+            raise GitLabError("模拟 commit 查询故障")
+        return self.commits_by_sha.get((project_id, sha))
 
 
 def make_pipeline(pid: int, status: str = "success", ref: str = "main",
@@ -360,3 +369,131 @@ class TestPipelinesOverview:
         tc.get("/api/pipelines/overview")
 
         assert stub.calls.count("pipeline:42") == 2
+
+
+# ---- 最近流水线对应提交的提交时间（issue #43） ----
+
+class TestCommitTimeUtc:
+    """纯函数：GitLab committed_date（ISO 8601 带时区）→ UTC 无后缀时间串。"""
+
+    def test_offset_converted_to_utc(self):
+        assert _commit_time_utc("2026-08-13T12:00:00.000+08:00") == "2026-08-13 04:00:00"
+
+    def test_z_suffix_treated_as_utc(self):
+        assert _commit_time_utc("2026-08-13T12:00:00.000Z") == "2026-08-13 12:00:00"
+
+    def test_naive_input_treated_as_utc(self):
+        """无时区后缀输入按 UTC 处理（GitLab 可能输出无后缀时间）。"""
+        assert _commit_time_utc("2026-08-13T12:00:00") == "2026-08-13 12:00:00"
+
+    def test_negative_offset_converted_to_utc(self):
+        assert _commit_time_utc("2026-08-13T01:30:00.000-05:00") == "2026-08-13 06:30:00"
+
+    def test_milliseconds_kept_truncated(self):
+        assert _commit_time_utc("2026-08-13T04:00:00.999+00:00") == "2026-08-13 04:00:00"
+
+    def test_empty_and_none(self):
+        assert _commit_time_utc(None) is None
+        assert _commit_time_utc("") is None
+
+    def test_invalid_format(self):
+        assert _commit_time_utc("not-a-date") is None
+        assert _commit_time_utc("2026/08/13 12:00") is None
+
+
+class TestOverviewCommitTime:
+    """API：每条结果带 commit_time（最近流水线对应提交的提交时间，UTC 无后缀）。"""
+
+    def test_overview_includes_commit_time(self, client):
+        """正常路径：有流水线仓库返回对应提交的提交时间（转 UTC 无后缀）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(731)}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+        stub.commits_by_sha = {(42, "abc123"): {
+            "id": "abc123",
+            "committed_date": "2026-08-13T12:00:00.000+08:00"}}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        entry = data["pipelines"][0]
+        assert entry["commit_time"] == "2026-08-13 04:00:00"
+        # 提交时间按 pipeline.sha 查询
+        assert "commit:42:abc123" in stub.calls
+
+    def test_overview_commit_query_failure_silent_null(self, client):
+        """commit 查询故障：静默降级为 None，不进 errors，卡片其余部分正常。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(731)}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+        stub.fail_commits = {(42, "abc123")}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        entry = data["pipelines"][0]
+        assert entry["commit_time"] is None
+        assert entry["pipeline"]["id"] == 731
+        assert [(s["name"], s["status"]) for s in entry["stages"]] == [("build", "success")]
+
+    def test_overview_commit_not_found_silent_null(self, client):
+        """commit 不存在（force-push 后 sha 失效，GitLab 404）：静默降级。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(731)}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+        # commits_by_sha 未配置 → get_commit 返回 None（404 语义）
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        assert data["pipelines"][0]["commit_time"] is None
+
+    def test_overview_no_pipeline_skips_commit_query(self, client):
+        """无流水线仓库不查 commit（避免无效 API 调用），commit_time 为 None。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        _add_repo(db, project_id=43, name="b")
+        stub.pipelines_by_project = {42: make_pipeline(731)}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        data = resp.json()
+        b = next(p for p in data["pipelines"] if p["repo_name"] == "b")
+        assert b["commit_time"] is None
+        assert not any(c.startswith("commit:43:") for c in stub.calls)
+
+    def test_overview_pipeline_without_sha(self, client):
+        """边界：pipeline 缺 sha 字段时 commit_time 为 None 且不查 commit。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(731, sha="")}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        data = resp.json()
+        assert data["pipelines"][0]["commit_time"] is None
+        assert not any(c.startswith("commit:") for c in stub.calls)
+
+    def test_overview_commit_without_date_field(self, client):
+        """边界：commit 对象缺 committed_date 字段时 commit_time 为 None。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(731)}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+        stub.commits_by_sha = {(42, "abc123"): {"id": "abc123"}}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        data = resp.json()
+        assert data["pipelines"][0]["commit_time"] is None

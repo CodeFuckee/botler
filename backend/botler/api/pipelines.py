@@ -8,6 +8,8 @@ GET /api/pipelines/overview：遍历所有配置仓库（含未启用，issue #3
 - 运行成功还是失败
 - 运行到哪个阶段（stage 状态：success/failed/running/pending/canceled）
 - 还有哪些阶段（stage 列表）
+- 最近流水线对应提交的提交时间（commit_time，issue #43；UTC 无后缀，
+  查询失败静默为 None，不进 errors）
 
 多仓库场景下单仓库失败不中断整体（HTTP 200），失败明细进 errors 列表
 （与 /tasks/reconcile-all 的 issue #38 模式一致）；无流水线仓库 pipeline
@@ -20,6 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 
@@ -105,6 +108,40 @@ def _trim_pipeline(pipeline: dict) -> dict:
     return {k: pipeline.get(k) for k in _PIPELINE_KEYS}
 
 
+def _commit_time_utc(value: str | None) -> str | None:
+    """GitLab commit API 的 committed_date（ISO 8601 带时区）→ UTC 无后缀
+    'YYYY-MM-DD HH:MM:SS'（与 executor 落库时间格式一致，issue #42 约定，
+    前端 fmtTime 按此格式解析）。空值 / 解析失败返回 None。
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)  # 无时区输入按 UTC 处理
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _lookup_commit_time(c, project_id: int, pipeline: dict) -> str | None:
+    """查最近流水线对应提交的提交时间（issue #43）。
+
+    提交时间仅为展示增强信息：commit 查询失败 / 不存在 / 缺字段时静默
+    降级为 None（不进 errors 列表），不影响卡片其余部分展示。
+    """
+    sha = pipeline.get("sha")
+    if not sha:
+        return None
+    try:
+        commit = c.gitlab.get_commit(project_id, sha)
+    except GitLabError:
+        return None
+    if not isinstance(commit, dict):
+        return None
+    return _commit_time_utc(commit.get("committed_date"))
+
+
 def _collect(c) -> dict:
     """遍历所有配置仓库（含未启用，issue #39 第二轮），聚合各仓库最新流水线状态。"""
     pipelines: list[dict] = []
@@ -112,7 +149,7 @@ def _collect(c) -> dict:
     for row in c.db.list_repos():
         entry = {"repo_id": row["id"], "repo_name": row["name"],
                  "enabled": bool(row["enabled"]),
-                 "pipeline": None, "stages": []}
+                 "pipeline": None, "stages": [], "commit_time": None}
         try:
             pipeline = c.gitlab.get_latest_pipeline(row["gitlab_project_id"])
             if pipeline is None:
@@ -121,6 +158,8 @@ def _collect(c) -> dict:
             jobs = c.gitlab.list_pipeline_jobs(row["gitlab_project_id"], pipeline["id"])
             entry["pipeline"] = _trim_pipeline(pipeline)
             entry["stages"] = aggregate_stages(jobs)
+            entry["commit_time"] = _lookup_commit_time(
+                c, row["gitlab_project_id"], pipeline)
         except GitLabError as e:
             errors.append(f"仓库 {row['name']}: {e}")
         pipelines.append(entry)

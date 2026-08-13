@@ -71,6 +71,26 @@
 
 ### Added
 
+- **概览页流水线卡片显示最近流水线对应提交的提交时间**（issue #43）：
+  概览页 CI/CD 流水线区块每张仓库卡片在分支 · sha 下方显示最近一次流水线
+  对应提交的提交时间（绝对时间，沿用页面时区配置）与距今多久（相对时间：
+  刚刚 / X 分钟前 / X 小时前 / X 天前 / X 个月前 / X 年前）。
+  - 后端：`gitlab_client.py` 新增 `get_commit`（单条提交详情）；`pipelines.py`
+    每条结果新增 `commit_time` 字段（committed_date 转 UTC 无后缀时间串，
+    与 executor 落库格式一致），commit 查询失败 / 不存在（force-push 后
+    sha 失效）/ 缺字段时静默降级为 None、不进 errors（时间仅为展示增强
+    信息，不影响卡片其余部分）；无流水线仓库不查 commit 避免无效 API 调用。
+  - 前端：`api.js` 新增 `fmtAgo` 相对时间纯函数（60 秒内与未来时间按
+    「刚刚」，30 天/365 天为月/年档边界，now 参数可注入供测试）；概览页
+    卡片渲染 `pipeline-commit-time` 节点（绝对+相对时间，commit_time 为
+    null 时不渲染）；`styles.css` 新增节点样式。
+  - 测试：后端 `test_api_pipelines.py` 新增 13 用例（时区转换纯函数 7 例
+    + API 正常/故障静默降级/404 静默降级/无流水线跳过查询/pipeline 缺
+    sha/commit 缺 committed_date 6 例）；前端新增
+    `pipeline-commit-time.test.mjs` 12 用例（fmtAgo 各档位与边界 9 例 +
+    渲染 2 例 + 源码/样式断言 1 例）；后端全量 471 passed + 前端全量
+    159 passed。
+
 - **标记库内置默认标签 need-verify + 领取任务过滤**（issue #41）：标记库默认
   清单新增流程/状态标签 `need-verify`（黄色 `#ffcc00`，语义「需要人工验证，
   bot 不领取」）；bot 领取任务（webhook 入队与对账补入队两处）时跳过带
