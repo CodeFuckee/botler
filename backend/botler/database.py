@@ -11,10 +11,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.environ.get("BOTLER_DB", os.path.join(os.path.dirname(os.path.dirname(__file__)), "botler.db"))
 
@@ -99,6 +103,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_task
 """
 
 
+def _parse_db_ts(s: str) -> datetime | None:
+    """解析库内时间串（'YYYY-MM-DD HH:MM:SS' 无时区后缀）。失败返回 None。"""
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def _near_any(t: datetime, others: list[datetime], tol: timedelta) -> bool:
+    """t 与列表任一时间差 ≤ tol（naive datetime 统一按 UTC 语义比较）。"""
+    return any(abs(t - o) <= tol for o in others)
+
+
 class Database:
     """线程安全的 SQLite 封装。"""
 
@@ -111,25 +128,83 @@ class Database:
             self._migrate(conn)
 
     def _migrate(self, conn) -> None:
-        """轻量迁移：给旧库补新增列（CREATE TABLE IF NOT EXISTS 不更新已有表）。"""
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
-        if "remote_name" not in cols:
-            conn.execute("ALTER TABLE repos ADD COLUMN remote_name TEXT")
-        task_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
-        if "error_detail" not in task_cols:
-            conn.execute("ALTER TABLE tasks ADD COLUMN error_detail TEXT")
-        if "claude_session_id" not in task_cols:
-            # issue #8：claude --resume 会话断点续跑——记录上次执行的 claude 会话，
-            # 重启/重试后用于接续对话（从上次结束的地方继续）
-            conn.execute("ALTER TABLE tasks ADD COLUMN claude_session_id TEXT")
-        if "hermes_history" not in task_cols:
-            # issue #47：hermes 引擎断点续跑——记录上次执行的会话消息历史
-            # （runner 输出的 messages JSON），重试/重启后作为
-            # conversation_history 传入接续对话（Q3-B 等价实现）
-            conn.execute("ALTER TABLE tasks ADD COLUMN hermes_history TEXT")
-        if "commit_sha" not in task_cols:
-            # issue #19：任务成功时记录对应提交的完整 sha（任务页面 commit 链接）
-            conn.execute("ALTER TABLE tasks ADD COLUMN commit_sha TEXT")
+        """轻量迁移（PRAGMA user_version 版本化）。
+
+        v0 → v1：给旧库补新增列（CREATE TABLE IF NOT EXISTS 不更新已有表）；
+        v1 → v2：修正旧版 executor 按本地 CST 写入的 started_at/finished_at
+                 （issue #49 第二轮：550e04f 部署前的存量数据，前端按 UTC
+                 解析会偏移 +8 小时）。
+        """
+        ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        if ver < 1:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+            if "remote_name" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN remote_name TEXT")
+            task_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "error_detail" not in task_cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN error_detail TEXT")
+            if "claude_session_id" not in task_cols:
+                # issue #8：claude --resume 会话断点续跑——记录上次执行的 claude 会话，
+                # 重启/重试后用于接续对话（从上次结束的地方继续）
+                conn.execute("ALTER TABLE tasks ADD COLUMN claude_session_id TEXT")
+            if "hermes_history" not in task_cols:
+                # issue #47：hermes 引擎断点续跑——记录上次执行的会话消息历史
+                # （runner 输出的 messages JSON），重试/重启后作为
+                # conversation_history 传入接续对话（Q3-B 等价实现）
+                conn.execute("ALTER TABLE tasks ADD COLUMN hermes_history TEXT")
+            if "commit_sha" not in task_cols:
+                # issue #19：任务成功时记录对应提交的完整 sha（任务页面 commit 链接）
+                conn.execute("ALTER TABLE tasks ADD COLUMN commit_sha TEXT")
+            conn.execute("PRAGMA user_version = 1")
+            ver = 1
+        if ver < 2:
+            fixed = self._fix_legacy_cst_timestamps(conn)
+            if fixed:
+                logger.info("迁移：已修正 %s 个旧版 CST 时间戳字段为 UTC（issue #49）", fixed)
+            conn.execute("PRAGMA user_version = 2")
+
+    def _fix_legacy_cst_timestamps(self, conn) -> int:
+        """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
+
+        550e04f（issue #42）前旧版 executor 用 time.strftime()（无 gmtime）按
+        容器本地时区（部署固定 Asia/Shanghai，UTC+8）写 started_at/finished_at
+        无时区后缀串，与 created_at（SQLite datetime('now') UTC）及前端「按 UTC
+        解析」契约不一致，任务页「用时」虚增 8 小时（任务 #65 显示 8 小时，
+        实际 9 分钟）。
+
+        以 task_logs 的 ts（恒为 datetime('now') UTC）为参照逐字段判定：
+        - H_UTC 优先：串按 UTC 解析后与任一日志 ts 差 ≤ 10 分钟 → 已是 UTC，
+          不动（排队 8 小时以上的任务首条日志恰在 t-8h 附近，先判 H_CST 会误减）；
+        - 否则 H_CST：解析结果减 8 小时与任一日志 ts 差 ≤ 10 分钟 → CST 串，
+          改写为减 8 小时后的 UTC 串；
+        - 均不命中（无日志等）→ 保守不动。
+        幂等：修正后串按 UTC 解析与日志直接吻合，重复执行不再命中 H_CST。
+        返回修正的字段个数。
+        """
+        cst_offset = timedelta(hours=8)   # 旧数据写入时容器 TZ 固定 Asia/Shanghai
+        tolerance = timedelta(minutes=10)
+        fixed = 0
+        rows = conn.execute(
+            "SELECT id, started_at, finished_at FROM tasks").fetchall()
+        for row in rows:
+            logs = [r["ts"] for r in conn.execute(
+                "SELECT ts FROM task_logs WHERE task_id=? ORDER BY id", (row["id"],))]
+            log_times = [t for t in (_parse_db_ts(s) for s in logs) if t is not None]
+            for col in ("started_at", "finished_at"):
+                val = row[col]
+                if not val or not log_times:
+                    continue
+                t = _parse_db_ts(val)
+                if t is None:
+                    continue
+                if _near_any(t, log_times, tolerance):        # H_UTC：已是 UTC
+                    continue
+                if _near_any(t - cst_offset, log_times, tolerance):  # H_CST：存量本地串
+                    conn.execute(
+                        f"UPDATE tasks SET {col}=? WHERE id=?",
+                        ((t - cst_offset).strftime("%Y-%m-%d %H:%M:%S"), row["id"]))
+                    fixed += 1
+        return fixed
 
     @contextmanager
     def _conn(self):

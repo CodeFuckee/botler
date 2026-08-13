@@ -74,6 +74,27 @@
     兜底）+ `tasks-duration-calculation.test.mjs`（列表与详情渲染断言
     40 分钟完整周期、源码不依赖 started_at）。
 
+- **任务「用时」仍显示不正确：存量 CST 时间戳数据迁移为 UTC**（issue #49
+  第二轮）：用户以任务 #65 验证——该任务 14:38:41（本地）创建、14:48:10 打
+  bot-done，18:20 查看时页面显示用时 8 小时（实际 9 分 29 秒）。根因：
+  550e04f（issue #42）部署前旧版 executor 用 `time.strftime()`（无 gmtime）
+  按容器本地 CST 写 `started_at`/`finished_at` 无时区后缀串，与 `created_at`
+  （SQLite `datetime('now')` UTC）及前端「按 UTC 解析」契约不一致；第一轮只
+  修了新数据写入，存量 CST 串按 UTC 解析偏移 +8 小时（终点落在未来）。
+  - 后端 `database.py`：启动迁移新增 v2 步骤（`PRAGMA user_version` 版本化）
+    `_fix_legacy_cst_timestamps`——以 `task_logs.ts`（恒为 UTC）为参照逐字段
+    判定：串按 UTC 解析后与任一日志差 ≤ 10 分钟 → 已是 UTC 不动（H_UTC 优先，
+    排队 8 小时以上的任务首条日志恰在 t-8h 附近不会被误减）；否则解析结果减
+    8 小时与任一日志差 ≤ 10 分钟 → CST 串，改写为减 8 小时后的 UTC 串；均不
+    命中（无日志等）→ 保守不动；幂等（修正后与日志直接吻合，重复执行不再
+    命中）；
+  - 生产数据实测：78 个任务 152 个字段迁移后与日志全部吻合（任务 #65
+    finished_at 14:48:10 → 06:48:10，页面用时恢复 9 分钟；一键停止写 UTC 的
+    #47 与 550e04f 后的 #66+ 均保持不动）；
+  - 测试：新增 `test_database_legacy_cst.py` 7 用例（CST 修正 / UTC 不动 /
+    一键停止 UTC 特例不动 / 排队 8 小时不误判 / 无日志保守不动 / 幂等 /
+    user_version 标记）。
+
 - **概览页 CI/CD 流水线阶段顺序反转（sync→deploy→build）**（issue #44）：
   概览页流水线区块的 stage 展示顺序与 `.gitlab-ci.yml` 定义顺序相反
   （执行 build→deploy→sync，显示 sync→deploy→build）。根因：GitLab
