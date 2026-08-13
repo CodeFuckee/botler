@@ -57,6 +57,18 @@
 
 ### Fixed
 
+- **任务页面「尝试」列数值与「恢复」文字不在同一水平线上**（issue #31）：
+  任务列表「尝试」列单元格内混排纯文本数值 `attempt_count`（继承 body 14px /
+  line-height 1.6）与恢复任务的 `badge.resume`（inline-block，11px，padding
+  1px 8px，border 1px）——`.badge` 默认 `vertical-align: baseline`，基线对齐下
+  胶囊的 padding/border 下沉到基线以下、小字号视觉中心低于数值中心，两者不在
+  同一水平线上。
+  - 修复：`.badge.resume` 增加 `vertical-align: middle`（与 `h1 .badge` 的既有
+    处理方式一致），胶囊与数值垂直居中对齐。
+  - 涉及 `frontend/src/styles.css`；新增复现测试
+    `tests/tasks-attempt-badge-align.test.mjs` 2 用例（修复前 1 个稳定失败）。
+    前端全量 68 passed + 后端全量 353 passed。
+
 - **配置（启用）Synology SSO 后页面无限刷新**（issue #27 第五轮）：`App.jsx` 的
   「时区加载」effect 无条件请求 `/api/settings`（未像通知轮询那样加 auth 守卫）——
   SSO 启用后（配置即时生效）未登录访问该接口被 `SsoGuardMiddleware` 返回 401，

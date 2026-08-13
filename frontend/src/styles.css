@@ -323,7 +323,9 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .status-interrupted { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
 .badge-muted { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
 /* 断点续跑标记（issue #8）：任务从上次中断的 claude 会话恢复执行 */
-.badge.resume { margin-left: 6px; background: var(--primary-weak); color: var(--primary); font-size: 11px; }
+/* vertical-align: middle（issue #31）：badge 与尝试次数数值混排，基线对齐时胶囊
+   padding/border 下沉到基线以下、小字号视觉中心偏低，改为 middle 与数值居中对齐 */
+.badge.resume { margin-left: 6px; background: var(--primary-weak); color: var(--primary); font-size: 11px; vertical-align: middle; }
 
 /* ---- 统计条 ---- */
 .stats-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
