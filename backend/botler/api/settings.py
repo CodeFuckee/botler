@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,6 +17,11 @@ from ..config import KNOWN_FIELDS
 from ..templates import PLACEHOLDERS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+# SSO 配置指南文档（issue #27 第六轮）：设置页直接展示，避免使用者去
+# 查看代码仓库本地文档。路径与 main.py 的 PROJECT_ROOT/docs 对应
+# （backend/botler/api/settings.py → 上溯三级到项目根）。
+SSO_GUIDE_PATH = Path(__file__).resolve().parents[3] / "docs" / "Synology-SSO-配置指南.md"
 
 
 class WorkerPatch(BaseModel):
@@ -102,6 +108,20 @@ def get_settings(request: Request):
             "anthropic_model": os.environ.get("ANTHROPIC_MODEL", ""),
         },
     }
+
+
+@router.get("/sso-guide")
+def get_sso_guide():
+    """SSO 配置指南（issue #27 第六轮）：返回 docs/ 指南 Markdown 原文。
+
+    前端设置页直接渲染展示（单一文档来源，docs/ 改动即页面生效）；
+    文档缺失时 404，前端降级提示不阻塞设置页其他功能。
+    """
+    try:
+        content = SSO_GUIDE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        raise HTTPException(status_code=404, detail="SSO 配置指南文档不存在")
+    return {"content": content}
 
 
 @router.put("")

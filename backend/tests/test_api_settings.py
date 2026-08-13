@@ -117,7 +117,7 @@ class TestSsoSettings:
         assert data["well_known_url"] == ""
         assert data["client_id"] == ""
         assert data["client_secret_masked"] == ""
-        assert data["session_days"] == 7
+        assert data["session_days"] == 30  # 默认 30 天（issue #27 第三轮用户确认）
 
     def test_update_sso_persists(self, client):
         """PUT sso 段写回 config.yaml 并可读回。"""

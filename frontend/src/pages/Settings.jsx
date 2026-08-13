@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, setDisplayTz, fmtTime } from '../api.js'
 import { sendTestNotification } from '../notify.js'
 import BackupManager from '../components/BackupManager.jsx'
+import Markdown from '../components/Markdown.jsx'
 
 const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
@@ -40,6 +41,11 @@ export default function Settings() {
   // 全局「保存」按钮在下方「任务调度」卡片，SSO 卡片（第一位）内需可独立保存
   const [ssoBusy, setSsoBusy] = useState(false)
   const [ssoSaved, setSsoSaved] = useState(false)
+  // SSO 配置指南（issue #27 第六轮）：使用者看不到仓库本地文档，改为
+  // 从后端拉取 docs/ 指南 Markdown 在设置页直接展示（默认收起，点击展开）
+  const [guide, setGuide] = useState(null)
+  const [guideError, setGuideError] = useState('')
+  const [guideOpen, setGuideOpen] = useState(false)
 
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
@@ -76,6 +82,8 @@ export default function Settings() {
 
   useEffect(() => {
     api.get('/api/settings').then(setSettings).catch((e) => setError(e.message))
+    api.get('/api/settings/sso-guide').then((d) => setGuide(d.content))
+      .catch((e) => setGuideError(e.message))
     loadEnv()
   }, [])
 
@@ -222,7 +230,7 @@ export default function Settings() {
                   type="number"
                   min={1}
                   max={365}
-                  value={settings.sso?.session_days ?? 7}
+                  value={settings.sso?.session_days ?? 30}
                   onChange={(e) => setSsoField('session_days', e.target.value)}
                 />
               </td>
@@ -261,9 +269,25 @@ export default function Settings() {
         <p className="muted small">
           接入群晖 SSO Server（OIDC 协议）：先在群晖「SSO Server → 应用程序」新增 OIDC 应用，
           填写回调地址并记下 Application ID / Secret，再回此页填写并保存。
-          群晖侧详细步骤见 <code>docs/Synology-SSO-配置指南.md</code>。
           修改后点击下方「保存 SSO 配置」生效；启用后当前会话不受影响，下次访问需登录。
+          完整的配置步骤（含群晖侧设置与常见问题）见下方「查看 SSO 配置指南」。
         </p>
+        <div className="guide-box">
+          <button className="btn" onClick={() => setGuideOpen((v) => !v)}>
+            {guideOpen ? '收起 SSO 配置指南' : '查看 SSO 配置指南'}
+          </button>
+          {guideOpen && (
+            <div className="guide-content">
+              {guideError && (
+                <div className="alert alert-error" onClick={() => setGuideError('')}>
+                  指南文档不可用：{guideError}
+                </div>
+              )}
+              {!guide && !guideError && <p className="muted">指南加载中…</p>}
+              {guide && <Markdown content={guide} />}
+            </div>
+          )}
+        </div>
       </div>
 
       <h1>系统设置</h1>

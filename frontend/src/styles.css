@@ -768,3 +768,55 @@ code {
   font-size: 12px;
   background: var(--bg);
 }
+
+/* ---- SSO 配置指南折叠区（issue #27 第六轮） ---- */
+/* 使用者看不到仓库本地文档，设置页直接展示 docs/Synology-SSO-配置指南.md
+   的渲染结果；guide-content 内是轻量 Markdown 渲染器（components/Markdown.jsx）
+   输出的 h1~h4 / p / pre / ul / ol / table / blockquote，沿用页面既有风格 */
+.guide-box { margin-top: 12px; }
+.guide-content {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  max-height: 520px;
+  overflow-y: auto;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.guide-content h1 { margin: 4px 0 12px; font-size: 17px; }
+.guide-content h2 { margin: 18px 0 8px; padding-bottom: 4px; font-size: 15px; border-bottom: 1px solid var(--border); }
+.guide-content h3,
+.guide-content h4 { margin: 14px 0 6px; font-size: 14px; }
+.guide-content p { margin: 6px 0; }
+.guide-content ul,
+.guide-content ol { margin: 6px 0; padding-left: 24px; }
+.guide-content li { margin: 3px 0; }
+.guide-content pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-active);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.guide-content code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--bg-active);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.guide-content pre code { background: none; padding: 0; }
+.guide-content blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--border-hover);
+  color: var(--muted);
+  background: var(--bg-card);
+}
+.guide-content blockquote p { margin: 2px 0; }
+.guide-content a { color: var(--primary); }
+.guide-content table { font-size: 12.5px; }

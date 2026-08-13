@@ -96,7 +96,8 @@ class Settings:
     sso_client_id: str = ""
     sso_client_secret: str = ""
     sso_scope: str = "openid profile email"
-    sso_session_days: int = 7
+    # 默认 30 天（issue #27 第三轮用户确认；历史实现误为 7）
+    sso_session_days: int = 30
     sso_redirect_uri: str = ""  # 回调地址；留空 = 按浏览器访问地址动态生成
     sso_verify_ssl: bool = True  # 群晖自签名证书时设 false
     repos: list[RepoConfig] = field(default_factory=list)
@@ -239,7 +240,7 @@ class ConfigManager:
             sso_client_id=sso.get("client_id", ""),
             sso_client_secret=sso.get("client_secret", ""),
             sso_scope=(sso.get("scope") or "openid profile email").strip(),
-            sso_session_days=int(sso.get("session_days", 7)),
+            sso_session_days=int(sso.get("session_days", 30)),
             sso_redirect_uri=sso.get("redirect_uri", ""),
             sso_verify_ssl=bool(sso.get("verify_ssl", True)),
             repos=repos,

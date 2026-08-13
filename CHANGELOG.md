@@ -72,6 +72,28 @@
     webhook/health 放行）+ `test_api_settings.py` 追加 sso 段 6 个用例。
     后端全量 330 passed + 前端 46 passed + build 通过。
 
+### Changed
+
+- **SSO 配置指南直接显示在设置页 + 提示文字优化**（issue #27 第六轮）：
+  平台使用者看不到代码仓库里的本地文档 `docs/Synology-SSO-配置指南.md`，
+  SSO 卡片说明此前指向该本地文件路径（部署环境中不存在）。改为设置页
+  从后端拉取指南 Markdown 并渲染展示，文档内容与 `docs/` 单一来源同步；
+  同时修正登录有效期默认值 7 → 30 天（用户第三轮已确认 30 天，历史实现偏差）。
+  - 后端：`GET /api/settings/sso-guide` 读取 `docs/Synology-SSO-配置指南.md`
+    返回 Markdown 原文（文件缺失 404 降级，SSO 启用时同受登录保护）；
+    `config.py` `sso_session_days` 默认值 7 → 30。
+  - 前端：新增 `components/Markdown.jsx` 轻量渲染器（标题/段落/围栏代码块/
+    嵌套列表/表格/引用块/行内粗体、代码、链接，全部走 React 文本节点天然
+    防 XSS，无第三方依赖）；设置页 SSO 卡片内新增「查看 SSO 配置指南」折叠区
+    （默认收起，点击展开渲染文档）；卡片说明文字去掉本地 docs/ 路径指向、
+    改为指向页面内指南；`session_days` 输入框 fallback 7 → 30。
+  - 文档：`docs/Synology-SSO-配置指南.md` 同步默认有效期 30 天（两处）。
+  - 测试：后端 `tests/test_api_sso_guide.py` 4 用例（内容契约/文件缺失 404/
+    SSO 保护/默认 30 天）+ 前端 `tests/markdown.test.mjs` 11 用例（各语法/
+    空值边界/XSS 转义/长文档混合）与 `tests/settings-sso-guide.test.mjs`
+    4 用例（不指向本地路径/折叠区/默认 30/渲染交互）。后端全量 379 passed +
+    前端全量 102 passed + build 通过。
+
 ### Fixed
 
 - **领取任务重复入队：缺少「最后发言人」判断、bot-done 依赖 Claude 手打**（issue #34）：
