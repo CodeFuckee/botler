@@ -239,16 +239,25 @@ class Database:
         with self._conn() as conn:
             return conn.execute(sql, params).fetchall()
 
-    def count_tasks(self, status: str | list[str] | None = None) -> int:
-        sql = "SELECT COUNT(*) AS c FROM tasks"
+    def count_tasks(self, status: str | list[str] | None = None,
+                    repo_id: int | None = None, search: str | None = None) -> int:
+        # 过滤条件与 list_tasks 保持一致（issue #50：翻页组件按 total 计算
+        # 总页数，total 必须跟随 repo_id/search 筛选，否则筛选后总页数偏大）
+        sql = "SELECT COUNT(*) AS c FROM tasks WHERE 1=1"
         params: list = []
         if status:
             if isinstance(status, str):
-                sql += " WHERE status=?"
+                sql += " AND status=?"
                 params.append(status)
             else:
-                sql += f" WHERE status IN ({', '.join('?' * len(status))})"
+                sql += f" AND status IN ({', '.join('?' * len(status))})"
                 params.extend(status)
+        if repo_id:
+            sql += " AND repo_id=?"
+            params.append(repo_id)
+        if search:
+            sql += " AND (issue_title LIKE ? OR CAST(issue_iid AS TEXT) LIKE ?)"
+            params.extend([f"%{search}%", f"%{search}%"])
         with self._conn() as conn:
             return conn.execute(sql, params).fetchone()["c"]
 

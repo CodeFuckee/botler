@@ -103,7 +103,8 @@ def list_tasks(
     repos = {r["id"]: {"name": r["name"], "url": r["url"]} for r in c.db.list_repos()}
     return {
         "tasks": [_task_to_dict(r, repos.get(r["repo_id"])) for r in rows],
-        "total": c.db.count_tasks(status=statuses),
+        # total 与 list_tasks 同套过滤条件（issue #50 翻页组件按 total 计算总页数）
+        "total": c.db.count_tasks(status=statuses, repo_id=repo_id, search=search),
         "stats": c.db.task_stats(),
     }
 

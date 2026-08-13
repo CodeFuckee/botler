@@ -6,6 +6,23 @@
 
 ### Added
 
+- **任务页面增加翻页组件（issue #50）**：任务列表页此前固定只显示
+  最近 50 条（「最多显示 50 条」），更早的历史任务无法在页面浏览。
+  现利用后端已有 limit/offset 分页能力，页面底部新增翻页组件：
+  上一页/页码数字/下一页 + 当前页信息（`第 X / Y 页`），每页 50 条；
+  状态/仓库/搜索筛选变化自动重置回第 1 页，5s 自动刷新保持当前页；
+  单页（total ≤ 50）与空列表不渲染翻页组件。
+  - 后端 `database.py`：`count_tasks` 扩展 `repo_id`/`search` 过滤
+    （与 `list_tasks` 过滤一致），`api/tasks.py` 的 `total` 随之跟随
+    当前筛选——否则筛选后 total 偏大、总页数错误；
+  - 前端 `Tasks.jsx`：新增 `page` 状态与 `offset` 请求参数、导出
+    `pageNumbers` 页码窗口函数（≤7 页全显示，多页显示首尾 + 当前 ±1 +
+    省略号）；`styles.css` 新增 `.pagination` 样式；
+  - 测试：`test_api_tasks.py` 新增 4 用例（total 跟随 repo/search/
+    组合筛选、无匹配为 0）+ `tasks-pagination.test.mjs` 12 用例
+    （翻页渲染与禁用态、点击翻页 offset 正确、筛选重置、单页/空列表
+    隐藏、pageNumbers 边界）。
+
 - **本地环境检测增加 hermes 检测（issue #48）**：设置页「本地环境检测」
   卡片新增 Hermes Agent 项（`hermes --version` 检测安装与版本）。hermes 为
   git 安装的内部 agent，无 npm/GitHub 公开发布源，不查最新版本

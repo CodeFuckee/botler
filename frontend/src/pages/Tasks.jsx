@@ -2,12 +2,33 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 
+// 每页条数（与后端 limit 一致，issue #50 翻页）
+const PAGE_SIZE = 50
+
+// 翻页组件页码窗口（issue #50）：页数少（≤7）时全量显示；
+// 页数多时显示首尾页 + 当前页 ±1，中间省略号。返回数组元素为数字或 '…'。
+export function pageNumbers(totalPages, current) {
+  if (totalPages <= 0) return []
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1)
+  const set = new Set([1, totalPages, current - 1, current, current + 1])
+  const nums = [...set].filter((n) => n >= 1 && n <= totalPages).sort((a, b) => a - b)
+  const out = []
+  let prev = 0
+  for (const n of nums) {
+    if (n - prev > 1) out.push('…')
+    out.push(n)
+    prev = n
+  }
+  return out
+}
+
 export default function Tasks() {
   const [data, setData] = useState({ tasks: [], total: 0, stats: {} })
   const [status, setStatus] = useState('')
   const [search, setSearch] = useState('')
   const [repos, setRepos] = useState([])
   const [repoId, setRepoId] = useState('')
+  const [page, setPage] = useState(1) // 当前页（issue #50 翻页组件）
   const [error, setError] = useState('')
   const [detailTask, setDetailTask] = useState(null) // 正在查看详细失败原因的任务
   const [stopMsg, setStopMsg] = useState('') // 一键停止成功提示（issue #35）
@@ -20,7 +41,10 @@ export default function Tasks() {
 
   const load = useCallback(async () => {
     try {
-      const q = new URLSearchParams({ limit: '50' })
+      const q = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String((page - 1) * PAGE_SIZE),
+      })
       if (status) q.set('status', status)
       if (search.trim()) q.set('search', search.trim())
       if (repoId) q.set('repo_id', repoId)
@@ -29,7 +53,10 @@ export default function Tasks() {
     } catch (e) {
       setError(e.message)
     }
-  }, [status, search, repoId])
+  }, [status, search, repoId, page])
+
+  // 总页数（issue #50）：total 为 0 时也保持 ≥1，组件渲染条件另由 totalPages > 1 控制
+  const totalPages = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
 
   // 有活跃任务时每 5s 自动刷新
   useEffect(() => {
@@ -130,13 +157,14 @@ export default function Tasks() {
 
       <div className="card">
         <div className="form-row wrap">
-          <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}>
+          {/* 筛选变化重置回第 1 页（issue #50），避免停留在越界页码 */}
+          <select className="input" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }}>
             <option value="">全部状态</option>
             {Object.entries(STATUS_META).map(([k, v]) => (
               <option key={k} value={k}>{v.label}</option>
             ))}
           </select>
-          <select className="input" value={repoId} onChange={(e) => setRepoId(e.target.value)}>
+          <select className="input" value={repoId} onChange={(e) => { setRepoId(e.target.value); setPage(1) }}>
             <option value="">全部仓库</option>
             {repos.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
@@ -144,7 +172,7 @@ export default function Tasks() {
             className="input grow"
             placeholder="搜索 issue 标题或编号…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(1) }}
           />
           {/* 一键停止所有任务（issue #35）：高危操作，需确认；无活跃任务或请求中禁用 */}
           <button
@@ -242,7 +270,45 @@ export default function Tasks() {
           </tbody>
           </table>
         </div>
-        <p className="muted small">共 {data.total} 条（最多显示 50 条）</p>
+        <p className="muted small">共 {data.total} 条</p>
+
+        {/* 翻页组件（issue #50）：多页时显示；上一页/页码/下一页 + 当前页信息 */}
+        {totalPages > 1 && (
+          <div className="pagination">
+            <button
+              className="btn btn-sm"
+              disabled={page === 1}
+              onClick={() => setPage(page - 1)}
+              title="上一页"
+            >
+              ‹ 上一页
+            </button>
+            {pageNumbers(totalPages, page).map((n, i) =>
+              n === '…' ? (
+                <span key={`gap-${i}`} className="muted">…</span>
+              ) : (
+                <button
+                  key={n}
+                  className={'btn btn-sm' + (n === page ? ' btn-primary' : '')}
+                  disabled={n === page}
+                  onClick={() => setPage(n)}
+                  title={`第 ${n} 页`}
+                >
+                  {String(n)}
+                </button>
+              ),
+            )}
+            <button
+              className="btn btn-sm"
+              disabled={page === totalPages}
+              onClick={() => setPage(page + 1)}
+              title="下一页"
+            >
+              下一页 ›
+            </button>
+            <span className="muted small">{`第 ${page} / ${totalPages} 页`}</span>
+          </div>
+        )}
       </div>
 
       {detailTask && (

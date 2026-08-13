@@ -271,6 +271,9 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 /* 宽表格滚动容器（issue #28）：任务列表等 12 列表格最小宽度超出容器时，
    在容器内横向滚动而非溢出卡片白色底 */
 .table-wrap { overflow-x: auto; }
+/* 任务列表翻页组件（issue #50）：上一页/页码/下一页横向排列，窄视口自动换行 */
+.pagination { display: flex; align-items: center; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+.pagination .muted.small { margin-left: 8px; }
 .table { width: 100%; border-collapse: collapse; }
 /* 任务列表固定布局（issue #28 第二轮）：table-layout: auto 下表格被内容撑到
    min-content（实测 1628px），而 .content max-width 封顶 1600px，任何桌面视口

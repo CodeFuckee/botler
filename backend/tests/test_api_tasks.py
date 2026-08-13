@@ -185,6 +185,65 @@ class TestListTasks:
         assert app_client.get("/api/tasks", params={"limit": 0}).status_code == 422
         assert app_client.get("/api/tasks", params={"limit": 201}).status_code == 422
 
+    # ---- issue #50：翻页组件依赖的 total 契约 ----
+    # 任务页面翻页组件按 total 计算总页数；total 必须与当前筛选条件
+    # （repo_id / search）一致，否则筛选后总页数偏大、翻页越界。
+
+    def test_total_follows_repo_filter(self, client):
+        """repo_id 筛选时 total 只统计该仓库的任务（翻页总页数正确）。"""
+        app_client, db = client
+        repo_a = _mk_repo(db, project_id=1, name="repo-a")
+        repo_b = _mk_repo(db, project_id=2, name="repo-b")
+        _mk_task(db, repo_a, issue_iid=1)
+        _mk_task(db, repo_a, issue_iid=2)
+        _mk_task(db, repo_b, issue_iid=3)
+
+        body = app_client.get("/api/tasks", params={"repo_id": repo_a}).json()
+        assert body["total"] == 2
+        assert {t["issue_iid"] for t in body["tasks"]} == {1, 2}
+
+    def test_total_follows_search_filter(self, client):
+        """search 筛选时 total 只统计匹配的任务（标题或 issue 编号）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        _mk_task(db, repo_id, issue_iid=7, title="数据库连接失败排查")
+        _mk_task(db, repo_id, issue_iid=8, title="优化构建速度")
+        _mk_task(db, repo_id, issue_iid=9, title="数据库迁移脚本")
+
+        body = app_client.get("/api/tasks", params={"search": "数据库"}).json()
+        assert body["total"] == 2
+        assert {t["issue_iid"] for t in body["tasks"]} == {7, 9}
+
+    def test_total_follows_combined_filters(self, client):
+        """status + repo_id + search 组合筛选时 total 与三层过滤条件一致。"""
+        app_client, db = client
+        repo_a = _mk_repo(db, project_id=1, name="repo-a")
+        repo_b = _mk_repo(db, project_id=2, name="repo-b")
+        _mk_task(db, repo_a, issue_iid=1, title="部署失败排查", status="failed",
+                 error_message="原因")
+        _mk_task(db, repo_a, issue_iid=2, title="部署脚本优化", status="succeeded")
+        _mk_task(db, repo_b, issue_iid=3, title="部署失败排查", status="failed",
+                 error_message="原因")
+
+        body = app_client.get("/api/tasks", params={
+            "status": "failed", "repo_id": repo_a, "search": "部署",
+        }).json()
+        assert body["total"] == 1
+        assert [t["issue_iid"] for t in body["tasks"]] == [1]
+
+    def test_total_zero_for_no_match(self, client):
+        """筛选无匹配时 total 为 0（翻页组件不渲染、不出现空页）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        _mk_task(db, repo_id, issue_iid=1)
+        body = app_client.get("/api/tasks", params={"search": "不存在的关键字"}).json()
+        assert body["total"] == 0
+        assert body["tasks"] == []
+        # 不存在的仓库 id 同理
+        body = app_client.get("/api/tasks", params={"repo_id": 99999}).json()
+        assert body["total"] == 0
+        assert body["tasks"] == []
+
     def test_repo_name_resolved(self, client):
         app_client, db = client
         repo_id = _mk_repo(db, project_id=42, name="my-awesome-repo")
