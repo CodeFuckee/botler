@@ -1,6 +1,7 @@
 // 概览页 CI/CD 流水线状态测试（issue #39）：
-// 概览页面展示所有启用仓库的最新流水线状态（整体状态 + 按 jobs 聚合的
-// stage 进度），展示方式参考 GitLab CI/CD 的 pipeline 阶段图。
+// 概览页面展示所有配置仓库（含未启用，issue #39 第二轮）的最新流水线
+// 状态（整体状态 + 按 jobs 聚合的 stage 进度），展示方式参考 GitLab
+// CI/CD 的 pipeline 阶段图。
 //
 // 断言：
 // 1. Overview 页独立轮询 GET /api/pipelines/overview（15 秒，比任务轮询慢）；
@@ -8,9 +9,10 @@
 //    （节点 class 按 stage 状态映射 st-success / st-failed / st-running /
 //     st-pending / st-canceled），卡片链接到 GitLab pipeline 页面；
 // 3. 无流水线仓库显示「暂无流水线」；全部无数据时显示空状态；
-// 4. 部分仓库查询失败时 errors 以警告形式展示；
-// 5. PIPELINE_STATUS_META / stageClass 纯函数映射边界；
-// 6. styles.css 提供 pipeline 卡片与 stage 节点样式。
+// 4. 未启用仓库（enabled=false）卡片显示「未启用」徽章；
+// 5. 部分仓库查询失败时 errors 以警告形式展示；
+// 6. PIPELINE_STATUS_META / stageClass 纯函数映射边界；
+// 7. styles.css 提供 pipeline 卡片与 stage 节点样式。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -162,6 +164,79 @@ test('无流水线仓库显示「暂无流水线」占位', async () => {
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('empty-repo'), '应显示仓库名')
     assert.ok(text.includes('暂无流水线'), '应显示暂无流水线占位')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('未启用仓库卡片显示「未启用」徽章（issue #39 第二轮）', async () => {
+  const data = {
+    pipelines: [
+      {
+        repo_id: 1, repo_name: 'enabled-repo', enabled: true,
+        pipeline: {
+          id: 731, status: 'success', ref: 'main', sha: 'abc123',
+          web_url: 'https://gitlab.example.com/g/a/-/pipelines/731',
+        },
+        stages: [{ name: 'build', status: 'success' }],
+      },
+      {
+        repo_id: 2, repo_name: 'disabled-repo', enabled: false,
+        pipeline: null, stages: [],
+      },
+    ],
+    errors: [],
+  }
+  const { renderer, renderError } = await renderAndSettle(makeApiMock(data))
+  try {
+    assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
+    const root = renderer.root
+    // 未启用仓库卡片上应出现「未启用」徽章
+    const badges = root.findAll(
+      (n) => n.type === 'span' && n.children?.some((c) => c === '未启用'),
+    )
+    assert.equal(badges.length, 1, '应只有一个未启用徽章（disabled-repo 卡片）')
+    assert.ok(
+      String(badges[0].props.className).includes('badge-muted'),
+      '未启用徽章应使用 badge-muted 灰色样式',
+    )
+    // 启用仓库卡片不出现未启用徽章
+    const text = JSON.stringify(renderer.toJSON())
+    assert.ok(text.includes('disabled-repo') && text.includes('enabled-repo'))
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('未启用仓库有流水线：卡片同样渲染状态徽章与 stage 节点', async () => {
+  const data = {
+    pipelines: [{
+      repo_id: 1, repo_name: 'off-repo', enabled: false,
+      pipeline: {
+        id: 732, status: 'failed', ref: 'main', sha: 'def456',
+        web_url: 'https://gitlab.example.com/g/off/-/pipelines/732',
+      },
+      stages: [
+        { name: 'build', status: 'success' },
+        { name: 'test', status: 'failed' },
+      ],
+    }],
+    errors: [],
+  }
+  const { renderer, renderError } = await renderAndSettle(makeApiMock(data))
+  try {
+    assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
+    const root = renderer.root
+    const text = JSON.stringify(renderer.toJSON())
+    assert.ok(text.includes('off-repo'), '应显示未启用仓库名')
+    assert.ok(text.includes('失败'), '应显示流水线失败状态徽章')
+    const stages = root.findAll(
+      (n) => n.props?.className && String(n.props.className).split(' ').includes('pipeline-stage'),
+    )
+    assert.equal(stages.length, 2, '未启用仓库的 stage 节点也应渲染')
+    assert.ok(stages[1].props.className.includes('st-failed'), 'test 节点应为失败样式')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

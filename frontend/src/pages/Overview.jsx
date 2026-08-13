@@ -50,7 +50,7 @@ export default function Overview() {
   const [tasks, setTasks] = useState([])
   const [liveLines, setLiveLines] = useState({}) // taskId -> 实时输出行数组
   const [error, setError] = useState('')
-  // 流水线状态（issue #39）：所有启用仓库的最新 CI/CD 流水线
+  // 流水线状态（issue #39）：所有配置仓库（含未启用，第二轮）的最新 CI/CD 流水线
   const [pipelines, setPipelines] = useState([])
   const [pipeErrors, setPipeErrors] = useState([])
   const [pipeError, setPipeError] = useState('')
@@ -86,7 +86,7 @@ export default function Overview() {
     }
   }, [])
 
-  // 所有启用仓库的最新流水线状态（issue #39，独立慢轮询）
+  // 所有配置仓库的最新流水线状态（issue #39，独立慢轮询）
   const loadPipelines = useCallback(async () => {
     try {
       const d = await api.get('/api/pipelines/overview')
@@ -165,7 +165,7 @@ export default function Overview() {
 
       <section className="pipelines-section">
         <h2>CI/CD 流水线</h2>
-        <p className="muted">所有启用仓库的最新流水线（每 {PIPELINE_POLL_MS / 1000} 秒自动刷新）</p>
+        <p className="muted">所有配置仓库的最新流水线（每 {PIPELINE_POLL_MS / 1000} 秒自动刷新）</p>
         {pipeError && (
           <div className="alert alert-error" onClick={() => setPipeError('')}>{pipeError}</div>
         )}
@@ -187,6 +187,9 @@ export default function Overview() {
                 <div key={p.repo_id} className="card pipeline-card">
                   <div className="pipeline-head">
                     <span className="pipeline-repo" title="仓库">📁 {p.repo_name || '（已删除）'}</span>
+                    {p.enabled === false && (
+                      <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
+                    )}
                     {meta ? (
                       <span className={'badge ' + meta.cls}>{meta.label}</span>
                     ) : (

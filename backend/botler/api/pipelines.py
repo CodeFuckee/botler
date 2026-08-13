@@ -1,17 +1,18 @@
 """概览页 CI/CD 流水线状态 API（issue #39）。
 
-GET /api/pipelines/overview：遍历所有启用仓库，返回各仓库最新一次流水线
-的整体状态与按 jobs 聚合的 stage 进度（stage 顺序 = jobs 首次出现顺序，
-即 .gitlab-ci.yml 定义顺序），供概览页以 GitLab CI/CD 风格展示：
+GET /api/pipelines/overview：遍历所有配置仓库（含未启用，issue #39 第二轮），
+返回各仓库最新一次流水线的整体状态与按 jobs 聚合的 stage 进度（stage 顺序
+= jobs 首次出现顺序，即 .gitlab-ci.yml 定义顺序），供概览页以 GitLab CI/CD
+风格展示：
 - 运行完成没有（pipeline.status 是否终态）
 - 运行成功还是失败
 - 运行到哪个阶段（stage 状态：success/failed/running/pending/canceled）
 - 还有哪些阶段（stage 列表）
 
 多仓库场景下单仓库失败不中断整体（HTTP 200），失败明细进 errors 列表
-（与 /tasks/reconcile-all 的 issue #38 模式一致）；停用仓库跳过；无流水线
-仓库 pipeline 为 null。为避免前端轮询打爆 GitLab API，结果带 10 秒 TTL
-内存缓存。
+（与 /tasks/reconcile-all 的 issue #38 模式一致）；无流水线仓库 pipeline
+为 null；每条结果带 enabled 字段供前端标注未启用仓库。为避免前端轮询
+打爆 GitLab API，结果带 10 秒 TTL 内存缓存。
 """
 
 from __future__ import annotations
@@ -102,13 +103,12 @@ def _trim_pipeline(pipeline: dict) -> dict:
 
 
 def _collect(c) -> dict:
-    """遍历所有启用仓库，聚合各仓库最新流水线状态。"""
+    """遍历所有配置仓库（含未启用，issue #39 第二轮），聚合各仓库最新流水线状态。"""
     pipelines: list[dict] = []
     errors: list[str] = []
     for row in c.db.list_repos():
-        if not row["enabled"]:
-            continue
         entry = {"repo_id": row["id"], "repo_name": row["name"],
+                 "enabled": bool(row["enabled"]),
                  "pipeline": None, "stages": []}
         try:
             pipeline = c.gitlab.get_latest_pipeline(row["gitlab_project_id"])
@@ -126,7 +126,7 @@ def _collect(c) -> dict:
 
 @router.get("/overview")
 def pipelines_overview(request: Request):
-    """所有启用仓库的最新流水线状态（10 秒 TTL 缓存）。"""
+    """所有配置仓库（含未启用）的最新流水线状态（10 秒 TTL 缓存）。"""
     c = request.app.state.ctx
     now = time.monotonic()
     with _CACHE_LOCK:

@@ -1,15 +1,16 @@
 """概览页流水线状态 API 测试：GET /api/pipelines/overview（issue #39）。
 
-遍历所有启用仓库，返回各仓库最新一次 CI/CD 流水线状态（整体状态 +
-按 jobs 聚合的 stage 进度），供概览页以 GitLab CI/CD 风格展示：
+遍历所有配置仓库（含未启用，issue #39 第二轮），返回各仓库最新一次
+CI/CD 流水线状态（整体状态 + 按 jobs 聚合的 stage 进度），供概览页以
+GitLab CI/CD 风格展示：
 - 运行完成没有（pipeline.status 是否终态）
 - 运行成功还是失败
 - 运行到哪个阶段（stage 状态：success/failed/running/pending/canceled）
 - 还有哪些阶段（stage 列表按 .gitlab-ci.yml 顺序）
 
 与 reconcile-all（issue #38）一致：多仓库场景下单个仓库失败不中断整体
-（HTTP 200），失败明细放入 errors 列表；停用仓库跳过；无流水线仓库
-pipeline 为 null。
+（HTTP 200），失败明细放入 errors 列表；无流水线仓库 pipeline 为 null；
+每条结果带 enabled 字段供前端标注未启用仓库。
 """
 
 import time
@@ -197,6 +198,8 @@ class TestPipelinesOverview:
         assert len(data["pipelines"]) == 2
         a = next(p for p in data["pipelines"] if p["repo_name"] == "a")
         b = next(p for p in data["pipelines"] if p["repo_name"] == "b")
+        # 每条结果带 enabled 字段（供前端标注未启用仓库，issue #39 第二轮）
+        assert a["enabled"] is True and b["enabled"] is True
         # 仓库 a：流水线正常
         assert a["pipeline"]["id"] == 731
         assert a["pipeline"]["status"] == "success"
@@ -255,8 +258,8 @@ class TestPipelinesOverview:
         assert len(data["errors"]) == 2
         assert all(p["pipeline"] is None for p in data["pipelines"])
 
-    def test_overview_skips_disabled_repo(self, client):
-        """停用仓库不查询：结果只含启用仓库。"""
+    def test_overview_includes_disabled_repo(self, client):
+        """未启用仓库也返回并查询流水线（issue #39 第二轮），enabled 字段透传。"""
         tc, stub, db, tmp_path = client
         _add_repo(db, project_id=42, name="on")
         _add_repo(db, project_id=43, name="off", enabled=False)
@@ -264,9 +267,49 @@ class TestPipelinesOverview:
         resp = tc.get("/api/pipelines/overview")
 
         data = resp.json()
-        assert [p["repo_name"] for p in data["pipelines"]] == ["on"]
+        assert sorted(p["repo_name"] for p in data["pipelines"]) == ["off", "on"]
         assert data["errors"] == []
-        assert "pipeline:43" not in stub.calls
+        off = next(p for p in data["pipelines"] if p["repo_name"] == "off")
+        assert off["enabled"] is False
+        assert off["pipeline"] is None and off["stages"] == []
+        # 未启用仓库同样查询 GitLab（不因 enabled 跳过）
+        assert "pipeline:43" in stub.calls
+
+    def test_overview_disabled_repo_with_pipeline(self, client):
+        """未启用仓库有流水线：正常展示状态与 stage 进度。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="off", enabled=False)
+        stub.pipelines_by_project = {42: make_pipeline(731, status="running")}
+        stub.jobs_by_pipeline = {731: [
+            make_job(1, "build"), make_job(2, "test", status="running")]}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        data = resp.json()
+        assert data["errors"] == []
+        assert len(data["pipelines"]) == 1
+        off = data["pipelines"][0]
+        assert off["enabled"] is False
+        assert off["pipeline"]["status"] == "running"
+        assert [(s["name"], s["status"]) for s in off["stages"]] == [
+            ("build", "success"), ("test", "running")]
+
+    def test_overview_disabled_repo_query_failure(self, client):
+        """未启用仓库查询失败：与启用仓库一致进 errors，不整体失败。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="off", enabled=False)
+        stub.fail_projects = {42}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["pipelines"]) == 1
+        off = data["pipelines"][0]
+        assert off["enabled"] is False
+        assert off["pipeline"] is None and off["stages"] == []
+        assert len(data["errors"]) == 1
+        assert "仓库 off" in data["errors"][0]
 
     def test_overview_without_any_repo(self, client):
         """边界：没有任何仓库时返回空结果（不 500）。"""
