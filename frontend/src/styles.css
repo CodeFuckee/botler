@@ -276,12 +276,18 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
    min-content（实测 1628px），而 .content max-width 封顶 1600px，任何桌面视口
    下容器都装不下表格，水平滚动条必然出现。改为 table-layout: fixed + 12 列
    显式宽度，表格宽度恒等于容器宽度，宽视口下撑满容器不再滚动；
-   列内长文本由 ellipsis 列截断，窄视口列宽随容器压缩 */
-.table.tasks-table { table-layout: fixed; }
+   列内长文本由 ellipsis 列截断，窄视口列宽随容器压缩。
+   min-width = 12 列宽度总和 1360px（issue #37）：容器窄于总和时表格横向滚动
+   （.table-wrap 滚动，#28 既有行为），各列保持完整宽度不折行；
+   容器宽于总和时表格撑满容器，富余空间按列宽比例分配 */
+.table.tasks-table { table-layout: fixed; min-width: 1360px; }
 .table.tasks-table th:nth-child(1) { width: 44px; }
 .table.tasks-table th:nth-child(2) { width: 110px; }
 .table.tasks-table th:nth-child(3) { width: 50px; }
-.table.tasks-table th:nth-child(4) { width: 30%; }
+/* 标题列由 30% 改为固定 254px（issue #37）：百分比列在宽视口下吃掉富余空间，
+   挤占时间/用时/操作三列，改为固定宽度后富余空间按比例分配给所有列；
+   长标题仍由 ellipsis 截断 + title 悬浮显示全文 */
+.table.tasks-table th:nth-child(4) { width: 254px; }
 .table.tasks-table th:nth-child(5) { width: 78px; }
 /* 尝试列加宽（issue #31 第二轮）：68px 时内容区仅 48px，放不下「数值 + 空格 +
    badge.resume（40px + margin 6px）」约 66px，badge 折行到第二行——
@@ -289,11 +295,26 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
    配合 .badge.resume 的 vertical-align: middle 垂直居中对齐 */
 .table.tasks-table th:nth-child(6) { width: 88px; }
 .table.tasks-table th:nth-child(7) { width: 76px; }
-.table.tasks-table th:nth-child(8) { width: 22%; }
-.table.tasks-table th:nth-child(9) { width: 104px; }
-.table.tasks-table th:nth-child(10) { width: 135px; }
-.table.tasks-table th:nth-child(11) { width: 60px; }
-.table.tasks-table th:nth-child(12) { width: 65px; }
+/* 失败原因列由 22% 改为固定 140px（issue #37）：理由同标题列；
+   详情按钮保留，长文本 ellipsis 截断 + title 悬浮 + 详情弹窗 */
+.table.tasks-table th:nth-child(8) { width: 140px; }
+/* 提交列 104→90px（issue #37）：内容为 8 字符 shortSha（约 62px），
+   原 104px 富余较大，压缩出的宽度让给创建时间/用时/操作三列 */
+.table.tasks-table th:nth-child(9) { width: 90px; }
+/* 创建时间列 135→165px（issue #37）：`2026-08-13 12:06:19` 19 字符约 127px，
+   加 td 左右 padding 20px 需 147px，原 135px 放不下导致日期与时间折成两行 */
+.table.tasks-table th:nth-child(10) { width: 165px; }
+/* 用时列 60→120px（issue #37）：最长文案 `12 天 23 小时` 约 85px，
+   加 padding 20px 需 105px，原 60px 导致数字与单位折行 */
+.table.tasks-table th:nth-child(11) { width: 120px; }
+/* 操作列 65→145px（issue #37）：「执行」+「重试」两按钮（重试中… 最宽）约 116px，
+   加 padding 20px 需 136px，原 65px 导致两按钮上下堆叠 */
+.table.tasks-table th:nth-child(12) { width: 145px; }
+/* 时间/用时/操作三列不折行（issue #37）：内容含空格（日期与时间之间、数字与单位之间），
+   列宽不足时浏览器默认在空格处折行；nowrap 保证三列内容恒为一行 */
+.table.tasks-table td:nth-child(10),
+.table.tasks-table td:nth-child(11),
+.table.tasks-table td:nth-child(12) { white-space: nowrap; }
 .table th, .table td {
   text-align: left;
   padding: 9px 10px;
