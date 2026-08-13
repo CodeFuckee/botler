@@ -6,6 +6,26 @@
 
 ### Fixed
 
+- **任务页面「用时」显示不正确（多 8 小时）**（issue #42）：
+  生产任务 #64 创建于 13:52:43（本地），14:56 查看时页面显示用时 8 小时 24 分钟，
+  实际执行仅约 24 分钟——恰好多 8 小时。根因：容器 TZ=Asia/Shanghai，
+  tasks 表时间字段时区混合存储——`created_at` 由 SQLite `datetime('now')`
+  写 UTC 串，`started_at`/`finished_at` 由 executor `time.strftime` 写本地
+  CST 串；前端 `fmtDuration` 统一按 UTC 解析（api.js 契约），当 `started_at`
+  为 NULL 回退 `created_at` 时 UTC/CST 串混算，时长多 8 小时。
+  - 后端 `executor.py`：4 处 `time.strftime("%Y-%m-%d %H:%M:%S")` 改为
+    `time.strftime(..., time.gmtime())`，started_at/finished_at 统一写 UTC，
+    与 created_at 及前端解析契约一致。
+  - 测试：新增 `tests/test_task_timestamps.py` 4 用例（TZ=Asia/Shanghai 下
+    复现 + 验证 `_finish_failed`/`_finish_stopped`/`run_task` 全流程时间戳
+    均为 UTC + 前端视角 created_at 与 finished_at 混算回归）。
+  - 附带修复 flaky 测试：`test_executor.py::_shorten_ci_timeouts` 的等待
+    窗口 20ms 太短，高负载机器上 `db.add_log` 真实写 SQLite（实测 27ms）
+    即可耗尽窗口导致 `TestWaitPipelineForCommit` 误报 timeout——窗口放大
+    到 1s（sleep 已 mock 为 no-op，不拖慢测试），「永不终态」用例的
+    statuses 迭代器改 `itertools.repeat` 防耗尽；后端全量 457 passed +
+    前端全量 147 passed。
+
 - **任务在 CI 流水线运行中即显示已完成 + 完成后未给 issue 打终态标签**（issue #40）：
   生产任务 #63（issue #39 第二轮）于 13:31:45 被平台标记 succeeded，而其提交
   d08e104 触发的流水线 #737 的 backend:test 到 13:32:17、sync_to_github 到

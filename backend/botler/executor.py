@@ -901,7 +901,7 @@ class ClaudeExecutor:
             self.db.set_task_status(
                 task_id, STATUS_RUNNING,
                 attempt_count=attempt,
-                started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                started_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
                 finished_at=None, error_message=None)
             self.db.add_log(task_id, "info", f"第 {attempt} 次尝试开始")
             logger.info("任务 %s（%s#%s）第 %s 次执行", task_id, project_id, issue_iid, attempt)
@@ -1007,7 +1007,7 @@ class ClaudeExecutor:
                 task_id, STATUS_INTERRUPTED,
                 exit_code=None,
                 error_message="用户手动停止（一键停止所有任务）",
-                finished_at=time.strftime("%Y-%m-%d %H:%M:%S")):
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())):
             return
         self.db.add_log(task_id, "warn", "任务已停止：用户一键停止所有任务")
 
@@ -1045,7 +1045,7 @@ class ClaudeExecutor:
         if not self.db.finish_task(
                 task_id, STATUS_SUCCEEDED,
                 exit_code=0,
-                finished_at=time.strftime("%Y-%m-%d %H:%M:%S")):
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())):
             logger.info("任务 %s 成功收尾被跳过（状态已非运行中，可能已被其他实例收尾）", task_id)
             return
         self.db.add_log(task_id, "info", "任务成功：Claude Code 已完成处理（issue 保持打开，等用户确认后手动关闭）")
@@ -1095,7 +1095,7 @@ class ClaudeExecutor:
                 exit_code=None,
                 error_message=reason,
                 error_detail=error_detail,
-                finished_at=time.strftime("%Y-%m-%d %H:%M:%S")):
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())):
             logger.info("任务 %s 失败收尾被跳过（状态已非运行中，可能已被其他实例收尾）", task_id)
             return
         self.db.add_log(task_id, "error", f"任务失败: {reason}")

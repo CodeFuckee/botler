@@ -6,6 +6,7 @@ issue #8 会话断点续跑：claude --resume 恢复上次会话 + 保留工作�
 """
 
 import io
+import itertools
 import json
 import sqlite3
 from pathlib import Path
@@ -745,14 +746,21 @@ class TestRunTaskConcurrency:
 
 
 def _shorten_ci_timeouts(executor, monkeypatch):
-    """把 CI 等待相关的配置超时缩到极小（测试用，避免真实等待秒级时间）。"""
+    """把 CI 等待相关的配置超时缩到极小（测试用，避免真实等待秒级时间）。
+
+    窗口留 1 秒余量（issue #42）：等待/探测的 deadline 在探测前计算，
+    期间 db.add_log 真实写 SQLite，高负载机器上单次写入可达数十毫秒，
+    20ms 窗口会被 add_log 耗尽导致误报 timeout（flaky）。测试里
+    time.sleep 已 mock 为 no-op，窗口放大不拖慢正常路径；仅
+    sha 永不匹配 / 永不终态两个用例以空转耗尽窗口（各约 1 秒 CPU）。
+    """
     real_get = executor.config.get
     settings = real_get()
     monkeypatch.setattr(executor.config, "get", lambda: SimpleNamespace(
         **{**vars(settings),
-           "ci_wait_detect_seconds": 0.02,
+           "ci_wait_detect_seconds": 1.0,
            "ci_wait_interval_seconds": 0.001,
-           "ci_wait_timeout_seconds": 0.02}))
+           "ci_wait_timeout_seconds": 1.0}))
 
 
 class TestWaitPipelineBeforeSucceed:
@@ -974,7 +982,7 @@ class TestWaitPipelineForCommit:
         """流水线一直 running 直到总超时 → timeout。"""
         self._install(executor, monkeypatch,
                       latest=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
-                      statuses=iter(lambda: "running" for _ in range(10000)))
+                      statuses=itertools.repeat("running"))
 
         state = executor._wait_pipeline_for_commit(1, 42, self.SHA)
 
@@ -984,7 +992,7 @@ class TestWaitPipelineForCommit:
         """等待期间收到停止请求 → stopped（run_task 据此走停止收尾）。"""
         self._install(executor, monkeypatch,
                       latest=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
-                      statuses=iter(lambda: "running" for _ in range(10000)))
+                      statuses=itertools.repeat("running"))
         monkeypatch.setattr(executor, "_stop_requested", lambda tid: True)
 
         state = executor._wait_pipeline_for_commit(1, 42, self.SHA)
