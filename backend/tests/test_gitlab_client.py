@@ -227,3 +227,65 @@ class TestFindCommitForIssue:
         client._request = lambda method, path, **kwargs: [
             {"title": "x", "message": "fix: 解决 issue #7"}]
         assert client.find_commit_for_issue(42, 7) is None
+
+
+class TestLastNoteAuthorId:
+    """last_note_author_id（issue #34）：领取判定用的「最后一个发言人」。
+
+    最后一条非系统评论的作者 id；无发言（仅系统事件/无评论）返回 None。
+    系统评论（assigned/labeled 等事件）不算「发言」。
+    """
+
+    def _stub(self, client: GitLabClient, notes: list[dict]) -> list[str]:
+        """替换 _paged，返回固定 notes 并记录请求路径与参数。"""
+        captured: list = []
+
+        def fake_paged(path, **kwargs):
+            captured.append((path, kwargs))
+            return notes
+
+        client._paged = fake_paged
+        return captured
+
+    def test_returns_last_non_system_author(self):
+        """混合评论：跳过 system 评论，返回最后一条普通评论的作者。"""
+        client = make_client()
+        self._stub(client, [
+            {"id": 1, "system": True, "author": {"id": 1}},
+            {"id": 2, "system": False, "author": {"id": 99}},
+            {"id": 3, "system": True, "author": {"id": 7}},   # 事件不算发言
+            {"id": 4, "system": False, "author": {"id": 7}},   # 用户回复
+        ])
+        assert client.last_note_author_id(42, 7) == 7
+
+    def test_skips_trailing_system_notes(self):
+        """最后一条是 system 评论时向前找最近的普通评论作者。"""
+        client = make_client()
+        self._stub(client, [
+            {"id": 2, "system": False, "author": {"id": 99}},
+            {"id": 3, "system": True, "author": {"id": 1}},
+        ])
+        assert client.last_note_author_id(42, 7) == 99
+
+    def test_no_notes_returns_none(self):
+        client = make_client()
+        self._stub(client, [])
+        assert client.last_note_author_id(42, 7) is None
+
+    def test_only_system_notes_returns_none(self):
+        """仅系统事件（如新指派）无实质发言 → None（视为新任务可领取）。"""
+        client = make_client()
+        self._stub(client, [
+            {"id": 1, "system": True, "author": {"id": 1}},
+            {"id": 2, "system": True, "author": {"id": 1}},
+        ])
+        assert client.last_note_author_id(42, 7) is None
+
+    def test_note_without_author_is_skipped(self):
+        """异常数据结构（无 author 字段）不应崩溃，继续向前找。"""
+        client = make_client()
+        self._stub(client, [
+            {"id": 1, "system": False, "author": {"id": 1}},
+            {"id": 2, "system": False},  # 无 author
+        ])
+        assert client.last_note_author_id(42, 7) == 1

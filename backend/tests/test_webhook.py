@@ -39,6 +39,7 @@ class StubGitLab:
     def __init__(self):
         self.current_issue: dict | None = None
         self.issue_calls = 0
+        self.last_note_author: int | None = None
 
     def get_bot_id(self):
         return BOT_ID
@@ -48,6 +49,10 @@ class StubGitLab:
         if self.current_issue is None:
             raise GitLabError("模拟 GitLab API 故障")
         return self.current_issue
+
+    def last_note_author_id(self, project_id, iid):
+        """最后一条非系统评论的作者 id；None 表示无发言。"""
+        return self.last_note_author
 
 
 def make_event(action: str = "open", labels: list[str] | None = None) -> dict:
@@ -140,3 +145,45 @@ class TestWebhookSkipsTerminalLabeledIssues:
 
         assert result["accepted"] is False
         assert ctx.db.count_tasks() == 0
+
+
+class TestWebhookSkipsWhenBotLastSpoke:
+    """issue #34：最后一个发言人（非系统评论）是 bot 时不重复领取。
+
+    bot 提问/处理完留评论后，若用户仅重新指派（无新回复）触发 webhook，
+    最后发言仍是 bot——此时不应入队，等用户回复后再领。
+    """
+
+    def test_rejects_when_bot_last_spoke(self, ctx):
+        """最后一条非系统评论是 bot：拒绝入队（等用户回复）。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
+        ctx.gitlab.last_note_author = BOT_ID
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert "发言人" in result["reason"]
+        assert ctx.db.count_tasks() == 0
+
+    def test_accepts_when_user_last_spoke(self, ctx):
+        """最后一条非系统评论是用户（有新指示）：照常入队。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
+        ctx.gitlab.last_note_author = 1  # 用户 id，非 bot
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        assert ctx.db.find_active_task(PROJECT_ID, IID) is not None
+
+    def test_accepts_when_no_notes(self, ctx):
+        """无任何非系统评论（新任务，仅系统事件）：照常入队。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
+        ctx.gitlab.last_note_author = None
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        assert ctx.db.find_active_task(PROJECT_ID, IID) is not None

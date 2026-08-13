@@ -91,6 +91,21 @@ class Reconciler:
                     logger.info("对账跳过终态标签 issue %s#%s（%s）",
                                 repo["gitlab_project_id"], issue["iid"], hit)
                     continue
+                # 最后发言人过滤（issue #34）：最后一条非系统评论是 bot 本人时
+                # 不补入队——bot 提问后用户未回复，平台重启/手动对账不应重复领取。
+                # 用户回复后（或新任务无评论）再领取。
+                try:
+                    last_author = self.gitlab.last_note_author_id(
+                        repo["gitlab_project_id"], issue["iid"])
+                except GitLabError as e:
+                    logger.warning("对账查询 issue %s#%s 评论失败: %s",
+                                   repo["gitlab_project_id"], issue["iid"], e)
+                    errors.append(f"仓库 {repo['name']} issue #{issue['iid']}: {e}")
+                    continue
+                if last_author is not None and last_author == bot_id:
+                    logger.info("对账跳过最后发言人为 bot 的 issue %s#%s",
+                                repo["gitlab_project_id"], issue["iid"])
+                    continue
                 if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
                     active_count += 1  # 已有活跃任务（含排队中）
                     continue

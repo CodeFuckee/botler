@@ -74,6 +74,23 @@
 
 ### Fixed
 
+- **领取任务重复入队：缺少「最后发言人」判断、bot-done 依赖 Claude 手打**（issue #34）：
+  bot 提问或处理完留评论后，用户仅重新指派（无新回复）触发 webhook，或平台重启
+  后对账扫描，都会把「最后发言人是 bot、等用户回复」的 issue 重复领取入队；
+  且成功任务的 bot-done 标签依赖 Claude 按模板自行打——Claude 忘打时 issue 无
+  终态标签，也会被重复领取。
+  - 后端：`gitlab_client.py` 新增 `last_note_author_id`（取最后一条非系统评论的
+    作者 id，系统事件不算「发言」，无发言返回 None）；`webhook.py` 与
+    `reconciler.py` 在终态标签过滤之后新增该判定——最后发言人是 bot 时不入队，
+    用户回复后（或新任务无评论）才领取；`executor.py` 成功收尾时由平台代码直接
+    打 bot-done（幂等，打标签失败仅记 warn 不阻塞任务成功），模板同步改为
+    「平台自动打标签」。
+  - 测试：`test_gitlab_client.py` 新增 5 用例（排除系统评论/无评论/无 author
+    字段容错）、`test_webhook.py` 与 `test_reconciler.py` 各新增 3 用例（bot 最后
+    发言拒绝/用户最后发言放行/无评论放行）、`test_executor.py` 新增 3 用例
+    （成功打 bot-done/打标签失败仍成功/条件终态跳过不打），并更新成功判定用例
+    断言（成功路径由代码打 bot-done）。后端全量 375 passed + 前端全量 87 passed。
+
 - **任务页面「操作」列表头与「执行」按钮左边缘不在同一竖线**（issue #33）：
   操作列单元格内容「执行」链接复用了 `.btn-mini`，而该 class 带
   `margin-left: 8px`（原为「详情」按钮与前置失败原因文字留间距而设）——

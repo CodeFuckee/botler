@@ -36,6 +36,8 @@ class StubGitLab:
     def __init__(self, issues_by_project: dict[int, list[dict]] | None = None):
         self.issues_by_project = issues_by_project or {}
         self.fail_projects: set[int] = set()
+        # issue iid → 最后一条非系统评论的作者 id（None = 无发言）
+        self.last_author_by_issue: dict[int, int | None] = {}
 
     def get_bot_id(self):
         return BOT_ID
@@ -44,6 +46,9 @@ class StubGitLab:
         if project_id in self.fail_projects:
             raise GitLabError("模拟 GitLab API 故障")
         return self.issues_by_project.get(project_id, [])
+
+    def last_note_author_id(self, project_id, iid):
+        return self.last_author_by_issue.get(iid)
 
 
 def make_issue(iid: int, title: str = "测试 issue", labels: list[str] | None = None) -> dict:
@@ -121,3 +126,44 @@ class TestReconcileSkipsTerminalLabeledIssues:
         assert task is not None
         assert task["status"] == "queued"
         assert task["triggered_by"] == "reconcile"
+
+
+class TestReconcileSkipsWhenBotLastSpoke:
+    """issue #34：最后一个发言人（非系统评论）是 bot 时不对账补入队。
+
+    bot 提问后用户未回复（最后发言人是 bot），平台重启/手动对账时不应把
+    该 issue 再次补入队——否则 bot 会重复领取自己刚提问过的任务。
+    """
+
+    def test_skips_issue_with_bot_last_note(self, ctx):
+        """最后发言人是 bot：对账跳过，不补入队。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {42: [make_issue(7, labels=["bug"])]}
+        ctx.gitlab.last_author_by_issue = {7: BOT_ID}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 0}
+        assert ctx.db.count_tasks() == 0
+
+    def test_enqueues_issue_with_user_last_note(self, ctx):
+        """最后发言人是用户（有新指示）：照常补入队。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {42: [make_issue(8, labels=["bug"])]}
+        ctx.gitlab.last_author_by_issue = {8: 1}  # 用户 id，非 bot
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert ctx.db.find_active_task(42, 8) is not None
+
+    def test_enqueues_issue_with_no_notes(self, ctx):
+        """无任何非系统评论（新任务）：照常补入队。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {42: [make_issue(9, labels=["bug"])]}
+        ctx.gitlab.last_author_by_issue = {9: None}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert ctx.db.find_active_task(42, 9) is not None

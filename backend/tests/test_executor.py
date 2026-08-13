@@ -288,8 +288,8 @@ class TestRunTaskSuccessCriteria:
         assert task["status"] == "succeeded"
         assert task["attempt_count"] == 1  # 未因 issue 未关闭而重试
         assert task["exit_code"] == 0
-        # 成功路径不打失败标签；失败评论（bot-failed）不应出现
-        assert sum(1 for kind, _ in calls if kind == "labels") == 0
+        # issue #34：成功路径由平台代码打 bot-done（幂等），不打 bot-failed
+        assert calls.count(("labels", (42, 1, ["bot-done"]))) == 1
         assert "无法完成此 issue" not in "".join(
             a[2] for kind, a in calls if kind == "comment")
 
@@ -554,7 +554,8 @@ class TestCommitRecording:
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id)
         executor.gitlab = SimpleNamespace(
-            find_commit_for_issue=lambda pid, iid: self._commit_sha())
+            find_commit_for_issue=lambda pid, iid: self._commit_sha(),
+            add_labels=lambda *a, **k: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
@@ -571,7 +572,9 @@ class TestCommitRecording:
         db = executor.db
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id)
-        executor.gitlab = SimpleNamespace(find_commit_for_issue=lambda pid, iid: None)
+        executor.gitlab = SimpleNamespace(
+            find_commit_for_issue=lambda pid, iid: None,
+            add_labels=lambda *a, **k: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
@@ -588,7 +591,8 @@ class TestCommitRecording:
         task_id = _mk_task(db, repo_id)
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: (_ for _ in ()).throw(
-                GitLabError("GitLab API 错误 500: boom", 500)))
+                GitLabError("GitLab API 错误 500: boom", 500)),
+            add_labels=lambda *a, **k: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
@@ -626,6 +630,71 @@ class TestCommitRecording:
         task = db.get_task(task_id)
         assert task["status"] == "succeeded"
         assert task["commit_sha"] == self._commit_sha()
+
+
+class TestSucceededAddsBotDoneLabel:
+    """issue #34：任务成功收尾时由 executor 代码直接打 bot-done 标签。
+
+    此前 bot-done 依赖 Claude 按模板自行打标签——若 Claude 忘打，issue 缺
+    终态标签会被 webhook/对账重复领取。改为平台代码写死：成功即打
+    bot-done（幂等），打标签失败不阻塞任务成功。
+    """
+
+    def test_success_adds_bot_done_label(self, executor, tmp_path):
+        """_finish_succeeded 应调用 add_labels 打 bot-done。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        labels_calls = []
+        executor.gitlab = SimpleNamespace(
+            find_commit_for_issue=lambda pid, iid: None,
+            add_labels=lambda pid, iid, labels: labels_calls.append((pid, iid, labels)))
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+
+        db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
+        executor._finish_succeeded(task_id, "ok")
+
+        assert labels_calls == [(42, 1, ["bot-done"])]
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("bot-done" in m for m in logs)
+
+    def test_label_error_keeps_success(self, executor, tmp_path):
+        """打标签时 GitLab API 报错：任务仍成功，仅记 warn 日志。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        executor.gitlab = SimpleNamespace(
+            find_commit_for_issue=lambda pid, iid: None,
+            add_labels=lambda pid, iid, labels: (_ for _ in ()).throw(
+                GitLabError("GitLab API 错误 500: boom", 500)))
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+
+        db.claim_task(task_id)
+        executor._finish_succeeded(task_id, "ok")
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("bot-done 标签失败" in m for m in logs)
+
+    def test_no_label_when_finish_skipped(self, executor, tmp_path):
+        """条件终态（issue #24）：已被其他实例收尾时不打标签（避免重复）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        labels_calls = []
+        executor.gitlab = SimpleNamespace(
+            find_commit_for_issue=lambda pid, iid: None,
+            add_labels=lambda pid, iid, labels: labels_calls.append((pid, iid, labels)))
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+
+        db.claim_task(task_id)
+        db.finish_task(task_id, "succeeded")  # 模拟其他实例已收尾
+        executor._finish_succeeded(task_id, "ok")
+
+        assert labels_calls == []
 
 
 class TestRunTaskConcurrency:

@@ -159,6 +159,7 @@ class TestExecutorNotificationEvents:
         task_id = _mk_task(db, repo_id, issue_iid=7, title="修复登录 bug")
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"  # type: ignore[method-assign]
         executor.gitlab.find_commit_for_issue = lambda *a, **k: None  # type: ignore[method-assign]
+        executor.gitlab.add_labels = lambda *a, **k: None  # type: ignore[method-assign]
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
         executor._finish_succeeded(task_id, "ok")
         events = db.list_notifications(after_id=0)
@@ -262,6 +263,9 @@ class StubGitLab:
         if project_id in self.fail_projects:
             raise GitLabError("模拟 GitLab API 故障")
         return self.issues_by_project.get(project_id, [])
+
+    def last_note_author_id(self, project_id, iid):
+        return None  # 默认无发言
 
 
 def make_issue(iid: int, title: str = "测试 issue") -> dict:

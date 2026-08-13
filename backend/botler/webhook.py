@@ -93,7 +93,20 @@ class WebhookHandler:
                             label, project_id, issue_iid)
                 return {"accepted": False, "reason": f"issue 已打 {label} 标签，跳过"}
 
-        # 4. 入队（去重由 scheduler 保证）
+        # 5. 最后发言人过滤（issue #34）：最后一条非系统评论是 bot 本人时
+        #    不重复领取——bot 提问/处理完留评论后，用户仅重新指派（无新回复）
+        #    也会触发 webhook，此时应等用户回复。用户回复后（或新任务无评论）
+        #    再领取。
+        try:
+            last_author = self.gitlab.last_note_author_id(project_id, issue_iid)
+        except GitLabError as e:
+            logger.warning("webhook 查询 issue %s#%s 评论失败: %s", project_id, issue_iid, e)
+            return {"accepted": False, "reason": "查询 issue 评论失败，拒绝入队"}
+        if last_author is not None and last_author == bot_id:
+            logger.info("webhook 忽略最后发言人为 bot 的 issue %s#%s", project_id, issue_iid)
+            return {"accepted": False, "reason": "最后一个发言人是 bot，等待用户回复，跳过"}
+
+        # 6. 入队（去重由 scheduler 保证）
         repo = self.db.get_repo_by_project_id(project_id)
         if repo is None:
             logger.info("webhook 来自未注册仓库 project=%s，忽略", project_id)

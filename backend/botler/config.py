@@ -139,7 +139,7 @@ DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以�
 2. 编写修复代码并自测通过（运行相关测试/构建验证）
 3. 自测通过后，直接推送到 main 分支：
    git add -A && git commit -m "fix: 解决 issue #{issue_iid}" && git push origin main
-4. 推送成功后，在 issue 上留结果评论并打 bot-done 标签；
+4. 推送成功后，在 issue 上留结果评论（平台会自动打 bot-done 标签）；
    不要关闭该 issue——关闭动作留给用户确认后手动执行（模版库规范）
 5. 若确实无法解决，不要推送代码，如实汇报失败原因和已做的尝试
 

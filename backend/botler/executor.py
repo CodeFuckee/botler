@@ -863,6 +863,16 @@ class ClaudeExecutor:
         self.db.add_log(task_id, "info", "任务成功：Claude Code 已完成处理（issue 保持打开，等用户确认后手动关闭）")
         self._write_log_tail(task_id, output)
         self._record_commit(task_id)
+        # issue #34：成功时由平台代码直接打 bot-done 标签（幂等），不再依赖
+        # Claude 按模板打——Claude 忘打会导致 issue 无终态标签被重复领取。
+        # 打标签失败不阻塞任务成功（仅记 warn，用户可手动补标签）。
+        task = self.db.get_task(task_id)
+        if task is not None:
+            try:
+                self.gitlab.add_labels(task["project_id"], task["issue_iid"], ["bot-done"])
+                self.db.add_log(task_id, "info", "已在 issue 上打 bot-done 标签，等待用户确认后手动关闭")
+            except GitLabError as e:
+                self.db.add_log(task_id, "warn", f"打 bot-done 标签失败: {e}")
         # 网页通知：issue 完成（issue #21）
         self._emit_task_event(task_id, "task_succeeded")
         logger.info("任务 %s 成功", task_id)

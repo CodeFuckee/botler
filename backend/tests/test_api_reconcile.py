@@ -46,6 +46,9 @@ class StubGitLab:
             raise GitLabError("模拟 GitLab API 故障")
         return self.issues_by_project.get(project_id, [])
 
+    def last_note_author_id(self, project_id, iid):
+        return None  # 默认无发言
+
 
 def make_issue(iid: int, title: str = "测试 issue") -> dict:
     return {"iid": iid, "title": title}
