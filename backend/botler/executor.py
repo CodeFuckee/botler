@@ -34,6 +34,7 @@ from pathlib import Path
 from .config import ConfigManager
 from .database import (
     Database, STATUS_RUNNING, STATUS_RETRYING, STATUS_SUCCEEDED, STATUS_FAILED,
+    STATUS_INTERRUPTED,
 )
 from .gitlab_client import GitLabClient, GitLabError
 from .templates import TemplateRenderer
@@ -52,6 +53,10 @@ _UNRESOLVABLE_RE = re.compile("|".join(UNRESOLVABLE_PATTERNS), re.IGNORECASE)
 # 日志保留行数（落盘 + 失败评论摘要）
 LOG_TAIL_LINES = 400
 COMMENT_TAIL_CHARS = 3000
+
+# 手动停止约定退出码（issue #35）：读循环检测到停止标记时返回，
+# 区别于 124（超时）与其他环境失败，run_task 据此走停止收尾
+STOP_EXIT_CODE = 125
 
 # 恢复执行引导语（issue #8）：中断恢复时不用完整模版重发 issue 描述，
 # 而是让 Claude 检查工作区现状后从断点继续（避免重复分析与重复评论）
@@ -366,6 +371,11 @@ class ClaudeExecutor:
         # 网页通知事件（issue #21）：任务收尾时记录，前端轮询弹系统通知
         from .notifier import Notifier
         self.notifier = Notifier(db)
+        # 一键停止（issue #35）：运行中进程注册表 + 停止请求集合。
+        # task_id 自增唯一，集合只增不减（进程退出注销的是注册表不是集合）。
+        self._procs: dict[int, subprocess.Popen] = {}
+        self._stop_requests: set[int] = set()
+        self._proc_lock = threading.Lock()
 
     # ---- 工作区管理 ----
 
@@ -562,6 +572,30 @@ class ClaudeExecutor:
 
     # ---- 单次执行 ----
 
+    def _kill_process_group(self, proc) -> None:
+        """向进程组发 SIGKILL（超时与手动停止共用，issue #35 抽取）。"""
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def request_stop(self, task_id: int) -> None:
+        """登记停止请求并终止任务进程组（issue #35 一键停止所有任务）。
+
+        登记先行：进程尚未创建（worker 还在准备阶段）时，_run_once 在
+        Popen 后立即检查登记表自行终止；进程已存在则直接 SIGKILL 进程组
+        （readline 读到 EOF 后 _run_once 自然退出）。
+        """
+        with self._proc_lock:
+            self._stop_requests.add(task_id)
+            proc = self._procs.get(task_id)
+        if proc is not None and proc.poll() is None:
+            self._kill_process_group(proc)
+
+    def _stop_requested(self, task_id: int) -> bool:
+        with self._proc_lock:
+            return task_id in self._stop_requests
+
     def _run_once(self, task_id: int, repo: dict, issue: dict,
                   resume_session: str | None = None) -> tuple[int, str]:
         """执行一次 claude -p。返回 (exit_code, output)。
@@ -603,55 +637,79 @@ class ClaudeExecutor:
         except FileNotFoundError:
             raise ExecutorError(f"找不到 claude 命令: {cfg.claude_command}（请先 npm install -g @anthropic-ai/claude-code）")
 
-        deadline = time.time() + cfg.task_timeout_seconds
-        chunks: list[str] = []
-        timed_out = False
-        session_known = False
+        # 注册运行中进程（issue #35：一键停止可定位并终止 claude 进程组）
+        with self._proc_lock:
+            self._procs[task_id] = proc
+        try:
+            deadline = time.time() + cfg.task_timeout_seconds
+            chunks: list[str] = []
+            timed_out = False
+            stopped = False
+            session_known = False
 
-        # 边读边写日志文件，避免内存堆积；超时则杀整个进程组
-        with open(log_path, "w", encoding="utf-8", errors="replace") as f:
-            while True:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    timed_out = True
-                    break
-                try:
-                    chunk = proc.stdout.readline() if proc.stdout else b""
-                except Exception:
-                    chunk = ""
-                if chunk == "" and proc.poll() is not None:
-                    break
-                if chunk:
-                    f.write(chunk)
-                    chunks.append(chunk)
-                    if len(chunks) > 20000:  # 约 20MB 上限
-                        chunks.pop(0)
-                    # 运行中即把 session_id 落库（issue #20 实时查看），
-                    # 只落首次：进程未结束时 API 就能定位当前会话文件
-                    if not session_known and self._persist_session_from_chunk(task_id, chunk):
-                        session_known = True
-                if time.time() >= deadline and proc.poll() is None:
-                    timed_out = True
-                    break
-                time.sleep(0.05)
+            # 停止请求先于进程创建到达（worker 准备阶段收到 stop）→ 立即终止
+            if self._stop_requested(task_id):
+                stopped = True
 
-        if timed_out:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            proc.wait(timeout=10)
+            # 边读边写日志文件，避免内存堆积；超时/被停止则杀整个进程组
+            with open(log_path, "w", encoding="utf-8", errors="replace") as f:
+                while not stopped:
+                    # 每轮检查停止请求：readline 阻塞等待输出时，外部
+                    # request_stop 已 SIGKILL 进程组 → readline 返回 EOF
+                    # 自然退出；此处兜底 readline 长期无输出时仍能感知停止
+                    if self._stop_requested(task_id) and proc.poll() is None:
+                        stopped = True
+                        break
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    try:
+                        chunk = proc.stdout.readline() if proc.stdout else b""
+                    except Exception:
+                        chunk = ""
+                    if chunk == "" and proc.poll() is not None:
+                        break
+                    if chunk:
+                        f.write(chunk)
+                        chunks.append(chunk)
+                        if len(chunks) > 20000:  # 约 20MB 上限
+                            chunks.pop(0)
+                        # 运行中即把 session_id 落库（issue #20 实时查看），
+                        # 只落首次：进程未结束时 API 就能定位当前会话文件
+                        if not session_known and self._persist_session_from_chunk(task_id, chunk):
+                            session_known = True
+                    if time.time() >= deadline and proc.poll() is None:
+                        timed_out = True
+                        break
+                    time.sleep(0.05)
+
+            if stopped:
+                self._kill_process_group(proc)
+                proc.wait(timeout=10)
+                output = "".join(chunks)
+                self.db.add_log(task_id, "warn",
+                                "任务被用户停止，已强制终止 claude 进程组")
+                self._persist_session_id(task_id, output)
+                return STOP_EXIT_CODE, output
+
+            if timed_out:
+                self._kill_process_group(proc)
+                proc.wait(timeout=10)
+                output = "".join(chunks)
+                self.db.add_log(task_id, "error",
+                                f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止进程组")
+                self._persist_session_id(task_id, output)
+                return 124, output  # 124 = timeout 约定退出码
+
+            exit_code = proc.wait(timeout=30)
             output = "".join(chunks)
-            self.db.add_log(task_id, "error",
-                            f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止进程组")
+            self.db.add_log(task_id, "info", f"claude 退出码: {exit_code}")
             self._persist_session_id(task_id, output)
-            return 124, output  # 124 = timeout 约定退出码
-
-        exit_code = proc.wait(timeout=30)
-        output = "".join(chunks)
-        self.db.add_log(task_id, "info", f"claude 退出码: {exit_code}")
-        self._persist_session_id(task_id, output)
-        return exit_code, output
+            return exit_code, output
+        finally:
+            with self._proc_lock:
+                self._procs.pop(task_id, None)
 
     def _persist_session_id(self, task_id: int, output: str) -> None:
         """执行结束后把 claude 会话 id 落库（供下次重试 / 平台重启断点续跑）。"""
@@ -726,6 +784,13 @@ class ClaudeExecutor:
             logger.info("任务 %s 已被其他实例领取或已结束（状态非 queued/retrying），跳过", task_id)
             return
 
+        # 用户一键停止（issue #35）：停止请求可能先于 worker 领取到达
+        # （scheduler.stop_all 先落库再登记请求），领取后立即检查，
+        # 避免已经停止的任务再发起执行
+        if self._stop_requested(task_id):
+            self._finish_stopped(task_id)
+            return
+
         project_id, issue_iid = task["project_id"], task["issue_iid"]
         self.db.set_task_status(task_id, None, log_path=str(self._log_file(task_id)))
         try:
@@ -741,6 +806,11 @@ class ClaudeExecutor:
         attempt_details: list[dict] = []  # 每次失败的详情（退出码 + 提取的 trace/错误），供 error_detail 落库
 
         while True:
+            # 用户一键停止（issue #35）：重试循环每轮检查停止请求
+            # （请求可能在第 N 次失败后、重试间隙到达），命中即终止
+            if self._stop_requested(task_id):
+                self._finish_stopped(task_id)
+                return
             attempt += 1
             # issue #8 断点续跑：上次执行留过 claude 会话 → 接续（resume）；
             # 会话文件丢失（如 ~/.claude 未持久化）→ 清除后降级全新会话
@@ -779,6 +849,12 @@ class ClaudeExecutor:
                 self.db.add_log(task_id, "error", output)
 
             last_output, last_exit = output, exit_code
+
+            # 被停止（issue #35）：进程组被杀（STOP_EXIT_CODE）且已登记
+            # 停止请求 → 直接收尾，不进入重试分支（避免状态闪现 retrying）
+            if exit_code == STOP_EXIT_CODE and self._stop_requested(task_id):
+                self._finish_stopped(task_id)
+                return
 
             if exit_code == 0:
                 state = self._issue_state(project_id, issue_iid)
@@ -822,6 +898,21 @@ class ClaudeExecutor:
             error_detail=self._dump_error_detail(attempt_details, last_exit))
 
     # ---- 收尾 ----
+
+    def _finish_stopped(self, task_id: int) -> None:
+        """用户一键停止收尾（issue #35）：条件落 interrupted 终态（幂等）。
+
+        常规路径状态已由 scheduler.stop_all → db.stop_active_tasks 统一
+        落库，此处条件更新兜底「刚被领取尚未被停止流程覆盖」的任务；
+        状态已终态时跳过覆盖（多实例场景由先完成者生效）。
+        """
+        if not self.db.finish_task(
+                task_id, STATUS_INTERRUPTED,
+                exit_code=None,
+                error_message="用户手动停止（一键停止所有任务）",
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S")):
+            return
+        self.db.add_log(task_id, "warn", "任务已停止：用户一键停止所有任务")
 
     def _emit_task_event(self, task_id: int, event: str, reason: str = "") -> None:
         """任务收尾产生网页通知事件（issue #21）。查库失败不阻塞收尾。"""

@@ -6,6 +6,23 @@
 
 ### Added
 
+- **一键停止所有任务**（issue #35）：任务页面新增「停止所有任务」危险按钮（显示当前
+  活跃任务数），一键把排队/执行/重试中的任务全部标记为已中断（interrupted 终态），
+  执行中的 claude 进程组被强制终止；被停止的任务不会在平台重启后自动恢复执行。
+  - 前端：`Tasks.jsx` 筛选行新增 `btn-danger` 按钮（无活跃任务或请求中禁用），
+    点击需 `window.confirm` 确认防误触；调 `POST /api/tasks/stop-all` 后显示
+    绿色成功提示（已停止 N 个任务）并刷新列表，失败显示错误。
+  - 后端：新增 `POST /api/tasks/stop-all`（返回 `{stopped, count}`）；调度器
+    `stop_all()` 清空待派发队列并终止运行中任务；执行器维护运行中进程注册表 +
+    停止请求集合（`request_stop` SIGKILL 进程组，`_run_once` 读循环轮询感知停止
+    返回约定退出码 125，`run_task` 收到停止请求后不再执行/重试）；数据库
+    `stop_active_tasks()` 统一落 interrupted 终态 + 错误信息 + warn 日志。
+  - 测试：后端 `tests/test_task_stop.py` 11 用例（db 落库/调度清队列/进程终止/
+    停止收尾/API 契约）+ 前端 `tests/stop-all-button.test.mjs` 8 用例（按钮
+    禁用条件/确认流/成功失败提示，`tests/helpers/mock-router.jsx` mock
+    react-router-dom 供 node --test 渲染）。
+    后端全量 390 passed + 前端全量 110 passed + build 通过。
+
 - **概览页面**（issue #32）：导航栏新增「概览」tab（位于「仓库」tab 左边），实时展示
   正在执行的任务（running + retrying）卡片：仓库名称、对应 issue（GitLab 链接）、
   agent 实时输出（每 3 秒轮询增量刷新、卡片内滚动跟随最新）。多任务以网格排布，

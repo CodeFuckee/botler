@@ -10,6 +10,8 @@ export default function Tasks() {
   const [repoId, setRepoId] = useState('')
   const [error, setError] = useState('')
   const [detailTask, setDetailTask] = useState(null) // 正在查看详细失败原因的任务
+  const [stopMsg, setStopMsg] = useState('') // 一键停止成功提示（issue #35）
+  const [stopping, setStopping] = useState(false) // 停止请求进行中
   const timer = useRef(null)
 
   const load = useCallback(async () => {
@@ -42,10 +44,34 @@ export default function Tasks() {
     api.get('/api/repos').then((d) => setRepos(d.repos)).catch(() => {})
   }, [])
 
+  // 活跃任务数（issue #35）：排队 + 执行 + 重试
+  const activeCount =
+    (data.stats?.queued || 0) + (data.stats?.running || 0) + (data.stats?.retrying || 0)
+
+  // 一键停止所有任务（issue #35）：确认后调后端批量停止，刷新列表
+  const stopAll = async () => {
+    if (!window.confirm(
+      `确定停止所有正在执行的任务吗？当前 ${activeCount} 个活跃任务（排队/执行/重试）将被标记为已中断，执行中的 claude 进程会被强制终止。`)) {
+      return
+    }
+    setStopping(true)
+    setStopMsg('')
+    try {
+      const r = await api.post('/api/tasks/stop-all')
+      setStopMsg(`已停止 ${r.count} 个任务`)
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setStopping(false)
+    }
+  }
+
   return (
     <div>
       <h1>任务列表</h1>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
+      {stopMsg && <div className="alert alert-ok" onClick={() => setStopMsg('')}>{stopMsg}</div>}
 
       <div className="stats-row">
         {Object.entries(data.stats || {}).map(([k, v]) => (
@@ -74,6 +100,15 @@ export default function Tasks() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          {/* 一键停止所有任务（issue #35）：高危操作，需确认；无活跃任务或请求中禁用 */}
+          <button
+            className="btn btn-danger"
+            onClick={stopAll}
+            disabled={activeCount === 0 || stopping}
+            title={activeCount === 0 ? '当前没有正在执行的任务' : '停止所有排队中、执行中、重试中的任务'}
+          >
+            ⏹ 停止所有任务{activeCount > 0 ? `（${activeCount}）` : ''}
+          </button>
         </div>
 
         {/* 12 列表格最小宽度超容器，外包滚动容器防止窄视口下内容溢出卡片（issue #28） */}

@@ -108,6 +108,19 @@ def list_tasks(
     }
 
 
+@router.post("/stop-all")
+def stop_all_tasks(request: Request):
+    """一键停止所有活跃任务（issue #35）。
+
+    排队/执行/重试中的任务统一标记 interrupted（终态），执行中的
+    claude 进程组被强制终止；被停止的任务不会在平台重启后自动恢复。
+    返回被停止的任务 id 列表与数量（无活跃任务时为空列表）。
+    """
+    c = ctx_of(request)
+    stopped = c.scheduler.stop_all()
+    return {"stopped": stopped, "count": len(stopped)}
+
+
 @router.get("/{task_id}")
 def get_task(request: Request, task_id: int):
     c = ctx_of(request)

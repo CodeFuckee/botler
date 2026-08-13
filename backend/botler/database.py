@@ -308,6 +308,29 @@ class Database:
                 vals)
             return cur.rowcount > 0
 
+    def stop_active_tasks(self) -> list[int]:
+        """一键停止所有活跃任务（issue #35）：queued/running/retrying → interrupted。
+
+        返回被停止的任务 id 列表。interrupted 为终态：requeue_interrupted
+        只捞 running/retrying，用户手动停止的任务不会在平台重启后被
+        重新入队执行。
+        """
+        stopped: list[int] = []
+        with self._conn() as conn:
+            for row in conn.execute(
+                    "SELECT id FROM tasks WHERE status IN ('queued','running','retrying')"):
+                stopped.append(row["id"])
+            if stopped:
+                conn.execute(
+                    """UPDATE tasks SET status='interrupted',
+                       error_message='用户手动停止（一键停止所有任务）',
+                       finished_at=datetime('now')
+                       WHERE status IN ('queued','running','retrying')""")
+                conn.executemany(
+                    "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'warn', ?)",
+                    [(tid, "任务已停止：用户一键停止所有任务") for tid in stopped])
+        return stopped
+
     def requeue_interrupted(self) -> list[int]:
         """重启恢复：queued 保持不变，running/retrying 标记 interrupted 后重新入队。"""
         restored: list[int] = []

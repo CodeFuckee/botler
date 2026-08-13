@@ -77,6 +77,24 @@ class TaskScheduler:
                 "queues": {str(k): list(v) for k, v in self._queues.items()},
             }
 
+    def stop_all(self) -> list[int]:
+        """一键停止所有任务（issue #35）：状态落库 + 清空队列 + 终止运行中进程。
+
+        返回被停止的任务 id 列表（db.stop_active_tasks 的返回）。
+        顺序保证：先落库再登记停止请求——worker 感知到停止请求时
+        状态必已 interrupted（或由 worker 收尾时条件更新兜底）。
+        队列清理与派发循环共用 _lock：清空后不再派发新任务；已从队列
+        取出尚未派发的任务在 _running 中登记，会被一并请求终止。
+        """
+        stopped = self.db.stop_active_tasks()
+        with self._lock:
+            self._queues.clear()
+            running_ids = list(self._running.values())
+        for task_id in running_ids:
+            self.executor.request_stop(task_id)
+        logger.info("一键停止所有任务：%s 个活跃任务已标记 interrupted", len(stopped))
+        return stopped
+
     # ---- 调度循环 ----
 
     def _loop(self) -> None:
