@@ -6,6 +6,23 @@
 
 ### Added
 
+- **一键对账所有仓库**（issue #38）：任务页面筛选行新增「对账所有仓库」按钮，
+  点击后同步扫描全部启用仓库，把「assignee 是 bot 但任务表无活跃记录」的
+  open issues 补入任务队列，并即时展示扫描数/补入队数。
+  - 前端：`Tasks.jsx` 筛选行「停止所有任务」旁新增对账按钮（低危操作无需
+    `confirm`，请求中禁用防重复点击）；调 `POST /api/tasks/reconcile-all` 后
+    显示绿色成功提示（扫描 X 个 issue、补入队 Y 个任务）并刷新列表；部分仓库
+    失败时展示失败明细，接口失败显示错误。
+  - 后端：新增 `POST /api/tasks/reconcile-all`，同步执行全量对账扫描
+    （复用 `Reconciler.reconcile_once()`，与仓库页单仓库对账 issue #17 一致）
+    并直接返回 `{ok, scanned, enqueued, errors}`；多仓库场景下单个仓库失败
+    不中断整体（HTTP 200），失败明细放入 `errors` 列表返回。
+  - 测试：后端 `tests/test_task_reconcile.py` 8 用例（全量入队/无漏单/幂等/
+    终态标签跳过/部分与全部仓库失败/停用仓库/无仓库）+ 前端
+    `tests/tasks-reconcile-all-button.test.mjs` 7 用例（源码断言/按钮渲染/
+    成功提示/部分失败明细/接口失败）。后端全量 410 passed + 前端全量
+    134 passed + build 通过。
+
 - **手动重试任务**（issue #36）：任务页面操作列新增「重试」按钮（仅失败/已中断
   任务显示），点击确认后任务重新入队执行——失败相关字段清空、尝试次数归零、
   来源标记「手动」，保留 claude 会话断点续跑（接续上次进度继续处理）。

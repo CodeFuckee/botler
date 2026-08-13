@@ -121,6 +121,21 @@ def stop_all_tasks(request: Request):
     return {"stopped": stopped, "count": len(stopped)}
 
 
+@router.post("/reconcile-all")
+def reconcile_all(request: Request):
+    """一键对账所有启用仓库（issue #38）。
+
+    同步执行全量对账扫描：把所有启用仓库中「assignee 是 bot 但任务表无
+    活跃记录」的 open issues 补入队。与仓库页单仓库对账
+    （/repos/{id}/reconcile，issue #17）一致，同步执行并直接返回结果；
+    多仓库场景下单个仓库失败不中断整体，失败明细放入 errors 列表返回。
+    """
+    c = ctx_of(request)
+    result = c.reconciler.reconcile_once()
+    return {"ok": True, "scanned": result["scanned"], "enqueued": result["enqueued"],
+            "errors": result.get("errors", [])}
+
+
 @router.post("/{task_id}/retry")
 def retry_task(request: Request, task_id: int):
     """手动重试任务（issue #36）：终态失败任务重新入队执行。

@@ -14,6 +14,8 @@ export default function Tasks() {
   const [stopping, setStopping] = useState(false) // 停止请求进行中
   const [retryMsg, setRetryMsg] = useState('') // 手动重试成功提示（issue #36）
   const [retryId, setRetryId] = useState(null) // 正在重试的任务 id（请求中禁用）
+  const [reconcileMsg, setReconcileMsg] = useState('') // 一键对账成功提示（issue #38）
+  const [reconciling, setReconciling] = useState(false) // 对账请求进行中
   const timer = useRef(null)
 
   const load = useCallback(async () => {
@@ -88,12 +90,34 @@ export default function Tasks() {
     }
   }
 
+  // 一键对账所有启用仓库（issue #38）：同步扫描全部启用仓库把漏单补入队列。
+  // 与仓库页对账按钮一致为低危操作（无需确认）；部分仓库失败时展示失败明细。
+  const reconcileAll = async () => {
+    setReconciling(true)
+    setReconcileMsg('')
+    try {
+      const r = await api.post('/api/tasks/reconcile-all')
+      if (r.errors && r.errors.length > 0) {
+        setError(`对账完成：扫描 ${r.scanned} 个 issue，补入队 ${r.enqueued} 个任务；` +
+          `${r.errors.length} 个仓库失败：${r.errors[0]}`)
+      } else {
+        setReconcileMsg(`对账完成：扫描 ${r.scanned} 个 issue，补入队 ${r.enqueued} 个任务`)
+      }
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setReconciling(false)
+    }
+  }
+
   return (
     <div>
       <h1>任务列表</h1>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {stopMsg && <div className="alert alert-ok" onClick={() => setStopMsg('')}>{stopMsg}</div>}
       {retryMsg && <div className="alert alert-ok" onClick={() => setRetryMsg('')}>{retryMsg}</div>}
+      {reconcileMsg && <div className="alert alert-ok" onClick={() => setReconcileMsg('')}>{reconcileMsg}</div>}
 
       <div className="stats-row">
         {Object.entries(data.stats || {}).map(([k, v]) => (
@@ -130,6 +154,15 @@ export default function Tasks() {
             title={activeCount === 0 ? '当前没有正在执行的任务' : '停止所有排队中、执行中、重试中的任务'}
           >
             ⏹ 停止所有任务{activeCount > 0 ? `（${activeCount}）` : ''}
+          </button>
+          {/* 一键对账所有启用仓库（issue #38）：低危操作无需确认；请求中禁用 */}
+          <button
+            className="btn btn-gap-left"
+            onClick={reconcileAll}
+            disabled={reconciling}
+            title="立即扫描所有启用仓库，把漏掉的 issue 补入任务队列"
+          >
+            ↻ 对账所有仓库{reconciling ? '…' : ''}
           </button>
         </div>
 
