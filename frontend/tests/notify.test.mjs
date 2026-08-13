@@ -235,6 +235,57 @@ test('sendTestNotification：构造通知抛异常 → 返回 error 不崩溃', 
   } finally { env.restore() }
 })
 
+// ---- 连续点击独立弹出（issue #21 第四轮）----
+// 用户报告：点击多次测试通知，只有第一次在系统上弹出，后续点击没有反应。
+// 根因：固定 tag 'botler-test' —— 浏览器通知中心对相同 tag 的通知做「替换」
+// 而非「新弹」，第一条还在屏幕上时后续同 tag 通知只更新旧条目、不触发新弹出。
+
+// 模拟真实浏览器通知中心行为：相同 tag 的新通知替换已有通知（不触发新弹出），
+// 不同 tag 的通知各自独立弹出（popupCount 只统计真正的"弹出"次数）。
+function mockNotificationCenter() {
+  const center = new Map() // tag -> 通知
+  const popupCount = { n: 0 }
+  const constructed = []
+  const prev = {
+    window: globalThis.window, Notification: globalThis.Notification,
+    isSecureContext: globalThis.isSecureContext,
+  }
+  globalThis.window = globalThis
+  globalThis.isSecureContext = true
+  globalThis.Notification = class {
+    static permission = 'granted'
+    static requestPermission = async () => 'granted'
+    constructor(title, opts) {
+      constructed.push({ title, ...opts })
+      if (!center.has(opts.tag)) popupCount.n += 1 // 同 tag 替换不触发新弹出
+      center.set(opts.tag, { title })
+    }
+  }
+  return {
+    constructed, popupCount,
+    restore() {
+      if (prev.window === undefined) delete globalThis.window
+      else globalThis.window = prev.window
+      if (prev.Notification === undefined) delete globalThis.Notification
+      else globalThis.Notification = prev.Notification
+      if (prev.isSecureContext === undefined) delete globalThis.isSecureContext
+      else globalThis.isSecureContext = prev.isSecureContext
+    },
+  }
+}
+
+test('sendTestNotification：连续多次点击每次都独立弹出（tag 唯一，不被浏览器合并）', async () => {
+  const env = mockNotificationCenter()
+  try {
+    for (let i = 0; i < 3; i++) await sendTestNotification()
+    assert.equal(env.popupCount.n, 3, '三次点击应触发三次系统弹出')
+    assert.equal(env.constructed.length, 3)
+    // 三次构造的 tag 必须互不相同，浏览器才视为独立通知
+    const tags = env.constructed.map((n) => n.tag)
+    assert.equal(new Set(tags).size, 3)
+  } finally { env.restore() }
+})
+
 // ---- 非安全上下文判定（issue #21 第三轮）----
 // 根因：http/自签名证书不受信任时 Notification.permission 恒为 'denied' 且
 // requestPermission() 永不弹框——必须用 isSecureContext 区分，提示用户换 https。

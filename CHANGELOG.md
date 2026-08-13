@@ -74,6 +74,18 @@
 
 ### Fixed
 
+- **测试通知按钮多次点击只有第一次弹出系统通知**（issue #21 第四轮）：
+  设置页「弹出测试通知」使用固定 `tag: 'botler-test'` 构造通知——浏览器通知
+  中心对相同 tag 的通知做「替换」而非「新弹」：第一条通知还在屏幕上时，后续
+  同 tag 通知只更新旧条目、不触发新的弹出动画，用户看到的就是「后续点击没有
+  反应」。
+  - 修复：`sendTestNotification()` 的 tag 改为每次唯一（模块级自增序号
+    `botler-test-<n>`），每次点击都是独立通知、必然弹出；仍保留 tag 机制
+    （同一瞬间重复点击不堆积）。
+  - 涉及 `frontend/src/notify.js`；新增复现测试 `tests/notify.test.mjs`
+    「连续多次点击每次都独立弹出」用例（mock 浏览器通知中心同 tag 替换语义，
+    修复前失败 `1 !== 3`）。前端全量 84 passed + 后端全量 361 passed（零改动）。
+
 - **任务页面「尝试」列数值与「恢复」文字不在同一水平线上**（issue #31）：
   任务列表「尝试」列单元格内混排纯文本数值 `attempt_count`（继承 body 14px /
   line-height 1.6）与恢复任务的 `badge.resume`（inline-block，11px，padding

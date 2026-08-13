@@ -66,6 +66,9 @@ export function showNotification(event) {
 // 绕过事件过滤——用户主动点击就是要验证通知能力本身。权限未决（default）
 // 时先请求授权；返回 {ok, reason} 供 UI 提示结果
 // （reason: browser-unsupported / insecure-context / denied / error）。
+// tag 每次唯一（issue #21 第四轮）：浏览器对相同 tag 的通知做「替换」而非
+// 「新弹」，固定 tag 会导致连续点击只有第一次真正弹出。
+let testNotifySeq = 0
 export async function sendTestNotification() {
   const reason = notifyFailureReason()
   if (reason) return { ok: false, reason }
@@ -77,7 +80,7 @@ export async function sendTestNotification() {
   try {
     new Notification('Botler 测试通知', {
       body: '这是一条测试通知，网页通知功能正常 ✅',
-      tag: 'botler-test', // 固定 tag：连续点击不重复堆积
+      tag: `botler-test-${++testNotifySeq}`, // 唯一 tag：每次点击独立弹出
     })
     return { ok: true }
   } catch {
