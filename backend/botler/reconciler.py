@@ -13,7 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import ConfigManager
-from .database import Database
+from .database import Database, STATUS_FAILED, STATUS_SUCCEEDED
 from .gitlab_client import GitLabClient, GitLabError
 from .scheduler import TaskScheduler
 
@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 # issue。bot-done = 已完成待用户确认关闭；bot-failed = 处理失败待人工介入。
 # 带这两个标签的 issue 不再补入队，避免重复处理已完成的 issue、失败 issue 无限重试。
 TERMINAL_LABELS = ("bot-done", "bot-failed")
+
+# 终态标签对账扫描的任务数上限（issue #40）：每次对账只回看每仓库最近
+# BACKFILL_TASKS_LIMIT 条终态任务，避免大仓库反复扫描全量历史
+BACKFILL_TASKS_LIMIT = 20
 
 
 class Reconciler:
@@ -118,6 +122,11 @@ class Reconciler:
                     enqueued += 1
                     logger.info("对账补入队: 任务 %s (%s#%s)",
                                 task_id, repo["gitlab_project_id"], issue["iid"])
+            # 终态标签对账（issue #40）：任务收尾打标签时平台可能被部署重启
+            # 打断（任务 #63 的 PUT /issues/39 未发出进程即被 pm2 delete 杀死），
+            # issue 缺 bot-done/bot-failed 标签会被 webhook/对账重复领取。
+            # 这里回看终态任务，issue 仍 open 且无终态标签时补打。
+            self._backfill_terminal_labels(repo)
             # 网页通知：队列状态（issue #21，节流由 notifier 负责）
             if not issues:
                 self.notifier.queue_empty(repo["name"])
@@ -127,3 +136,38 @@ class Reconciler:
         if errors:
             result["errors"] = errors
         return result
+
+    def _backfill_terminal_labels(self, repo) -> None:
+        """终态标签对账（issue #40）：给缺终态标签的终态任务补打 bot-done/bot-failed。
+
+        收尾打标签依赖 executor 进程存活，而任务 push 的代码触发部署会 pm2
+        delete 重启平台——收尾瞬间被打断的任务，issue 上既无 bot-done 也无
+        bot-failed（生产任务 #63），webhook/对账会把它当新任务重复领取。
+        这里兜底扫描最近 BACKFILL_TASKS_LIMIT 条终态任务：issue 仍 open 且
+        无终态标签时，按任务结果补打对应标签。失败不影响主流程（下轮再试）。
+        """
+        tasks = self.db.list_tasks(
+            status=[STATUS_SUCCEEDED, STATUS_FAILED],
+            repo_id=repo["id"], limit=BACKFILL_TASKS_LIMIT)
+        for task in tasks:
+            project_id, iid = task["project_id"], task["issue_iid"]
+            try:
+                issue = self.gitlab.get_issue(project_id, iid)
+            except GitLabError as e:
+                logger.warning("终态标签对账：查询 issue %s#%s 失败: %s",
+                               project_id, iid, e)
+                continue
+            if issue.get("state") != "opened":
+                continue  # 已关闭（用户已确认），无需补打
+            labels = set(issue.get("labels") or [])
+            if labels & set(TERMINAL_LABELS):
+                continue  # 已有终态标签，幂等跳过
+            want = "bot-done" if task["status"] == STATUS_SUCCEEDED else "bot-failed"
+            try:
+                self.gitlab.add_labels(project_id, iid, [want])
+            except GitLabError as e:
+                logger.warning("终态标签对账：补打 %s 失败（%s#%s）: %s",
+                               want, project_id, iid, e)
+                continue
+            logger.info("终态标签对账：任务 %s（%s#%s）收尾被打断，已补打 %s",
+                        task["id"], project_id, iid, want)

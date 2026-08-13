@@ -38,6 +38,9 @@ class StubGitLab:
         self.fail_projects: set[int] = set()
         # issue iid → 最后一条非系统评论的作者 id（None = 无发言）
         self.last_author_by_issue: dict[int, int | None] = {}
+        # 终态标签对账（issue #40）：(project_id, iid) → issue 详情桩
+        self.issue_details: dict[tuple[int, int], dict] = {}
+        self.labels_added: list[tuple[int, int, list[str]]] = []
 
     def get_bot_id(self):
         return BOT_ID
@@ -49,6 +52,13 @@ class StubGitLab:
 
     def last_note_author_id(self, project_id, iid):
         return self.last_author_by_issue.get(iid)
+
+    def get_issue(self, project_id, iid):
+        return self.issue_details.get((project_id, iid), {"state": "opened", "labels": []})
+
+    def add_labels(self, project_id, iid, labels):
+        self.labels_added.append((project_id, iid, labels))
+        return {"iid": iid}
 
 
 def make_issue(iid: int, title: str = "测试 issue", labels: list[str] | None = None) -> dict:
@@ -167,3 +177,72 @@ class TestReconcileSkipsWhenBotLastSpoke:
 
         assert result == {"scanned": 1, "enqueued": 1}
         assert ctx.db.find_active_task(42, 9) is not None
+
+
+def _mk_terminal_task(db, repo_id: int, issue_iid: int, status: str) -> int:
+    """创建终态任务（succeeded/failed）并返回任务 id。"""
+    task_id = db.create_task(repo_id, 42, issue_iid, f"终态任务 {issue_iid}")
+    db.set_task_status(task_id, status)
+    return task_id
+
+
+class TestReconcileBackfillsTerminalLabels:
+    """issue #40：终态任务对应的 issue 缺 bot-done/bot-failed 标签时对账补打。
+
+    复现缺陷：任务收尾打标签时平台被部署重启打断（任务 #63 于 13:31:45
+    收尾，PUT /issues/39 未发出进程即被 pm2 delete 杀死），issue 无终态
+    标签会被 webhook/对账重复领取。对账兜底扫描终态任务补打标签。
+    """
+
+    def test_backfills_bot_done_for_succeeded_task(self, ctx):
+        """succeeded 任务 + issue 仍 open 无终态标签 → 补打 bot-done。"""
+        repo_id = _add_repo(ctx.db)
+        _mk_terminal_task(ctx.db, repo_id, 1, "succeeded")
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert (42, 1, ["bot-done"]) in ctx.gitlab.labels_added
+
+    def test_backfills_bot_failed_for_failed_task(self, ctx):
+        """failed 任务 → 补打 bot-failed（失败 issue 不再被重复领取）。"""
+        repo_id = _add_repo(ctx.db)
+        _mk_terminal_task(ctx.db, repo_id, 2, "failed")
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert (42, 2, ["bot-failed"]) in ctx.gitlab.labels_added
+
+    def test_skips_when_issue_has_terminal_label(self, ctx):
+        """issue 已带 bot-done：不重复补打。"""
+        repo_id = _add_repo(ctx.db)
+        _mk_terminal_task(ctx.db, repo_id, 3, "succeeded")
+        ctx.gitlab.issue_details[(42, 3)] = {"state": "opened", "labels": ["bot-done"]}
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert ctx.gitlab.labels_added == []
+
+    def test_skips_when_issue_closed(self, ctx):
+        """issue 已关闭（用户已确认）：不补打标签。"""
+        repo_id = _add_repo(ctx.db)
+        _mk_terminal_task(ctx.db, repo_id, 4, "succeeded")
+        ctx.gitlab.issue_details[(42, 4)] = {"state": "closed", "labels": []}
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert ctx.gitlab.labels_added == []
+
+    def test_backfill_error_does_not_block_enqueue(self, ctx):
+        """补打标签失败（GitLab 报错）：不影响补入队主流程。"""
+        repo_id = _add_repo(ctx.db)
+        _mk_terminal_task(ctx.db, repo_id, 5, "succeeded")
+
+        def flaky_add_labels(project_id, iid, labels):
+            raise GitLabError("模拟 GitLab API 故障")
+
+        ctx.gitlab.add_labels = flaky_add_labels
+        ctx.gitlab.issues_by_project = {42: [make_issue(6, labels=["bug"])]}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}

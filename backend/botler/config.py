@@ -76,6 +76,13 @@ class Settings:
     task_timeout_seconds: int = 1800
     max_retries: int = 2
     reconcile_interval_seconds: int = 300
+    # CI 流水线等待（issue #40）：任务成功收尾前等待任务提交触发的流水线
+    # 到终态。detect = 探测窗口（GitLab 收到 push 即创建流水线记录，
+    # 窗口内找不到匹配 sha 说明仓库无 CI）；timeout = 等待终态总上限；
+    # interval = 轮询间隔
+    ci_wait_detect_seconds: int = 120
+    ci_wait_interval_seconds: int = 15
+    ci_wait_timeout_seconds: int = 1800
     claude_command: str = "claude"
     claude_args: list[str] = field(default_factory=lambda: ["-p", "--output-format", "json"])
     default_template: str = ""
@@ -108,7 +115,9 @@ class Settings:
 
 # settings API 可写字段（写回 config.yaml 用）
 KNOWN_FIELDS = {
-    "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries", "reconcile_interval_seconds"},
+    "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries",
+               "reconcile_interval_seconds", "ci_wait_detect_seconds",
+               "ci_wait_interval_seconds", "ci_wait_timeout_seconds"},
     "claude": {"command", "args"},
     "templates": {"default"},
     "browse": {"default_path"},
@@ -223,6 +232,9 @@ class ConfigManager:
             task_timeout_seconds=int(worker.get("task_timeout_seconds", 1800)),
             max_retries=int(worker.get("max_retries", 2)),
             reconcile_interval_seconds=int(worker.get("reconcile_interval_seconds", 300)),
+            ci_wait_detect_seconds=int(worker.get("ci_wait_detect_seconds", 120)),
+            ci_wait_interval_seconds=int(worker.get("ci_wait_interval_seconds", 15)),
+            ci_wait_timeout_seconds=int(worker.get("ci_wait_timeout_seconds", 1800)),
             claude_command=claude.get("command", "claude"),
             claude_args=claude.get("args", ["-p", "--output-format", "json"]),
             default_template=tpl.get("default", DEFAULT_TEMPLATE),

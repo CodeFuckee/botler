@@ -36,7 +36,7 @@ from .database import (
     Database, STATUS_RUNNING, STATUS_RETRYING, STATUS_SUCCEEDED, STATUS_FAILED,
     STATUS_INTERRUPTED,
 )
-from .gitlab_client import GitLabClient, GitLabError
+from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
 from .templates import TemplateRenderer
 
 logger = logging.getLogger(__name__)
@@ -764,6 +764,82 @@ class ClaudeExecutor:
         except GitLabError as e:
             return f"error: {e}"
 
+    def _wait_pipeline_for_commit(self, task_id: int, project_id: int,
+                                  commit_sha: str,
+                                  detect_timeout: float | None = None,
+                                  wait_timeout: float | None = None) -> str:
+        """等待 commit_sha 触发的 CI 流水线到终态（issue #40）。
+
+        任务 #63 缺陷：claude push 代码后退出，平台立即把任务判 succeeded，
+        此时流水线还在运行（#63 于 13:31:45 收尾，流水线到 13:48:34 才结束）。
+        现在成功收尾前先等流水线终态：
+
+        - 探测窗口（默认 ci_wait_detect_seconds）：GitLab 收到 push 即创建
+          流水线记录，窗口内找到 sha 匹配的最新流水线就进入终态等待；
+          窗口内始终无匹配 → "no_pipeline"（仓库无 CI），调用方不等待；
+        - 等待阶段（默认 ci_wait_timeout_seconds 总上限）：轮询到
+          success/failed/canceled/skipped 任一终态即返回该状态；
+          超上限仍非终态 → "timeout"；
+        - 任一阶段收到用户停止请求 → "stopped"。
+
+        detect_timeout / wait_timeout 仅测试注入用（None 时用配置默认值）。
+        """
+        cfg = self.config.get()
+        detect = detect_timeout if detect_timeout is not None else cfg.ci_wait_detect_seconds
+        total = wait_timeout if wait_timeout is not None else cfg.ci_wait_timeout_seconds
+        deadline = time.time() + total
+        detect_deadline = time.time() + min(detect, total)
+
+        pipeline: dict | None = None
+        while time.time() < detect_deadline:
+            if self._stop_requested(task_id):
+                return "stopped"
+            try:
+                latest = self.gitlab.get_latest_pipeline(project_id)
+            except GitLabError as e:
+                self.db.add_log(task_id, "warn", f"查询最新流水线失败: {e}")
+                return "no_pipeline"
+            if latest is not None and latest.get("sha") == commit_sha:
+                pipeline = latest
+                break
+            time.sleep(cfg.ci_wait_interval_seconds)
+        if pipeline is None:
+            return "no_pipeline"
+
+        self.db.add_log(task_id, "info",
+                        f"发现任务提交触发的流水线 #{pipeline['id']}，等待其到达终态…")
+        while time.time() < deadline:
+            if self._stop_requested(task_id):
+                return "stopped"
+            status = pipeline.get("status")
+            if status in PIPELINE_TERMINAL_STATES:
+                self.db.add_log(task_id, "info", f"CI 流水线 #{pipeline['id']} 终态: {status}")
+                return status
+            time.sleep(cfg.ci_wait_interval_seconds)
+            try:
+                pipeline = self.gitlab.get_pipeline(project_id, pipeline["id"])
+            except GitLabError as e:
+                self.db.add_log(task_id, "warn", f"查询流水线 #{pipeline['id']} 失败: {e}")
+        return "timeout"
+
+    def _await_task_pipeline(self, task_id: int, project_id: int,
+                             issue_iid: int) -> str:
+        """成功收尾前的流水线等待入口（issue #40）：拿任务提交 sha 并等待终态。
+
+        查不到提交（Claude 未推送代码，仅评论/分析）→ "no_pipeline" 不等待；
+        查询提交失败（GitLab 报错）→ 同样降级 "no_pipeline"（不阻塞成功收尾）。
+        """
+        try:
+            sha = self.gitlab.find_commit_for_issue(project_id, issue_iid)
+        except GitLabError as e:
+            self.db.add_log(task_id, "warn", f"查询任务提交失败，跳过流水线等待: {e}")
+            return "no_pipeline"
+        if not sha:
+            self.db.add_log(task_id, "info", "未找到任务提交，无流水线可等，直接成功收尾")
+            return "no_pipeline"
+        self.db.add_log(task_id, "info", f"等待任务提交 {sha[:8]} 触发的 CI 流水线到达终态…")
+        return self._wait_pipeline_for_commit(task_id, project_id, sha)
+
     def run_task(self, task_id: int) -> None:
         """任务主流程：单次或重试执行，写状态机与收尾评论。"""
         cfg = self.config.get()
@@ -875,6 +951,27 @@ class ClaudeExecutor:
                 # 新判定：正常完成输出（JSON result，非「无法解决」）即成功，
                 # 无论 issue 是否仍 open。
                 if _load_json_output(output) is not None:
+                    # issue #40：成功收尾前等待任务提交触发的 CI 流水线终态。
+                    # 此前 claude exit 0 即判成功，流水线还在运行任务就显示
+                    # 已完成（任务 #63 于 13:31:45 收尾，流水线到 13:48:34 才结束）。
+                    pipeline_state = self._await_task_pipeline(
+                        task_id, project_id, issue_iid)
+                    if pipeline_state == "stopped":
+                        self._finish_stopped(task_id)
+                        return
+                    if pipeline_state in ("failed", "canceled"):
+                        self._finish_failed(
+                            task_id,
+                            f"CI 流水线状态为 {pipeline_state}，任务视为失败",
+                            output)
+                        return
+                    if pipeline_state == "timeout":
+                        self._finish_failed(
+                            task_id,
+                            "CI 流水线超时未完成，任务视为失败",
+                            output)
+                        return
+                    # success / skipped / no_pipeline → 成功收尾
                     self._finish_succeeded(task_id, output)
                     return
 

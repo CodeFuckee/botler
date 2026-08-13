@@ -623,7 +623,10 @@ class TestCommitRecording:
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
             find_commit_for_issue=lambda pid, iid: self._commit_sha(),
+            # issue #40：成功路径会探测任务触发的流水线；无匹配 sha → 不等待
+            get_latest_pipeline=lambda pid: {"id": 1, "status": "success", "sha": "other"},
         )
+        _shorten_ci_timeouts(executor, monkeypatch)
 
         executor.run_task(task_id)
 
@@ -739,3 +742,262 @@ class TestRunTaskConcurrency:
 
         assert called == []
         assert db.get_task(task_id)["status"] == "succeeded"
+
+
+def _shorten_ci_timeouts(executor, monkeypatch):
+    """把 CI 等待相关的配置超时缩到极小（测试用，避免真实等待秒级时间）。"""
+    real_get = executor.config.get
+    settings = real_get()
+    monkeypatch.setattr(executor.config, "get", lambda: SimpleNamespace(
+        **{**vars(settings),
+           "ci_wait_detect_seconds": 0.02,
+           "ci_wait_interval_seconds": 0.001,
+           "ci_wait_timeout_seconds": 0.02}))
+
+
+class TestWaitPipelineBeforeSucceed:
+    """issue #40：任务成功收尾前等待任务提交触发的 CI 流水线到终态。
+
+    复现缺陷：claude push 代码后退出，平台立即把任务标记 succeeded，
+    此时流水线仍在运行（任务 #63 于 13:31:45 收尾，流水线 #737 的
+    sync_to_github 到 13:48:34 才结束）。修复后：
+    - 流水线 success/skipped → 任务 succeeded（打 bot-done）
+    - 流水线 failed/canceled → 任务 failed（打 bot-failed + 失败评论）
+    - 等待超时 → 任务 failed
+    - 无匹配流水线（仓库无 CI / 未推送）→ 直接成功，不等待
+    - 等待期间用户停止 → interrupted
+    """
+
+    SHA = "abc123def456"
+
+    def _install(self, executor, monkeypatch, tmp_path, run_once,
+                 latest_pipeline, pipeline_status, issue_state="opened"):
+        """构造 run_task 环境：fake _run_once + fake gitlab（含流水线桩）。"""
+        calls = []
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda pid, iid: {"state": issue_state},
+            add_comment=lambda *a, **k: calls.append(("comment", a)),
+            add_labels=lambda *a, **k: calls.append(("labels", a)),
+            find_commit_for_issue=lambda pid, iid: self.SHA,
+            get_latest_pipeline=latest_pipeline,
+            get_pipeline=lambda pid, pid2: {"id": pid2, "status": pipeline_status(),
+                                            "sha": self.SHA},
+        )
+        monkeypatch.setattr(executor, "_run_once", run_once)
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+        return calls
+
+    def test_pipeline_success_before_task_succeeded(self, executor, monkeypatch, tmp_path):
+        """流水线先 running 后 success：任务等到流水线终态才 succeeded。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "开发完成，已推送代码"}, ensure_ascii=False)
+        states = iter(["success"])
+        calls = self._install(
+            executor, monkeypatch, tmp_path,
+            run_once=lambda *a: (0, output),
+            latest_pipeline=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+            pipeline_status=lambda: next(states),
+        )
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded"
+        assert calls.count(("labels", (42, 1, ["bot-done"]))) == 1
+
+    def test_pipeline_failed_marks_task_failed(self, executor, monkeypatch, tmp_path):
+        """流水线 failed：任务判失败并打 bot-failed（不再仅凭 claude exit 0 判成功）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "开发完成，已推送代码"}, ensure_ascii=False)
+        states = iter(["failed"])
+        calls = self._install(
+            executor, monkeypatch, tmp_path,
+            run_once=lambda *a: (0, output),
+            latest_pipeline=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+            pipeline_status=lambda: next(states),
+        )
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert "流水线" in task["error_message"]
+        assert calls.count(("labels", (42, 1, ["bot-failed"]))) == 1
+        assert any("无法完成此 issue" in a[2] for kind, a in calls if kind == "comment")
+
+    def test_pipeline_canceled_marks_task_failed(self, executor, monkeypatch, tmp_path):
+        """流水线 canceled 同样视为失败（CI 未通过，任务不算完成）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "已推送"}, ensure_ascii=False)
+        states = iter(["canceled"])
+        self._install(
+            executor, monkeypatch, tmp_path,
+            run_once=lambda *a: (0, output),
+            latest_pipeline=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+            pipeline_status=lambda: next(states),
+        )
+
+        executor.run_task(task_id)
+
+        assert db.get_task(task_id)["status"] == "failed"
+
+    def test_pipeline_skipped_counts_as_success(self, executor, monkeypatch, tmp_path):
+        """流水线 skipped（无 job 需要执行）：任务成功收尾。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "已推送"}, ensure_ascii=False)
+        states = iter(["skipped"])
+        self._install(
+            executor, monkeypatch, tmp_path,
+            run_once=lambda *a: (0, output),
+            latest_pipeline=lambda pid: {"id": 900, "status": "pending", "sha": self.SHA},
+            pipeline_status=lambda: next(states),
+        )
+
+        executor.run_task(task_id)
+
+        assert db.get_task(task_id)["status"] == "succeeded"
+
+    def test_no_matching_pipeline_skips_wait(self, executor, monkeypatch, tmp_path):
+        """仓库无 CI（最新流水线 sha 始终不匹配）：不等待，直接成功。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "完成"}, ensure_ascii=False)
+        self._install(
+            executor, monkeypatch, tmp_path,
+            run_once=lambda *a: (0, output),
+            latest_pipeline=lambda pid: {"id": 1, "status": "success", "sha": "other-sha"},
+            pipeline_status=lambda: "success",
+        )
+        # 探测窗口缩到极小，避免默认 120s 拖慢测试
+        _shorten_ci_timeouts(executor, monkeypatch)
+
+        executor.run_task(task_id)
+
+        assert db.get_task(task_id)["status"] == "succeeded"
+
+    def test_pipeline_timeout_marks_task_failed(self, executor, monkeypatch, tmp_path):
+        """流水线一直不结束（超时）：任务判失败，不再无限等待。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "已推送"}, ensure_ascii=False)
+        self._install(
+            executor, monkeypatch, tmp_path,
+            run_once=lambda *a: (0, output),
+            latest_pipeline=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+            pipeline_status=lambda: "running",
+        )
+        # 用极小超时模拟"流水线迟迟不完成"
+        monkeypatch.setattr(executor, "_wait_pipeline_for_commit",
+                            lambda *a, **k: "timeout")
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert "超时" in task["error_message"]
+
+    def test_stop_during_pipeline_wait_interrupts_task(self, executor, monkeypatch, tmp_path):
+        """等待流水线期间用户一键停止：任务 interrupted，不判成功也不判失败。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "已推送"}, ensure_ascii=False)
+        self._install(
+            executor, monkeypatch, tmp_path,
+            run_once=lambda *a: (0, output),
+            latest_pipeline=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+            pipeline_status=lambda: "running",
+        )
+        monkeypatch.setattr(executor, "_wait_pipeline_for_commit",
+                            lambda *a, **k: "stopped")
+
+        executor.run_task(task_id)
+
+        assert db.get_task(task_id)["status"] == "interrupted"
+
+
+class TestWaitPipelineForCommit:
+    """_wait_pipeline_for_commit 内部轮询逻辑（issue #40）。"""
+
+    SHA = "abc123def456"
+
+    def _install(self, executor, monkeypatch, latest, statuses):
+        """fake gitlab + 缩短超时；statuses 为 get_pipeline 依序返回的状态迭代。"""
+        executor.gitlab = SimpleNamespace(
+            get_latest_pipeline=latest,
+            get_pipeline=lambda pid, pid2: {"id": pid2, "sha": self.SHA,
+                                            "status": next(statuses)},
+        )
+        _shorten_ci_timeouts(executor, monkeypatch)
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+
+    def test_waits_until_terminal_state(self, executor, monkeypatch):
+        """命中 sha 匹配的流水线后，轮询直到 success 返回。"""
+        self._install(executor, monkeypatch,
+                      latest=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+                      statuses=iter(["success"]))
+
+        state = executor._wait_pipeline_for_commit(1, 42, self.SHA)
+
+        assert state == "success"
+
+    def test_returns_failed_state(self, executor, monkeypatch):
+        """流水线 failed → 返回 failed（run_task 据此判任务失败）。"""
+        self._install(executor, monkeypatch,
+                      latest=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+                      statuses=iter(["failed"]))
+
+        assert executor._wait_pipeline_for_commit(1, 42, self.SHA) == "failed"
+
+    def test_returns_no_pipeline_when_sha_never_matches(self, executor, monkeypatch):
+        """探测窗口内最新流水线 sha 始终不匹配（仓库无 CI）→ no_pipeline。"""
+        self._install(executor, monkeypatch,
+                      latest=lambda pid: {"id": 1, "status": "success", "sha": "other"},
+                      statuses=iter([]))
+
+        state = executor._wait_pipeline_for_commit(1, 42, self.SHA)
+
+        assert state == "no_pipeline"
+
+    def test_returns_timeout_when_pipeline_never_terminal(self, executor, monkeypatch):
+        """流水线一直 running 直到总超时 → timeout。"""
+        self._install(executor, monkeypatch,
+                      latest=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+                      statuses=iter(lambda: "running" for _ in range(10000)))
+
+        state = executor._wait_pipeline_for_commit(1, 42, self.SHA)
+
+        assert state == "timeout"
+
+    def test_stop_during_wait_returns_stopped(self, executor, monkeypatch):
+        """等待期间收到停止请求 → stopped（run_task 据此走停止收尾）。"""
+        self._install(executor, monkeypatch,
+                      latest=lambda pid: {"id": 900, "status": "running", "sha": self.SHA},
+                      statuses=iter(lambda: "running" for _ in range(10000)))
+        monkeypatch.setattr(executor, "_stop_requested", lambda tid: True)
+
+        state = executor._wait_pipeline_for_commit(1, 42, self.SHA)
+
+        assert state == "stopped"
+
+    def test_stop_during_detect_returns_stopped(self, executor, monkeypatch):
+        """探测阶段收到停止请求同样返回 stopped。"""
+        self._install(executor, monkeypatch,
+                      latest=lambda pid: {"id": 1, "status": "success", "sha": "other"},
+                      statuses=iter([]))
+        monkeypatch.setattr(executor, "_stop_requested", lambda tid: True)
+
+        state = executor._wait_pipeline_for_commit(1, 42, self.SHA)
+
+        assert state == "stopped"

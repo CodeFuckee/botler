@@ -22,6 +22,10 @@ HOOK_URL_PATH = "/webhook/gitlab"
 # 超过该延迟即丢弃 webhook 事件（GitLab 默认超时 10s）
 HOOK_TIMEOUT_SECONDS = 5
 
+# 流水线终态（issue #40）：任务成功收尾前等待任务触发的流水线到达
+# 这些状态之一。success/skipped 视为通过，failed/canceled 视为失败。
+PIPELINE_TERMINAL_STATES = ("success", "failed", "canceled", "skipped")
+
 
 def _is_private_url(url: str) -> bool:
     """URL 是否指向本地/私有网络地址（GitLab 默认拒绝注册这类 webhook）。
@@ -247,6 +251,13 @@ class GitLabClient:
         if not isinstance(pipelines, list) or not pipelines:
             return None
         return pipelines[0]
+
+    def get_pipeline(self, project_id: int, pipeline_id: int) -> dict | None:
+        """单条流水线详情（executor 等待终态时轮询用）。"""
+        pipeline = self._request("GET", f"/projects/{project_id}/pipelines/{pipeline_id}")
+        if not isinstance(pipeline, dict):
+            return None
+        return pipeline
 
     def list_pipeline_jobs(self, project_id: int, pipeline_id: int) -> list[dict]:
         """流水线全部 jobs（含 stage / status / allow_failure，供概览页聚合 stage 状态）。"""

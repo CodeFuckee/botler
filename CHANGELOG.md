@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **任务在 CI 流水线运行中即显示已完成 + 完成后未给 issue 打终态标签**（issue #40）：
+  生产任务 #63（issue #39 第二轮）于 13:31:45 被平台标记 succeeded，而其提交
+  d08e104 触发的流水线 #737 的 backend:test 到 13:32:17、sync_to_github 到
+  13:48:34 才结束——成功判定只检查 claude exit 0，不等待流水线终态；且该任务
+  收尾打 bot-done 时（13:31:45）恰逢自身 push 的代码触发 deploy job 执行
+  pm2 delete 重启平台，`PUT /issues/39` 未发出进程即被杀死，issue #39 至今无
+  bot-done/bot-failed 标签，会被 webhook/对账当作新任务重复领取。
+  - 后端 `executor.py`：成功收尾前新增流水线等待——`_await_task_pipeline` 用
+    `find_commit_for_issue` 拿任务提交 sha（查不到提交即不等待，仓库无 CI
+    不影响成功）；`_wait_pipeline_for_commit` 在探测窗口（默认 120s）内找
+    sha 匹配的最新流水线（GitLab 收到 push 即创建流水线记录），命中后轮询
+    至 success/failed/canceled/skipped 终态（总上限默认 1800s，轮询间隔
+    默认 15s）；流水线 failed/canceled → 任务判失败（打 bot-failed + 留失败
+    评论），超时未终态 → 判失败，success/skipped/无匹配 → 成功收尾（打
+    bot-done）；等待期间用户一键停止 → interrupted。
+  - 后端 `reconciler.py`：终态标签对账兜底——每轮对账回看每仓库最近 20 条
+    succeeded/failed 任务，issue 仍 open 且无 bot-done/bot-failed 时按任务
+    结果补打对应标签（幂等，GitLab 报错仅记日志下轮再试），覆盖「收尾打标签
+    被部署重启打断」的窗口。
+  - 后端 `gitlab_client.py`：新增模块级常量 `PIPELINE_TERMINAL_STATES` 与
+    `get_pipeline`（单条流水线详情，轮询终态用）；`config.py` worker 配置
+    新增 `ci_wait_detect_seconds` / `ci_wait_interval_seconds` /
+    `ci_wait_timeout_seconds`（settings API 可写，默认 120/15/1800）。
+  - 测试：后端 `test_executor.py` 新增 17 用例（流水线 success 才判成功/
+    failed 与 canceled 判失败并打 bot-failed/skipped 视为成功/无匹配流水线
+    不等待/超时判失败/等待中停止判 interrupted/`_wait_pipeline_for_commit`
+    轮询细节 6 例）+ `test_reconciler.py` 新增 5 用例（succeeded 补打
+    bot-done/failed 补打 bot-failed/已有终态标签跳过/issue 已关闭跳过/
+    补打失败不影响补入队）；后端全量 449 passed + 前端全量 147 passed。
+
 ### Added
 
 - **概览页 CI/CD 流水线状态展示未启用仓库**（issue #39 第二轮）：流水线区块由
