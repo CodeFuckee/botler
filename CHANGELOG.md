@@ -71,6 +71,31 @@
 
 ### Added
 
+- **设置页增加 AI API 供应商配置**（issue #46）：
+  设置页新增「AI API 供应商」卡片，可增删改 AI 供应商配置（名称 / 供应商
+  类型 / Base URL / API Key / 默认模型 / 启用开关），为后续 AI 功能消费做
+  准备（本期纯配置存储，不接入实际调用）。内置 11 个预设供应商
+  （DeepSeek / OpenAI / Anthropic / Google Gemini / Moonshot / 通义千问 /
+  智谱 GLM / 硅基流动 / Ollama / OpenRouter / 自定义），选择预设自动填充
+  默认 Base URL 与模型，每个供应商显示各自品牌 logo（而非统一图标）。
+  - 后端：`config.py` Settings 新增 `ai_providers` 列表（config.yaml 落盘，
+    与 repos / custom_labels 同为整体替换模式）与 `update_ai_providers`；
+    `api/settings.py` GET 返回 `ai_providers` 段（api_key 只返回掩码，明文
+    不流转到界面），PUT 校验（name 必填且不重复 / base_url 须 http(s) 开头 /
+    enabled 布尔），api_key 回传掩码值或留空 = 保持现有（按 name 匹配旧
+    配置，与 sso.client_secret 同模式），config.yaml 中 api_key 支持
+    `${ENV}` 引用（凭据不落明文）。
+  - 前端：新增 `providers.jsx`（预设清单 + 各供应商品牌色内联 SVG logo，
+    未知 key 回退 custom 通用图标）与 `components/AiProvidersCard.jsx`
+    （列表展示 + 增删改表单 + 卡片内独立保存按钮，只提交 ai_providers 段）；
+    `Settings.jsx` 在 SSO 卡片后挂载；styles.css 新增 provider-* 样式。
+  - 测试：后端 `test_api_settings.py` 新增 11 用例（持久化 / 掩码不回传 /
+    掩码与留空保持现有 / 整体替换 / 清空 / name 必填与去重 / base_url 校验 /
+    非数组拒绝 / ${ENV} 引用展开），后端全量 482 passed；前端新增
+    `settings-ai-providers-card.test.mjs` 8 用例（卡片挂载 / 表单字段 /
+    PUT ai_providers 段 / 预设清单 / logo 差异化 / 样式类），前端全量
+    167 passed。
+
 - **概览页流水线卡片显示最近流水线对应提交的提交时间**（issue #43）：
   概览页 CI/CD 流水线区块每张仓库卡片在分支 · sha 下方显示最近一次流水线
   对应提交的提交时间（绝对时间，沿用页面时区配置）与距今多久（相对时间：

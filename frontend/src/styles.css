@@ -946,3 +946,39 @@ code {
 .guide-content blockquote p { margin: 2px 0; }
 .guide-content a { color: var(--primary); }
 .guide-content table { font-size: 12.5px; }
+
+/* ---- AI API 供应商卡片（issue #46）---- */
+.provider-logo {
+  border-radius: 50%;
+  flex: none;
+  vertical-align: middle;
+}
+.provider-table th:first-child,
+.provider-table td:first-child { width: 32%; }
+.provider-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.provider-form {
+  margin: 10px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+.provider-form h3 { margin: 0 0 10px; font-size: 14px; }
+.provider-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 220px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.provider-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

@@ -111,6 +111,10 @@ class Settings:
     # 自定义标签（issue #29 标记库）：默认清单见 labels.DEFAULT_LABELS（内置不可删），
     # 用户通过 Web UI 添加的自定义标签存 config.yaml 的 labels.custom
     custom_labels: list[dict] = field(default_factory=list)
+    # AI API 供应商（issue #46）：设置页增删改查的供应商列表，为后续 AI 功能
+    # 消费做准备。每项 {name, provider, base_url, api_key, model, enabled}；
+    # api_key 落盘 config.yaml（与 sso.client_secret 同模式），API 只返回掩码。
+    ai_providers: list[dict] = field(default_factory=list)
 
 
 # settings API 可写字段（写回 config.yaml 用）
@@ -207,6 +211,7 @@ class ConfigManager:
         sso = data.get("sso", {})
         repos_raw = data.get("repos", []) or []
         labels_raw = (data.get("labels", {}) or {}).get("custom", []) or []
+        providers_raw = data.get("ai_providers", []) or []
 
         repos = []
         for r in repos_raw:
@@ -262,6 +267,19 @@ class ConfigManager:
                  "description": str(l.get("description") or "").strip()}
                 for l in labels_raw
                 if l.get("name")
+            ],
+            ai_providers=[
+                {
+                    "name": str(p.get("name", "")).strip(),
+                    "provider": str(p.get("provider", "")).strip() or "custom",
+                    "base_url": str(p.get("base_url", "")).strip(),
+                    # api_key 支持 ${ENV} 引用（load 时已展开为明文）
+                    "api_key": str(p.get("api_key") or ""),
+                    "model": str(p.get("model", "")).strip(),
+                    "enabled": bool(p.get("enabled", True)),
+                }
+                for p in providers_raw
+                if isinstance(p, dict) and p.get("name")
             ],
         )
 
@@ -390,6 +408,14 @@ class ConfigManager:
         """整体替换自定义标签列表（标记库页增删后落盘，issue #29）。"""
         self._reload_from_disk()
         self._data.setdefault("labels", {})["custom"] = labels
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_ai_providers(self, providers: list[dict[str, Any]]) -> Settings:
+        """整体替换 AI 供应商列表（设置页增删改后落盘，issue #46）。"""
+        self._reload_from_disk()
+        self._data["ai_providers"] = providers
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

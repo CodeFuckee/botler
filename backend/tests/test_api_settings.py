@@ -161,3 +161,148 @@ class TestSsoSettings:
         resp = tc.put("/api/settings", json={"sso": {"enabled": True}})
         assert resp.status_code == 400
         assert "client_id" in resp.json()["detail"]
+
+
+class TestAiProvidersSettings:
+    """ai_providers 段：AI API 供应商配置（issue #46，设置页增删改查供应商）。
+
+    与 sso.client_secret 同模式：api_key 落盘 config.yaml、API 只返回掩码、
+    编辑时留空或回传掩码值 = 保持现有。列表整体替换（与 repos/custom_labels 一致）。
+    """
+
+    PROVIDER = {
+        "name": "DeepSeek",
+        "provider": "deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "sk-deepseek-123456",
+        "model": "deepseek-chat",
+        "enabled": True,
+    }
+
+    def test_get_settings_includes_ai_providers_empty(self, client):
+        """未配置时 ai_providers 返回空列表。"""
+        tc, tmp_path = client
+        data = tc.get("/api/settings").json()["ai_providers"]
+        assert data == []
+
+    def test_put_ai_providers_persists(self, client):
+        """PUT ai_providers 写回 config.yaml 并可读回（api_key 只返回掩码）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ai_providers": [self.PROVIDER]})
+        assert resp.status_code == 200
+        providers = resp.json()["ai_providers"]
+        assert len(providers) == 1
+        assert providers[0]["name"] == "DeepSeek"
+        assert providers[0]["provider"] == "deepseek"
+        assert providers[0]["base_url"] == "https://api.deepseek.com/v1"
+        assert providers[0]["model"] == "deepseek-chat"
+        assert providers[0]["enabled"] is True
+        masked = providers[0]["api_key_masked"]
+        assert "sk-deepseek-123456" not in masked  # 明文不回传
+        assert "*" in masked  # 有掩码占位
+        # config.yaml 是唯一事实来源，明文落盘
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: sk-deepseek-123456" in config_text
+
+    def test_put_masked_api_key_not_overwritten(self, client):
+        """前端回传掩码值（含 *）不覆盖真实 key。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"ai_providers": [self.PROVIDER]})
+        masked = tc.get("/api/settings").json()["ai_providers"][0]["api_key_masked"]
+        resp = tc.put("/api/settings", json={"ai_providers": [
+            {**self.PROVIDER, "api_key": masked},
+        ]})
+        assert resp.status_code == 200
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: sk-deepseek-123456" in config_text
+
+    def test_put_blank_api_key_keeps_existing(self, client):
+        """api_key 留空 = 保持现有（新增条目则存空串）。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"ai_providers": [self.PROVIDER]})
+        resp = tc.put("/api/settings", json={"ai_providers": [
+            {**self.PROVIDER, "api_key": ""},
+        ]})
+        assert resp.status_code == 200
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: sk-deepseek-123456" in config_text
+
+    def test_put_replaces_whole_list(self, client):
+        """整体替换语义：新列表覆盖旧列表。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"ai_providers": [self.PROVIDER]})
+        resp = tc.put("/api/settings", json={"ai_providers": [
+            {"name": "OpenAI", "provider": "openai",
+             "base_url": "https://api.openai.com/v1",
+             "api_key": "sk-openai-789", "model": "gpt-4o", "enabled": False},
+        ]})
+        assert resp.status_code == 200
+        providers = resp.json()["ai_providers"]
+        assert len(providers) == 1
+        assert providers[0]["name"] == "OpenAI"
+        assert providers[0]["enabled"] is False
+
+    def test_put_empty_list_clears(self, client):
+        """空列表清空配置。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"ai_providers": [self.PROVIDER]})
+        resp = tc.put("/api/settings", json={"ai_providers": []})
+        assert resp.status_code == 200
+        assert resp.json()["ai_providers"] == []
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "ai_providers" in config_text
+
+    def test_put_rejects_blank_name(self, client):
+        """name 必填非空。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ai_providers": [
+            {**self.PROVIDER, "name": "   "},
+        ]})
+        assert resp.status_code == 400
+        assert "name" in resp.json()["detail"]
+
+    def test_put_rejects_duplicate_name(self, client):
+        """name 唯一（掩码回传按 name 匹配旧值，重复会歧义）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ai_providers": [
+            self.PROVIDER,
+            {**self.PROVIDER, "model": "deepseek-reasoner"},
+        ]})
+        assert resp.status_code == 400
+        assert "重复" in resp.json()["detail"]
+
+    def test_put_rejects_invalid_base_url(self, client):
+        """base_url 必须以 http(s):// 开头。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ai_providers": [
+            {**self.PROVIDER, "base_url": "not-a-url"},
+        ]})
+        assert resp.status_code == 400
+
+    def test_put_rejects_non_list(self, client):
+        """ai_providers 必须是数组。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ai_providers": {"name": "x"}})
+        assert resp.status_code == 400
+
+    def test_env_ref_api_key_expanded_on_read(self, client):
+        """config.yaml 中 api_key 支持 ${ENV} 引用（凭据不落明文，config.py 已有能力）。"""
+        tc, tmp_path = client
+        config_path = tmp_path / "config.yaml"
+        config_text = config_path.read_text(encoding="utf-8")
+        config_path.write_text(
+            config_text + "ai_providers:\n"
+            "  - name: DeepSeek\n"
+            "    provider: deepseek\n"
+            "    base_url: https://api.deepseek.com/v1\n"
+            "    api_key: ${BOTLER_TEST_DEEPSEEK_KEY}\n"
+            "    model: deepseek-chat\n"
+            "    enabled: true\n",
+            encoding="utf-8")
+        import os
+        os.environ["BOTLER_TEST_DEEPSEEK_KEY"] = "sk-from-env"
+        try:
+            data = tc.get("/api/settings").json()["ai_providers"]
+            assert data[0]["api_key_masked"].endswith("-env")
+        finally:
+            os.environ.pop("BOTLER_TEST_DEEPSEEK_KEY", None)
