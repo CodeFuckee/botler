@@ -168,7 +168,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
 | `worker.engine` | `claude` | 任务执行引擎：`claude`（Claude Code CLI）/ `hermes`（部署机已装好的 hermes-agent）；非法值回退 `claude`（issue #47） |
-| `claude.command` / `args` | `claude -p --output-format json` | claude 引擎执行命令 |
+| `claude.command` / `args` | `claude -p --output-format stream-json --verbose` | claude 引擎执行命令（stream-json 逐行实时输出，任务页面逐事件查看执行过程） |
 | `hermes.command` / `args` | — | hermes 引擎执行命令（部署机 hermes venv 的 python + `backend/hermes_runner.py`），部署见 `docs/hermes-engine-deployment.md` |
 | `browse.default_path` | 空（服务器用户主目录 `~`） | 目录选择对话框的初始定位目录；支持 `~` 展开，路径不存在时自动回退主目录 |
 | `notifications.enabled` | true | 网页通知总开关（任务需交互 / issue 完成 / 队列空 / 无新任务，逐项可关） |
@@ -199,6 +199,7 @@ GET    /api/tasks                     任务列表（分页/过滤，含 commit_
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url）
 GET    /api/tasks/{id}/logs           任务日志
 GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
+GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/文本/工具调用/结果逐事件实时可见；终态任务连接后回放历史事件，见实时输出功能）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
 GET    /api/auth/status               登录状态探测（SSO 是否启用 + 当前用户，issue #27）

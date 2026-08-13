@@ -6,6 +6,32 @@
 
 ### Added
 
+- **任务执行过程实时输出（事件流，SSE 推送）**：像在终端跑 Claude Code
+  一样，任务页面逐事件实时看到引擎输出——模型文本、thinking（可折叠）、
+  工具调用与工具结果、执行结果，边跑边出；任务结束后可回放完整事件流。
+  - 后端：claude 引擎切 `--output-format stream-json --verbose`（逐行
+    NDJSON 实时 flush；init 行即拿到 session_id，比原 result 更早落库）；
+    hermes runner 注册 hermes-agent 自带回调（thinking/tool_start/
+    tool_complete/stream_delta/status），stdout 改为 NDJSON 事件流
+    + 最后一行结果 JSON（旧单行协议向后兼容）；
+  - 新增 `botler/events.py`：引擎输出行 → 归一化事件解析
+    （status/thinking/text/tool/tool_result/result）+ 进程内事件总线
+    （EventBus，executor 发布 → SSE 订阅，队列满丢最旧不阻塞读流）；
+  - 新增 `GET /api/tasks/{id}/events`（SSE）：连接先回放日志文件已有
+    事件（先订阅再回放，回放间隙的实时事件在队列积累无缝衔接），再实时
+    推送总线事件，终态后 done 收尾；断线重连自动补齐且不重复（前端按
+    seq 去重）；
+  - 任务详情页「实时输出」区替换为事件流面板（@tanstack/react-virtual
+    虚拟滚动，thinking 默认折叠）；聊天记录面板并行保留；概览页任务卡片
+    实时输出改走 SSE（每活跃任务一个连接，最后 N 行自动滚，保留
+    trimLogTail 截尾）；
+  - 成功判定适配：stream-json 多行输出下按尾部 result 行判定（首个 JSON
+    对象是 init 行，不能作为成功依据）；错误提取同样取 result 行；
+  - 测试：后端新增 67 用例（test_events 32、test_executor_stream 8、
+    test_hermes_runner_stream 5、test_api_events 7，另回归更新）+ 前端
+    新增 6 用例（SSE 封装 3 + 详情页事件流 3）+ overview 测试更新为
+    SSE 断言；全量 591（后端）+ 188（前端）通过。
+
 - **任务页面增加翻页组件（issue #50）**：任务列表页此前固定只显示
   最近 50 条（「最多显示 50 条」），更早的历史任务无法在页面浏览。
   现利用后端已有 limit/offset 分页能力，页面底部新增翻页组件：

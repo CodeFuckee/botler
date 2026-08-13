@@ -36,6 +36,7 @@ from .database import (
     Database, STATUS_RUNNING, STATUS_RETRYING, STATUS_SUCCEEDED, STATUS_FAILED,
     STATUS_INTERRUPTED,
 )
+from .events import EventBus, parse_claude_stream_line, parse_hermes_event_line
 from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
 from .templates import TemplateRenderer
 
@@ -360,11 +361,17 @@ def read_log_delta(path: Path, after_byte: int = 0,
 class ClaudeExecutor:
     def __init__(self, config: ConfigManager, db: Database,
                  gitlab: GitLabClient, renderer: TemplateRenderer,
-                 workspace_root: str | None = None):
+                 workspace_root: str | None = None,
+                 event_bus: EventBus | None = None):
         self.config = config
         self.db = db
         self.gitlab = gitlab
         self.renderer = renderer
+        # 实时事件总线（SSE 推送）：executor 读流时逐事件发布；API 层订阅。
+        # seq 计数按任务递增且跨重试轮次持久——断线重连后 API 回放日志
+        # （从 1 重算）与实时事件 seq 衔接，前端按 seq 去重不丢事件
+        self.event_bus = event_bus if event_bus is not None else EventBus()
+        self._seq: dict[int, int] = {}
         base = Path(workspace_root) if workspace_root else Path(__file__).resolve().parents[1] / "workspace"
         self.workspace_root = base.resolve()
         self.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -679,6 +686,12 @@ class ClaudeExecutor:
         log_path = self._log_file(task_id)
 
         cmd = [cfg.claude_command, *cfg.claude_args]
+        # stream-json 输出在 claude 2.1.x 强制要求 --verbose，缺失直接报错；
+        # 用户配置可能只写 --output-format stream-json，这里自动补齐
+        if ("--output-format" in cmd
+                and cmd[cmd.index("--output-format") + 1] == "stream-json"
+                and "--verbose" not in cmd):
+            cmd.append("--verbose")
         # 无人值守（-p）下跳过权限确认：GIT_ASKPASS/GITLAB_TOKEN 只解决
         # 凭据，Bash/curl/Read/MCP 等操作仍会被权限系统拦截（task_7/8/9
         # 的 permission_denials），且无人值守无法交互授权，任务必然失败。
@@ -708,9 +721,12 @@ class ClaudeExecutor:
             def _on_chunk(chunk: str) -> None:
                 nonlocal session_known
                 # 运行中即把 session_id 落库（issue #20 实时查看），
-                # 只落首次：进程未结束时 API 就能定位当前会话文件
+                # 只落首次：进程未结束时 API 就能定位当前会话文件。
+                # stream-json 下 init 行首条即带 session_id，比 result 更早
                 if not session_known and self._persist_session_from_chunk(task_id, chunk):
                     session_known = True
+                # 实时事件流（SSE）：逐行解析 stream-json 输出发布到总线
+                self._publish_stream_line(task_id, chunk, parse_claude_stream_line)
 
             if not stopped:
                 timed_out, stopped, chunks = self._drain_process_output(
@@ -747,9 +763,38 @@ class ClaudeExecutor:
 
     # ---- hermes 引擎（issue #47）----
 
+    def _last_json_object(self, output: str) -> dict | None:
+        """取输出中最后一个完整 JSON 对象（流式协议的结果行在最后）。
+
+        claude stream-json 多行输出：最后一行是 result 事件；hermes runner
+        流式输出：事件行在前，结果 JSON 收尾。旧单行协议（唯一行）同样适用。
+        逐行从尾部扫描，容忍行间/行内噪音（每行内 raw_decode 取首个对象）。
+        """
+        if not output:
+            return None
+        for line in reversed(output.splitlines()):
+            data = _load_json_output(line)
+            if data is not None:
+                return data
+        return None
+
+    def _result_line(self, output: str) -> dict | None:
+        """claude 结果行或 None（异常中断时无结果行）。
+
+        run_task 成功判定依据：stream-json 多行输出下 _load_json_output
+        取首个 JSON 对象（init 行）会误判成功，必须找最后的结果行。
+        判定宽松兼容两种格式：旧 --output-format json 单行结果（可能有
+        type=result）与 stream-json 尾部 result 事件行——两者都带字符串
+        result 字段；init/assistant/user 事件行均无该字段，不会误判。
+        """
+        data = self._last_json_object(output)
+        if data is not None and isinstance(data.get("result"), str):
+            return data
+        return None
+
     def _hermes_history_from_output(self, output: str) -> list:
         """从 hermes runner 输出解析会话消息历史（messages 缺失/非列表 → 空列表）。"""
-        data = _load_json_output(output)
+        data = self._last_json_object(output)
         messages = data.get("messages") if data else None
         return messages if isinstance(messages, list) else []
 
@@ -760,7 +805,7 @@ class ClaudeExecutor:
         - unresolvable：final_response 命中「无法解决」表述（不重试）
         - failed：非 JSON / error 非空 / 缺 final_response（按失败重试）
         """
-        data = _load_json_output(output)
+        data = self._last_json_object(output)
         if data is None or data.get("error"):
             return "failed"
         final_response = data.get("final_response")
@@ -793,7 +838,7 @@ class ClaudeExecutor:
 
         messages 为空时不落库（无从恢复，保持上次值）；落库失败不影响任务收尾。
         """
-        data = _load_json_output(output)
+        data = self._last_json_object(output)
         messages = self._hermes_history_from_output(output)
         if data is None or not messages:
             return
@@ -865,9 +910,14 @@ class ClaudeExecutor:
 
             deadline = time.time() + cfg.task_timeout_seconds
             stopped = self._stop_requested(task_id)
+            # 实时事件流（SSE）：runner 流式协议的事件行发布到总线；
+            # 结果行（parse 返回 None）不发布，由收尾判定
+            def _on_chunk(chunk: str) -> None:
+                self._publish_stream_line(task_id, chunk, parse_hermes_event_line)
+
             if not stopped:
                 timed_out, stopped, chunks = self._drain_process_output(
-                    proc, task_id, log_path, deadline)
+                    proc, task_id, log_path, deadline, _on_chunk)
             else:
                 timed_out, chunks = False, []
 
@@ -894,6 +944,22 @@ class ClaudeExecutor:
         finally:
             with self._proc_lock:
                 self._procs.pop(task_id, None)
+
+    def _publish_event(self, task_id: int, event: dict) -> None:
+        """归一化事件补 seq/ts 后发布到总线（SSE 实时推送）。"""
+        seq = self._seq.get(task_id, 0) + 1
+        self._seq[task_id] = seq
+        event["seq"] = seq
+        event["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.event_bus.publish(task_id, event)
+
+    def _publish_stream_line(self, task_id: int, chunk: str, parser) -> None:
+        """把一行引擎输出解析为归一化事件并发布（解析失败/无事件静默跳过）。"""
+        events = parser(chunk.strip())
+        if not events:
+            return
+        for event in events:
+            self._publish_event(task_id, event)
 
     def _persist_session_id(self, task_id: int, output: str) -> None:
         """执行结束后把 claude 会话 id 落库（供下次重试 / 平台重启断点续跑）。"""
@@ -934,7 +1000,7 @@ class ClaudeExecutor:
         if not output:
             return ""
         text = output
-        data = _load_json_output(output)
+        data = self._last_json_object(output)
         if data is not None and isinstance(data.get("result"), str):
             text = _decode_escapes(data["result"])
         idx = text.rfind("Traceback (most recent call last)")
@@ -1188,7 +1254,10 @@ class ClaudeExecutor:
                     # 开发后违规关闭 issue（生产日志 task_30/31：issue #28 完成即被关）。
                     # 新判定：正常完成输出（JSON result，非「无法解决」）即成功，
                     # 无论 issue 是否仍 open。
-                    if _load_json_output(output) is not None:
+                    # stream-json 多行输出下必须定位 type=result 行
+                    # （_result_line 从尾部扫描），首个 JSON 对象是 init 行，
+                    # 不能作为成功依据（异常中断的输出同样含 init 行）
+                    if self._result_line(output) is not None:
                         self._await_pipeline_and_finish_succeeded(
                             task_id, project_id, issue_iid, output)
                         return

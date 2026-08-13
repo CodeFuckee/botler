@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, STATUS_META, shortSha, fmtTime, fmtAgo } from '../api.js'
+import { useCallback, useEffect, useState } from 'react'
+import { api, STATUS_META, shortSha, fmtTime, fmtAgo, summarizeToolInput } from '../api.js'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
 export const LIVE_STATUSES = ['running', 'retrying']
@@ -7,7 +7,7 @@ export const LIVE_STATUSES = ['running', 'retrying']
 // 每张卡片保留的实时输出行数（超出丢弃最旧行，防止卡片无限增长）
 export const MAX_CARD_LINES = 40
 
-// 任务列表与实时输出轮询间隔（与任务详情页实时执行一致）
+// 任务列表轮询间隔
 export const OVERVIEW_POLL_MS = 3000
 
 // 流水线状态轮询间隔（issue #39）：比任务轮询慢——流水线变化不频繁，
@@ -46,6 +46,17 @@ export function trimLogTail(lines, max) {
   return lines.length > max ? lines.slice(lines.length - max) : lines
 }
 
+// 事件 → 卡片单行文本（实时输出 SSE 事件流；status 事件跳过，卡片空间有限）
+export function eventToLine(e) {
+  if (!e || typeof e !== 'object') return ''
+  if (e.kind === 'thinking') return `💭 ${e.text || ''}`
+  if (e.kind === 'tool') return `🔧 ${e.tool} ${summarizeToolInput(e.input, e.tool)}`
+  if (e.kind === 'tool_result') return e.text || '（无输出）'
+  if (e.kind === 'result') return `🏁 ${e.result || ''}`
+  if (e.kind === 'status') return ''
+  return e.text || ''
+}
+
 export default function Overview() {
   const [tasks, setTasks] = useState([])
   const [liveLines, setLiveLines] = useState({}) // taskId -> 实时输出行数组
@@ -54,8 +65,7 @@ export default function Overview() {
   const [pipelines, setPipelines] = useState([])
   const [pipeErrors, setPipeErrors] = useState([])
   const [pipeError, setPipeError] = useState('')
-  const liveRef = useRef(new Map()) // taskId -> { offset }（日志字节偏移续读）
-  // 任务集合签名：任务增删 / 状态变化时重跑实时输出轮询 effect
+  // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
   // 拉取全部正在执行的任务（running+retrying 多值过滤，issue #32）
@@ -70,21 +80,31 @@ export default function Overview() {
     }
   }, [])
 
-  // 单个任务的实时输出增量轮询（after_byte 续读 + trimLogTail 截尾）
-  const pollLive = useCallback(async (taskId) => {
-    const cur = liveRef.current.get(taskId) || { offset: 0 }
-    try {
-      const d = await api.get(`/api/tasks/${taskId}/execution?after_byte=${cur.offset}`)
-      cur.offset = d.log_offset
-      liveRef.current.set(taskId, cur)
-      setLiveLines((prev) => {
-        const lines = trimLogTail((prev[taskId] || []).concat(d.log_delta || []), MAX_CARD_LINES)
-        return { ...prev, [taskId]: lines }
+  // 各卡片事件流（SSE 实时输出）：每个活跃任务一个 EventSource，事件
+  // 转单行文本 append 到卡片（trimLogTail 截尾）。seq 去重防断线重连
+  // 回放重复；任务集合变化（tasksKey）时重建全部连接
+  useEffect(() => {
+    if (tasks.length === 0) return
+    const streams = tasks.map((t) => {
+      let lastSeq = 0
+      const es = api.openTaskEventStream(t.id, {
+        onEvent: (ev) => {
+          if (typeof ev.seq === 'number') {
+            if (ev.seq <= lastSeq) return
+            lastSeq = ev.seq
+          }
+          const line = eventToLine(ev)
+          if (!line) return
+          setLiveLines((prev) => ({
+            ...prev,
+            [t.id]: trimLogTail((prev[t.id] || []).concat(line), MAX_CARD_LINES),
+          }))
+        },
       })
-    } catch {
-      // 单个卡片拉取失败忽略（列表轮询下一轮兜底重试，不阻塞页面）
-    }
-  }, [])
+      return es
+    })
+    return () => streams.forEach((es) => es.close())
+  }, [tasksKey])
 
   // 所有配置仓库的最新流水线状态（issue #39，独立慢轮询）
   const loadPipelines = useCallback(async () => {
@@ -109,14 +129,6 @@ export default function Overview() {
     const t = setInterval(loadPipelines, PIPELINE_POLL_MS)
     return () => clearInterval(t)
   }, [loadPipelines])
-
-  useEffect(() => {
-    if (tasks.length === 0) return
-    const ids = tasks.map((t) => t.id)
-    ids.forEach(pollLive)
-    const t = setInterval(() => ids.forEach(pollLive), OVERVIEW_POLL_MS)
-    return () => clearInterval(t)
-  }, [tasksKey, pollLive])
 
   // 各卡片实时输出自动滚动到底部（SSR 测试环境无 document 时跳过）
   useEffect(() => {

@@ -1,12 +1,16 @@
-"""任务 API：列表（分页/过滤）、详情（含日志）、日志、实时执行（issue #20）。"""
+"""任务 API：列表（分页/过滤）、详情（含日志）、日志、实时执行（issue #20）、
+SSE 事件流（实时输出功能）。"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from queue import Empty
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
+from botler.events import parse_claude_stream_line, parse_hermes_event_line
 from botler.executor import (
     find_session_file, format_display_line, parse_transcript, read_log_delta,
 )
@@ -14,6 +18,8 @@ from botler.executor import (
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 STATUSES = {"queued", "running", "retrying", "succeeded", "failed", "interrupted"}
+# 任务仍可能产出新事件的活跃状态（SSE 实时推送期间订阅总线）
+LIVE_STATUSES = ("queued", "running", "retrying")
 
 
 def _commit_url(repo_url: str | None, sha: str | None) -> str | None:
@@ -227,6 +233,88 @@ def task_execution(request: Request, task_id: int,
         "transcript": transcript,
         "transcript_truncated": truncated,
     }
+
+
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def _event_stream(ctx, task_id: int):
+    """SSE 事件流生成器：回放日志已有事件 → 实时订阅总线 → done 收尾。
+
+    - 回放：日志文件（执行器逐行写入的引擎原始输出）按行解析为归一化
+      事件，seq 从 1 递增重算（与执行时发布顺序一致，断线重连/终态
+      回看时前端按 seq 去重不重复渲染）
+    - 实时：任务仍活跃时订阅 executor 事件总线，零延迟推送；15s 无事件
+      发心跳注释行（EventSource 忽略）；每次事件后检查任务终态，终态
+      即收尾（客户端断开时生成器随响应取消自然退出）
+    - done：流结束哨兵事件（前端据此关闭连接）
+    """
+    engine = str(getattr(ctx.config.get(), "engine", "") or "claude").strip().lower()
+    parser = parse_claude_stream_line if engine != "hermes" else parse_hermes_event_line
+
+    row = ctx.db.get_task(task_id)
+    # 注意 sqlite3.Row 无 .get()（issue #11），统一索引访问
+    log_path = row["log_path"] if row is not None else None
+    # 先订阅再回放：回放逐行 yield 的间隙 executor 仍在发布事件，若订阅
+    # 在回放之后建立，间隙事件会丢失（总线不保留订阅前事件）。先订阅
+    # 让回放期间的实时事件在队列中积累，回放完成后排空 → 无缝衔接；
+    # 队列满丢最旧安全（更早的历史已由回放覆盖）
+    sub = (ctx.executor.event_bus.subscribe(task_id)
+           if row is not None and row["status"] in LIVE_STATUSES else None)
+    seq = 0
+    try:
+        # 回放日志已有事件（文件缺失/不可读静默跳过）
+        if log_path and Path(log_path).is_file():
+            try:
+                text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            for line in text.splitlines():
+                events = parser(line.strip())
+                if not events:
+                    continue
+                for event in events:
+                    seq += 1
+                    event["seq"] = seq
+                    event.setdefault("ts", "")
+                    yield _sse(event)
+
+        # 实时推送（任务活跃期间）：排空订阅队列，无事件时 15s 心跳；
+        # 每次事件后检查任务终态，终态即收尾（客户端断开时生成器随
+        # 响应取消自然退出）
+        if sub is not None:
+            while True:
+                try:
+                    event = sub.get(timeout=15)
+                except Empty:
+                    yield ": ping\n\n"
+                    if ctx.db.get_task(task_id)["status"] not in LIVE_STATUSES:
+                        break
+                    continue
+                event.setdefault("ts", "")
+                yield _sse(event)
+                if ctx.db.get_task(task_id)["status"] not in LIVE_STATUSES:
+                    break
+    finally:
+        if sub is not None:
+            sub.close()
+    yield _sse({"kind": "done", "seq": seq + 1, "ts": ""})
+
+
+@router.get("/{task_id}/events")
+def task_events(request: Request, task_id: int):
+    """实时事件流（SSE）：任务执行过程逐事件推送 + 历史回放。
+
+    连接建立即回放日志文件已有事件（终态任务=完整回放后 done 收尾；
+    运行中任务=回放后续接总线实时推送）。断线重连（EventSource 自动）
+    重新走回放路径，天然补齐断档且不重复（前端按 seq 去重）。
+    """
+    c = ctx_of(request)
+    if c.db.get_task(task_id) is None:
+        raise HTTPException(404, "任务不存在")
+    return StreamingResponse(_event_stream(c, task_id),
+                             media_type="text/event-stream")
 
 
 def ctx_of(request: Request):

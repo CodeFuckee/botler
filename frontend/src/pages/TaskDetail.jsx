@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { api, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { api, openTaskEventStream, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 
 // 任务仍可能产出新日志/聊天的状态（活跃期间持续轮询）
 const LIVE_STATUSES = ['queued', 'running', 'retrying']
@@ -32,6 +33,89 @@ function LiveMsg({ m }) {
   )
 }
 
+// ---- 实时事件流（SSE 推送）：逐事件展示引擎执行过程 ----
+
+function EventRow({ e }) {
+  // 归一化事件渲染：thinking（默认折叠）/ 文本 / 工具调用 / 工具结果 /
+  // 状态（session/model 等）/ 结果摘要
+  if (e.kind === 'thinking') {
+    return (
+      <details className="event-row event-thinking">
+        <summary>💭 思考过程</summary>
+        <span className="pre-wrap">{e.text}</span>
+      </details>
+    )
+  }
+  if (e.kind === 'tool') {
+    return (
+      <div className="event-row chat-msg chat-tool">
+        <span className="chat-tool-name">🔧 {e.tool}</span>
+        <code>{summarizeToolInput(e.input, e.tool)}</code>
+      </div>
+    )
+  }
+  if (e.kind === 'tool_result') {
+    return (
+      <div className={'event-row chat-msg chat-tool-result' + (e.is_error ? ' chat-tool-error' : '')}>
+        {e.is_error && <span className="badge chat-err-badge">失败</span>}
+        <span className="pre-wrap">{e.text || '（无输出）'}</span>
+      </div>
+    )
+  }
+  if (e.kind === 'status') {
+    const parts = []
+    if (e.session_id) parts.push(`session ${e.session_id.slice(0, 8)}…`)
+    if (e.model) parts.push(e.model)
+    if (e.cwd) parts.push(e.cwd)
+    if (e.message) parts.push(e.message)
+    return <div className="event-row event-status muted small">{parts.join(' · ')}</div>
+  }
+  if (e.kind === 'result') {
+    return <div className="event-row event-result pre-wrap">🏁 {e.result}</div>
+  }
+  return <div className="event-row pre-wrap">{e.text}</div>
+}
+
+function EventList({ events }) {
+  // 长事件流虚拟滚动（@tanstack/react-virtual）：无真实 DOM 的测试/SSR
+  // 环境 parentRef 恒为 null，退化为全量渲染
+  const parentRef = useRef(null)
+  const [, force] = useState(0)
+  const setParent = useCallback((node) => {
+    parentRef.current = node
+    if (node) force((n) => n + 1) // ref 挂载后进入虚拟化渲染
+  }, [])
+  const virtualized = !!parentRef.current
+  const rowVirtualizer = useVirtualizer({
+    count: events.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 32,
+    overscan: 10,
+  })
+  const body = (() => {
+    if (!virtualized) {
+      return events.map((e, i) => <EventRow key={e.seq ?? i} e={e} />)
+    }
+    return (
+      <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+        {rowVirtualizer.getVirtualItems().map((vi) => (
+          <div key={vi.key} data-index={vi.index} ref={rowVirtualizer.measureElement}
+               style={{ position: 'absolute', top: 0, left: 0, width: '100%',
+                        transform: `translateY(${vi.start}px)` }}>
+            <EventRow e={events[vi.index]} />
+          </div>
+        ))}
+      </div>
+    )
+  })()
+  return (
+    <div ref={setParent} className="event-list">
+      {events.length === 0 && <p className="muted">暂无事件（任务尚未开始执行）</p>}
+      {body}
+    </div>
+  )
+}
+
 export default function TaskDetail() {
   const { id } = useParams()
   const location = useLocation()
@@ -43,7 +127,12 @@ export default function TaskDetail() {
   const [live, setLive] = useState(null)
   const [liveDone, setLiveDone] = useState(false)
   const liveRef = useRef({ offset: 0, lines: [], transcript: [], sessionId: null })
-  const logRef = useRef(null)
+  // 事件流（SSE 实时输出）：逐事件展示引擎执行过程；终态任务连接后
+  // 后端回放全部历史事件再发 done，前端按 seq 去重（断线重连回放
+  // 重叠不重复渲染）
+  const [events, setEvents] = useState([])
+  const [eventDone, setEventDone] = useState(false)
+  const lastSeqRef = useRef(0)
 
   const load = async () => {
     try {
@@ -57,7 +146,8 @@ export default function TaskDetail() {
     return () => clearInterval(t)
   }, [id])
 
-  // 实时执行轮询（3s）：日志增量（字节偏移续读）+ 聊天记录（全量替换）
+  // 实时执行轮询（3s）：日志增量（字节偏移续读）+ 聊天记录（全量替换）。
+  // 事件流改走 SSE（下方独立 effect），此处仅保留 transcript 部分
   const pollLive = useCallback(async () => {
     const cur = liveRef.current
     try {
@@ -80,11 +170,26 @@ export default function TaskDetail() {
     return () => clearInterval(t)
   }, [id, liveDone, pollLive])
 
-  // 实时日志自动滚动到底部
+  // 事件流 SSE 订阅：挂载即连接（终态任务由后端回放历史后 done 收尾）。
+  // EventSource 断线自动重连，后端重新回放，seq 去重保证不重复渲染
   useEffect(() => {
-    const el = logRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [live?.lines])
+    lastSeqRef.current = 0
+    setEvents([])
+    setEventDone(false)
+    const es = openTaskEventStream(Number(id), {
+      onEvent: (ev) => {
+        setEvents((prev) => {
+          if (typeof ev.seq === 'number') {
+            if (ev.seq <= lastSeqRef.current) return prev
+            lastSeqRef.current = ev.seq
+          }
+          return prev.concat(ev)
+        })
+      },
+      onDone: () => setEventDone(true),
+    })
+    return () => es.close()
+  }, [id])
 
   // 从列表页「执行」按钮跳转（?live=1）时滚动到实时面板
   useEffect(() => {
@@ -155,27 +260,22 @@ export default function TaskDetail() {
         <h2>
           实时执行
           {live?.sessionId && <code className="muted small live-session">session {live.sessionId.slice(0, 8)}…</code>}
-          {!liveDone && live && <span className="muted small">（每 3 秒自动刷新）</span>}
+          {!eventDone && <span className="muted small">（事件流实时推送）</span>}
         </h2>
+        <h3>事件流</h3>
+        <EventList events={events} />
+        <h3>聊天记录{!liveDone && live && <span className="muted small">（每 3 秒自动刷新）</span>}</h3>
         {!live ? (
           <p className="muted">加载中…</p>
         ) : (
-          <>
-            <div className="chat-list">
-              {live.transcript.length === 0 && (
-                <p className="muted">
-                  {live.sessionId ? '暂无聊天消息' : '暂无聊天记录（会话尚未开始或会话文件不可读）'}
-                </p>
-              )}
-              {live.transcript.map((m, i) => <LiveMsg key={i} m={m} />)}
-            </div>
-            <details className="live-log-block">
-              <summary>实时输出（{live.lines.length} 行）</summary>
-              <pre className="log-view live-log" ref={logRef}>
-                {live.lines.join('\n') || '（暂无输出）'}
-              </pre>
-            </details>
-          </>
+          <div className="chat-list">
+            {live.transcript.length === 0 && (
+              <p className="muted">
+                {live.sessionId ? '暂无聊天消息' : '暂无聊天记录（会话尚未开始或会话文件不可读）'}
+              </p>
+            )}
+            {live.transcript.map((m, i) => <LiveMsg key={i} m={m} />)}
+          </div>
         )}
       </div>
 

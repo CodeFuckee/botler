@@ -19,7 +19,10 @@ worker:
 
 claude:
   command: claude
-  args: ["-p", "--output-format", "json"]
+  # stream-json 逐行实时输出（实时输出功能）：任务页面逐事件查看执行
+  # 过程（thinking/文本/工具调用/结果）；claude 2.1.x 要求 stream-json
+  # 配 --verbose，缺失时 executor 自动补齐
+  args: ["-p", "--output-format", "stream-json", "--verbose"]
   # Claude Code 认证继承自服务器环境变量（见 .env.example 注释）
 
 hermes:

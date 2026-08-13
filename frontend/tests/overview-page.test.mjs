@@ -65,14 +65,13 @@ test('概览页一次拉取全部正在执行的任务（running+retrying）', (
   assert.match(overview, /setInterval/, '列表应定时轮询刷新')
 })
 
-test('每个任务卡片独立轮询实时输出（字节偏移续读）', () => {
+test('每个任务卡片独立订阅事件流（SSE 实时输出）', () => {
   assert.match(
     overview,
-    /\/api\/tasks\/\$\{[^}]+\}\/execution\?after_byte=/,
-    '实时输出走 GET /api/tasks/{id}/execution 带 after_byte 增量续读',
+    /openTaskEventStream\(t\.id/,
+    '每个任务卡片应独立订阅事件流 openTaskEventStream(t.id)',
   )
-  assert.match(overview, /log_offset/, '应使用返回的 log_offset 推进偏移')
-  assert.match(overview, /log_delta/, '应展示返回的 log_delta 增量行')
+  assert.match(overview, /eventToLine/, '事件应经 eventToLine 转单行文本进卡片')
   assert.match(overview, /trimLogTail/, '日志行应经 trimLogTail 截尾防卡片无限增长')
 })
 
@@ -125,6 +124,23 @@ test('trimLogTail：非法输入兜底（null / 非数组 / 非法 max）', () =
 
 // ---- 组件渲染（api.get 通过 vite 模块实例 mock）----
 
+// 事件流连接 mock（SSE 实时输出）：记录实例，可手动 emit 事件驱动卡片渲染
+class FakeEventSource {
+  static instances = []
+  constructor(url) {
+    this.url = url
+    this.onmessage = null
+    this.closed = false
+    FakeEventSource.instances.push(this)
+  }
+  close() {
+    this.closed = true
+  }
+  emit(event) {
+    if (this.onmessage) this.onmessage({ data: JSON.stringify(event) })
+  }
+}
+
 async function renderAndSettle(impl, waitMs = 30) {
   mock.method(api, 'get', impl)
   let renderer = null
@@ -132,7 +148,7 @@ async function renderAndSettle(impl, waitMs = 30) {
   await TestRenderer.act(async () => {
     try {
       renderer = TestRenderer.create(React.createElement(Overview))
-      // 等待首轮列表 + 实时输出轮询的 promise flush
+      // 等待首轮列表 + 事件流订阅的 promise flush
       await new Promise((resolve) => setTimeout(resolve, waitMs))
     } catch (e) {
       renderError = e
@@ -142,9 +158,10 @@ async function renderAndSettle(impl, waitMs = 30) {
 }
 
 test('渲染正在执行任务的卡片：仓库名、issue 链接、实时输出', async () => {
-  const calls = { exec: [] }
+  FakeEventSource.instances = []
+  const saved = globalThis.EventSource
+  globalThis.EventSource = FakeEventSource
   const { renderer, renderError } = await renderAndSettle(async (pathname) => {
-    calls.exec.push(pathname)
     if (pathname.startsWith('/api/tasks?')) {
       return {
         tasks: [{
@@ -154,9 +171,6 @@ test('渲染正在执行任务的卡片：仓库名、issue 链接、实时输�
         }],
         total: 1, stats: { running: 1 },
       }
-    }
-    if (pathname.includes('/execution')) {
-      return { status: 'running', log_offset: 10, log_delta: ['正在分析 bug…'], transcript: [] }
     }
     throw new Error('unexpected ' + pathname)
   })
@@ -173,15 +187,27 @@ test('渲染正在执行任务的卡片：仓库名、issue 链接、实时输�
       .flatMap((n) => n.props.children || [])
       .join('')
     assert.ok(issueText.includes('#7'), `卡片应显示 issue 编号（实际文本: ${issueText}）`)
-    assert.ok(text.includes('正在分析 bug…'), '卡片应显示 agent 实时输出')
+    // 每个活跃任务一个事件流连接（SSE 实时输出）
+    assert.equal(FakeEventSource.instances.length, 1, '应为任务创建事件流连接')
+    assert.equal(FakeEventSource.instances[0].url, '/api/tasks/11/events',
+                 '事件流应订阅 /api/tasks/{id}/events')
+    // 推送事件 → 卡片实时输出
+    await TestRenderer.act(async () => {
+      FakeEventSource.instances[0].emit({ seq: 1, kind: 'text', text: '正在分析 bug…' })
+      FakeEventSource.instances[0].emit({ seq: 2, kind: 'tool', tool: 'Bash',
+                                          input: { command: 'git status' } })
+    })
+    const textAfter = JSON.stringify(renderer.toJSON())
+    assert.ok(textAfter.includes('正在分析 bug…'), '卡片应显示 agent 实时输出')
+    assert.ok(textAfter.includes('Bash'), '卡片应显示工具调用事件')
     assert.ok(
       root.findAllByType('a').some((a) => a.props.href?.includes('/-/issues/7')),
       'issue 应渲染为指向 GitLab 的链接',
     )
-    assert.ok(calls.exec.some((p) => p.includes('after_byte=')), '应发起 execution 轮询请求')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
+    globalThis.EventSource = saved
   }
 })
 

@@ -84,7 +84,10 @@ class Settings:
     ci_wait_interval_seconds: int = 15
     ci_wait_timeout_seconds: int = 1800
     claude_command: str = "claude"
-    claude_args: list[str] = field(default_factory=lambda: ["-p", "--output-format", "json"])
+    # stream-json 逐行实时输出（实时输出功能：任务页面逐事件查看执行过程）；
+    # claude 2.1.x 要求 stream-json 配 --verbose，executor 会自动补齐
+    claude_args: list[str] = field(
+        default_factory=lambda: ["-p", "--output-format", "stream-json", "--verbose"])
     # 任务执行引擎（issue #47）：claude = Claude Code CLI（默认，现网行为不变）；
     # hermes = 部署机已装好的 hermes-agent（经 hermes_runner.py 进程内调用）。
     # 非法值回退 claude（executor._engine 校验）。

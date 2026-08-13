@@ -657,6 +657,39 @@ code {
   margin-top: 8px;
   font-size: 12px;
 }
+/* 事件流（SSE 实时输出）：虚拟滚动容器与各类事件行 */
+.event-list {
+  height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.event-row {
+  margin-bottom: 6px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.event-thinking {
+  color: var(--muted);
+  font-size: 12px;
+}
+.event-thinking summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.event-status {
+  font-size: 12px;
+}
+.event-result {
+  background: var(--primary-weak);
+  border: 1px solid rgba(0, 112, 243, 0.15);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
 
 /* 网页通知设置（issue #21） */
 .check-input {

@@ -30,11 +30,41 @@ async function request(method, path, body) {
   return data
 }
 
+// 订阅任务事件流（SSE 实时输出）：后端逐事件推送执行过程
+// （thinking/文本/工具调用/工具结果/结果），终态任务连接后先回放
+// 历史事件再发 done 收尾；EventSource 断线自动重连（后端重新回放，
+// 事件带递增 seq，消费方按 seq 去重即可无缝衔接）。
+// 返回 EventSource 实例；kind=done 时自动关闭并回调 onDone。
+export function openTaskEventStream(taskId, handlers = {}) {
+  if (typeof EventSource === 'undefined') {
+    // 非浏览器环境（node 测试）降级为空连接，避免组件渲染抛错
+    return { close() {} }
+  }
+  const es = new EventSource(`/api/tasks/${taskId}/events`)
+  es.onmessage = (msg) => {
+    let ev = null
+    try {
+      ev = JSON.parse(msg.data)
+    } catch {
+      return // 非法 data 容错
+    }
+    if (!ev || typeof ev !== 'object') return
+    if (ev.kind === 'done') {
+      es.close()
+      if (handlers.onDone) handlers.onDone()
+      return
+    }
+    if (handlers.onEvent) handlers.onEvent(ev)
+  }
+  return es
+}
+
 export const api = {
   get: (path) => request('GET', path),
   post: (path, body) => request('POST', path, body),
   put: (path, body) => request('PUT', path, body),
   del: (path) => request('DELETE', path),
+  openTaskEventStream,
   // 下载备份文件（blob，不走 JSON 解析）
   download: async (path, filename) => {
     const resp = await fetch(path)
