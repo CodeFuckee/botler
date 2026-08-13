@@ -18,6 +18,7 @@ from .notifications import router as notifications_router  # noqa: E402
 from .environment import router as environment_router  # noqa: E402
 from .auth import router as auth_router  # noqa: E402
 from .labels import router as labels_router  # noqa: E402
+from .pipelines import router as pipelines_router  # noqa: E402
 
 router.include_router(repos_router)
 router.include_router(tasks_router)
@@ -27,3 +28,4 @@ router.include_router(notifications_router)
 router.include_router(environment_router)
 router.include_router(auth_router)
 router.include_router(labels_router)
+router.include_router(pipelines_router)

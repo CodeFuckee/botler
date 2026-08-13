@@ -1,0 +1,139 @@
+"""概览页 CI/CD 流水线状态 API（issue #39）。
+
+GET /api/pipelines/overview：遍历所有启用仓库，返回各仓库最新一次流水线
+的整体状态与按 jobs 聚合的 stage 进度（stage 顺序 = jobs 首次出现顺序，
+即 .gitlab-ci.yml 定义顺序），供概览页以 GitLab CI/CD 风格展示：
+- 运行完成没有（pipeline.status 是否终态）
+- 运行成功还是失败
+- 运行到哪个阶段（stage 状态：success/failed/running/pending/canceled）
+- 还有哪些阶段（stage 列表）
+
+多仓库场景下单仓库失败不中断整体（HTTP 200），失败明细进 errors 列表
+（与 /tasks/reconcile-all 的 issue #38 模式一致）；停用仓库跳过；无流水线
+仓库 pipeline 为 null。为避免前端轮询打爆 GitLab API，结果带 10 秒 TTL
+内存缓存。
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+
+from fastapi import APIRouter, Request
+
+from ..gitlab_client import GitLabError
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/pipelines", tags=["pipelines"])
+
+# 概览页流水线轮询缓存：10 秒 TTL（前端 15s 轮询 + 多标签页并发兜底）
+CACHE_TTL_SECONDS = 10.0
+_CACHE_LOCK = threading.Lock()
+_CACHE: dict = {"expires_at": 0.0, "data": None}
+
+# 待运行类 job 状态（stage 聚合时统一视为 pending）
+_PENDING_STATUSES = {"pending", "created", "waiting_for_resource",
+                     "preparing", "scheduled"}
+
+# pipeline 对象透传给前端的字段（丢弃 user/tag 等无关字段）
+_PIPELINE_KEYS = ("id", "iid", "status", "ref", "sha", "web_url",
+                  "created_at", "updated_at", "finished_at", "duration")
+
+
+def clear_pipeline_cache() -> None:
+    """清空模块级缓存（测试隔离用）。"""
+    with _CACHE_LOCK:
+        _CACHE["expires_at"] = 0.0
+        _CACHE["data"] = None
+
+
+def _stage_status(jobs: list[dict]) -> str:
+    """聚合单个 stage 的 job 状态为 stage 状态（参考 GitLab CI/CD 语义）。
+
+    优先级：failed（allow_failure 的 job 失败不算失败，GitLab 显示
+    passed with warnings）> running > pending 系列 > canceled > success；
+    manual / skipped 不影响聚合结果。空列表视为 success（无 job 可失败）。
+    """
+    if any(j.get("status") == "failed" and not j.get("allow_failure") for j in jobs):
+        return "failed"
+    statuses = [j.get("status") for j in jobs]
+    if "running" in statuses:
+        return "running"
+    if any(s in _PENDING_STATUSES for s in statuses):
+        return "pending"
+    if "canceled" in statuses:
+        return "canceled"
+    return "success"
+
+
+def aggregate_stages(jobs: list[dict]) -> list[dict]:
+    """按 stage 分组聚合 jobs，返回 [{name, status, jobs:[精简 job]}]。
+
+    stage 顺序 = jobs 中首次出现顺序（GitLab jobs API 按 job 创建顺序返回，
+    与 .gitlab-ci.yml 的 stage 定义顺序一致）；无 stage 字段的 job 跳过。
+    """
+    stages: list[dict] = []
+    by_name: dict[str, dict] = {}
+    for job in jobs:
+        name = job.get("stage")
+        if not name:
+            continue
+        entry = by_name.get(name)
+        if entry is None:
+            entry = {"name": name, "jobs": []}
+            by_name[name] = entry
+            stages.append(entry)
+        entry["jobs"].append({
+            "name": job.get("name"),
+            "status": job.get("status"),
+            "allow_failure": bool(job.get("allow_failure")),
+            "web_url": job.get("web_url"),
+        })
+    for entry in stages:
+        entry["status"] = _stage_status(entry["jobs"])
+    return stages
+
+
+def _trim_pipeline(pipeline: dict) -> dict:
+    """精简 pipeline 对象：只保留概览页展示需要的字段。"""
+    return {k: pipeline.get(k) for k in _PIPELINE_KEYS}
+
+
+def _collect(c) -> dict:
+    """遍历所有启用仓库，聚合各仓库最新流水线状态。"""
+    pipelines: list[dict] = []
+    errors: list[str] = []
+    for row in c.db.list_repos():
+        if not row["enabled"]:
+            continue
+        entry = {"repo_id": row["id"], "repo_name": row["name"],
+                 "pipeline": None, "stages": []}
+        try:
+            pipeline = c.gitlab.get_latest_pipeline(row["gitlab_project_id"])
+            if pipeline is None:
+                pipelines.append(entry)
+                continue
+            jobs = c.gitlab.list_pipeline_jobs(row["gitlab_project_id"], pipeline["id"])
+            entry["pipeline"] = _trim_pipeline(pipeline)
+            entry["stages"] = aggregate_stages(jobs)
+        except GitLabError as e:
+            errors.append(f"仓库 {row['name']}: {e}")
+        pipelines.append(entry)
+    return {"pipelines": pipelines, "errors": errors}
+
+
+@router.get("/overview")
+def pipelines_overview(request: Request):
+    """所有启用仓库的最新流水线状态（10 秒 TTL 缓存）。"""
+    c = request.app.state.ctx
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        if _CACHE["data"] is not None and now < _CACHE["expires_at"]:
+            return _CACHE["data"]
+    result = _collect(c)
+    with _CACHE_LOCK:
+        _CACHE["expires_at"] = time.monotonic() + CACHE_TTL_SECONDS
+        _CACHE["data"] = result
+    return result

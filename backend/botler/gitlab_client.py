@@ -237,6 +237,21 @@ class GitLabClient:
             return False, "平台返回 401（webhook secret 不匹配）"
         return False, f"尚未触发或状态未知: {last}"
 
+    # ---- pipelines ----
+
+    def get_latest_pipeline(self, project_id: int) -> dict | None:
+        """项目最新一次流水线（按 id 倒序第一条）；无流水线返回 None。"""
+        pipelines = self._request(
+            "GET", f"/projects/{project_id}/pipelines",
+            params={"per_page": 1, "order_by": "id", "sort": "desc"})
+        if not isinstance(pipelines, list) or not pipelines:
+            return None
+        return pipelines[0]
+
+    def list_pipeline_jobs(self, project_id: int, pipeline_id: int) -> list[dict]:
+        """流水线全部 jobs（含 stage / status / allow_failure，供概览页聚合 stage 状态）。"""
+        return self._paged(f"/projects/{project_id}/pipelines/{pipeline_id}/jobs")
+
     # ---- issues ----
 
     def get_issue(self, project_id: int, iid: int) -> dict:

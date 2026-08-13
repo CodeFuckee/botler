@@ -6,6 +6,31 @@
 
 ### Added
 
+- **概览页 CI/CD 流水线状态**（issue #39）：概览页面新增「CI/CD 流水线」区块，
+  展示所有启用仓库的最新一次流水线状态——整体是否完成、成功还是失败、运行到
+  哪个阶段、还有哪些阶段；每仓库一张卡片，参考 GitLab CI/CD 的阶段图以横向
+  stage 节点条展示（绿=成功/红=失败/蓝=运行中带脉冲动画/灰=待运行），节点悬停
+  显示 stage 名与状态，卡片链接跳转 GitLab pipeline 页面；无流水线仓库显示
+  「暂无流水线」占位。
+  - 前端：`Overview.jsx` 新增流水线区块，独立慢轮询（15 秒，任务轮询仍为
+    3 秒）；导出 `PIPELINE_STATUS_META`（流水线状态徽章映射，复用 status-*
+    样式类）与 `stageClass()`（stage 状态→节点样式类，未知状态兜底 pending）；
+    `styles.css` 新增 pipeline 卡片/节点样式（3 列网格、运行中脉冲动画）。
+  - 后端：新增 `GET /api/pipelines/overview`，遍历所有启用仓库（停用跳过），
+    取最新流水线（`GitLabClient.get_latest_pipeline`，无流水线 pipeline=null）
+    与全部 jobs（`list_pipeline_jobs`），按 stage 聚合状态（`aggregate_stages`：
+    failed（allow_failure 的失败不计）> running > pending 系列 > canceled >
+    success，manual/skipped 不影响；stage 顺序 = jobs 首次出现顺序即
+    .gitlab-ci.yml 定义顺序）；多仓库场景下单仓库失败不中断整体（HTTP 200），
+    失败明细进 `errors` 列表（与 issue #38 对账一致）；结果带 10 秒 TTL 内存
+    缓存，避免轮询打爆 GitLab API。
+  - 测试：后端 `tests/test_api_pipelines.py` 19 用例（stage 聚合规则 10 例含
+    allow_failure/优先级/空列表 + API 正常/无流水线/部分与全部仓库失败/jobs
+    查询失败/停用跳过/无仓库/缓存命中与过期）+ 前端
+    `tests/overview-pipelines.test.mjs` 11 用例（轮询源码断言/状态映射纯函数/
+    组件渲染含 stage 节点样式与 GitLab 链接/无流水线与 errors 兜底/样式）。
+    后端全量 429 passed + 前端全量 145 passed。
+
 - **一键对账所有仓库**（issue #38）：任务页面筛选行新增「对账所有仓库」按钮，
   点击后同步扫描全部启用仓库，把「assignee 是 bot 但任务表无活跃记录」的
   open issues 补入任务队列，并即时展示扫描数/补入队数。
