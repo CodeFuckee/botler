@@ -8,7 +8,6 @@ import Tasks from './pages/Tasks.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
 import Login from './pages/Login.jsx'
-import VersionBadge from './components/VersionBadge.jsx'
 import { api, setDisplayTz, setSsoEnabled } from './api.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 
@@ -83,13 +82,14 @@ export default function App() {
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           设置
         </NavLink>
+        {/* 登录后用户名称与退出按钮位于导航栏最右（issue #9 第二轮）：
+            .user-chip 的 margin-left:auto 承接原版本徽标的"推到最右"职责 */}
         {auth.user && (
           <span className="navlink user-chip" title="当前登录的群晖账号">
             👤 {auth.user.username || auth.user.name || auth.user.sub}
             <button className="btn btn-sm" onClick={logout}>退出</button>
           </span>
         )}
-        <VersionBadge />
       </nav>
       <main className="content">
         <Routes>

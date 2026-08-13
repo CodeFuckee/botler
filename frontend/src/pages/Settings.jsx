@@ -3,6 +3,7 @@ import { api, setDisplayTz, fmtTime } from '../api.js'
 import { sendTestNotification } from '../notify.js'
 import BackupManager from '../components/BackupManager.jsx'
 import Markdown from '../components/Markdown.jsx'
+import VersionBadge from '../components/VersionBadge.jsx'
 
 const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
@@ -505,6 +506,16 @@ export default function Settings() {
         <p className="muted small">
           凭据修改请直接编辑 <code>backend/config.yaml</code> 与 <code>.env</code>，然后重启服务。
         </p>
+      </div>
+
+      {/* 版本信息（issue #9 第二轮）：从导航栏移入设置页面底部，
+          每次 CI/CD 构建自动更新版本号与构建时间 */}
+      <div className="card">
+        <h2>版本信息</h2>
+        <p className="muted small">当前版本与构建时间（每次 CI/CD 构建自动更新）：</p>
+        <div className="settings-version">
+          <VersionBadge />
+        </div>
       </div>
     </div>
   )

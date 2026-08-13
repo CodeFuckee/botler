@@ -95,14 +95,19 @@ body {
 .navlink.active { color: var(--primary); background: var(--primary-weak); }
 .navlink:focus-visible { box-shadow: var(--focus-ring); }
 
-/* ---- 版本徽标（构建产物 version.json 注入，导航栏右侧）---- */
+/* ---- 版本徽标（构建产物 version.json 注入；issue #9 第二轮起显示在设置页底部）---- */
 .version-badge {
-  margin-left: auto;
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   user-select: none;
+}
+
+/* 设置页「版本信息」卡片内的版本徽标（issue #9 第二轮）：字号放大并跟随正文字色 */
+.settings-version .version-badge {
+  font-size: 14px;
+  color: var(--text);
 }
 
 .content {
@@ -658,8 +663,10 @@ code {
   text-align: left;
   margin-bottom: 14px;
 }
-/* 导航栏当前登录用户（issue #27） */
+/* 导航栏当前登录用户（issue #27）；issue #9 第二轮：版本徽标移入设置页后，
+   由 user-chip 承接 margin-left:auto 占据导航栏最右侧 */
 .user-chip {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;

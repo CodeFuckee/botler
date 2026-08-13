@@ -108,6 +108,19 @@
 
 ### Changed
 
+- **版本与构建时间显示移入设置页底部 + 登录用户信息放导航栏最右**（issue #9 第二轮）：
+  用户反馈调整：版本号与构建时间不再占用导航栏右侧，改为设置页面底部「版本信息」
+  卡片展示；登录后用户名称与退出按钮位于导航栏最右侧。
+  - 前端：`App.jsx` 导航栏移除 `VersionBadge`（及 import），`user-chip` 承接
+    原版本徽标"推到最右"职责；`Settings.jsx` 页面底部新增「版本信息」卡片
+    （复用 `VersionBadge` 组件，构建产物 `version.json` 注入，开发模式无该
+    文件时静默隐藏）；`styles.css` 移除 `.version-badge` 的 `margin-left:auto`
+    （导航栏专属布局不再适用），新增 `.settings-version .version-badge` 放大
+    字号跟随正文字色、`.user-chip` 增加 `margin-left:auto`。
+  - 测试：前端 `tests/version-badge-settings-page.test.mjs` 4 用例（导航栏
+    无版本徽标/设置页渲染/导航栏末尾为用户信息/user-chip 推右样式）。
+    后端全量 402 passed + 前端全量 121 passed + build 通过。
+
 - **SSO 配置指南直接显示在设置页 + 提示文字优化**（issue #27 第六轮）：
   平台使用者看不到代码仓库里的本地文档 `docs/Synology-SSO-配置指南.md`，
   SSO 卡片说明此前指向该本地文件路径（部署环境中不存在）。改为设置页
