@@ -119,7 +119,9 @@ export default function TaskDetail() {
             <tr><th>创建时间</th><td>{fmtTime(task.created_at)}</td></tr>
             <tr><th>开始时间</th><td>{fmtTime(task.started_at)}</td></tr>
             <tr><th>完成时间</th><td>{fmtTime(task.finished_at)}</td></tr>
-            <tr><th>执行用时</th><td>{fmtDuration(task.started_at || task.created_at, task.finished_at) || <span className="muted">—</span>}</td></tr>
+            {/* 处理用时（issue #49）：系统接收时间 created_at → bot-done 打标时间
+                finished_at 的动态计算，不再用执行开始时间 started_at 作起点 */}
+            <tr><th>处理用时</th><td>{fmtDuration(task.created_at, task.finished_at) || <span className="muted">—</span>}</td></tr>
             <tr>
               <th>提交</th>
               <td>

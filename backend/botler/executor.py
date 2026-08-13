@@ -1276,6 +1276,13 @@ class ClaudeExecutor:
         if task is not None:
             try:
                 self.gitlab.add_labels(task["project_id"], task["issue_iid"], ["bot-done"])
+                # issue #49：finished_at 语义 = 系统给 issue 打上 bot-done
+                # 标记的时间。打标签成功后把 finished_at 更新为打标时刻，
+                # 任务页「用时」以它与 created_at（系统接收时间）动态计算
+                # 完整处理周期；打标失败保留收尾时刻（下方 warn 兜底）。
+                self.db.set_task_status(
+                    task_id, None,
+                    finished_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
                 self.db.add_log(task_id, "info", "已在 issue 上打 bot-done 标签，等待用户确认后手动关闭")
             except GitLabError as e:
                 self.db.add_log(task_id, "warn", f"打 bot-done 标签失败: {e}")

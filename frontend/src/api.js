@@ -106,7 +106,9 @@ export function fmtTime(ts, tz = displayTz) {
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
 }
 
-// 任务执行时长人类可读（issue #23）：start → end 的时长换算为 秒/分钟/小时/天。
+// 时长人类可读（issue #23）：start → end 的时长换算为 秒/分钟/小时/天。
+// 任务「用时」（issue #49）以此动态计算完整处理周期——系统接收时间
+// created_at → bot-done 打标时间 finished_at（不落库时长字段）。
 // 与 fmtTime 同规则解析后端 UTC 时间串；缺字段、解析失败或结束早于开始
 // （时钟异常）返回 null（页面显示占位符）。
 export function fmtDuration(startTs, endTs) {

@@ -218,7 +218,9 @@ export default function Tasks() {
                     )}
                   </td>
                   <td>{fmtTime(t.created_at)}</td>
-                  <td>{fmtDuration(t.started_at || t.created_at, t.finished_at) || <span className="muted">—</span>}</td>
+                  {/* 用时（issue #49）：系统接收时间 created_at → bot-done 打标时间
+                      finished_at 的动态计算，不再用执行开始时间 started_at 作起点 */}
+                  <td>{fmtDuration(t.created_at, t.finished_at) || <span className="muted">—</span>}</td>
                   <td>
                     <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
                           title="实时查看 agent 执行进度与聊天记录（issue #20）">执行</Link>

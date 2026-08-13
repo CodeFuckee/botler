@@ -43,6 +43,20 @@
 
 ### Fixed
 
+- **任务「用时」改为完整处理周期动态计算（issue #49）**：任务页「用时」
+  此前显示执行时长（started_at → finished_at），排队等待时间不计入，
+  且终点不是 bot-done 打标时刻。现改为「系统接收到该问题的时间 →
+  系统给 issue 打上 bot-done 标记的时间」的动态计算，不落库时长字段。
+  - 后端 `executor.py`：`_finish_succeeded` 打 bot-done 标签成功后把
+    `finished_at` 更新为打标时刻（`finished_at` 语义 = bot-done 打标
+    时间）；打标失败保留收尾时刻兜底；
+  - 前端 `Tasks.jsx` / `TaskDetail.jsx`：用时起点由 `started_at ||
+    created_at` 改为固定 `created_at`（系统接收时间），详情页字段名
+    「执行用时」→「处理用时」；
+  - 测试：`test_task_duration.py`（finished_at 不早于打标时刻 / 打标失败
+    兜底）+ `tasks-duration-calculation.test.mjs`（列表与详情渲染断言
+    40 分钟完整周期、源码不依赖 started_at）。
+
 - **概览页 CI/CD 流水线阶段顺序反转（sync→deploy→build）**（issue #44）：
   概览页流水线区块的 stage 展示顺序与 `.gitlab-ci.yml` 定义顺序相反
   （执行 build→deploy→sync，显示 sync→deploy→build）。根因：GitLab
