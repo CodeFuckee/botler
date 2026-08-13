@@ -107,6 +107,21 @@
 
 ### Fixed
 
+- **任务页面两侧有空白时任务列表不再出现水平滚动条（issue #53）**：1440~
+  1919px 视口下任务列表出现水平滚动条，页面左右两侧却还有大量空白。根因：
+  border-box 下任务表格可用宽度 = `--content-width` − 80px（.content/.card
+  左右 padding），而 `.table.tasks-table` min-width 为 1360px（12 列宽度
+  总和，issue #37），需要 `--content-width ≥ 1440px` 才装得下；此前媒体
+  查询 ≥1600px 才放宽到 1360px，导致 1440~1919px 视口下表格可用宽度仅
+  1280px，必然滚动。
+  - 前端 `styles.css`：媒体查询断点由 `min-width: 1600px`（1360px）提前为
+    `min-width: 1440px`（1440px）——该区间表格恰好无滚动；≥1920px 保持
+    1600px 封顶；视口 <1440px 本身装不下表格，保持 .table-wrap 横向滚动
+    （issue #28/#37 既有行为不变）；
+  - 测试：`tasks-table-fit-content.test.mjs` 3 用例（解析 styles.css 断点
+    与 min-width，模拟 1440/1500/1600/1750/1919/1920/2560 视口断言表格
+    可用宽度 ≥ min-width、窄视口滚动保留）。
+
 - **任务「用时」改为完整处理周期动态计算（issue #49）**：任务页「用时」
   此前显示执行时长（started_at → finished_at），排队等待时间不计入，
   且终点不是 bot-done 打标时刻。现改为「系统接收到该问题的时间 →
