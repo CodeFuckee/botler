@@ -74,6 +74,20 @@
 
 ### Fixed
 
+- **任务页面「操作」列表头与「执行」按钮左边缘不在同一竖线**（issue #33）：
+  操作列单元格内容「执行」链接复用了 `.btn-mini`，而该 class 带
+  `margin-left: 8px`（原为「详情」按钮与前置失败原因文字留间距而设）——
+  表头文字与单元格内容都从相同的左右 padding（10px）处开始排布，
+  「执行」按钮的 8px 左外边距使其左边缘比「操作」文字右移 8px，
+  两者不在同一竖线上。
+  - 修复：`.btn-mini` 移除 `margin-left`；「详情」按钮改用新增的
+    `.btn-gap-left { margin-left: 8px }` 显式声明与前置文字的间距
+    （通用 class 不再携带上下文相关的左外边距）。
+  - 涉及 `frontend/src/styles.css`、`frontend/src/pages/Tasks.jsx`；新增复现
+    测试 `tests/tasks-action-col-align.test.mjs` 3 用例（含「详情」按钮间距
+    守卫断言，修复前「执行按钮左外边距合计 8px ≠ 0」稳定失败）。
+    前端全量 87 passed + 后端全量 361 passed（零改动）。
+
 - **测试通知按钮多次点击只有第一次弹出系统通知**（issue #21 第四轮）：
   设置页「弹出测试通知」使用固定 `tag: 'botler-test'` 构造通知——浏览器通知
   中心对相同 tag 的通知做「替换」而非「新弹」：第一条通知还在屏幕上时，后续

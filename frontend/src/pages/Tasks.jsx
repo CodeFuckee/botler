@@ -116,7 +116,7 @@ export default function Tasks() {
                   <td className="ellipsis" title={failedReason}>
                     {failedReason || <span className="muted">—</span>}
                     {hasDetail && (
-                      <button className="btn btn-mini" onClick={() => setDetailTask(t)}>详情</button>
+                      <button className="btn btn-mini btn-gap-left" onClick={() => setDetailTask(t)}>详情</button>
                     )}
                   </td>
                   <td className="ellipsis" title={t.commit_sha ? `查看提交 ${t.commit_sha}` : undefined}>

@@ -505,12 +505,15 @@ code {
   gap: 10px;
 }
 /* 失败详细原因弹窗（任务列表「详情」按钮） */
+/* 注意（issue #33）：.btn-mini 不设 margin-left——该 class 同时用于操作列「执行」链接，
+   而「执行」是单元格第一个内容，左外边距会使其与表头文字左边缘不对齐；
+   需要与前置文字留间距的使用点（「详情」按钮）改用 .btn-gap-left 显式声明 */
 .btn-mini {
-  margin-left: 8px;
   padding: 1px 8px;
   font-size: 12px;
   line-height: 1.7;
 }
+.btn-gap-left { margin-left: 8px; }
 .error-summary {
   font-size: 13px;
   color: var(--text);
