@@ -121,6 +121,26 @@ def stop_all_tasks(request: Request):
     return {"stopped": stopped, "count": len(stopped)}
 
 
+@router.post("/{task_id}/retry")
+def retry_task(request: Request, task_id: int):
+    """手动重试任务（issue #36）：终态失败任务重新入队执行。
+
+    仅 failed（失败）与 interrupted（已中断）状态可重试；同 issue 已有
+    活跃任务时返回 409（去重索引冲突）。成功后任务回到调度器仓库 FIFO
+    队列由 worker 正常领取执行，保留 claude 会话断点续跑（接续上次进度）。
+    """
+    c = ctx_of(request)
+    result = c.db.retry_task(task_id)
+    if result == "not_found":
+        raise HTTPException(404, "任务不存在")
+    if result == "bad_state":
+        raise HTTPException(400, "仅失败（failed）或已中断（interrupted）的任务可手动重试")
+    if result == "conflict":
+        raise HTTPException(409, "该 issue 已有活跃任务，无法重试")
+    c.scheduler.enqueue(task_id)
+    return {"task_id": task_id, "status": "queued"}
+
+
 @router.get("/{task_id}")
 def get_task(request: Request, task_id: int):
     c = ctx_of(request)

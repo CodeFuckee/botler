@@ -12,6 +12,8 @@ export default function Tasks() {
   const [detailTask, setDetailTask] = useState(null) // 正在查看详细失败原因的任务
   const [stopMsg, setStopMsg] = useState('') // 一键停止成功提示（issue #35）
   const [stopping, setStopping] = useState(false) // 停止请求进行中
+  const [retryMsg, setRetryMsg] = useState('') // 手动重试成功提示（issue #36）
+  const [retryId, setRetryId] = useState(null) // 正在重试的任务 id（请求中禁用）
   const timer = useRef(null)
 
   const load = useCallback(async () => {
@@ -67,11 +69,31 @@ export default function Tasks() {
     }
   }
 
+  // 手动重试任务（issue #36）：确认后重新入队执行（接续上次 claude 会话），刷新列表
+  const retryTask = async (t) => {
+    if (!window.confirm(
+      `确定重试任务 #${t.id}（issue #${t.issue_iid} ${t.issue_title || ''}）吗？任务将重新入队执行，并接续上次 claude 会话继续处理。`)) {
+      return
+    }
+    setRetryId(t.id)
+    setRetryMsg('')
+    try {
+      await api.post(`/api/tasks/${t.id}/retry`)
+      setRetryMsg(`任务 #${t.id} 已重新入队，开始重试`)
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setRetryId(null)
+    }
+  }
+
   return (
     <div>
       <h1>任务列表</h1>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {stopMsg && <div className="alert alert-ok" onClick={() => setStopMsg('')}>{stopMsg}</div>}
+      {retryMsg && <div className="alert alert-ok" onClick={() => setRetryMsg('')}>{retryMsg}</div>}
 
       <div className="stats-row">
         {Object.entries(data.stats || {}).map(([k, v]) => (
@@ -147,7 +169,7 @@ export default function Tasks() {
                       <span className="badge resume" title="从上次中断的 claude 会话恢复执行（断点续跑）">恢复</span>
                     )}
                   </td>
-                  <td>{t.triggered_by === 'reconcile' ? '对账' : 'webhook'}</td>
+                  <td>{t.triggered_by === 'reconcile' ? '对账' : t.triggered_by === 'manual' ? '手动' : 'webhook'}</td>
                   <td className="ellipsis" title={failedReason}>
                     {failedReason || <span className="muted">—</span>}
                     {hasDetail && (
@@ -167,6 +189,17 @@ export default function Tasks() {
                   <td>
                     <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
                           title="实时查看 agent 执行进度与聊天记录（issue #20）">执行</Link>
+                    {/* 手动重试（issue #36）：仅失败/中断任务可重试，请求中禁用防重复点击 */}
+                    {(t.status === 'failed' || t.status === 'interrupted') && (
+                      <button
+                        className="btn btn-mini btn-gap-left"
+                        onClick={() => retryTask(t)}
+                        disabled={retryId === t.id}
+                        title="手动重试：重新入队执行该任务（接续上次 claude 会话）"
+                      >
+                        {retryId === t.id ? '重试中…' : '重试'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               )

@@ -331,6 +331,47 @@ class Database:
                     [(tid, "任务已停止：用户一键停止所有任务") for tid in stopped])
         return stopped
 
+    def retry_task(self, task_id: int) -> str:
+        """手动重试（issue #36）：终态失败任务重置为 queued，返回结果码。
+
+        - "ok"：重置成功（failed/interrupted → queued）
+        - "not_found"：任务不存在
+        - "bad_state"：状态非 failed/interrupted（含已被重试过的情况）
+        - "conflict"：同一 issue 已有活跃任务（部分唯一索引去重）
+
+        重置失败相关字段（attempt_count 归零、清空 exit_code/error_message/
+        error_detail/commit_sha/started_at/finished_at），triggered_by 标记
+        manual 供前端「来源」列展示；保留 claude_session_id（断点续跑接续
+        上次会话）与 log_path（日志文件重试时覆盖重写）。
+        条件 UPDATE 兜底并发：多请求同时重试时先到者生效。
+        """
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                return "not_found"
+            if row["status"] not in (STATUS_FAILED, STATUS_INTERRUPTED):
+                return "bad_state"
+            dup = conn.execute(
+                """SELECT id FROM tasks WHERE project_id=? AND issue_iid=?
+                   AND status IN ('queued','running','retrying')""",
+                (row["project_id"], row["issue_iid"])).fetchone()
+            if dup is not None:
+                return "conflict"
+            cur = conn.execute(
+                """UPDATE tasks SET status='queued', attempt_count=0,
+                   triggered_by='manual', exit_code=NULL, error_message=NULL,
+                   error_detail=NULL, commit_sha=NULL, started_at=NULL,
+                   finished_at=NULL
+                   WHERE id=? AND status IN ('failed','interrupted')""",
+                (task_id,))
+            if cur.rowcount == 0:
+                return "bad_state"
+            conn.execute(
+                "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', ?)",
+                (task_id,
+                 f"手动重试：任务状态由 {row['status']} 重置为 queued，重新入队执行"))
+        return "ok"
+
     def requeue_interrupted(self) -> list[int]:
         """重启恢复：queued 保持不变，running/retrying 标记 interrupted 后重新入队。"""
         restored: list[int] = []
