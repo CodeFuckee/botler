@@ -278,7 +278,11 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .table.tasks-table th:nth-child(3) { width: 50px; }
 .table.tasks-table th:nth-child(4) { width: 30%; }
 .table.tasks-table th:nth-child(5) { width: 78px; }
-.table.tasks-table th:nth-child(6) { width: 68px; }
+/* 尝试列加宽（issue #31 第二轮）：68px 时内容区仅 48px，放不下「数值 + 空格 +
+   badge.resume（40px + margin 6px）」约 66px，badge 折行到第二行——
+   数字在上、恢复在下。88px 内容区 68px ≥ 同行所需，两者同处一行，
+   配合 .badge.resume 的 vertical-align: middle 垂直居中对齐 */
+.table.tasks-table th:nth-child(6) { width: 88px; }
 .table.tasks-table th:nth-child(7) { width: 76px; }
 .table.tasks-table th:nth-child(8) { width: 22%; }
 .table.tasks-table th:nth-child(9) { width: 104px; }
@@ -323,8 +327,9 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .status-interrupted { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
 .badge-muted { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
 /* 断点续跑标记（issue #8）：任务从上次中断的 claude 会话恢复执行 */
-/* vertical-align: middle（issue #31）：badge 与尝试次数数值混排，基线对齐时胶囊
-   padding/border 下沉到基线以下、小字号视觉中心偏低，改为 middle 与数值居中对齐 */
+/* vertical-align: middle（issue #31）：badge 与尝试次数数值同行混排时，基线对齐
+   会让胶囊 padding/border 下沉到基线以下、小字号视觉中心偏低，改为 middle 与
+   数值居中对齐（折行问题另见尝试列宽度，两者配合才真正同线） */
 .badge.resume { margin-left: 6px; background: var(--primary-weak); color: var(--primary); font-size: 11px; vertical-align: middle; }
 
 /* ---- 统计条 ---- */

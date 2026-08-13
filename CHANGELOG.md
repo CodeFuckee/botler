@@ -69,6 +69,21 @@
     `tests/tasks-attempt-badge-align.test.mjs` 2 用例（修复前 1 个稳定失败）。
     前端全量 68 passed + 后端全量 353 passed。
 
+- **任务页面「尝试」列数值与「恢复」文字不在同一水平线（第二轮）**（issue #31）：
+  用户反馈第一轮修复后界面仍不正确——真实浏览器实测（Chromium 1280 视口）数字
+  中心 y=78、badge 中心 y=102，垂直中心差 24px。根因是 `.tasks-table` 为
+  `table-layout: fixed`，「尝试」列固定 68px（td padding 10px → 内容区仅 48px），
+  放不下「数值（2 位约 16px）+ 空格（约 4px）+ margin-left 6px + badge
+  （40px）」约 66px，`inline-block` badge 被整体折行到第二行——数字在上、恢复
+  在下；`vertical-align` 只作用于同一行框，折行后第一轮修复完全无效。
+  - 修复：「尝试」列 68px → 88px（内容区 68px ≥ 同行所需），badge 与数值同处
+    一行，配合 `vertical-align: middle` 垂直居中对齐；修复后实测垂直中心差
+    1.3px。固定列总宽 +20px 由第 4/8 弹性列（30%/22%）吸收，宽视口下无感。
+  - 涉及 `frontend/src/styles.css`；复现测试
+    `tests/tasks-attempt-badge-align.test.mjs` 新增「列宽足够容纳同行显示」
+    静态计算用例（修复前失败，48px < 64px）。
+    前端全量 69 passed + 后端全量 353 passed。
+
 - **配置（启用）Synology SSO 后页面无限刷新**（issue #27 第五轮）：`App.jsx` 的
   「时区加载」effect 无条件请求 `/api/settings`（未像通知轮询那样加 auth 守卫）——
   SSO 启用后（配置即时生效）未登录访问该接口被 `SsoGuardMiddleware` 返回 401，
