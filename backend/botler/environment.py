@@ -35,6 +35,10 @@ TOOLS = [
     {"key": "aider", "name": "Aider", "command": "aider",
      "version_args": ["--version"], "latest_source": "npm",
      "latest_pkg": "aider-chat"},
+    # hermes 为 git 安装的内部 agent（issue #48），无 npm/GitHub 公开发布源，
+    # 只检测安装与版本，不查最新版本（前端显示 "—"）
+    {"key": "hermes", "name": "Hermes Agent", "command": "hermes",
+     "version_args": ["--version"], "latest_source": None},
     {"key": "gh", "name": "GitHub CLI", "command": "gh",
      "version_args": ["--version"], "latest_source": "github",
      "latest_repo": "cli/cli"},

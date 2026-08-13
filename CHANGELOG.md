@@ -6,6 +6,16 @@
 
 ### Added
 
+- **本地环境检测增加 hermes 检测（issue #48）**：设置页「本地环境检测」
+  卡片新增 Hermes Agent 项（`hermes --version` 检测安装与版本）。hermes 为
+  git 安装的内部 agent，无 npm/GitHub 公开发布源，不查最新版本
+  （前端显示 "—"）。
+  - 后端 `environment.py`：TOOLS 清单新增 hermes 项；前端/API 无需改动
+    （环境检测卡片通用渲染 tools 列表）。
+  - 测试：`test_environment.py` 新增 TestHermesTool 6 用例（清单配置 /
+    真实版本输出格式 "Hermes Agent v0.20.0 (2026.8.3)" 提取 / 安装与
+    未安装检测 / 无发布源不发网络请求 / 整体检测包含 hermes）。
+
 - **任务执行引擎支持 hermes-agent（issue #47）**：`worker.engine` 可切换
   `claude`（Claude Code CLI，默认，现网行为不变）/ `hermes`（部署机已装好的
   hermes-agent，直接调用，botler 不打包不管理 hermes 的 LLM 配置）。

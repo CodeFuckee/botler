@@ -101,6 +101,72 @@ def subprocess_timeout_expired():
     return subprocess.TimeoutExpired(cmd=["claude"], timeout=10)
 
 
+class TestHermesTool:
+    """hermes 检测（issue #48）：TOOLS 清单配置 + 真实版本输出格式解析。"""
+
+    def _hermes_tool(self):
+        return next(t for t in environment.TOOLS if t["key"] == "hermes")
+
+    def test_hermes_in_tools_list(self):
+        """TOOLS 清单包含 hermes 项且配置正确。"""
+        tool = self._hermes_tool()
+        assert tool["name"] == "Hermes Agent"
+        assert tool["command"] == "hermes"
+        assert tool["version_args"] == ["--version"]
+        # hermes 为 git 安装的内部工具，无 npm/GitHub 公开发布源
+        assert tool["latest_source"] is None
+
+    def test_hermes_real_version_output(self):
+        """hermes --version 真实输出 "Hermes Agent v0.20.0 (2026.8.3)" →
+        提取 "0.20.0"（而非括号内的日期 "2026.8.3"）。"""
+        assert environment.parse_version("Hermes Agent v0.20.0 (2026.8.3)") == "0.20.0"
+
+    def test_hermes_detect_installed(self, monkeypatch):
+        """which 找到 hermes → 已安装且版本解析正确。"""
+        monkeypatch.setattr("botler.environment.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda *a, **k: SimpleNamespace(
+                returncode=0, stdout="Hermes Agent v0.20.0 (2026.8.3)\n", stderr=""),
+        )
+        result = environment.detect_tool(self._hermes_tool())
+        assert result["installed"] is True
+        assert result["version"] == "0.20.0"
+
+    def test_hermes_not_installed(self, monkeypatch):
+        """which 找不到 hermes → 未安装。"""
+        monkeypatch.setattr("botler.environment.shutil.which", lambda cmd: None)
+        result = environment.detect_tool(self._hermes_tool())
+        assert result["installed"] is False
+        assert result["version"] is None
+
+    def test_hermes_no_latest_source(self, monkeypatch):
+        """hermes 无发布源 → 不查网络，latest/up_to_date 为 None。"""
+        monkeypatch.setattr("botler.environment.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout="Hermes Agent v0.20.0\n", stderr=""),
+        )
+        monkeypatch.setattr("botler.environment.httpx.get", lambda *a, **k: pytest.fail("不应发请求"))
+        result = environment._inspect_tool(self._hermes_tool(), cmd_timeout=10, net_timeout=8)
+        assert result["latest"] is None
+        assert result["up_to_date"] is None
+
+    def test_full_flow_includes_hermes(self, monkeypatch):
+        """整体检测结果包含 hermes 项。"""
+        monkeypatch.setattr("botler.environment.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout="Hermes Agent v0.20.0\n", stderr=""),
+        )
+        monkeypatch.setattr("botler.environment.httpx.get", lambda *a, **k: SimpleNamespace(
+            status_code=200, json=lambda: {"version": "2.0.0"}))
+        tools = {t["key"]: t for t in environment.detect_local_environment()["tools"]}
+        assert "hermes" in tools
+        assert tools["hermes"]["installed"] is True
+        assert tools["hermes"]["version"] == "0.20.0"
+
+
 class TestFetchLatest:
     """最新版本查询：npm registry / GitHub API，网络失败返回 None。"""
 
