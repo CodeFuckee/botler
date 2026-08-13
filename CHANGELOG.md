@@ -6,6 +6,19 @@
 
 ### Fixed
 
+- **概览页 CI/CD 流水线阶段顺序反转（sync→deploy→build）**（issue #44）：
+  概览页流水线区块的 stage 展示顺序与 `.gitlab-ci.yml` 定义顺序相反
+  （执行 build→deploy→sync，显示 sync→deploy→build）。根因：GitLab
+  `GET /projects/:id/pipelines/:pipeline_id/jobs` 默认按 job id 倒序
+  返回且不响应 `sort` 参数（已对生产实例实证），后端按 API 返回顺序
+  聚合 stage，导致顺序反转。
+  - 后端 `pipelines.py`：`aggregate_stages` 聚合前先按 job id 升序排序
+    （job id 为全局自增序列，同一 pipeline 内升序即 job 创建顺序，与
+    stage 定义顺序一致），不再依赖 API 返回顺序；docstring 同步修正。
+  - 测试：`test_api_pipelines.py` 新增
+    `test_aggregate_reorders_reversed_api_jobs`（用生产流水线 #744 的
+    真实倒序数据复现）；后端全量 458 passed + 前端全量 147 passed。
+
 - **任务页面「用时」显示不正确（多 8 小时）**（issue #42）：
   生产任务 #64 创建于 13:52:43（本地），14:56 查看时页面显示用时 8 小时 24 分钟，
   实际执行仅约 24 分钟——恰好多 8 小时。根因：容器 TZ=Asia/Shanghai，

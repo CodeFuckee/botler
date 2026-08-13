@@ -163,13 +163,24 @@ class TestStageAggregation:
         assert aggregate_stages([]) == []
 
     def test_aggregate_preserves_stage_order(self):
-        """stage 顺序 = jobs 中首次出现顺序（.gitlab-ci.yml 定义顺序）。"""
+        """stage 顺序 = .gitlab-ci.yml 定义顺序（job id 升序，jobs 已按序传入）。"""
         jobs = [make_job(1, "build"), make_job(2, "build"),
                 make_job(3, "test", status="failed"),
                 make_job(4, "deploy", status="pending")]
         stages = aggregate_stages(jobs)
         assert [s["name"] for s in stages] == ["build", "test", "deploy"]
         assert [s["status"] for s in stages] == ["success", "failed", "pending"]
+
+    def test_aggregate_reorders_reversed_api_jobs(self):
+        """GitLab jobs API 默认按 job id 倒序返回（issue #44 复现）：
+        stage 顺序必须按 .gitlab-ci.yml 定义顺序（job id 升序）展示，
+        而不是 API 返回顺序（sync->deploy->build 倒置）。
+        """
+        jobs = [make_job(4226, "sync"), make_job(4225, "deploy"),
+                make_job(4224, "build"), make_job(4223, "build")]
+        stages = aggregate_stages(jobs)
+        assert [s["name"] for s in stages] == ["build", "deploy", "sync"]
+        assert [s["status"] for s in stages] == ["success", "success", "success"]
 
     def test_aggregate_skips_missing_stage_field(self):
         jobs = [make_job(1, "build"), {"id": 9, "name": "no-stage", "status": "success"}]

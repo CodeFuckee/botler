@@ -72,12 +72,15 @@ def _stage_status(jobs: list[dict]) -> str:
 def aggregate_stages(jobs: list[dict]) -> list[dict]:
     """按 stage 分组聚合 jobs，返回 [{name, status, jobs:[精简 job]}]。
 
-    stage 顺序 = jobs 中首次出现顺序（GitLab jobs API 按 job 创建顺序返回，
-    与 .gitlab-ci.yml 的 stage 定义顺序一致）；无 stage 字段的 job 跳过。
+    stage 顺序 = job id 升序（issue #44 修复）：GitLab jobs API 默认按
+    job id 倒序返回，且不响应 sort 参数；job id 为全局自增序列，同一
+    pipeline 内 id 升序即 job 创建顺序，与 .gitlab-ci.yml 的 stage 定义
+    顺序一致。无 stage 字段的 job 跳过。
     """
+    ordered = sorted(jobs, key=lambda j: j.get("id") or 0)
     stages: list[dict] = []
     by_name: dict[str, dict] = {}
-    for job in jobs:
+    for job in ordered:
         name = job.get("stage")
         if not name:
             continue
