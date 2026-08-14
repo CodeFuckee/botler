@@ -214,6 +214,23 @@
 
 ### Fixed
 
+- **删除仓库报错 500（issue #61）**：仓库页删除仓库时后端 500，
+  配置移除与软删除均未执行。根因：config 模块重构后
+  `c.config.get()` 返回纯数据对象 `Settings`，而 `delete_repo`
+  仍把它当 `ConfigManager` 调用其不存在的 `update_repos` 方法
+  （`AttributeError`），该端点自重构后即无法删除任何仓库。
+  - 后端 `config.py`：`ConfigManager` 新增领域方法 `remove_repo`
+    （project_id）——重读磁盘、过滤掉指定仓库、落盘并刷新内存
+    settings（与 `update_repos` 等 update_* 系列同一模式，避免
+    覆盖并发的手动编辑）；
+  - 后端 `api/repos.py`：`delete_repo` 改为调用
+    `c.config.remove_repo(row["gitlab_project_id"])`，删除链路的
+    config 移除逻辑内聚到 ConfigManager；
+  - 测试：TDD 先行（复现测试红灯 `AttributeError` 与生产日志一致），
+    新增 API 用例 3（删除成功含 webhook 注销/config 移除/db 软删除、
+    404、webhook 注销失败不阻塞）+ config 层用例 3（落盘与内存刷新、
+    缺失 id 幂等、保留并发手动编辑），后端全量 646（+6）通过。
+
 - **全局模版取消内层的垂直滚动，改成折叠的方式（issue #55）**：提示词
   模版页的 textarea 此前固定 18 行，全局默认模版（issue-agent 完整提示词）
   远超 18 行，内容在 textarea 内部滚动查看（内层垂直滚动条）。现改为折叠

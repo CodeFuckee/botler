@@ -121,3 +121,69 @@ class TestReloadRobustness:
         path.unlink()
 
         assert cm.get().default_template == TEMPLATE_A
+
+
+def _write_config_with_repos(path: Path, repos: list[dict]) -> None:
+    data = {
+        "gitlab": {"url": "https://gitlab.example.com", "bot_token": "t"},
+        "worker": {},
+        "repos": repos,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+
+
+class TestRemoveRepo:
+    """ConfigManager.remove_repo（issue #61）：删除仓库时从 config.yaml 移除条目。"""
+
+    def test_remove_repo_persists_and_refreshes(self, tmp_path):
+        """移除指定 project_id：内存 settings 刷新 + 磁盘落盘，其余仓库保留。"""
+        path = tmp_path / "config.yaml"
+        _write_config_with_repos(path, [
+            {"project_id": 11, "name": "graph2plan", "url": "https://g.example.com/g2p.git"},
+            {"project_id": 22, "name": "botler", "url": "https://g.example.com/botler.git"},
+        ])
+        cm = ConfigManager(str(path))
+
+        cm.remove_repo(11)
+
+        # 内存已刷新（无需重新 get 也应可见）
+        assert [r.project_id for r in cm.get().repos] == [22]
+        # 磁盘已落盘
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert [r["project_id"] for r in data["repos"]] == [22]
+
+    def test_remove_repo_missing_id_noop(self, tmp_path):
+        """移除不存在的 project_id：其余仓库原样保留，不报错。"""
+        path = tmp_path / "config.yaml"
+        _write_config_with_repos(path, [
+            {"project_id": 22, "name": "botler", "url": "https://g.example.com/botler.git"},
+        ])
+        cm = ConfigManager(str(path))
+
+        cm.remove_repo(999)
+
+        assert [r.project_id for r in cm.get().repos] == [22]
+
+    def test_remove_repo_keeps_manual_edit(self, tmp_path):
+        """remove_repo 先重读磁盘再保存：期间用户手动编辑的其他字段不被覆盖。"""
+        path = tmp_path / "config.yaml"
+        _write_config_with_repos(path, [
+            {"project_id": 11, "name": "graph2plan", "url": "https://g.example.com/g2p.git"},
+        ])
+        cm = ConfigManager(str(path))
+        cm.get()  # 缓存旧状态
+
+        # 模拟用户手动编辑（绕过进程内存）：改默认模版
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data.setdefault("templates", {})["default"] = "手动改的模版"
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+
+        cm.remove_repo(11)
+
+        # 手动编辑的模版保留（未被内存旧值覆盖）
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert data["templates"]["default"] == "手动改的模版"
+        assert data["repos"] == []

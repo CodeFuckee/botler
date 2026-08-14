@@ -238,11 +238,7 @@ def delete_repo(request: Request, repo_id: int):
     except GitLabError as e:
         logger.warning("注销 webhook 失败（忽略）: %s", e)
 
-    config = c.config.get()
-    config.update_repos([
-        config.repo_to_config_dict(r) for r in config.repos
-        if r.project_id != row["gitlab_project_id"]
-    ])
+    c.config.remove_repo(row["gitlab_project_id"])
     c.db.update_repo(repo_id, enabled=False)
     logger.info("删除仓库 %s (project=%s)", row["name"], row["gitlab_project_id"])
     return {"ok": True}

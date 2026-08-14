@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from botler.api import router as api_router
 from botler.config import ConfigManager
 from botler.database import Database
-from botler.gitlab_client import GitLabClient
+from botler.gitlab_client import GitLabClient, GitLabError
 
 CONFIG_TEXT = """\
 gitlab:
@@ -385,3 +385,61 @@ class TestUrlMasking:
         raw = db.get_repo(repo_id)
         assert raw["url"] == "https://agent:glpat-keep@gitlab.example.com/group/project.git"
         assert raw["name"] == "改名"
+
+
+class TestDeleteRepo:
+    """删除仓库（issue #61）：注销 webhook + 从 config 移除 + db 软删除。"""
+
+    def _add_repo(self, client, monkeypatch):
+        """添加一个 url 方式的仓库（webhook 注册打桩），返回 (repo_id, project_id)。"""
+        tc, stub, _ = client
+        monkeypatch.setattr(
+            GitLabClient, "register_webhook",
+            lambda self, project_id, secret: {"id": 1})
+        resp = tc.post("/api/repos", json={
+            "url": "https://gitlab.example.com/group/graph2plan.git",
+            "name": "graph2plan",
+        })
+        assert resp.status_code == 201
+        return resp.json()["id"], resp.json()["gitlab_project_id"]
+
+    def test_delete_repo_success(self, client, monkeypatch):
+        """删除仓库：200 + 注销 webhook + config 移除 + db 软删除（复现 issue #61）。"""
+        tc, stub, tmp_path = client
+        repo_id, project_id = self._add_repo(client, monkeypatch)
+
+        resp = tc.delete(f"/api/repos/{repo_id}")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"ok": True}
+        # webhook 注销被调用
+        assert stub.unregistered == [project_id]
+        # config.yaml 中该仓库被移除（config 是唯一事实来源）
+        settings = ConfigManager(str(tmp_path / "config.yaml")).get()
+        assert all(r.project_id != project_id for r in settings.repos)
+        # db 软删除（行保留，enabled=False；SQLite 布尔存为 0）
+        row = tc.app.state.ctx.db.get_repo(repo_id)
+        assert row is not None
+        assert not row["enabled"]
+
+    def test_delete_repo_not_found(self, client):
+        """删除不存在的仓库返回 404。"""
+        tc, stub, tmp_path = client
+        resp = tc.delete("/api/repos/999")
+        assert resp.status_code == 404
+
+    def test_delete_repo_unregister_webhook_failure_not_blocking(self, client, monkeypatch):
+        """注销 webhook 失败（GitLabError）不阻塞删除（尽力而为）。"""
+        tc, stub, tmp_path = client
+        repo_id, project_id = self._add_repo(client, monkeypatch)
+
+        def boom(_project_id):
+            raise GitLabError("token 无效或已过期（401）", 401)
+        stub.unregister_webhook = boom
+
+        resp = tc.delete(f"/api/repos/{repo_id}")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"ok": True}
+        row = tc.app.state.ctx.db.get_repo(repo_id)
+        assert not row["enabled"]

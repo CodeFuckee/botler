@@ -421,6 +421,20 @@ class ConfigManager:
         self.save()
         self.settings = self._to_settings(self._data)
 
+    def remove_repo(self, project_id: int) -> None:
+        """从 repos 列表移除指定 project_id 的仓库并落盘（issue #61）。
+
+        删除仓库时由 API 层调用；先重读磁盘再过滤保存，
+        避免覆盖并发写入的其他配置（与 update_* 系列一致）。
+        """
+        self._reload_from_disk()
+        self._data["repos"] = [
+            r for r in self._data["repos"]
+            if r.get("project_id") != project_id
+        ]
+        self.save()
+        self.settings = self._to_settings(self._data)
+
     def update_custom_labels(self, labels: list[dict[str, Any]]) -> Settings:
         """整体替换自定义标签列表（标记库页增删后落盘，issue #29）。"""
         self._reload_from_disk()
