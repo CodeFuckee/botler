@@ -177,6 +177,9 @@ security:bandit:
       - backend/.uv-cache/
     policy: pull-push
   # SARIF 报告产物：上传 GitLab SAST，Security 页面可视化查看（issue #72）
+  # 注意：artifacts 路径相对 job 工作目录（$CI_PROJECT_DIR 根），
+  # 而扫描在 backend/ 子目录执行（.backend_setup 会 cd backend），
+  # 报告实际生成于 backend/bandit-report.sarif
   artifacts:
     # when: always —— job 因发现中/高危漏洞失败时报告同样上传，
     # 保证用户在 GitLab 页面能看到被阻断的具体漏洞
@@ -184,9 +187,9 @@ security:bandit:
     paths:
       # reports 类型文件默认不进可下载 artifacts 归档（仅系统内部
       # 摄入），需显式加入 paths 才能在 job 页面下载原始报告
-      - bandit-report.sarif
+      - backend/bandit-report.sarif
     reports:
-      sast: bandit-report.sarif
+      sast: backend/bandit-report.sarif
     expire_in: 1 week
   script:
     - JOB_START_TIME=$(date +%s)
