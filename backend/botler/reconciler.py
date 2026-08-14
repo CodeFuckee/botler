@@ -15,6 +15,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .config import ConfigManager
 from .database import Database, STATUS_FAILED, STATUS_SUCCEEDED
 from .gitlab_client import GitLabClient, GitLabError
+from .git_remote import build_repo_client
 from .labels import CLAIM_SKIP_LABELS
 from .scheduler import TaskScheduler
 
@@ -68,11 +69,16 @@ class Reconciler:
         错误信息记入返回值 errors 列表，由 API 层转成 HTTP 错误。
         """
         cfg = self.config.get()
-        try:
-            bot_id = cfg.bot_id or self.gitlab.get_bot_id()
-        except GitLabError as e:
-            logger.warning("对账失败：无法获取 bot 身份: %s", e)
-            return {"scanned": 0, "enqueued": 0, "errors": [f"无法获取 bot 身份: {e}"]}
+        # 全局 bot 身份（config 优先）。全局 token 失效时不再整体放弃对账
+        # （issue #63）：降级为 None，由每仓库用 remote url 内嵌 token
+        # 客户端兜底，以其账号作为该仓库的 bot 身份。
+        bot_id = cfg.bot_id
+        if bot_id is None:
+            try:
+                bot_id = self.gitlab.get_bot_id()
+            except GitLabError as e:
+                logger.warning("对账：全局 token 获取 bot 身份失败（%s），"
+                               "将对启用仓库逐个尝试 remote token 兜底", e)
 
         repos = [self.db.get_repo(repo_id)] if repo_id is not None else self.db.list_repos()
         scanned = enqueued = 0
@@ -80,67 +86,116 @@ class Reconciler:
         for repo in repos:
             if repo is None or not repo["enabled"]:
                 continue
-            try:
-                issues = self.gitlab.list_open_issues(repo["gitlab_project_id"], assignee_id=bot_id)
-            except GitLabError as e:
-                msg = f"仓库 {repo['name']}: {e}"
-                logger.warning("对账失败：%s", msg)
-                errors.append(msg)
-                continue
-            active_count = 0
-            for issue in issues:
-                scanned += 1
-                labels = set(issue.get("labels") or [])
-                # 领取过滤（issue #30 / #41）：终态标签 + need-verify
-                # （用户标记需人工验证，bot 不领取）一律不补入队
-                if labels & set(CLAIM_SKIP_LABELS):
-                    hit = sorted(labels & set(CLAIM_SKIP_LABELS))
-                    logger.info("对账跳过领取过滤标签 issue %s#%s（%s）",
-                                repo["gitlab_project_id"], issue["iid"], hit)
-                    continue
-                # 最后发言人过滤（issue #34）：最后一条非系统评论是 bot 本人时
-                # 不补入队——bot 提问后用户未回复，平台重启/手动对账不应重复领取。
-                # 用户回复后（或新任务无评论）再领取。
-                try:
-                    last_author = self.gitlab.last_note_author_id(
-                        repo["gitlab_project_id"], issue["iid"])
-                except GitLabError as e:
-                    logger.warning("对账查询 issue %s#%s 评论失败: %s",
-                                   repo["gitlab_project_id"], issue["iid"], e)
-                    errors.append(f"仓库 {repo['name']} issue #{issue['iid']}: {e}")
-                    continue
-                if last_author is not None and last_author == bot_id:
-                    logger.info("对账跳过最后发言人为 bot 的 issue %s#%s",
-                                repo["gitlab_project_id"], issue["iid"])
-                    continue
-                if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
-                    active_count += 1  # 已有活跃任务（含排队中）
-                    continue
-                task_id = self.db.create_task(
-                    repo["id"], repo["gitlab_project_id"], issue["iid"],
-                    issue.get("title") or f"issue #{issue['iid']}",
-                    triggered_by="reconcile")
-                if task_id is not None:
-                    self.scheduler.enqueue(task_id)
-                    enqueued += 1
-                    logger.info("对账补入队: 任务 %s (%s#%s)",
-                                task_id, repo["gitlab_project_id"], issue["iid"])
-            # 终态标签对账（issue #40）：任务收尾打标签时平台可能被部署重启
-            # 打断（任务 #63 的 PUT /issues/39 未发出进程即被 pm2 delete 杀死），
-            # issue 缺 bot-done/bot-failed 标签会被 webhook/对账重复领取。
-            # 这里回看终态任务，issue 仍 open 且无终态标签时补打。
-            self._backfill_terminal_labels(repo)
-            # 网页通知：队列状态（issue #21，节流由 notifier 负责）
-            if not issues:
-                self.notifier.queue_empty(repo["name"])
-            elif active_count == len(issues) and enqueued == 0:
-                self.notifier.queue_no_work(repo["name"], active_count)
+            s, e, errs = self._reconcile_repo(repo, cfg, bot_id)
+            scanned += s
+            enqueued += e
+            errors.extend(errs)
         result: dict = {"scanned": scanned, "enqueued": enqueued}
         if errors:
             result["errors"] = errors
         return result
 
-    def _backfill_terminal_labels(self, repo) -> None:
+    def _call_with_fallback(self, repo: dict, verify_ssl: bool, client, call):
+        """用 client 执行 call(client)；遇 401/403（token 失效）时尝试从仓库
+        remote url 提取内嵌 token 构建 per-repo client 重试一次（issue #63）。
+
+        返回 (result, client)。client 已是 per-repo 兜底客户端时不再重复
+        兜底；remote 无可用 token 或重试仍失败时抛 GitLabError。
+        """
+        try:
+            return call(client), client
+        except GitLabError as e:
+            if e.status_code not in (401, 403) or client is not self.gitlab:
+                raise
+            fallback = build_repo_client(repo, verify_ssl)
+            if fallback is None:
+                raise
+            logger.info("对账仓库 %s：token 失效（%s），改用 remote url 内嵌 token 重试",
+                        repo["name"], e)
+            return call(fallback), fallback
+
+    def _reconcile_repo(self, repo: dict, cfg, bot_id: int | None) -> tuple[int, int, list[str]]:
+        """扫描单个仓库并补入队，返回 (scanned, enqueued, errors)。
+
+        issue #63：默认用全局 client（bot token）；调用遇 401/403 时用仓库
+        remote url 内嵌 token 的 per-repo client 兜底重试。全局 bot 身份
+        不可用（bot_id 为 None）时，以 per-repo client 的账号作为该仓库
+        的 bot 身份；remote 无可用 token 则记错跳过。
+        """
+        client = self.gitlab
+        if bot_id is None:
+            fallback = build_repo_client(repo, cfg.verify_ssl)
+            if fallback is None:
+                return 0, 0, [f"仓库 {repo['name']}: 全局 token 失效且 remote 无内嵌 token"]
+            client = fallback
+            try:
+                bot_id = client.get_bot_id()
+            except GitLabError as e:
+                return 0, 0, [f"仓库 {repo['name']}: {e}"]
+            logger.info("对账仓库 %s：全局 bot 身份不可用，改用 remote token 账号（id=%s）",
+                        repo["name"], bot_id)
+        try:
+            issues, client = self._call_with_fallback(
+                repo, cfg.verify_ssl, client,
+                lambda c: c.list_open_issues(repo["gitlab_project_id"], assignee_id=bot_id))
+        except GitLabError as e:
+            msg = f"仓库 {repo['name']}: {e}"
+            logger.warning("对账失败：%s", msg)
+            return 0, 0, [msg]
+        scanned = enqueued = 0
+        errors: list[str] = []
+        active_count = 0
+        for issue in issues:
+            scanned += 1
+            labels = set(issue.get("labels") or [])
+            # 领取过滤（issue #30 / #41）：终态标签 + need-verify
+            # （用户标记需人工验证，bot 不领取）一律不补入队
+            if labels & set(CLAIM_SKIP_LABELS):
+                hit = sorted(labels & set(CLAIM_SKIP_LABELS))
+                logger.info("对账跳过领取过滤标签 issue %s#%s（%s）",
+                            repo["gitlab_project_id"], issue["iid"], hit)
+                continue
+            # 最后发言人过滤（issue #34）：最后一条非系统评论是 bot 本人时
+            # 不补入队——bot 提问后用户未回复，平台重启/手动对账不应重复领取。
+            # 用户回复后（或新任务无评论）再领取。
+            try:
+                last_author, client = self._call_with_fallback(
+                    repo, cfg.verify_ssl, client,
+                    lambda c: c.last_note_author_id(repo["gitlab_project_id"], issue["iid"]))
+            except GitLabError as e:
+                logger.warning("对账查询 issue %s#%s 评论失败: %s",
+                               repo["gitlab_project_id"], issue["iid"], e)
+                errors.append(f"仓库 {repo['name']} issue #{issue['iid']}: {e}")
+                continue
+            if last_author is not None and last_author == bot_id:
+                logger.info("对账跳过最后发言人为 bot 的 issue %s#%s",
+                            repo["gitlab_project_id"], issue["iid"])
+                continue
+            if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
+                active_count += 1  # 已有活跃任务（含排队中）
+                continue
+            task_id = self.db.create_task(
+                repo["id"], repo["gitlab_project_id"], issue["iid"],
+                issue.get("title") or f"issue #{issue['iid']}",
+                triggered_by="reconcile")
+            if task_id is not None:
+                self.scheduler.enqueue(task_id)
+                enqueued += 1
+                logger.info("对账补入队: 任务 %s (%s#%s)",
+                            task_id, repo["gitlab_project_id"], issue["iid"])
+        # 终态标签对账（issue #40）：任务收尾打标签时平台可能被部署重启
+        # 打断（任务 #63 的 PUT /issues/39 未发出进程即被 pm2 delete 杀死），
+        # issue 缺 bot-done/bot-failed 标签会被 webhook/对账重复领取。
+        # 这里回看终态任务，issue 仍 open 且无终态标签时补打。
+        self._backfill_terminal_labels(repo, cfg, client)
+        # 网页通知：队列状态（issue #21，节流由 notifier 负责）
+        if not issues:
+            self.notifier.queue_empty(repo["name"])
+        elif active_count == len(issues) and enqueued == 0:
+            self.notifier.queue_no_work(repo["name"], active_count)
+        return scanned, enqueued, errors
+
+    def _backfill_terminal_labels(self, repo: dict, cfg, client) -> None:
         """终态标签对账（issue #40）：给缺终态标签的终态任务补打 bot-done/bot-failed。
 
         收尾打标签依赖 executor 进程存活，而任务 push 的代码触发部署会 pm2
@@ -148,6 +203,9 @@ class Reconciler:
         bot-failed（生产任务 #63），webhook/对账会把它当新任务重复领取。
         这里兜底扫描最近 BACKFILL_TASKS_LIMIT 条终态任务：issue 仍 open 且
         无终态标签时，按任务结果补打对应标签。失败不影响主流程（下轮再试）。
+
+        client 为当前仓库生效的 GitLab 客户端（全局或 remote token 兜底，
+        issue #63），调用遇 401/403 时同样尝试 remote token 兜底。
         """
         tasks = self.db.list_tasks(
             status=[STATUS_SUCCEEDED, STATUS_FAILED],
@@ -155,7 +213,9 @@ class Reconciler:
         for task in tasks:
             project_id, iid = task["project_id"], task["issue_iid"]
             try:
-                issue = self.gitlab.get_issue(project_id, iid)
+                issue, client = self._call_with_fallback(
+                    repo, cfg.verify_ssl, client,
+                    lambda c: c.get_issue(project_id, iid))
             except GitLabError as e:
                 logger.warning("终态标签对账：查询 issue %s#%s 失败: %s",
                                project_id, iid, e)
@@ -167,7 +227,9 @@ class Reconciler:
                 continue  # 已有终态标签，幂等跳过
             want = "bot-done" if task["status"] == STATUS_SUCCEEDED else "bot-failed"
             try:
-                self.gitlab.add_labels(project_id, iid, [want])
+                _, client = self._call_with_fallback(
+                    repo, cfg.verify_ssl, client,
+                    lambda c: c.add_labels(project_id, iid, [want]))
             except GitLabError as e:
                 logger.warning("终态标签对账：补打 %s 失败（%s#%s）: %s",
                                want, project_id, iid, e)

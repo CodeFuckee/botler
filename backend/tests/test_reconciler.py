@@ -284,3 +284,144 @@ class TestReconcileBackfillsTerminalLabels:
         result = ctx.reconciler.reconcile_once(repo_id=repo_id)
 
         assert result == {"scanned": 1, "enqueued": 1}
+
+
+class TestReconcileFallsBackToRemoteToken:
+    """issue #63：对账遇 token 失效（401/403）时，尝试用仓库 remote url
+    内嵌的 token 构建 per-repo client 兜底重试。
+
+    复现缺陷：全局 bot token 失效后对账整体失败（或 get_bot_id 失败直接
+    放弃），各仓库 remote 里明明有可用 token 却不尝试。
+    """
+
+    @staticmethod
+    def _make_git_repo(path, remote_url: str) -> None:
+        import subprocess
+        subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+        subprocess.run(["git", "-C", str(path), "remote", "add",
+                        "origin", remote_url], check=True)
+
+    @staticmethod
+    def _add_local_repo(db, tmp_path, project_id=42, name="demo") -> int:
+        repo_dir = tmp_path / name
+        TestReconcileFallsBackToRemoteToken._make_git_repo(
+            repo_dir, "https://agent:glpat-repo@gitlab.example.com/group/repo.git")
+        return db.upsert_repo(
+            project_id=project_id, name=name,
+            url=f"https://gitlab.example.com/{name}.git",
+            local_path=str(repo_dir), remote_name="origin")
+
+    def test_global_401_falls_back_to_remote_token(self, ctx, tmp_path, monkeypatch):
+        """全局 token 失效（401）：用 remote 内嵌 token 客户端重试，补入队成功。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+
+        def fail_list(project_id, assignee_id=None):
+            raise GitLabError("token 无效或已过期（401）", 401)
+
+        ctx.gitlab.list_open_issues = fail_list
+        fallback = StubGitLab()
+        fallback.issues_by_project = {42: [make_issue(1, labels=["bug"])]}
+        monkeypatch.setattr("botler.reconciler.build_repo_client",
+                            lambda repo, verify_ssl: fallback)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert ctx.db.find_active_task(42, 1) is not None
+
+    def test_global_403_falls_back_to_remote_token(self, ctx, tmp_path, monkeypatch):
+        """全局 token 权限不足（403）：同样尝试 remote token 兜底。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+
+        def fail_list(project_id, assignee_id=None):
+            raise GitLabError("权限不足（403）", 403)
+
+        ctx.gitlab.list_open_issues = fail_list
+        fallback = StubGitLab()
+        fallback.issues_by_project = {42: [make_issue(2, labels=["bug"])]}
+        monkeypatch.setattr("botler.reconciler.build_repo_client",
+                            lambda repo, verify_ssl: fallback)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert ctx.db.find_active_task(42, 2) is not None
+
+    def test_401_without_remote_token_reports_error(self, ctx, monkeypatch):
+        """全局 401 且仓库 remote 无可用 token：报错进 errors，不补入队。"""
+        repo_id = _add_repo(ctx.db)  # 无 local_path，remote 不可解析
+
+        def fail_list(project_id, assignee_id=None):
+            raise GitLabError("token 无效或已过期（401）", 401)
+
+        ctx.gitlab.list_open_issues = fail_list
+        monkeypatch.setattr("botler.reconciler.build_repo_client",
+                            lambda repo, verify_ssl: None)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result["scanned"] == 0
+        assert result["enqueued"] == 0
+        assert any("仓库 demo" in e for e in result["errors"])
+
+    def test_global_bot_id_unavailable_uses_remote_token_identity(
+            self, ctx, tmp_path, monkeypatch):
+        """全局 token 失效致 bot 身份不可用：以 remote token 账号身份对账。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+
+        def fail_bot_id(force=False):
+            raise GitLabError("token 无效或已过期（401）", 401)
+
+        ctx.gitlab.get_bot_id = fail_bot_id
+        fallback = StubGitLab()
+        fallback.get_bot_id = lambda: 77  # remote token 账号的 user id
+        fallback.issues_by_project = {42: [make_issue(3, labels=["bug"])]}
+        seen_assignee: list = []
+        fallback.list_open_issues = lambda project_id, assignee_id=None: (
+            seen_assignee.append(assignee_id)
+            or fallback.issues_by_project.get(project_id, []))
+        monkeypatch.setattr("botler.reconciler.build_repo_client",
+                            lambda repo, verify_ssl: fallback)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert seen_assignee == [77]  # 用 remote token 账号 id 过滤 assignee
+
+    def test_backfill_label_401_falls_back_to_remote_token(
+            self, ctx, tmp_path, monkeypatch):
+        """主查询正常、终态标签补打遇 401：改用 remote token 客户端补打。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+        _mk_terminal_task(ctx.db, repo_id, 1, "succeeded")
+        ctx.gitlab.issues_by_project = {42: []}  # 主查询走全局正常
+
+        def fail_add_labels(project_id, iid, labels):
+            raise GitLabError("token 无效或已过期（401）", 401)
+
+        ctx.gitlab.add_labels = fail_add_labels
+        fallback = StubGitLab()
+        monkeypatch.setattr("botler.reconciler.build_repo_client",
+                            lambda repo, verify_ssl: fallback)
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert (42, 1, ["bot-done"]) in fallback.labels_added
+
+    def test_fallback_failure_reports_error(self, ctx, tmp_path, monkeypatch):
+        """remote token 客户端也失败（401）：报错进 errors，不补入队。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+
+        def fail_list(project_id, assignee_id=None):
+            raise GitLabError("token 无效或已过期（401）", 401)
+
+        ctx.gitlab.list_open_issues = fail_list
+        fallback = StubGitLab()
+        fallback.fail_projects = {42}
+        monkeypatch.setattr("botler.reconciler.build_repo_client",
+                            lambda repo, verify_ssl: fallback)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result["scanned"] == 0
+        assert result["enqueued"] == 0
+        assert any("仓库 demo" in e for e in result["errors"])

@@ -23,13 +23,12 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Request
 
 from ..gitlab_client import GitLabClient, GitLabError
-from ..git_remote import NoGitRemoteError, list_local_remotes, parse_remote_url
+from ..git_remote import build_repo_client
 
 logger = logging.getLogger(__name__)
 
@@ -156,43 +155,6 @@ def _lookup_commit_time(client, project_id: int, pipeline: dict) -> str | None:
     return _commit_time_utc(commit.get("committed_date"))
 
 
-def _workspace_root() -> Path:
-    """任务执行工作区根目录（与 executor 默认一致：backend/workspace）。"""
-    return Path(__file__).resolve().parents[1] / "workspace"
-
-
-def _build_repo_client(c, row) -> GitLabClient | None:
-    """为仓库构建 per-repo GitLabClient（issue #60）。
-
-    在仓库本地目录（local_path 优先，否则 workspace/<name>，与 executor
-    工作区一致）运行 git remote -v，从 remote_name（缺省 origin）对应的
-    URL 解析内嵌 token：有 token 则用该 token 与 remote host 建客户端，
-    每个仓库使用自己的 token。remote 无 token / 本地目录不存在 / 不是
-    git 仓库时返回 None（调用方回退全局 bot token 客户端，兼容旧仓库）。
-    """
-    d = dict(row)  # sqlite3.Row / dict 统一按 dict 访问
-    workdir = None
-    local_path = d.get("local_path")
-    if local_path:
-        workdir = Path(local_path)
-    else:
-        workdir = _workspace_root() / str(d["name"])
-    try:
-        remotes = list_local_remotes(str(workdir))
-    except NoGitRemoteError:
-        return None
-    remote_name = d.get("remote_name") or "origin"
-    match = next((r for r in remotes if r["name"] == remote_name), None)
-    if match is None:
-        return None
-    info = parse_remote_url(match["url"])
-    token, host, scheme = info["token"], info["host"], info["scheme"]
-    if not token or not host or not scheme:
-        return None
-    cfg = c.config.get()
-    return GitLabClient(f"{scheme}://{host}", token, verify_ssl=cfg.verify_ssl)
-
-
 def _repo_client(c, row) -> GitLabClient | None:
     """per-repo 客户端（带缓存）；解析失败返回 None（调用方回退全局）。"""
     repo_id = row["id"]
@@ -201,7 +163,7 @@ def _repo_client(c, row) -> GitLabClient | None:
         hit = _REPO_CLIENTS.get(repo_id)
         if hit is not None and now - hit[0] < _REPO_CLIENT_TTL_SECONDS:
             return hit[1]
-    client = _build_repo_client(c, row)
+    client = build_repo_client(row, c.config.get().verify_ssl)
     if client is not None:
         with _REPO_CLIENTS_LOCK:
             _REPO_CLIENTS[repo_id] = (now, client)

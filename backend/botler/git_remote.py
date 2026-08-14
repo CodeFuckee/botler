@@ -5,6 +5,8 @@
 
 issue #60：remote URL 可能内嵌凭据（https://user:token@host/path.git），
 提供 URL 凭据解析（parse_remote_url）与展示脱敏（mask_url_token）。
+issue #63：提供按仓库 remote 内嵌 token 构建 per-repo GitLabClient 的
+公共函数（build_repo_client），概览页流水线与对账兜底共用。
 """
 
 from __future__ import annotations
@@ -15,6 +17,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
+
+# 任务执行工作区根目录（与 executor 默认一致：backend/botler/workspace）
+_WORKSPACE_ROOT = Path(__file__).resolve().parents[0] / "workspace"
 
 
 class NoGitRemoteError(Exception):
@@ -119,3 +124,36 @@ def mask_url_token(url: str | None) -> str:
         return value  # 只有用户名没有 token，无需脱敏
     username = userinfo.split(":", 1)[0]
     return f"{scheme}://{username}:***@{tail}"
+
+
+def build_repo_client(row, verify_ssl: bool = True):
+    """为仓库构建 per-repo GitLabClient（issue #60 / #63 公共函数）。
+
+    在仓库本地目录（local_path 优先，否则 workspace/<name>，与 executor
+    工作区一致）运行 git remote -v，从 remote_name（缺省 origin）对应的
+    URL 解析内嵌 token：有 token 则用该 token 与 remote host 建客户端，
+    每个仓库使用自己的 token。remote 无 token / 本地目录不存在 / 不是
+    git 仓库时返回 None（调用方回退全局 bot token 客户端，兼容旧仓库）。
+    """
+    from .gitlab_client import GitLabClient
+
+    d = dict(row)  # sqlite3.Row / dict 统一按 dict 访问
+    workdir = None
+    local_path = d.get("local_path")
+    if local_path:
+        workdir = Path(local_path)
+    else:
+        workdir = _WORKSPACE_ROOT / str(d["name"])
+    try:
+        remotes = list_local_remotes(str(workdir))
+    except NoGitRemoteError:
+        return None
+    remote_name = d.get("remote_name") or "origin"
+    match = next((r for r in remotes if r["name"] == remote_name), None)
+    if match is None:
+        return None
+    info = parse_remote_url(match["url"])
+    token, host, scheme = info["token"], info["host"], info["scheme"]
+    if not token or not host or not scheme:
+        return None
+    return GitLabClient(f"{scheme}://{host}", token, verify_ssl=verify_ssl)

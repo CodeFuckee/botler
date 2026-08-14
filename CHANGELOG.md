@@ -214,6 +214,33 @@
 
 ### Fixed
 
+- **仓库对账遇 token 失效时用 remote url 内嵌 token 兜底（issue #63）**：
+  对账（定时兜底 + 仓库页「对账」按钮）完全依赖全局 bot token；全局
+  token 失效（401）后 `get_bot_id` 失败即整体放弃，各仓库 remote url
+  中明明有可用 token 也不尝试。现改为对账遇 401/403 时，从该仓库
+  本地目录的 `git remote -v` URL 提取内嵌 token 构建 per-repo
+  GitLabClient 重试（与 issue #60 概览页同一机制）。
+  - 后端 `git_remote.py`：新增公共函数 `build_repo_client`（原
+    `api/pipelines.py` 私有逻辑提取），概览页与对账共用；工作区根
+    目录常量化 `_WORKSPACE_ROOT`（backend/botler/workspace，与
+    executor 一致）；
+  - 后端 `api/pipelines.py`：`_repo_client` 改用公共函数，删除
+    本地重复实现；
+  - 后端 `reconciler.py`：全局 bot 身份获取失败不再整体放弃对账，
+    降级为逐仓库兜底；新增 `_call_with_fallback`（GitLab 调用遇
+    401/403 且当前仍是全局 client 时，用 remote token client 重试
+    一次，已兜底过不重复兜底）与 `_reconcile_repo`（单仓库扫描：
+    `list_open_issues` / `last_note_author_id` 与终态标签补打的
+    `get_issue` / `add_labels` 全部走 fallback；全局 bot 身份不可用
+    时以 remote token 账号的 user id 作为该仓库 bot 身份；remote
+    无可用 token 则记错跳过，行为不变）；
+  - 测试：TDD 先行（复现测试红灯：全局 401 时对账直接失败），新增
+    用例 6（全局 401/403 兜底补入队 / 无 remote token 记错 /
+    全局 bot 身份不可用改用 remote token 账号身份 / 补打标签 401
+    兜底 / 兜底也失败报错），更新 1 处（workspace 目录断言随
+    `_WORKSPACE_ROOT` 提取调整）；后端全量 661（+6）通过，前端
+    217 全量通过。
+
 - **页面上删除仓库后列表仍显示该仓库（issue #62）**：`DELETE
   /api/repos/{id}` 返回 200，但 `GET /api/repos` 仍返回已删除的仓库
   （以「已停用」身份残留，可被重新「启用」成 webhook 已注销、config

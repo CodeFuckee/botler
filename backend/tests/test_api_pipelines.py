@@ -576,13 +576,13 @@ class TestRepoClient:
     def test_workspace_fallback_dir(self, client, tmp_path, monkeypatch):
         """无 local_path 时用 workspace/<name> 目录（与 executor 一致）。"""
         tc, stub, db, tmp_dir = client
-        from botler.api import pipelines as pipelines_mod
+        from botler import git_remote
         from botler.api.pipelines import _repo_client
         ws = tmp_dir / "ws"
         repo_dir = ws / "myrepo"
         self._make_git_repo(repo_dir,
                             "https://agent:glpat-ws@gitlab.example.com/group/repo.git")
-        monkeypatch.setattr(pipelines_mod, "_workspace_root", lambda: ws)
+        monkeypatch.setattr(git_remote, "_WORKSPACE_ROOT", ws)
         row = {"id": 1, "name": "myrepo", "local_path": None,
                "remote_name": None}  # remote_name 缺省 → origin
         config = ConfigManager(str(tmp_dir / "config.yaml"))
