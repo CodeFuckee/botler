@@ -214,6 +214,30 @@
 
 ### Fixed
 
+- **页面上删除仓库后列表仍显示该仓库（issue #62）**：`DELETE
+  /api/repos/{id}` 返回 200，但 `GET /api/repos` 仍返回已删除的仓库
+  （以「已停用」身份残留，可被重新「启用」成 webhook 已注销、config
+  已移除的状态分裂仓库）。根因：「删除」与「停用」共用 `enabled`
+  字段软删除，仓库列表接口对软删除行无任何过滤。
+  - 后端 `database.py`：repos 表新增 `deleted_at` 列（迁移 v4，
+    user_version 3→4）；新增 `soft_delete_repo`（写 `deleted_at`
+    标记 + enabled=0，行保留供任务历史解析仓库名）；`list_repos`
+    与 `get_repo_by_project_id` 增加 `include_deleted` 参数默认
+    过滤已删除行（仓库列表、概览流水线、对账全局生效）；`upsert_repo`
+    冲突更新时清除 `deleted_at`（支持删除后重新添加同仓库），
+    id 改为按唯一键反查（冲突更新路径 lastrowid 不可靠，重新添加
+    路径暴露）；
+  - 后端 `api/repos.py`：`delete_repo` 的 db 软删除改调
+    `c.db.soft_delete_repo`，与「停用」（enabled=False、行仍可见
+    可重新启用）区分；
+  - 后端 `api/tasks.py`：任务列表的仓库名映射改用
+    `include_deleted=True`，已删除仓库的历史任务仍能显示仓库名；
+  - 测试：TDD 先行（复现测试红灯：删除后列表仍含该仓库），新增
+    用例 9（API 删除后列表不返回 / 停用仓库仍列表 / 删除后重新添加
+    同仓库成功 + 迁移 v4 补列 + 软删除过滤/标记/反查/重新添加清标记），
+    更新 3 处既有断言（deleted_at 标记、user_version 4）；后端全量
+    655（+9）通过，前端 217 全量通过。
+
 - **删除仓库报错 500（issue #61）**：仓库页删除仓库时后端 500，
   配置移除与软删除均未执行。根因：config 模块重构后
   `c.config.get()` 返回纯数据对象 `Settings`，而 `delete_repo`

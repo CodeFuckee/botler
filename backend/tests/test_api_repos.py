@@ -417,10 +417,11 @@ class TestDeleteRepo:
         # config.yaml 中该仓库被移除（config 是唯一事实来源）
         settings = ConfigManager(str(tmp_path / "config.yaml")).get()
         assert all(r.project_id != project_id for r in settings.repos)
-        # db 软删除（行保留，enabled=False；SQLite 布尔存为 0）
+        # db 软删除（issue #62：deleted_at 标记 + enabled=False，行保留供任务历史）
         row = tc.app.state.ctx.db.get_repo(repo_id)
         assert row is not None
         assert not row["enabled"]
+        assert row["deleted_at"] is not None
 
     def test_delete_repo_not_found(self, client):
         """删除不存在的仓库返回 404。"""
@@ -443,3 +444,54 @@ class TestDeleteRepo:
         assert resp.json() == {"ok": True}
         row = tc.app.state.ctx.db.get_repo(repo_id)
         assert not row["enabled"]
+        assert row["deleted_at"] is not None
+
+    def test_delete_repo_removed_from_list(self, client, monkeypatch):
+        """删除后 GET /api/repos 不再返回该仓库（复现 issue #62）。"""
+        tc, stub, tmp_path = client
+        repo_id, project_id = self._add_repo(client, monkeypatch)
+
+        resp = tc.delete(f"/api/repos/{repo_id}")
+        assert resp.status_code == 200, resp.text
+
+        listing = tc.get("/api/repos")
+        assert listing.status_code == 200
+        ids = [r["id"] for r in listing.json()["repos"]]
+        assert repo_id not in ids
+
+    def test_disabled_repo_still_listed(self, client, monkeypatch):
+        """停用（未删除）的仓库仍出现在列表中（可重新启用，与删除区分）。"""
+        tc, stub, tmp_path = client
+        repo_id, project_id = self._add_repo(client, monkeypatch)
+
+        resp = tc.put(f"/api/repos/{repo_id}", json={"enabled": False})
+        assert resp.status_code == 200, resp.text
+
+        listing = tc.get("/api/repos")
+        assert listing.status_code == 200
+        ids = [r["id"] for r in listing.json()["repos"]]
+        assert repo_id in ids
+
+    def test_delete_then_readd_same_project(self, client, monkeypatch):
+        """删除后重新添加同 project_id 仓库：201 成功且清除删除标记（issue #62）。"""
+        tc, stub, tmp_path = client
+        repo_id, project_id = self._add_repo(client, monkeypatch)
+
+        resp = tc.delete(f"/api/repos/{repo_id}")
+        assert resp.status_code == 200, resp.text
+
+        resp = tc.post("/api/repos", json={
+            "url": "https://gitlab.example.com/group/graph2plan.git",
+            "name": "graph2plan",
+        })
+        assert resp.status_code == 201, resp.text
+        readded = resp.json()
+        # upsert 复用原行并清除删除标记
+        assert readded["id"] == repo_id
+        row = tc.app.state.ctx.db.get_repo(repo_id)
+        assert row["deleted_at"] is None
+        assert row["enabled"]
+        # 列表再次可见
+        listing = tc.get("/api/repos")
+        ids = [r["id"] for r in listing.json()["repos"]]
+        assert repo_id in ids

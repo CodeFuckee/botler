@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS repos (
   prompt_template TEXT,
   enabled INTEGER DEFAULT 1,
   priority INTEGER DEFAULT 100,
+  deleted_at TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -174,6 +175,14 @@ class Database:
                 conn.execute(
                     "ALTER TABLE repos ADD COLUMN priority INTEGER DEFAULT 100")
             conn.execute("PRAGMA user_version = 3")
+            ver = 3
+        if ver < 4:
+            # issue #62：仓库软删除标记（删除与停用区分，
+            # list_repos 默认过滤 deleted_at 非空的行）
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+            if "deleted_at" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN deleted_at TEXT")
+            conn.execute("PRAGMA user_version = 4")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -242,7 +251,7 @@ class Database:
                     remote_name: str | None = None,
                     priority: int = DEFAULT_PRIORITY) -> int:
         with self._conn() as conn:
-            cur = conn.execute(
+            conn.execute(
                 """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, priority)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(gitlab_project_id) DO UPDATE SET
@@ -250,26 +259,52 @@ class Database:
                      prompt_template=excluded.prompt_template,
                      enabled=excluded.enabled, local_path=excluded.local_path,
                      remote_name=excluded.remote_name,
-                     priority=excluded.priority""",
+                     priority=excluded.priority,
+                     deleted_at=NULL""",
                 (project_id, name, url, prompt_template, 1 if enabled else 0,
                  local_path, remote_name, priority),
             )
-            return cur.lastrowid
+            # 冲突更新路径 lastrowid 不可靠（issue #62：重新添加已删除仓库），
+            # 按唯一键 project_id 反查
+            row = conn.execute(
+                "SELECT id FROM repos WHERE gitlab_project_id=?", (project_id,)).fetchone()
+            return row["id"]
 
-    def list_repos(self) -> list[sqlite3.Row]:
+    def list_repos(self, include_deleted: bool = False) -> list[sqlite3.Row]:
+        """列出仓库；默认过滤已软删除（deleted_at 非空）的行（issue #62）。
+
+        任务历史的仓库名解析等场景需要包含已删除仓库时传 include_deleted=True。
+        """
         with self._conn() as conn:
+            where = "" if include_deleted else " WHERE deleted_at IS NULL"
             # 按优先级升序（数字小在前），同优先级按 id（issue #51）
             return conn.execute(
-                "SELECT * FROM repos ORDER BY priority, id").fetchall()
+                f"SELECT * FROM repos{where} ORDER BY priority, id").fetchall()
 
     def get_repo(self, repo_id: int) -> sqlite3.Row | None:
         with self._conn() as conn:
             return conn.execute("SELECT * FROM repos WHERE id=?", (repo_id,)).fetchone()
 
-    def get_repo_by_project_id(self, project_id: int) -> sqlite3.Row | None:
+    def get_repo_by_project_id(self, project_id: int,
+                               include_deleted: bool = False) -> sqlite3.Row | None:
+        """按 gitlab project_id 查询；默认不返回已软删除的行（issue #62）。"""
         with self._conn() as conn:
+            where = "" if include_deleted else " AND deleted_at IS NULL"
             return conn.execute(
-                "SELECT * FROM repos WHERE gitlab_project_id=?", (project_id,)).fetchone()
+                f"SELECT * FROM repos WHERE gitlab_project_id=?{where}",
+                (project_id,)).fetchone()
+
+    def soft_delete_repo(self, repo_id: int) -> None:
+        """软删除仓库（issue #62）：写 deleted_at 标记 + enabled=0。
+
+        行保留供任务历史解析仓库名（api/tasks 用 include_deleted=True）；
+        list_repos 默认过滤，仓库列表/概览流水线/对账不再出现该仓库。
+        重新添加同 project_id 的仓库时 upsert 会清除删除标记。
+        """
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE repos SET deleted_at=datetime('now'), enabled=0
+                   WHERE id=?""", (repo_id,))
 
     def update_repo(self, repo_id: int, **fields) -> None:
         allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "priority"}

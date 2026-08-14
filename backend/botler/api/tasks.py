@@ -106,7 +106,9 @@ def list_tasks(
             statuses = statuses[0]
     rows = c.db.list_tasks(status=statuses, repo_id=repo_id, search=search,
                            limit=limit, offset=offset)
-    repos = {r["id"]: {"name": r["name"], "url": r["url"]} for r in c.db.list_repos()}
+    # issue #62：包含已软删除的仓库，任务历史仍能解析出仓库名
+    repos = {r["id"]: {"name": r["name"], "url": r["url"]}
+             for r in c.db.list_repos(include_deleted=True)}
     return {
         "tasks": [_task_to_dict(r, repos.get(r["repo_id"])) for r in rows],
         # total 与 list_tasks 同套过滤条件（issue #50 翻页组件按 total 计算总页数）

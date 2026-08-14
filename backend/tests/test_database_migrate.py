@@ -123,3 +123,60 @@ class TestMigrateRepoPriority:
         repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
         db.update_repo(repo_id, priority=77)
         assert db.get_repo(repo_id)["priority"] == 77
+
+
+class TestMigrateRepoDeletedAt:
+    """repos 表 deleted_at 列迁移与软删除行为（issue #62）。"""
+
+    def test_old_db_gets_deleted_at_column(self, tmp_path):
+        """旧库初始化后 repos 表补出 deleted_at 列（线上库迁移）。"""
+        path = tmp_path / "old.db"
+        _build_old_repos_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+        assert "deleted_at" in cols, "旧库应补出 deleted_at 列"
+
+    def test_new_db_has_deleted_at_column(self, tmp_path):
+        """新库建表语句应直接含 deleted_at 列（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+        assert "deleted_at" in cols
+
+    def test_soft_delete_filters_list_by_default(self, tmp_path):
+        """软删除后 list_repos 默认不返回；include_deleted=True 可见。"""
+        db = Database(str(tmp_path / "d.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        db.soft_delete_repo(repo_id)
+        assert db.list_repos() == [], "默认应过滤已软删除的仓库"
+        rows = db.list_repos(include_deleted=True)
+        assert [r["id"] for r in rows] == [repo_id]
+
+    def test_soft_delete_marks_deleted_at_and_disables(self, tmp_path):
+        """soft_delete_repo 写 deleted_at 并置 enabled=0。"""
+        db = Database(str(tmp_path / "s.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        db.soft_delete_repo(repo_id)
+        row = db.get_repo(repo_id)
+        assert row["deleted_at"] is not None
+        assert not row["enabled"]
+
+    def test_get_by_project_id_hides_deleted_by_default(self, tmp_path):
+        """get_repo_by_project_id 默认查不到已删除行（可重新添加，不误报 409）。"""
+        db = Database(str(tmp_path / "g.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        db.soft_delete_repo(repo_id)
+        assert db.get_repo_by_project_id(42) is None
+        assert db.get_repo_by_project_id(42, include_deleted=True)["id"] == repo_id
+
+    def test_readd_clears_deleted_mark(self, tmp_path):
+        """重新 upsert 同 project_id 仓库清除删除标记。"""
+        db = Database(str(tmp_path / "r.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        db.soft_delete_repo(repo_id)
+        readded = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        assert readded == repo_id
+        row = db.get_repo(repo_id)
+        assert row["deleted_at"] is None
+        assert row["enabled"]

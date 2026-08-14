@@ -226,7 +226,12 @@ def update_repo(request: Request, repo_id: int, body: RepoUpdate):
 
 @router.delete("/{repo_id}")
 def delete_repo(request: Request, repo_id: int):
-    """删除仓库：注销 webhook + 从 config 移除 + db 软删除（保留任务历史）。"""
+    """删除仓库：注销 webhook + 从 config 移除 + db 软删除（deleted_at 标记，issue #62）。
+
+    软删除行保留供任务历史解析仓库名，但不再出现在仓库列表
+    （list_repos 默认过滤 deleted_at 非空的行）；与「停用」（enabled=False、
+    行仍可见可重新启用）区分。
+    """
     c = ctx_of(request)
     row = c.db.get_repo(repo_id)
     if row is None:
@@ -239,7 +244,7 @@ def delete_repo(request: Request, repo_id: int):
         logger.warning("注销 webhook 失败（忽略）: %s", e)
 
     c.config.remove_repo(row["gitlab_project_id"])
-    c.db.update_repo(repo_id, enabled=False)
+    c.db.soft_delete_repo(repo_id)
     logger.info("删除仓库 %s (project=%s)", row["name"], row["gitlab_project_id"])
     return {"ok": True}
 
