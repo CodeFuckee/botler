@@ -289,3 +289,56 @@ class TestLastNoteAuthorId:
             {"id": 2, "system": False},  # 无 author
         ])
         assert client.last_note_author_id(42, 7) == 1
+
+
+class TestListOpenIssues:
+    """list_open_issues（issue #64 扩展）：新增 order_by/sort/limit 透传，
+    默认值不变保持向后兼容（reconciler 等既有调用不受影响）。"""
+
+    def _stub(self, client: GitLabClient) -> list[tuple[str, dict]]:
+        """替换 _paged，记录请求路径与参数。"""
+        captured: list = []
+
+        def fake_paged(path, **kwargs):
+            captured.append((path, kwargs))
+            return []
+
+        client._paged = fake_paged
+        return captured
+
+    def test_default_params_unchanged(self):
+        """不传新参数：行为与扩展前一致（state=opened + scope，无 order_by）。"""
+        client = make_client()
+        captured = self._stub(client)
+        client.list_open_issues(42)
+        assert captured == [("/projects/42/issues",
+                             {"state": "opened", "scope": "all"})]
+
+    def test_assignee_and_scope_still_forwarded(self):
+        client = make_client()
+        captured = self._stub(client)
+        client.list_open_issues(42, assignee_id=7, scope="assigned_to_me")
+        assert captured[0][1] == {"state": "opened",
+                                  "scope": "assigned_to_me", "assignee_id": 7}
+
+    def test_order_by_and_sort_forwarded(self):
+        """聚合概览（issue #64）：仓库内按最后更新时间降序，服务端排序。"""
+        client = make_client()
+        captured = self._stub(client)
+        client.list_open_issues(42, order_by="updated_at", sort="desc")
+        assert captured[0][1] == {"state": "opened", "scope": "all",
+                                  "order_by": "updated_at", "sort": "desc"}
+
+    def test_limit_forwarded(self):
+        client = make_client()
+        captured = self._stub(client)
+        client.list_open_issues(42, limit=100)
+        assert captured[0][1] == {"state": "opened", "scope": "all",
+                                  "limit": 100}
+
+    def test_limit_none_not_forwarded(self):
+        """limit 未传时不透传 None（保持请求参数干净）。"""
+        client = make_client()
+        captured = self._stub(client)
+        client.list_open_issues(42, order_by=None, sort=None, limit=None)
+        assert captured[0][1] == {"state": "opened", "scope": "all"}

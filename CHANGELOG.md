@@ -6,6 +6,31 @@
 
 ### Added
 
+- **概览页开放 issue 聚合板块（issue #64）**：概览页新增「开放 Issue」
+  板块，聚合读取所有已启用仓库的开放（opened）issue，按仓库优先级
+  排序（外层），仓库内按最后更新时间降序（内层）。
+  - 后端：新增 `GET /api/issues/overview`（api/issues.py）——遍历
+    `list_repos()`（已按 priority, id 排序、过滤软删除，issue #62）
+    中的已启用仓库，复用 pipelines 模块的 per-repo client 缓存
+    （issue #60：remote 内嵌 token 优先、无 token 回退全局 bot
+    token），单仓库失败进 errors 不中断整体（HTTP 200），结果带
+    10 秒 TTL 缓存；每仓库最多 100 条（limit 防大仓库翻页打爆
+    GitLab API），issue 的 updated_at 统一转 UTC 无后缀（复用
+    pipelines._commit_time_utc，与前端 fmtAgo 解析约定一致）；
+  - 客户端扩展：GitLabClient.list_open_issues 新增 order_by/sort/
+    limit 可选参数（服务端按 updated_at 降序 + 条数截断，_paged
+    支持 limit 停止翻页），不传时行为与扩展前一致（reconciler
+    等既有调用不受影响）；
+  - 前端：Overview.jsx 新增板块（15 秒轮询，与流水线板块同频），
+    按仓库分组卡片展示（仓库名 + 优先级徽章 + 每仓库 issue 数），
+    组内每条 issue 渲染 #iid、标题链接（web_url 新窗口打开）与
+    最后更新时间（fmtAgo 相对时间）；无仓库 / 全部仓库无开放
+    issue 时显示空状态；单仓库查询失败明细照常展示不影响整体；
+  - 测试：TDD 先行（红灯确认后实现），后端新增 24 用例（聚合排序
+    两级 / 未启用与软删除过滤 / 失败兜底 / 缓存 TTL / limit 截断 /
+    参数透传 / per-repo token），前端新增 8 用例；全量 699（后端）
+    + 225（前端）通过。
+
 - **概览页流水线按仓库使用各自 token（issue #60）**：概览页获取流水线
   状态的 token 不再统一用全局 bot token，而是从各仓库本地目录
   `git remote -v` 输出的 URL 中解析——每个仓库使用自己 remote url

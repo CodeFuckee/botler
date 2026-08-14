@@ -14,6 +14,10 @@ export const OVERVIEW_POLL_MS = 3000
 // 且后端有 10 秒 TTL 缓存兜底，避免高频轮询打爆 GitLab API
 export const PIPELINE_POLL_MS = 15000
 
+// 开放 issue 聚合轮询间隔（issue #64）：与流水线板块同频，后端同样
+// 有 10 秒 TTL 缓存兜底，避免高频轮询打爆 GitLab API
+export const ISSUE_POLL_MS = 15000
+
 // 流水线整体状态 → 徽章映射（issue #39）。样式类复用任务状态徽章
 // status-*（视觉语义一致：成功绿 / 失败红 / 运行蓝 / 其余灰）
 export const PIPELINE_STATUS_META = {
@@ -65,6 +69,10 @@ export default function Overview() {
   const [pipelines, setPipelines] = useState([])
   const [pipeErrors, setPipeErrors] = useState([])
   const [pipeError, setPipeError] = useState('')
+  // 开放 issue 聚合（issue #64）：已启用仓库的开放 issue，按仓库优先级排序
+  const [repoIssues, setRepoIssues] = useState([])
+  const [issueErrors, setIssueErrors] = useState([])
+  const [issueError, setIssueError] = useState('')
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
@@ -129,6 +137,24 @@ export default function Overview() {
     const t = setInterval(loadPipelines, PIPELINE_POLL_MS)
     return () => clearInterval(t)
   }, [loadPipelines])
+
+  // 已启用仓库的开放 issue 聚合（issue #64，独立慢轮询）
+  const loadIssues = useCallback(async () => {
+    try {
+      const d = await api.get('/api/issues/overview')
+      setRepoIssues(d.repos || [])
+      setIssueErrors(d.errors || [])
+      setIssueError('')
+    } catch (e) {
+      setIssueError(e.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadIssues()
+    const t = setInterval(loadIssues, ISSUE_POLL_MS)
+    return () => clearInterval(t)
+  }, [loadIssues])
 
   // 各卡片实时输出自动滚动到底部（SSR 测试环境无 document 时跳过）
   useEffect(() => {
@@ -235,6 +261,55 @@ export default function Overview() {
                 </div>
               )
             })}
+          </div>
+        )}
+      </section>
+
+      <section className="issues-section">
+        <h2>开放 Issue</h2>
+        <p className="muted">已启用仓库的开放 issue，按仓库优先级排序（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
+        {issueError && (
+          <div className="alert alert-error" onClick={() => setIssueError('')}>{issueError}</div>
+        )}
+        {issueErrors.length > 0 && (
+          <div className="alert alert-error">
+            {issueErrors.map((e, i) => <div key={i}>{e}</div>)}
+          </div>
+        )}
+        {repoIssues.length === 0 || repoIssues.every((r) => !r.issues || r.issues.length === 0) ? (
+          <p className="muted">暂无开放 issue</p>
+        ) : (
+          <div className="issues-list">
+            {repoIssues.map((r) => (
+              <div key={r.repo_id} className="card issue-repo-card">
+                <div className="issue-repo-head">
+                  <span className="issue-repo-name" title="仓库">📁 {r.repo_name || '（已删除）'}</span>
+                  <span className="badge badge-muted" title="仓库优先级：数字越小越优先">
+                    优先级 {r.priority ?? 100}
+                  </span>
+                  <span className="muted">{r.issues.length} 个开放 issue</span>
+                </div>
+                {(r.issues || []).length === 0 ? (
+                  <p className="muted">该仓库暂无开放 issue</p>
+                ) : (
+                  <ul className="issue-list">
+                    {(r.issues || []).map((i) => (
+                      <li key={i.iid} className="issue-item">
+                        <a className="issue-link" href={i.web_url} target="_blank"
+                           rel="noreferrer" title="在 GitLab 中打开 issue">
+                          #{i.iid} — {i.title || '—'}
+                        </a>
+                        {i.updated_at && (
+                          <span className="issue-updated" title="最后更新时间">
+                            {fmtAgo(i.updated_at) || ''}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </section>

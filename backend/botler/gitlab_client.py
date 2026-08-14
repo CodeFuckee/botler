@@ -94,7 +94,8 @@ class GitLabClient:
             return None
         return resp.json()
 
-    def _paged(self, path: str, **kwargs) -> list[dict]:
+    def _paged(self, path: str, limit: int | None = None, **kwargs) -> list[dict]:
+        """分页拉取（per_page=100）；limit 非空时最多取 limit 条即停止翻页。"""
         items: list[dict] = []
         page = 1
         while True:
@@ -106,10 +107,12 @@ class GitLabClient:
                 raise GitLabError(f"GitLab API 错误 {resp.status_code}: {resp.text[:300]}", resp.status_code)
             batch = resp.json()
             items.extend(batch)
+            if limit is not None and len(items) >= limit:
+                break
             if len(batch) < 100:
                 break
             page += 1
-        return items
+        return items[:limit] if limit is not None else items
 
     # ---- 认证与 bot 身份 ----
 
@@ -297,11 +300,25 @@ class GitLabClient:
         return issue
 
     def list_open_issues(self, project_id: int, assignee_id: int | None = None,
-                         scope: str = "all") -> list[dict]:
-        """列出 open issues。assignee_id 传入时为该 assignee 的 open issues。"""
+                         scope: str = "all", order_by: str | None = None,
+                         sort: str | None = None,
+                         limit: int | None = None) -> list[dict]:
+        """列出 open issues。assignee_id 传入时为该 assignee 的 open issues。
+
+        issue #64：聚合概览需服务端按最后更新时间排序（order_by/sort 透传
+        GitLab API）并限制每仓库条数（limit 截断，防大仓库翻页打爆 API）；
+        不传新参数时行为与扩展前一致（reconciler 等既有调用不受影响）。
+        """
         params: dict = {"state": "opened", "scope": scope}
         if assignee_id is not None:
             params["assignee_id"] = assignee_id
+        if order_by:
+            params["order_by"] = order_by
+        if sort:
+            params["sort"] = sort
+        if limit is not None:
+            return self._paged(f"/projects/{project_id}/issues",
+                               limit=limit, **params)
         return self._paged(f"/projects/{project_id}/issues", **params)
 
     def add_comment(self, project_id: int, iid: int, body: str) -> dict:
