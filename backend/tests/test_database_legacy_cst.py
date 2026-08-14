@@ -131,8 +131,8 @@ def test_migration_idempotent(tmp_path):
 
 
 def test_user_version_marker(tmp_path):
-    """迁移完成后 user_version 应为 4（v2 CST 修正 + v3 仓库优先级列 + v4 deleted_at）。"""
+    """迁移完成后 user_version 应为 5（v2 CST 修正 + v3 仓库优先级列 + v4 deleted_at + v5 dsh_session_id）。"""
     db = Database(str(tmp_path / "ver.db"))
     with db._conn() as conn:
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 4
+    assert ver == 5

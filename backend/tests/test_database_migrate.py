@@ -180,3 +180,43 @@ class TestMigrateRepoDeletedAt:
         row = db.get_repo(repo_id)
         assert row["deleted_at"] is None
         assert row["enabled"]
+
+
+class TestMigrateDshSessionId:
+    """issue #84：dsh 引擎断点续跑——tasks.dsh_session_id 列迁移（v5）。"""
+
+    def test_old_db_gets_dsh_session_id_column(self, tmp_path):
+        """旧库初始化后 tasks 表应补出 dsh_session_id 列。"""
+        path = tmp_path / "old.db"
+        _build_old_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "dsh_session_id" in cols
+
+    def test_new_db_has_dsh_session_id_column(self, tmp_path):
+        """新库建表语句应直接含 dsh_session_id 列（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "dsh_session_id" in cols
+
+    def test_set_task_status_writes_dsh_session_id(self, tmp_path):
+        """dsh_session_id 进入 _TASK_FIELDS 白名单（set_task_status 可写）。"""
+        db = Database(str(tmp_path / "w.db"))
+        db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo_id = db.get_repo_by_project_id(42)["id"]
+        task_id = db.create_task(repo_id, 42, 7, "标题")
+        db.set_task_status(task_id, None, dsh_session_id="dsh-sess-1")
+        assert db.get_task(task_id)["dsh_session_id"] == "dsh-sess-1"
+
+    def test_finish_task_writes_dsh_session_id(self, tmp_path):
+        """finish_task 附加字段白名单同样包含 dsh_session_id。"""
+        db = Database(str(tmp_path / "f.db"))
+        db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo_id = db.get_repo_by_project_id(42)["id"]
+        task_id = db.create_task(repo_id, 42, 7, "标题")
+        # finish_task 为条件终态更新（仅 running/retrying 生效），先置 running
+        db.set_task_status(task_id, "running")
+        assert db.finish_task(task_id, "failed", dsh_session_id="dsh-sess-2")
+        assert db.get_task(task_id)["dsh_session_id"] == "dsh-sess-2"

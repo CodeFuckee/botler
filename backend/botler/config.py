@@ -93,12 +93,24 @@ class Settings:
     # claude 2.1.x 要求 stream-json 配 --verbose，executor 会自动补齐
     claude_args: list[str] = field(
         default_factory=lambda: ["-p", "--output-format", "stream-json", "--verbose"])
-    # 任务执行引擎（issue #47）：claude = Claude Code CLI（默认，现网行为不变）；
-    # hermes = 部署机已装好的 hermes-agent（经 hermes_runner.py 进程内调用）。
+    # 任务执行引擎（issue #47/#84）：claude = Claude Code CLI（默认，现网行为
+    # 不变）；hermes = 部署机已装好的 hermes-agent（经 hermes_runner.py 进程
+    # 内调用）；dsh = deepseek-harness SDK（经 dsh_runner.py 进程内调用）。
     # 非法值回退 claude（executor._engine 校验）。
     engine: str = "claude"
     hermes_command: str = ""
     hermes_args: list[str] = field(default_factory=list)
+    # dsh 引擎（issue #84，worker.engine: dsh 时生效）：deepseek-harness
+    # Python SDK 运行参数。DeepSeek API Key 走部署机环境变量 DEEPSEEK_API_KEY
+    # （或 dsh.base_url/dsh.api_key 显式配置），与 hermes 同模式。
+    dsh_provider: str = "deepseek-official"
+    dsh_model: str = "deepseek-v4-flash"
+    dsh_max_tokens: int | None = None
+    dsh_session_root: str = ""
+    dsh_cordis: str = ""
+    dsh_runtime_bin: str = ""
+    dsh_base_url: str = ""
+    dsh_api_key: str = ""
     default_template: str = ""
     browse_default_path: str | None = None
     backup_enabled: bool = True
@@ -140,6 +152,8 @@ KNOWN_FIELDS = {
                "engine"},
     "claude": {"command", "args"},
     "hermes": {"command", "args"},
+    "dsh": {"provider", "model", "max_tokens", "session_root", "cordis",
+            "runtime_bin", "base_url", "api_key"},
     "templates": {"default"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
@@ -221,6 +235,7 @@ class ConfigManager:
         worker = data.get("worker", {})
         claude = data.get("claude", {})
         hermes = data.get("hermes", {})
+        dsh = data.get("dsh", {})
         tpl = data.get("templates", {})
         browse = data.get("browse", {})
         backup = data.get("backup", {})
@@ -265,6 +280,14 @@ class ConfigManager:
             engine=str(worker.get("engine", "claude")).strip() or "claude",
             hermes_command=str(hermes.get("command", "")).strip(),
             hermes_args=hermes.get("args", []),
+            dsh_provider=str(dsh.get("provider", "deepseek-official")).strip() or "deepseek-official",
+            dsh_model=str(dsh.get("model", "deepseek-v4-flash")).strip() or "deepseek-v4-flash",
+            dsh_max_tokens=dsh.get("max_tokens") if isinstance(dsh.get("max_tokens"), int) else None,
+            dsh_session_root=str(dsh.get("session_root", "")).strip(),
+            dsh_cordis=str(dsh.get("cordis", "")).strip(),
+            dsh_runtime_bin=str(dsh.get("runtime_bin", "")).strip(),
+            dsh_base_url=str(dsh.get("base_url", "")).strip(),
+            dsh_api_key=str(dsh.get("api_key", "")).strip(),
             default_template=tpl.get("default", DEFAULT_TEMPLATE),
             browse_default_path=browse.get("default_path") or None,
             backup_enabled=bool(backup.get("enabled", True)),
@@ -367,6 +390,26 @@ class ConfigManager:
         for key in KNOWN_FIELDS["claude"]:
             if key in patch:
                 claude[key] = patch[key]
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_dsh(self, patch: dict[str, Any]) -> Settings:
+        """更新 dsh 配置并写回（issue #84）。
+
+        前端回传的 api_key 掩码值（含 *）或空串视为"未修改"，不覆盖
+        真实凭据（与 gitlab.owner_token 同模式）。
+        """
+        self._reload_from_disk()
+        dsh = self._data.setdefault("dsh", {})
+        for key in KNOWN_FIELDS["dsh"]:
+            if key not in patch:
+                continue
+            val = patch[key]
+            if key == "api_key" and (val is None or "*" in str(val)
+                                     or not str(val).strip()):
+                continue  # 掩码占位符/空串：保持现有凭据
+            dsh[key] = val
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

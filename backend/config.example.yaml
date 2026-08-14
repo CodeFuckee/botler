@@ -21,6 +21,8 @@ worker:
   engine: claude                      # 任务执行引擎：claude（Claude Code CLI，
                                       #   默认）/ hermes（部署机已装好的
                                       #   hermes-agent，经 hermes_runner.py 调用）
+                                      #   / dsh（deepseek-harness SDK，经
+                                      #   dsh_runner.py 进程内调用，issue #84）
 
 claude:
   command: claude
@@ -38,6 +40,22 @@ hermes:
   # 部署细节见 docs/hermes-engine-deployment.md。
   command: ""                         # 如 /opt/hermes/hermes-agent/venv/bin/python
   args: ["/app/backend/hermes_runner.py"]
+
+dsh:
+  # dsh 引擎（worker.engine: dsh 时生效，issue #84）：deepseek-harness
+  # Python SDK（deepseek-harness-sdk==0.1.0rc6，可选依赖，botler venv 内
+  # 安装）运行参数。DeepSeek API Key 走部署机环境变量 DEEPSEEK_API_KEY
+  # （或 base_url/api_key 显式配置），与 hermes 同模式（botler 不管理）。
+  # 部署细节见 docs/dsh-engine-deployment.md。
+  provider: deepseek-official         # provider 路由（SDK 默认组合注册）
+  model: deepseek-v4-flash            # 模型 id
+  max_tokens: null                    # 可选：单请求输出 token 上限（null=provider 默认）
+  session_root: ""                    # 可选：会话持久化目录（断点续跑数据）；
+                                      #   留空 = SDK 默认（环境变量 DSH_SESSION_ROOT）
+  cordis: ""                          # 可选：自定义 Cordis 配置路径
+  runtime_bin: ""                     # 可选：自定义 runtime 二进制路径
+  base_url: ""                        # 可选：DeepSeek 兼容端点（默认环境 DEEPSEEK_BASE_URL）
+  api_key: ""                         # 可选：默认环境 DEEPSEEK_API_KEY；支持 ${ENV} 引用
 
 templates:
   default: |

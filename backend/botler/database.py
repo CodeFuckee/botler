@@ -39,7 +39,7 @@ DEFAULT_PRIORITY = 100
 # set_task_status / finish_task 可写的附加字段白名单
 _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
-                "hermes_history", "commit_sha"}
+                "hermes_history", "commit_sha", "dsh_session_id"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
@@ -183,6 +183,14 @@ class Database:
             if "deleted_at" not in cols:
                 conn.execute("ALTER TABLE repos ADD COLUMN deleted_at TEXT")
             conn.execute("PRAGMA user_version = 4")
+            ver = 4
+        if ver < 5:
+            # issue #84：dsh 引擎断点续跑——记录上次执行的 dsh 会话 id
+            # （SDK 在 session_root 持久化会话，重试/重启后同一 id 接续对话）
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "dsh_session_id" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN dsh_session_id TEXT")
+            conn.execute("PRAGMA user_version = 5")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -399,7 +407,7 @@ class Database:
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:
         """更新任务状态及附加字段（attempt_count / exit_code / error_message /
         error_detail / log_path / started_at / finished_at / claude_session_id /
-        commit_sha）。
+        hermes_history / commit_sha / dsh_session_id）。
 
         status 传 None 时只更新附加字段，不改状态。
         """

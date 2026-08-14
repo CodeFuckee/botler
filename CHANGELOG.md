@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 
+### Added
+
+- **执行引擎集成 deepseek-harness（issue #84）**：按 issue #74 方案B 以
+  Python SDK 进程内调用方式接入第三执行引擎 `dsh`（deepseek-harness 官方
+  `deepseek-harness-sdk`，stdio JSON-RPC 驱动捆绑运行时，无需 Node.js）。
+  `worker.engine: dsh` 即可切换，与 claude / hermes 共享全部既有设施
+  （工作区、超时、停止、日志、SSE 实时流、CI 流水线等待与收尾流程）。
+  - 后端新增 `botler/dsh_runner.py`：封装 SDK 生命周期（惰性导入、worker
+    线程跑 `harness.run()`、停止/超时经 `close()` 强制终止运行时——语义
+    等价 SIGKILL 进程组），SDK 通知映射为 hermes 风格事件行（文本/思考/
+    工具调用/回合结束/会话状态），输出协议与 hermes 对齐，SSE 解析与
+    回放零改动复用；
+  - 后端 `executor.py`：引擎白名单加 `dsh`，新增 `_run_dsh_once`（轮询
+    停止/超时）、`_dsh_result` 结果判定（finish_reason=completed 且
+    final_response 非空才算成功；max-tokens/error/未知 reason 一律按失败
+    重试，不静默成功）；
+  - 断点续跑：SDK 在 session_root 持久化会话，tasks 表新增
+    `dsh_session_id` 列（迁移 v5），重试/重启以同一会话 id 接续对话；
+  - 配置：config.yaml 新增 `dsh` 段（provider/model/max_tokens/
+    session_root/cordis/runtime_bin/base_url/api_key），设置页 API 可写
+    （api_key 掩码），DeepSeek Key 走环境变量 DEEPSEEK_API_KEY
+    （botler 不管理，同 hermes 模式）；SDK 为可选依赖（不在
+    requirements.txt），未安装时任务报错并附安装指引（阿里镜像 +
+    全版本号，清华源未同步 rc 版）；
+  - 环境检测：设置页新增 dsh 项（pip 包检测 + PyPI 最新版本查询）；
+  - 文档：新增 `docs/dsh-engine-deployment.md` 部署指南，README 配置表
+    同步；
+  - 测试：TDD 先行（红灯确认后实现），新增 65 用例（dsh_runner 线程
+    模型/停止/超时/事件映射 26、executor 分派/判定/落库/断点续跑 29、
+    迁移与环境检测 10，含既有引擎回归保护；另更新迁移版本断言 1 处）；
+    全量 806 通过。
+
 ### Fixed
 
 - **任务手动重试后过几秒又变中断（issue #69）**：一键停止所有任务时

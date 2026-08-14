@@ -256,7 +256,10 @@ def _event_stream(ctx, task_id: int):
     - done：流结束哨兵事件（前端据此关闭连接）
     """
     engine = str(getattr(ctx.config.get(), "engine", "") or "claude").strip().lower()
-    parser = parse_claude_stream_line if engine != "hermes" else parse_hermes_event_line
+    # dsh 引擎（issue #84）的输出协议与 hermes 对齐（事件行 + 结果行），
+    # 日志回放解析复用 parse_hermes_event_line
+    parser = (parse_claude_stream_line if engine == "claude"
+              else parse_hermes_event_line)
 
     row = ctx.db.get_task(task_id)
     # 注意 sqlite3.Row 无 .get()（issue #11），统一索引访问

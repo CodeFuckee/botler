@@ -4,7 +4,8 @@
 
 运行在服务器上的自动化平台：统一配置多个 GitLab 仓库，通过 webhook 实时监控 issue，
 当 issue 被指派给 bot 账号时，自动调用 **Claude Code CLI（无头模式）** 处理并推送修复到 main，最后关闭 issue。
-执行引擎可切换为 **hermes-agent**（部署机已装好时，见 [docs/hermes-engine-deployment.md](docs/hermes-engine-deployment.md)）。
+执行引擎可切换为 **hermes-agent**（部署机已装好时，见 [docs/hermes-engine-deployment.md](docs/hermes-engine-deployment.md)）
+或 **deepseek-harness**（Python SDK 进程内调用，见 [docs/dsh-engine-deployment.md](docs/dsh-engine-deployment.md)）。
 
 完整设计见 [`docs/设计方案.md`](docs/设计方案.md)。
 
@@ -28,6 +29,8 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 > 接续上次会话且保留工作区改动，从上次中断处继续（会话文件丢失时自动降级全新会话）。
 > hermes 引擎（issue #47）等价支持：会话消息历史落库 `tasks.hermes_history`，
 > 恢复时作为 `conversation_history` 传入接续对话。
+> dsh 引擎（issue #84）等价支持：SDK 在 session_root 持久化会话，会话 id
+> 落库 `tasks.dsh_session_id`，恢复时以同一 id 接续对话。
 
 ## 目录结构
 
@@ -40,8 +43,9 @@ backend/
     gitlab_client.py GitLab REST API 封装（webhook 注册、issue 评论等）
     webhook.py       webhook 接收器（secret 校验 + assignee 判定 + 去重）
     scheduler.py     任务调度器（每仓库 FIFO 串行、跨仓库并行、按仓库优先级派发）
-    executor.py      执行器（claude / hermes 双引擎，干净工作区 / 超时 / 重试 / 失败评论）
+    executor.py      执行器（claude / hermes / dsh 三引擎，干净工作区 / 超时 / 重试 / 失败评论）
     hermes_runner.py hermes 引擎 runner 脚本（hermes venv 进程内调用 AIAgent，stdin/stdout JSON 协议）
+    dsh_runner.py    dsh 引擎 runner（deepseek-harness SDK 进程内调用，线程运行 + 停止/超时关闭运行时）
     reconciler.py    对账兜底（APScheduler 定时扫描补漏）
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
     api/             REST API（repos / tasks / settings / auth）
@@ -168,9 +172,11 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟） |
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
-| `worker.engine` | `claude` | 任务执行引擎：`claude`（Claude Code CLI）/ `hermes`（部署机已装好的 hermes-agent）；非法值回退 `claude`（issue #47） |
+| `worker.engine` | `claude` | 任务执行引擎：`claude`（Claude Code CLI）/ `hermes`（部署机已装好的 hermes-agent）/ `dsh`（deepseek-harness SDK）；非法值回退 `claude`（issue #47/#84） |
 | `claude.command` / `args` | `claude -p --output-format stream-json --verbose` | claude 引擎执行命令（stream-json 逐行实时输出，任务页面逐事件查看执行过程） |
 | `hermes.command` / `args` | — | hermes 引擎执行命令（部署机 hermes venv 的 python + `backend/hermes_runner.py`），部署见 `docs/hermes-engine-deployment.md` |
+| `dsh.provider` / `model` | `deepseek-official` / `deepseek-v4-flash` | dsh 引擎运行参数（provider 路由 / 模型 id），Key 走环境变量 `DEEPSEEK_API_KEY` |
+| `dsh.max_tokens` / `session_root` / `cordis` / `runtime_bin` / `base_url` / `api_key` | — | dsh 引擎可选参数（输出上限 / 会话持久化目录 / 自定义 Cordis 配置 / 自定义 runtime / 兼容端点），部署见 `docs/dsh-engine-deployment.md` |
 | `browse.default_path` | 空（服务器用户主目录 `~`） | 目录选择对话框的初始定位目录；支持 `~` 展开，路径不存在时自动回退主目录 |
 | `notifications.enabled` | true | 网页通知总开关（任务需交互 / issue 完成 / 队列空 / 无新任务，逐项可关） |
 | `sso.enabled` | false | Synology SSO 登录总开关：启用后访问 Web UI 需用群晖账号登录（issue #27） |

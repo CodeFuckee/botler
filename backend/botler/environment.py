@@ -15,13 +15,17 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version as pkg_version
+from importlib.util import find_spec
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 # 检测工具清单。latest_source: "npm"（查 npm registry）/ "github"（查 GitHub
-# releases）/ None（无发布源，不查最新版本，前端显示 "—"）。
+# releases）/ "pypi"（查 PyPI）/ None（无发布源，不查最新版本，前端显示 "—"）。
+# 带 "module" 键的项为 pip 包检测（find_spec 定位模块 + 读包版本），
+# 不走 which/--version（issue #84 dsh SDK）。
 TOOLS = [
     {"key": "claude", "name": "Claude Code", "command": "claude",
      "version_args": ["--version"], "latest_source": "npm",
@@ -39,6 +43,10 @@ TOOLS = [
     # 只检测安装与版本，不查最新版本（前端显示 "—"）
     {"key": "hermes", "name": "Hermes Agent", "command": "hermes",
      "version_args": ["--version"], "latest_source": None},
+    # dsh 为 pip 包（issue #84：deepseek-harness-sdk，可选依赖），不走
+    # which/--version，按 module 检测 + PyPI 查最新版本
+    {"key": "dsh", "name": "DeepSeek Harness SDK", "module": "deepseek_harness",
+     "latest_source": "pypi", "latest_pkg": "deepseek-harness-sdk"},
     {"key": "gh", "name": "GitHub CLI", "command": "gh",
      "version_args": ["--version"], "latest_source": "github",
      "latest_repo": "cli/cli"},
@@ -70,12 +78,16 @@ def parse_version(text: str | None) -> str | None:
 
 
 def detect_tool(tool: dict, timeout: int = 10) -> dict:
-    """检测单个工具：which 定位 + 执行 --version。
+    """检测单个工具：which 定位 + 执行 --version（pip 包走 module 检测）。
 
-    返回 {"key", "name", "installed", "version"}。which 找不到 → 未安装；
-    which 找到但版本读取失败（非零退出/超时/异常）→ 已安装但版本未知（None）。
+    返回 {"key", "name", "installed", "version"}。找不到 → 未安装；
+    找到但版本读取失败（非零退出/超时/异常/无元数据）→ 已安装但版本
+    未知（None）。
     """
     base = {"key": tool["key"], "name": tool["name"], "installed": False, "version": None}
+    module = tool.get("module")
+    if module is not None:
+        return _detect_module(tool, base)
     cmd_path = shutil.which(tool["command"])
     if not cmd_path:
         return base
@@ -91,6 +103,20 @@ def detect_tool(tool: dict, timeout: int = 10) -> dict:
     return base
 
 
+def _detect_module(tool: dict, base: dict) -> dict:
+    """pip 包检测（issue #84）：find_spec 定位模块 + importlib.metadata 读版本。"""
+    module = tool["module"]
+    pkg = tool.get("pkg", tool.get("latest_pkg")) or module.replace("_", "-")
+    if find_spec(module) is None:
+        return base
+    base["installed"] = True
+    try:
+        base["version"] = parse_version(pkg_version(pkg))
+    except (PackageNotFoundError, ModuleNotFoundError, ValueError) as e:
+        logger.warning("读取 %s 版本失败: %s", tool["key"], e)
+    return base
+
+
 def fetch_latest(tool: dict, timeout: int = 8) -> str | None:
     """查询工具最新版本；无发布源或网络失败返回 None（前端显示 "—"）。"""
     source = tool.get("latest_source")
@@ -102,6 +128,10 @@ def fetch_latest(tool: dict, timeout: int = 8) -> str | None:
         repo = tool["latest_repo"]
         url = f"https://api.github.com/repos/{repo}/releases/latest"
         version_key = "tag_name"  # 形如 "v2.43.1"
+    elif source == "pypi":
+        pkg = tool["latest_pkg"]
+        url = f"https://pypi.org/pypi/{pkg}/json"
+        version_key = None  # 从 info.version 取
     else:
         return None
     try:
@@ -109,7 +139,11 @@ def fetch_latest(tool: dict, timeout: int = 8) -> str | None:
         if resp.status_code != 200:
             return None
         data = resp.json()
-        version = data.get(version_key)
+        if source == "pypi":
+            info = data.get("info")
+            version = info.get("version") if isinstance(info, dict) else None
+        else:
+            version = data.get(version_key)
         return version.lstrip("v") if isinstance(version, str) else None
     except Exception as e:  # 网络/超时/解析失败一律视为查不到
         logger.warning("查询 %s 最新版本失败: %s", tool["key"], e)

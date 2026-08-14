@@ -36,6 +36,7 @@ from .database import (
     Database, STATUS_RUNNING, STATUS_RETRYING, STATUS_SUCCEEDED, STATUS_FAILED,
     STATUS_INTERRUPTED,
 )
+from .dsh_runner import DshRunner, DshSdkNotInstalledError
 from .events import EventBus, parse_claude_stream_line, parse_hermes_event_line
 from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
 from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
@@ -720,9 +721,9 @@ class ClaudeExecutor:
             self._stop_requests.discard(task_id)
 
     def _engine(self, cfg) -> str:
-        """任务执行引擎（issue #47）：claude（默认）/ hermes；非法值回退 claude。"""
+        """任务执行引擎（issue #47/#84）：claude（默认）/ hermes / dsh；非法值回退 claude。"""
         engine = str(getattr(cfg, "engine", "") or "claude").strip().lower()
-        return engine if engine in ("claude", "hermes") else "claude"
+        return engine if engine in ("claude", "hermes", "dsh") else "claude"
 
     def _drain_process_output(self, proc, task_id: int, log_path: Path,
                               deadline: float, on_chunk=None) -> tuple[bool, bool, list[str]]:
@@ -769,13 +770,15 @@ class ClaudeExecutor:
     def _run_once(self, task_id: int, repo: dict, issue: dict,
                   resume_session: str | None = None,
                   resume_history: list | None = None) -> tuple[int, str]:
-        """执行一次任务引擎（claude -p 或 hermes runner）。返回 (exit_code, output)。
+        """执行一次任务引擎（claude -p / hermes runner / dsh SDK）。返回 (exit_code, output)。
 
         claude 引擎：resume_session 非空时为断点续跑（claude --resume 接续
         上次会话，工作区保留）；执行后解析 JSON 输出中的 session_id 落库。
         hermes 引擎（issue #47）：resume_history 为断点续跑的历史消息
         （工作区保留），显式传入优先；未传入时从任务落库的 hermes_history
         解析（含会话 id），等价 Q3-B conversation_history 落库断点续跑。
+        dsh 引擎（issue #84）：resume_session 为断点续跑的上次会话 id
+        （SDK 在 session_root 持久化会话，同一 id 接续对话；工作区保留）。
         """
         cfg = self.config.get()
         if self._engine(cfg) == "hermes":
@@ -785,6 +788,8 @@ class ClaudeExecutor:
             if resume_history is not None:
                 messages = resume_history
             return self._run_hermes_once(task_id, repo, issue, messages, sid)
+        if self._engine(cfg) == "dsh":
+            return self._run_dsh_once(task_id, repo, issue, resume_session)
 
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         if resume_session:
@@ -1060,6 +1065,133 @@ class ClaudeExecutor:
         finally:
             with self._proc_lock:
                 self._procs.pop(task_id, None)
+
+    # ---- dsh 引擎（issue #84）----
+
+    def _run_dsh_once(self, task_id: int, repo: dict, issue: dict,
+                      resume_session: str | None = None) -> tuple[int, str]:
+        """执行一次 dsh 引擎（deepseek-harness SDK 进程内调用）。返回 (exit_code, output)。
+
+        与 claude/hermes 不同，SDK 在 botler 进程内运行：worker 线程跑
+        harness.run()（DshRunner），本循环轮询停止请求与超时；停止/超时
+        通过 runner.stop() 关闭运行时强制终止（语义等价 SIGKILL 进程组）。
+        输出协议与 hermes 对齐（事件行 + 结果行），SSE 解析
+        （parse_hermes_event_line）与结果判定（_dsh_result）复用。
+        会话 id 执行后落库 dsh_session_id（断点续跑，含停止/超时路径）。
+        """
+        cfg = self.config.get()
+        workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_session))
+        if resume_session:
+            prompt = self._resume_prompt(repo, issue)
+            self.db.add_log(
+                task_id, "info",
+                f"恢复上次 dsh 会话 {resume_session[:8]}… 继续执行"
+                f"（工作区保留，超时 {cfg.task_timeout_seconds}s）")
+        else:
+            prompt = self._build_prompt(repo, issue)
+            self.db.add_log(task_id, "info",
+                            f"执行 dsh 引擎（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
+        env = self._build_env(repo, issue)
+
+        log_path = self._log_file(task_id)
+        lines: list[str] = []
+        log_f = open(log_path, "w", encoding="utf-8", errors="replace")
+
+        def _on_line(line: str) -> None:
+            """worker 线程回调：写日志 + 收行 + 发布 SSE（单线程顺序调用）。"""
+            log_f.write(line + "\n")
+            log_f.flush()
+            lines.append(line)
+            events = parse_hermes_event_line(line)
+            if events:
+                for event in events:
+                    self._publish_event(task_id, event)
+
+        try:
+            try:
+                runner = DshRunner(
+                    prompt=prompt, session_id=resume_session,
+                    provider=cfg.dsh_provider, model=cfg.dsh_model,
+                    max_tokens=cfg.dsh_max_tokens, cwd=str(workdir),
+                    session_root=cfg.dsh_session_root or None,
+                    cordis=cfg.dsh_cordis or None,
+                    runtime_bin=cfg.dsh_runtime_bin or None,
+                    base_url=cfg.dsh_base_url or None,
+                    api_key=cfg.dsh_api_key or None,
+                    env=env, on_line=_on_line)
+                runner.start()
+            except DshSdkNotInstalledError as e:
+                raise ExecutorError(str(e))
+
+            deadline = time.time() + cfg.task_timeout_seconds
+            timed_out = False
+            stopped = False
+            while not runner.done():
+                if self._stop_requested(task_id):
+                    stopped = True
+                    runner.stop()
+                    break
+                if time.time() >= deadline:
+                    timed_out = True
+                    runner.stop()
+                    break
+                time.sleep(0.05)
+            exit_code = runner.finish()
+            output = "".join(lines)
+
+            if stopped:
+                self.db.add_log(task_id, "warn",
+                                "任务被用户停止，已强制终止 dsh 运行时")
+                self._persist_dsh_session_id(task_id, output)
+                return STOP_EXIT_CODE, output
+
+            if timed_out:
+                self.db.add_log(task_id, "error",
+                                f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止 dsh 运行时")
+                self._persist_dsh_session_id(task_id, output)
+                return 124, output  # 124 = timeout 约定退出码
+
+            self.db.add_log(task_id, "info", f"dsh 引擎退出码: {exit_code}")
+            self._persist_dsh_session_id(task_id, output)
+            return exit_code, output
+        finally:
+            log_f.close()
+
+    def _dsh_result(self, output: str) -> str:
+        """判定 dsh runner 输出：success / unresolvable / failed。
+
+        - success：结果行合法、无 error、finish_reason=completed、
+          final_response 非空、未自认无法解决
+        - unresolvable：final_response 命中「无法解决」表述（不重试）
+        - failed：error 非空 / finish_reason 非 completed（max-tokens 截断、
+          error、无回合结束、未知 reason 一律不静默成功）/ 非 JSON /
+          final_response 空 → 按失败重试
+        """
+        data = self._last_json_object(output)
+        if data is None or data.get("error"):
+            return "failed"
+        if data.get("finish_reason") != "completed":
+            return "failed"
+        final_response = data.get("final_response")
+        if not isinstance(final_response, str) or not final_response.strip():
+            return "failed"
+        if self._is_unresolvable(final_response):
+            return "unresolvable"
+        return "success"
+
+    def _persist_dsh_session_id(self, task_id: int, output: str) -> None:
+        """执行结束后把 dsh 会话 id 落库（停止/超时/失败均落，供断点续跑）。
+
+        结果行缺 session_id 或输出非法时保持旧值；落库失败不影响任务收尾。
+        """
+        data = self._last_json_object(output)
+        sid = data.get("session_id") if data else None
+        if not isinstance(sid, str) or not sid:
+            return
+        try:
+            self.db.set_task_status(task_id, None, dsh_session_id=sid)
+        except Exception as e:  # noqa: BLE001 会话 id 落库失败不阻塞任务收尾
+            self.db.add_log(task_id, "warn", f"dsh 会话 id 落库失败: {e}")
 
     def _publish_event(self, task_id: int, event: dict) -> None:
         """归一化事件补 seq/ts 后发布到总线（SSE 实时推送）。"""
@@ -1356,10 +1488,16 @@ class ClaudeExecutor:
             # issue #8 断点续跑：上次执行留过 claude 会话 → 接续（resume）；
             # 会话文件丢失（如 ~/.claude 未持久化）→ 清除后降级全新会话。
             # hermes 引擎（issue #47）的断点续跑数据在 tasks.hermes_history，
-            # 由 _run_once 内部读取（session 文件机制仅 claude 有）。
+            # 由 _run_once 内部读取（session 文件机制仅 claude 有）；
+            # dsh 引擎（issue #84）的断点续跑数据在 tasks.dsh_session_id
+            # （SDK 在 session_root 持久化会话，无需本地会话文件校验）。
             task = self.db.get_task(task_id)
             resume_session = None
-            if engine != "hermes":
+            if engine == "hermes":
+                pass
+            elif engine == "dsh":
+                resume_session = _row_get(task, "dsh_session_id") if task else None
+            else:
                 resume_session = task["claude_session_id"] if task else None
                 if resume_session and not self._session_file(resume_session):
                     self.db.set_task_status(task_id, None, claude_session_id=None)
@@ -1406,22 +1544,25 @@ class ClaudeExecutor:
             if exit_code == 0:
                 state = self._issue_state(project_id, issue_iid, repo)
                 self.db.add_log(task_id, "info", f"执行结束，issue 当前状态: {state}")
-                if engine == "hermes":
-                    # issue #47 hermes 引擎：成功判定看 runner 输出 JSON
-                    # （final_response + error 为空），非 JSON / error 非空
-                    # 落入下方重试分支（与 claude exit 0 无 JSON 一致）
-                    result = self._hermes_result(output)
+                if engine in ("hermes", "dsh"):
+                    # hermes（issue #47）/ dsh（issue #84）引擎：成功判定看
+                    # runner 输出 JSON，非 JSON / error 非空 / dsh 回合未正常
+                    # 完成落入下方重试分支（与 claude exit 0 无 JSON 一致）
+                    result = (self._hermes_result(output) if engine == "hermes"
+                              else self._dsh_result(output))
                     if result == "unresolvable":
                         detail = {"attempt": attempt, "exit_code": exit_code,
                                   "error": self._extract_error(output)}
-                        self._finish_failed(task_id, "hermes 报告无法解决该 issue", output,
+                        self._finish_failed(task_id, f"{engine} 报告无法解决该 issue", output,
                                             error_detail=self._dump_error_detail(
                                                 [*attempt_details, detail], last_exit),
                                             repo=repo)
                         return
                     if result == "success":
                         # Q3-B：会话数据落库（断点续跑），收尾流程与 claude 引擎一致
-                        self._persist_hermes_history(task_id, output)
+                        # （dsh 的会话 id 已在 _run_dsh_once 内部落库）
+                        if engine == "hermes":
+                            self._persist_hermes_history(task_id, output)
                         self._await_pipeline_and_finish_succeeded(
                             task_id, project_id, issue_iid, output, repo)
                         return

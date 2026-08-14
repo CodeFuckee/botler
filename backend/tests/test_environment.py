@@ -273,3 +273,52 @@ class TestDetectEnvironment:
         tools = {t["key"]: t for t in environment.detect_local_environment()["tools"]}
         assert tools["claude"]["latest"] is None
         assert tools["claude"]["up_to_date"] is None
+
+
+class TestDshDetection:
+    """dsh 检测（issue #84）：pip 包检测（module 存在 + 版本 + PyPI 最新版）。"""
+
+    def _dsh_tool(self):
+        return next(t for t in environment.TOOLS if t["key"] == "dsh")
+
+    def test_dsh_in_tools_list(self):
+        """TOOLS 清单包含 dsh 项且配置正确（module 检测 + pypi 最新源）。"""
+        tool = self._dsh_tool()
+        assert tool["name"] == "DeepSeek Harness SDK"
+        assert tool["module"] == "deepseek_harness"
+        assert tool["latest_source"] == "pypi"
+        assert tool["latest_pkg"] == "deepseek-harness-sdk"
+
+    def test_dsh_detect_installed(self, monkeypatch):
+        monkeypatch.setattr("botler.environment.find_spec", lambda name: object())
+        monkeypatch.setattr("botler.environment.pkg_version",
+                            lambda name: "0.1.0rc6")
+        result = environment.detect_tool(self._dsh_tool())
+        assert result["installed"] is True
+        assert result["version"] == "0.1.0"  # parse_version 取 x.y.z
+
+    def test_dsh_not_installed(self, monkeypatch):
+        monkeypatch.setattr("botler.environment.find_spec", lambda name: None)
+        result = environment.detect_tool(self._dsh_tool())
+        assert result["installed"] is False
+        assert result["version"] is None
+
+    def test_dsh_version_read_failure_keeps_installed(self, monkeypatch):
+        """模块已装但版本读取失败 → installed=True 且 version=None。"""
+        monkeypatch.setattr("botler.environment.find_spec", lambda name: object())
+        monkeypatch.setattr("botler.environment.pkg_version",
+                            lambda name: (_ for _ in ()).throw(
+                                ModuleNotFoundError("no metadata")))
+        result = environment.detect_tool(self._dsh_tool())
+        assert result["installed"] is True
+        assert result["version"] is None
+
+    def test_dsh_latest_from_pypi(self, monkeypatch):
+        monkeypatch.setattr("botler.environment.httpx.get", lambda url, **kw: SimpleNamespace(
+            status_code=200, json=lambda: {"info": {"version": "0.1.0"}}))
+        assert environment.fetch_latest(self._dsh_tool()) == "0.1.0"
+
+    def test_dsh_latest_network_failure_none(self, monkeypatch):
+        monkeypatch.setattr("botler.environment.httpx.get",
+                            lambda url, **kw: (_ for _ in ()).throw(OSError("timeout")))
+        assert environment.fetch_latest(self._dsh_tool()) is None
