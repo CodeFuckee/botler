@@ -153,6 +153,11 @@ variables:
 # 中危（--severity-level medium）漏洞时 bandit 退出码非 0，job 失败
 # 阻断整个流水线（后续 build/deploy/sync 全部不运行）；低危漏洞仅
 # 记录不阻断。allow_failure: false 显式声明阻断语义。
+# 扫描结果同时输出 SARIF 报告（-f sarif），经 artifacts:reports:sast
+# 上传 GitLab，可在 GitLab 页面可视化查看（issue #72）：
+#   项目 → 安全 → 漏洞报告 / 流水线 Security 标签 / MR 安全组件
+# 报告 when: always 上传——门禁因漏洞失败时页面同样展示漏洞详情，
+# 详细查看方式见 docs/bandit-扫描结果查看指南.md。
 # 误报处理：database.py 4 处动态列名拼接（# nosec B608）——列名均
 # 来自模块级常量白名单（_TASK_FIELDS / allowed / 固定元组），非
 # 外部输入，SQL 列名本身无法参数化。
@@ -171,6 +176,14 @@ security:bandit:
     paths:
       - backend/.uv-cache/
     policy: pull-push
+  # SARIF 报告产物：上传 GitLab SAST，Security 页面可视化查看（issue #72）
+  artifacts:
+    # when: always —— job 因发现中/高危漏洞失败时报告同样上传，
+    # 保证用户在 GitLab 页面能看到被阻断的具体漏洞
+    when: always
+    reports:
+      sast: bandit-report.sarif
+    expire_in: 1 week
   script:
     - JOB_START_TIME=$(date +%s)
     - |
@@ -193,10 +206,45 @@ security:bandit:
       fi
 
       echo "=== 3. 安装 bandit（uv pip install 幂等）==="
-      uv pip install bandit -i ${PIP_INDEX_URL}
+      # bandit-sarif-formatter 为 bandit 注册 SARIF 输出格式（bandit
+      # 内置 sarif formatter 的 entry point 未随 wheel 注册，需此包
+      # 补齐 -f sarif 能力，issue #72）
+      uv pip install bandit bandit-sarif-formatter -i ${PIP_INDEX_URL}
 
-      echo "=== 4. bandit 安全扫描（severity ≥ medium 即阻断）==="
-      .venv/bin/python -m bandit -r botler hermes_runner.py --severity-level medium
+      echo "=== 4. bandit 安全扫描（severity ≥ medium 即阻断，SARIF 报告上传 Security 页面）==="
+      set +e
+      .venv/bin/python -m bandit -r botler hermes_runner.py --severity-level medium \
+        -f sarif -o bandit-report.sarif
+      BANDIT_EXIT=$?
+      set -e
+
+      echo "=== 5. 提取扫描摘要（SARIF → 日志）==="
+      .venv/bin/python - <<'PYEOF'
+      import json
+      with open('bandit-report.sarif', encoding='utf-8') as f:
+          sarif = json.load(f)
+      results = sarif.get('runs', [{}])[0].get('results', [])
+      if not results:
+          print("未发现任何问题")
+      else:
+          sev_count = {}
+          for r in results:
+              sev = (r.get('properties') or {}).get('issue_severity', 'UNKNOWN')
+              sev_count[sev] = sev_count.get(sev, 0) + 1
+          print(f"发现 {len(results)} 个问题（按严重级别统计：{sev_count}）")
+          for r in results:
+              loc = r['locations'][0]['physicalLocation']
+              uri = loc['artifactLocation']['uri'].rsplit('/', 1)[-1]
+              line = loc['region'].get('startLine', '?')
+              props = r.get('properties') or {}
+              print(f"  [{props.get('issue_severity', '?')}/{props.get('issue_confidence', '?')}] "
+                    f"{r['ruleId']} {uri}:{line}")
+      PYEOF
+
+      if [ "$BANDIT_EXIT" -ne 0 ]; then
+        echo "✗ 发现高危/中危漏洞，流水线阻断（漏洞详情见 GitLab Security 页面）"
+        exit $BANDIT_EXIT
+      fi
       echo "✓ 未发现高危/中危漏洞（低危漏洞仅记录不阻断）"
     - |
       JOB_END_TIME=$(date +%s)

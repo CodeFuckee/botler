@@ -23,6 +23,20 @@
 
 ### Added
 
+- **bandit 扫描结果在 GitLab 页面可视化查看（issue #72）**：CI 的
+  `security:bandit` job 此前只把扫描结果打在日志里，用户在页面无从
+  查看；现扫描时同步输出 SARIF 报告（`-f sarif`，安装
+  bandit-sarif-formatter 补齐格式支持）并经 `artifacts:reports:sast`
+  上传 GitLab，可在「安全 → 漏洞报告」/流水线 Security 标签/MR 安全
+  组件中可视化查看漏洞详情（CWE、文件行号、代码片段），并保留原
+  阻断门禁语义（中/高危退出码非 0 阻断流水线）。
+  - `.gitlab-ci.yml`：`security:bandit` 新增 SARIF 输出与
+    `artifacts:reports:sast` 上传（`when: always`——门禁失败时报告
+    同样上传，页面仍能看到被阻断的漏洞），扫描后从 SARIF 提取摘要
+    打印到 job 日志；
+  - 文档：新增 `docs/bandit-扫描结果查看指南.md`（三个查看入口、
+    原始报告下载、常见问题），README 安全说明章节同步补充入口。
+
 - **设置页新增 Owner GitLab Token 配置与申请教程（issue #87）**：设置页
   增加 owner gitlab token 设置，该 token 专门用来编辑 issue（写评论/
   打标签），严禁用于推送代码与处理流水线；页面内展示「如何申请一个只有
