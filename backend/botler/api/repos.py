@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from ..config import RepoConfig
 from ..database import DEFAULT_PRIORITY
 from ..gitlab_client import GitLabError
+from ..git_remote import mask_url_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/repos", tags=["repos"])
@@ -87,6 +88,16 @@ def _repo_row_to_dict(row) -> dict:
     }
 
 
+def _masked_repo_row(row) -> dict:
+    """API 展示用仓库行：url 脱敏（issue #60），token 不出现在响应上。
+
+    DB 与 config.yaml 仍保存真实 url（clone 需要）；仅 API 出口脱敏。
+    """
+    d = _repo_row_to_dict(row)
+    d["url"] = mask_url_token(d["url"])
+    return d
+
+
 def _sync_repo_to_config(app, repo_dict: dict) -> None:
     """将仓库写回 config.yaml（config 是唯一事实来源）。"""
     config = app.state.ctx.config
@@ -109,7 +120,7 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
 def list_repos(request: Request):
     c = ctx_of(request)
     rows = c.db.list_repos()
-    return {"repos": [_repo_row_to_dict(r) for r in rows]}
+    return {"repos": [_masked_repo_row(r) for r in rows]}
 
 
 @router.get("/browse")
@@ -144,6 +155,9 @@ def discover_remote(request: Request, body: LocalPathBody):
         remotes = list_local_remotes(body.local_path)
     except NoGitRemoteError as e:
         raise HTTPException(400, f"读取本地仓库 remote 失败: {e}")
+    # issue #60：remote url 可能内嵌 token，返回前脱敏
+    for r in remotes:
+        r["url"] = mask_url_token(r["url"])
     return {"remotes": remotes, "local_path": body.local_path}
 
 
@@ -186,7 +200,7 @@ def add_repo(request: Request, body: RepoCreate):
 
     source = f"local_path={local_path}" if local_path else f"url={url}"
     logger.info("添加仓库 %s (project=%s, %s) 并注册 webhook", name, project_id, source)
-    return _repo_row_to_dict(c.db.get_repo(repo_id))
+    return _masked_repo_row(c.db.get_repo(repo_id))
 
 
 @router.put("/{repo_id}")
@@ -197,13 +211,17 @@ def update_repo(request: Request, repo_id: int, body: RepoUpdate):
         raise HTTPException(404, "仓库不存在")
 
     fields = body.model_dump(exclude_unset=True)
+    # issue #60 脱敏防护：前端回传掩码 url（含 *）视为「未修改」，
+    # 不覆盖 DB 中的真实凭据（与 sso client_secret 掩码模式一致）
+    if fields.get("url") and "*" in fields["url"]:
+        fields.pop("url")
     if fields:
         c.db.update_repo(repo_id, **fields)
     updated = _repo_row_to_dict(c.db.get_repo(repo_id))
     # 仅当仓库仍存在于 config 时同步（避免把已删除的仓库写回去）
     if any(r.project_id == updated["gitlab_project_id"] for r in c.config.get().repos):
         _sync_repo_to_config(request.app, updated)
-    return updated
+    return _masked_repo_row(c.db.get_repo(repo_id))
 
 
 @router.delete("/{repo_id}")

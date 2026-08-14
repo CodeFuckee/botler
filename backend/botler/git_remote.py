@@ -2,6 +2,9 @@
 
 供「本地文件夹方式」添加仓库使用：用户填本地文件夹路径，
 平台在服务端运行 git remote -v 拿到 remote URL，再用 URL 识别 GitLab 项目。
+
+issue #60：remote URL 可能内嵌凭据（https://user:token@host/path.git），
+提供 URL 凭据解析（parse_remote_url）与展示脱敏（mask_url_token）。
 """
 
 from __future__ import annotations
@@ -9,6 +12,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +64,58 @@ def list_local_remotes(path: str, timeout: int = 15) -> list[dict]:
         raise NoGitRemoteError(
             f"不是有效的 git 仓库: {(result.stderr or result.stdout).strip()[-300:]}")
     return parse_git_remote_output(result.stdout)
+
+
+def parse_remote_url(url: str | None) -> dict:
+    """解析 remote URL 中的凭据信息（issue #60）。
+
+    支持 https://user:token@host:port/path.git 形式，返回
+    {"scheme", "host", "username", "token"}；host 含端口（如有）。
+    scp-like（git@host:path）与 ssh 形态无内嵌 token；URL 中无凭据、
+    空值或解析失败时 username / token 为 None。token 按 URL 解码还原。
+    """
+    result = {"scheme": None, "host": None, "username": None, "token": None}
+    value = (url or "").strip()
+    if not value:
+        return result
+    # scp-like 无 scheme：凭据走 ssh key / agent，无内嵌 token
+    if "://" not in value:
+        return result
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return result
+    host = parsed.hostname
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    result["scheme"] = parsed.scheme
+    result["host"] = host
+    # netloc 形如 user:token@host:port；最后一个 @ 前是 userinfo 段
+    if "@" in parsed.netloc:
+        userinfo = parsed.netloc.rsplit("@", 1)[0]
+        if ":" in userinfo:
+            username, token = userinfo.split(":", 1)
+            result["username"] = unquote(username)
+            result["token"] = unquote(token)
+        else:
+            # 只有用户名没有密码：不是 token
+            result["username"] = unquote(userinfo)
+    return result
+
+
+def mask_url_token(url: str | None) -> str:
+    """仓库 URL 脱敏（issue #60）：user:token@ → user:***@。
+
+    无凭据、只有用户名（无密码）、scp-like / ssh 形态原样返回；
+    已脱敏的 URL 幂等（userinfo 无冒号或密码本就是 *** 时结果不变）。
+    """
+    value = (url or "").strip()
+    if not value or "://" not in value:
+        return value
+    scheme, rest = value.split("://", 1)
+    if "@" not in rest:
+        return value
+    userinfo, tail = rest.rsplit("@", 1)
+    if ":" not in userinfo:
+        return value  # 只有用户名没有 token，无需脱敏
+    username = userinfo.split(":", 1)[0]
+    return f"{scheme}://{username}:***@{tail}"

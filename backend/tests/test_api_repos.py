@@ -303,3 +303,85 @@ class TestBrowseDefaultPath:
         assert resp.status_code == 200
         assert resp.json()["path"] == "/"
         assert resp.json()["parent"] is None
+
+
+class TestUrlMasking:
+    """仓库 URL 脱敏（issue #60）：token 不出现在 API 返回的 URL 上，
+    DB / config.yaml 仍保存真实 URL 供 clone 使用。"""
+
+    def test_list_repos_masks_url(self, client):
+        tc, stub, tmp_path = client
+        # 直接落一条带 token url 的仓库（模拟 local_path 方式添加、remote 带凭据）
+        from botler.database import Database
+        db = Database(str(tmp_path / "test.db"))
+        # 复用 fixture 的 db：重新打开同一文件即可读到
+        db.upsert_repo(project_id=42, name="带凭据",
+                       url="https://agent:glpat-secret@gitlab.example.com/group/project.git")
+        # 注意 fixture db 与这里打开的是同一 sqlite 文件（test.db）
+        resp = tc.get("/api/repos")
+        assert resp.status_code == 200
+        row = next(r for r in resp.json()["repos"] if r["name"] == "带凭据")
+        assert row["url"] == "https://agent:***@gitlab.example.com/group/project.git"
+        # 原始 url 仍保留在 DB（真实凭据供执行使用）
+        raw = db.get_repo_by_project_id(42)
+        assert raw["url"] == "https://agent:glpat-secret@gitlab.example.com/group/project.git"
+
+    def test_list_repos_clean_url_unchanged(self, client):
+        tc, stub, tmp_path = client
+        db = Database(str(tmp_path / "test.db"))
+        db.upsert_repo(project_id=43, name="干净",
+                       url="https://gitlab.example.com/group/project.git")
+        resp = tc.get("/api/repos")
+        row = next(r for r in resp.json()["repos"] if r["name"] == "干净")
+        assert row["url"] == "https://gitlab.example.com/group/project.git"
+
+    def test_discover_remote_masks_url(self, client):
+        tc, stub, tmp_path = client
+        repo_dir = tmp_path / "repo"
+        _init_repo_with_remotes(repo_dir, {
+            "origin": "https://agent:glpat-x@gitlab.example.com/group/project.git",
+        })
+        resp = tc.post("/api/repos/discover", json={"local_path": str(repo_dir)})
+        assert resp.status_code == 200
+        assert resp.json()["remotes"][0]["url"] == \
+            "https://agent:***@gitlab.example.com/group/project.git"
+
+    def test_add_repo_local_path_with_token_masks_response(self, client, monkeypatch):
+        """local_path 添加（remote 带 token 且 GitLab 不返回干净 url 时）：
+        响应 url 脱敏，DB 保留真实 url（供 clone 使用）。"""
+        tc, stub, tmp_path = client
+        repo_dir = tmp_path / "repo"
+        _init_repo_with_remotes(repo_dir, {
+            "origin": "https://agent:glpat-add@gitlab.example.com/group/project.git",
+        })
+        # GitLab 项目对象不带 http_url_to_repo / web_url → url 回退 remote 原始值
+        stub.resolve_project = lambda url_or_id: {
+            "id": 42, "path": "group/project", "name": "project"}
+        registered: list[int] = []
+        monkeypatch.setattr(
+            GitLabClient, "register_webhook",
+            lambda self, project_id, secret: registered.append(project_id) or {"id": 1})
+
+        resp = tc.post("/api/repos", json={
+            "local_path": str(repo_dir), "remote_name": "origin", "name": "本地带凭据"})
+
+        assert resp.status_code == 201
+        assert resp.json()["url"] == "https://agent:***@gitlab.example.com/group/project.git"
+        db = Database(str(tmp_path / "test.db"))
+        raw = db.get_repo_by_project_id(42)
+        assert raw["url"] == "https://agent:glpat-add@gitlab.example.com/group/project.git"
+
+    def test_update_repo_masked_url_ignored(self, client):
+        """update 回传掩码 url（含 *）：忽略该字段，不污染 DB 真实凭据。"""
+        tc, stub, tmp_path = client
+        db = Database(str(tmp_path / "test.db"))
+        repo_id = db.upsert_repo(project_id=42, name="带凭据",
+                                 url="https://agent:glpat-keep@gitlab.example.com/group/project.git")
+        resp = tc.put(f"/api/repos/{repo_id}", json={
+            "name": "改名",
+            "url": "https://agent:***@gitlab.example.com/group/project.git",
+        })
+        assert resp.status_code == 200
+        raw = db.get_repo(repo_id)
+        assert raw["url"] == "https://agent:glpat-keep@gitlab.example.com/group/project.git"
+        assert raw["name"] == "改名"

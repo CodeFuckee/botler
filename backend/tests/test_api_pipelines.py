@@ -497,3 +497,212 @@ class TestOverviewCommitTime:
 
         data = resp.json()
         assert data["pipelines"][0]["commit_time"] is None
+
+
+# ---- per-repo token（issue #60） ----
+
+class TestRepoClient:
+    """_repo_client：仓库本地目录 remote URL 内嵌 token → per-repo GitLabClient。"""
+
+    def _make_git_repo(self, path, remote_url: str, remote_name: str = "origin"):
+        import subprocess
+        subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+        subprocess.run(["git", "-C", str(path), "remote", "add",
+                        remote_name, remote_url], check=True)
+        return path
+
+    def test_client_built_from_remote_token(self, client, tmp_path, monkeypatch):
+        """local_path 仓库 remote 带 token：client 用该 token 与 remote host。"""
+        tc, stub, db, tmp_dir = client
+        from botler.api.pipelines import _repo_client
+        from botler.gitlab_client import GitLabClient
+        repo_dir = tmp_dir / "repo"
+        self._make_git_repo(repo_dir,
+                            "https://agent:glpat-repo1@gitlab.example.com:509/group/repo.git")
+        row = {"id": 1, "name": "repo", "local_path": str(repo_dir),
+               "remote_name": "origin"}
+        config = ConfigManager(str(tmp_dir / "config.yaml"))
+        ctx = SimpleNamespace(config=config, db=db, gitlab=stub,
+                              config_path=str(tmp_dir / "config.yaml"))
+        got = _repo_client(ctx, row)
+        assert isinstance(got, GitLabClient)
+        assert got.token == "glpat-repo1"
+        assert got.url == "https://gitlab.example.com:509"
+        assert got.verify_ssl is False  # 沿用全局配置
+
+    def test_clean_remote_falls_back(self, client, tmp_path):
+        """remote URL 无内嵌 token：返回 None（回退全局 bot token）。"""
+        tc, stub, db, tmp_dir = client
+        from botler.api.pipelines import _repo_client
+        repo_dir = tmp_dir / "repo"
+        self._make_git_repo(repo_dir, "https://gitlab.example.com/group/repo.git")
+        row = {"id": 1, "name": "repo", "local_path": str(repo_dir),
+               "remote_name": "origin"}
+        config = ConfigManager(str(tmp_dir / "config.yaml"))
+        ctx = SimpleNamespace(config=config, db=db, gitlab=stub,
+                              config_path=str(tmp_dir / "config.yaml"))
+        assert _repo_client(ctx, row) is None
+
+    def test_missing_local_dir_falls_back(self, client, tmp_path):
+        """本地目录不存在：返回 None（回退全局），不抛异常。"""
+        tc, stub, db, tmp_dir = client
+        from botler.api.pipelines import _repo_client
+        row = {"id": 1, "name": "repo", "local_path": str(tmp_dir / "nope"),
+               "remote_name": "origin"}
+        config = ConfigManager(str(tmp_dir / "config.yaml"))
+        ctx = SimpleNamespace(config=config, db=db, gitlab=stub,
+                              config_path=str(tmp_dir / "config.yaml"))
+        assert _repo_client(ctx, row) is None
+
+    def test_remote_name_selection(self, client, tmp_path):
+        """remote_name 指定的 remote 才用于解析 token（upstream 带 token）。"""
+        tc, stub, db, tmp_dir = client
+        from botler.api.pipelines import _repo_client
+        repo_dir = tmp_dir / "repo"
+        self._make_git_repo(repo_dir, "https://gitlab.example.com/group/repo.git",
+                            remote_name="origin")
+        import subprocess
+        subprocess.run(["git", "-C", str(repo_dir), "remote", "add", "upstream",
+                        "https://agent:glpat-up@gitlab.example.com/group/repo.git"],
+                       check=True)
+        row = {"id": 1, "name": "repo", "local_path": str(repo_dir),
+               "remote_name": "upstream"}
+        config = ConfigManager(str(tmp_dir / "config.yaml"))
+        ctx = SimpleNamespace(config=config, db=db, gitlab=stub,
+                              config_path=str(tmp_dir / "config.yaml"))
+        got = _repo_client(ctx, row)
+        assert got is not None and got.token == "glpat-up"
+
+    def test_workspace_fallback_dir(self, client, tmp_path, monkeypatch):
+        """无 local_path 时用 workspace/<name> 目录（与 executor 一致）。"""
+        tc, stub, db, tmp_dir = client
+        from botler.api import pipelines as pipelines_mod
+        from botler.api.pipelines import _repo_client
+        ws = tmp_dir / "ws"
+        repo_dir = ws / "myrepo"
+        self._make_git_repo(repo_dir,
+                            "https://agent:glpat-ws@gitlab.example.com/group/repo.git")
+        monkeypatch.setattr(pipelines_mod, "_workspace_root", lambda: ws)
+        row = {"id": 1, "name": "myrepo", "local_path": None,
+               "remote_name": None}  # remote_name 缺省 → origin
+        config = ConfigManager(str(tmp_dir / "config.yaml"))
+        ctx = SimpleNamespace(config=config, db=db, gitlab=stub,
+                              config_path=str(tmp_dir / "config.yaml"))
+        got = _repo_client(ctx, row)
+        assert got is not None and got.token == "glpat-ws"
+
+    def test_client_cached_within_ttl(self, client, tmp_path):
+        """同一仓库 TTL 内复用 client 实例（避免每轮轮询重建 httpx client）。"""
+        tc, stub, db, tmp_dir = client
+        from botler.api.pipelines import _repo_client
+        repo_dir = tmp_dir / "repo"
+        self._make_git_repo(repo_dir,
+                            "https://agent:glpat-c1@gitlab.example.com/group/repo.git")
+        row = {"id": 1, "name": "repo", "local_path": str(repo_dir),
+               "remote_name": "origin"}
+        config = ConfigManager(str(tmp_dir / "config.yaml"))
+        ctx = SimpleNamespace(config=config, db=db, gitlab=stub,
+                              config_path=str(tmp_dir / "config.yaml"))
+        first = _repo_client(ctx, row)
+        second = _repo_client(ctx, row)
+        assert first is not None and first is second
+
+    def test_fallback_not_cached(self, client, tmp_path):
+        """解析失败（无 token）不缓存：每次调用重试解析。"""
+        tc, stub, db, tmp_dir = client
+        from botler.api.pipelines import _repo_client
+        repo_dir = tmp_dir / "repo"
+        self._make_git_repo(repo_dir, "https://gitlab.example.com/group/repo.git")
+        row = {"id": 1, "name": "repo", "local_path": str(repo_dir),
+               "remote_name": "origin"}
+        config = ConfigManager(str(tmp_dir / "config.yaml"))
+        ctx = SimpleNamespace(config=config, db=db, gitlab=stub,
+                              config_path=str(tmp_dir / "config.yaml"))
+        assert _repo_client(ctx, row) is None
+        # 给仓库补上带 token 的 remote 后再次调用应解析成功（未被缓存 None）
+        import subprocess
+        subprocess.run(["git", "-C", str(repo_dir), "remote", "set-url", "origin",
+                        "https://agent:glpat-late@gitlab.example.com/group/repo.git"],
+                       check=True)
+        got = _repo_client(ctx, row)
+        assert got is not None and got.token == "glpat-late"
+
+
+class TestOverviewPerRepoToken:
+    """API 集成：概览页对每个仓库使用各自的 token 客户端查流水线。"""
+
+    def _per_repo_stub(self, pipelines_by_project):
+        stub = StubGitLab()
+        stub.pipelines_by_project = pipelines_by_project
+        stub.jobs_by_pipeline = {}
+        return stub
+
+    def test_overview_uses_per_repo_client(self, client, monkeypatch):
+        """remote 带 token 的仓库：流水线查询走 per-repo client，全局桩不被调用。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        per = self._per_repo_stub({42: make_pipeline(731)})
+        per.jobs_by_pipeline = {731: [make_job(1, "build")]}
+        from botler.api import pipelines as pipelines_mod
+        monkeypatch.setattr(pipelines_mod, "_repo_client",
+                            lambda c, row: per if row["name"] == "a" else None)
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        assert data["pipelines"][0]["pipeline"]["id"] == 731
+        assert per.calls.count("pipeline:42") == 1
+        # 全局 bot token 桩未被用于该仓库
+        assert stub.calls.count("pipeline:42") == 0
+
+    def test_overview_fallback_to_global_client(self, client, monkeypatch):
+        """remote 无 token 的仓库：回退全局 client（旧行为）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.pipelines_by_project = {42: make_pipeline(731)}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+        from botler.api import pipelines as pipelines_mod
+        monkeypatch.setattr(pipelines_mod, "_repo_client", lambda c, row: None)
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        assert resp.json()["errors"] == []
+        assert stub.calls.count("pipeline:42") == 1
+
+    def test_per_repo_token_invalid_goes_to_errors(self, client, monkeypatch):
+        """per-repo token 失效（401）：该仓库进 errors，不中断整体（HTTP 200）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        bad = StubGitLab()
+        bad.fail_projects = {42}
+        from botler.api import pipelines as pipelines_mod
+        monkeypatch.setattr(pipelines_mod, "_repo_client", lambda c, row: bad)
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["errors"]) == 1
+        assert "仓库 a" in data["errors"][0]
+
+    def test_per_repo_commit_time_uses_per_repo_client(self, client, monkeypatch):
+        """提交时间查询同样走 per-repo client。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        per = self._per_repo_stub({42: make_pipeline(731)})
+        per.jobs_by_pipeline = {731: [make_job(1, "build")]}
+        per.commits_by_sha = {(42, "abc123"): {
+            "id": "abc123", "committed_date": "2026-08-13T12:00:00.000+08:00"}}
+        from botler.api import pipelines as pipelines_mod
+        monkeypatch.setattr(pipelines_mod, "_repo_client",
+                            lambda c, row: per if row["name"] == "a" else None)
+
+        resp = tc.get("/api/pipelines/overview")
+
+        data = resp.json()
+        assert data["pipelines"][0]["commit_time"] == "2026-08-13 04:00:00"
+        assert "commit:42:abc123" in per.calls
+        assert not any(c.startswith("commit:") for c in stub.calls)

@@ -6,6 +6,30 @@
 
 ### Added
 
+- **概览页流水线按仓库使用各自 token（issue #60）**：概览页获取流水线
+  状态的 token 不再统一用全局 bot token，而是从各仓库本地目录
+  `git remote -v` 输出的 URL 中解析——每个仓库使用自己 remote url
+  内嵌的 token，仓库间互不相同；仓库 URL 展示统一脱敏。
+  - 后端：概览页对每个仓库解析本地目录（local_path 优先，否则
+    workspace/&lt;仓库名&gt;，与执行工作区一致）的 remote url，按
+    remote_name（缺省 origin）取内嵌 token 建 per-repo GitLabClient
+    （host 取 remote url 的 host:port，verify_ssl 沿用全局配置）；
+    remote 无 token / 本地目录不存在 / 非 git 仓库时回退全局 bot
+    token（兼容旧仓库）；per-repo client 60 秒 TTL 缓存（避免每轮
+    轮询重复跑 git 子进程与重建 httpx client，token 轮换 60 秒内
+    自动生效）；per-repo client 网络异常（httpx.HTTPError）同样
+    进 errors 列表不中断整体；
+  - 脱敏：git_remote 新增 `parse_remote_url`（解析 user:token@host，
+    支持 URL 编码、token 含 @/冒号等边界）与 `mask_url_token`
+    （脱敏为 user:***\@，幂等）；`GET /api/repos`、`POST /api/repos`、
+    `PUT /api/repos/{id}`、`POST /api/repos/discover` 响应中的
+    URL 统一脱敏；DB 与 config.yaml 仍保存真实 URL（clone 需要）；
+    update 回传掩码 url（含 \*）时忽略该字段，防止把掩码写回
+    DB（与 sso client_secret 掩码模式一致）；
+  - 测试：TDD 先行（新增用例红灯确认后实现），后端新增 32 用例
+    （URL 解析 9 + 脱敏 7 + per-repo client 7 + API 集成 4 + 仓库
+    API 脱敏 5），全量 640（后端）+ 217（前端）通过。
+
 - **任务列表页新增刷新按钮（issue #59）**：工具栏新增「↻ 刷新」按钮，
   点击重新拉取任务列表，更新所有任务的显示状态。
   - 背景：页面仅在存在活跃任务时每 5s 自动轮询，全部任务结束后轮询

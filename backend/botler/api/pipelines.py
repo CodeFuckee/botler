@@ -23,10 +23,13 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Request
 
-from ..gitlab_client import GitLabError
+from ..gitlab_client import GitLabClient, GitLabError
+from ..git_remote import NoGitRemoteError, list_local_remotes, parse_remote_url
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,15 @@ router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 CACHE_TTL_SECONDS = 10.0
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict = {"expires_at": 0.0, "data": None}
+
+# per-repo GitLab 客户端缓存（issue #60）：key = repo_id，TTL 60 秒。
+# 概览页对每个仓库用其本地目录 git remote url 内嵌的 token 建客户端
+# （每个仓库有自己的 token），缓存避免每轮轮询重复跑 git 子进程与
+# 重建 httpx client；解析失败（回退全局）不缓存，token 轮换后 60 秒
+# 内自动生效。
+_REPO_CLIENT_TTL_SECONDS = 60.0
+_REPO_CLIENTS_LOCK = threading.Lock()
+_REPO_CLIENTS: dict[int, tuple[float, GitLabClient]] = {}
 
 # 待运行类 job 状态（stage 聚合时统一视为 pending）
 _PENDING_STATUSES = {"pending", "created", "waiting_for_resource",
@@ -51,6 +63,8 @@ def clear_pipeline_cache() -> None:
     with _CACHE_LOCK:
         _CACHE["expires_at"] = 0.0
         _CACHE["data"] = None
+    with _REPO_CLIENTS_LOCK:
+        _REPO_CLIENTS.clear()
 
 
 def _stage_status(jobs: list[dict]) -> str:
@@ -124,7 +138,7 @@ def _commit_time_utc(value: str | None) -> str | None:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _lookup_commit_time(c, project_id: int, pipeline: dict) -> str | None:
+def _lookup_commit_time(client, project_id: int, pipeline: dict) -> str | None:
     """查最近流水线对应提交的提交时间（issue #43）。
 
     提交时间仅为展示增强信息：commit 查询失败 / 不存在 / 缺字段时静默
@@ -134,12 +148,64 @@ def _lookup_commit_time(c, project_id: int, pipeline: dict) -> str | None:
     if not sha:
         return None
     try:
-        commit = c.gitlab.get_commit(project_id, sha)
+        commit = client.get_commit(project_id, sha)
     except GitLabError:
         return None
     if not isinstance(commit, dict):
         return None
     return _commit_time_utc(commit.get("committed_date"))
+
+
+def _workspace_root() -> Path:
+    """任务执行工作区根目录（与 executor 默认一致：backend/workspace）。"""
+    return Path(__file__).resolve().parents[1] / "workspace"
+
+
+def _build_repo_client(c, row) -> GitLabClient | None:
+    """为仓库构建 per-repo GitLabClient（issue #60）。
+
+    在仓库本地目录（local_path 优先，否则 workspace/<name>，与 executor
+    工作区一致）运行 git remote -v，从 remote_name（缺省 origin）对应的
+    URL 解析内嵌 token：有 token 则用该 token 与 remote host 建客户端，
+    每个仓库使用自己的 token。remote 无 token / 本地目录不存在 / 不是
+    git 仓库时返回 None（调用方回退全局 bot token 客户端，兼容旧仓库）。
+    """
+    d = dict(row)  # sqlite3.Row / dict 统一按 dict 访问
+    workdir = None
+    local_path = d.get("local_path")
+    if local_path:
+        workdir = Path(local_path)
+    else:
+        workdir = _workspace_root() / str(d["name"])
+    try:
+        remotes = list_local_remotes(str(workdir))
+    except NoGitRemoteError:
+        return None
+    remote_name = d.get("remote_name") or "origin"
+    match = next((r for r in remotes if r["name"] == remote_name), None)
+    if match is None:
+        return None
+    info = parse_remote_url(match["url"])
+    token, host, scheme = info["token"], info["host"], info["scheme"]
+    if not token or not host or not scheme:
+        return None
+    cfg = c.config.get()
+    return GitLabClient(f"{scheme}://{host}", token, verify_ssl=cfg.verify_ssl)
+
+
+def _repo_client(c, row) -> GitLabClient | None:
+    """per-repo 客户端（带缓存）；解析失败返回 None（调用方回退全局）。"""
+    repo_id = row["id"]
+    now = time.monotonic()
+    with _REPO_CLIENTS_LOCK:
+        hit = _REPO_CLIENTS.get(repo_id)
+        if hit is not None and now - hit[0] < _REPO_CLIENT_TTL_SECONDS:
+            return hit[1]
+    client = _build_repo_client(c, row)
+    if client is not None:
+        with _REPO_CLIENTS_LOCK:
+            _REPO_CLIENTS[repo_id] = (now, client)
+    return client
 
 
 def _collect(c) -> dict:
@@ -150,18 +216,24 @@ def _collect(c) -> dict:
         entry = {"repo_id": row["id"], "repo_name": row["name"],
                  "enabled": bool(row["enabled"]),
                  "pipeline": None, "stages": [], "commit_time": None}
+        # issue #60：优先用仓库自己 remote url 内嵌的 token 查流水线，
+        # 无 token 回退全局 bot token（兼容旧仓库）
+        client = _repo_client(c, row) or c.gitlab
         try:
-            pipeline = c.gitlab.get_latest_pipeline(row["gitlab_project_id"])
+            pipeline = client.get_latest_pipeline(row["gitlab_project_id"])
             if pipeline is None:
                 pipelines.append(entry)
                 continue
-            jobs = c.gitlab.list_pipeline_jobs(row["gitlab_project_id"], pipeline["id"])
+            jobs = client.list_pipeline_jobs(row["gitlab_project_id"], pipeline["id"])
             entry["pipeline"] = _trim_pipeline(pipeline)
             entry["stages"] = aggregate_stages(jobs)
             entry["commit_time"] = _lookup_commit_time(
-                c, row["gitlab_project_id"], pipeline)
+                client, row["gitlab_project_id"], pipeline)
         except GitLabError as e:
             errors.append(f"仓库 {row['name']}: {e}")
+        except httpx.HTTPError as e:
+            # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+            errors.append(f"仓库 {row['name']}: 网络错误: {str(e)[:200]}")
         pipelines.append(entry)
     return {"pipelines": pipelines, "errors": errors}
 
