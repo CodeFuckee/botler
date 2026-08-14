@@ -30,6 +30,35 @@ name: CI
 on:
   push:
     branches: [main]
+    # issue #57：docs-only 提交（仅 *.md / docs/ / LICENSE 变更）不触发
+    # CI。paths 为白名单语义：至少一个变更文件匹配才运行本工作流，
+    # 纯文档 push 无匹配 → 不运行；docs+代码混合 push → 代码文件匹配 →
+    # 照常运行。与 GitLab 侧 .docs_only_skip 规则（.gitlab-ci.yml）
+    # 使用同一套「代码文件」定义，保持两边判定一致。
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'deploy/**'
+      - 'scripts/**'
+      - 'data/**'
+      - '.github/**'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.dockerignore'
+      - '.gitignore'
+      - '**/*.py'
+      - '**/*.js'
+      - '**/*.jsx'
+      - '**/*.mjs'
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/*.css'
+      - '**/*.html'
+      - '**/*.json'
+      - '**/*.yaml'
+      - '**/*.yml'
+      - '**/*.toml'
+      - '**/*.sh'
   workflow_dispatch:
 
 jobs:

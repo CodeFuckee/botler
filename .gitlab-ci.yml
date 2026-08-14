@@ -67,6 +67,52 @@ variables:
 # 公共配置
 # ================================================================
 
+# --- 触发规则：docs-only 提交跳过流水线（issue #57）---
+# main 分支 push 若仅变更文档（*.md / docs/ / LICENSE），跳过构建、
+# 测试与部署，只保留 sync_to_github 同步镜像（docs 变更也需及时镜像
+# 到 GitHub）。rules 按顺序求值：第一条「代码/配置白名单」优先于第二
+# 条「docs 跳过」——代码提交通常伴随 CHANGELOG.md 变更，若先判定 docs
+# 会把混合提交误判为 docs-only 跳过。其余场景（其他分支 / MR / tag /
+# schedule 等）维持原行为（when: always）。
+.docs_only_skip:
+  rules:
+    # 1) 任何代码/配置路径有变更 → 正常执行（docs+代码混合提交也执行）
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+      changes:
+        - backend/**/*
+        - frontend/**/*
+        - deploy/**/*
+        - scripts/**/*
+        - data/**/*
+        - .github/**/*
+        - Dockerfile
+        - docker-compose.yml
+        - .dockerignore
+        - .gitignore
+        - "**/*.py"
+        - "**/*.js"
+        - "**/*.jsx"
+        - "**/*.mjs"
+        - "**/*.ts"
+        - "**/*.tsx"
+        - "**/*.css"
+        - "**/*.html"
+        - "**/*.json"
+        - "**/*.yaml"
+        - "**/*.yml"
+        - "**/*.toml"
+        - "**/*.sh"
+      when: always
+    # 2) 仅文档变更 → 跳过（不启动构建/测试/部署）
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+      changes:
+        - "**/*.md"
+        - docs/**/*
+        - LICENSE
+      when: never
+    # 3) 其他分支 / MR / tag / schedule 等 → 维持原行为
+    - when: always
+
 # --- 前端公共配置 ---
 .frontend_setup:
   before_script:
@@ -101,7 +147,7 @@ variables:
 
 # --- 前端：React/Vite 构建（产出 dist，供部署使用）---
 frontend:build:
-  extends: .frontend_setup
+  extends: [.frontend_setup, .docs_only_skip]
   stage: build
   tags:
     - linux
@@ -150,7 +196,7 @@ frontend:build:
 # 在 gitlab-runner 机器（code01）上直接运行（shell executor），
 # 不依赖 Docker，与 Shipyard 的 backend:test 同模式。
 backend:test:
-  extends: .backend_setup
+  extends: [.backend_setup, .docs_only_skip]
   stage: build
   tags:
     - linux
@@ -237,6 +283,7 @@ backend:test:
 # （Docker / systemd 仍保留为手动部署备选）。
 # ================================================================
 deploy_to_code01:
+  extends: .docs_only_skip
   stage: deploy
   tags:
     - linux
@@ -668,21 +715,49 @@ sync_to_github:
       # GITHUB_PUSH_TOKEN 无 workflow scope 时会 403，仅警告，不影响
       # 镜像同步与 push 触发；若日后升级 token 权限，push 与 dispatch
       # 会各触发一次运行，属预期）。
+      #
+      # issue #57：docs-only 提交（本次 push 仅文档变更）跳过触发。
+      # GitHub 侧 push 事件已被 ci.yml 的 paths 白名单拦截（纯文档
+      # push 不运行 workflow），此处 dispatch 是补充入口，docs-only
+      # 时一并跳过，避免白跑一次 Actions；镜像同步本身不受影响。
+      # 判定基准 = CI_COMMIT_BEFORE_SHA..CI_COMMIT_SHA（本次 push 的
+      # 全部变更）；BEFORE_SHA 全零（force push / 新分支）或 diff
+      # 失败时保守视为含代码变更，维持原触发行为。
       # ----------------------------------------------------------
+      DOCS_ONLY=0
+      CHANGED_FILES=$(git diff --name-only "${CI_COMMIT_BEFORE_SHA}..${CI_COMMIT_SHA}" 2>/dev/null || true)
+      # 代码文件 = 变更文件中匹配「代码白名单」的集合（与上方
+      # .docs_only_skip 规则及 GitHub ci.yml paths 白名单同一套定义，
+      # 两边判定保持一致）；为空说明全部为文档变更。
+      # 不用 grep -q（非 GNU 实现的 -q 快速退出在多行输入下行为不一），
+      # 改判输出是否为空，兼容性更稳。
+      NON_DOCS=$(echo "${CHANGED_FILES}" | grep -E \
+        '(^backend/|^frontend/|^deploy/|^scripts/|^data/|^\.github/|^Dockerfile$|^docker-compose\.yml$|^\.dockerignore$|^\.gitignore$|\.py$|\.js$|\.jsx$|\.mjs$|\.ts$|\.tsx$|\.css$|\.html$|\.json$|\.yaml$|\.yml$|\.toml$|\.sh$)' \
+        2>/dev/null || true)
+      if [ -n "${CHANGED_FILES}" ] && [ -z "${NON_DOCS}" ]; then
+        DOCS_ONLY=1
+      fi
+
       echo "=== 触发 GitHub Actions workflow ==="
-      set +e
-      DISPATCH_RESPONSE=$(curl -sf -o /dev/null -w "%{http_code}" \
-        -X POST \
-        -H "Authorization: token ${GITHUB_PUSH_TOKEN}" \
-        -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/CodeFuckee/botler/actions/workflows/ci.yml/dispatches" \
-        -d '{"ref":"main"}')
-      DISPATCH_EXIT=$?
-      set -e
-      if [ "$DISPATCH_EXIT" -eq 0 ] && [ "$DISPATCH_RESPONSE" = "204" ]; then
-        echo "✓ 已触发 GitHub Actions workflow（https://github.com/CodeFuckee/botler/actions）"
+      if [ "${DOCS_ONLY}" = "1" ]; then
+        echo "⏭️  docs-only 提交，跳过 GitHub Actions 触发（镜像已同步）"
+        echo "   变更文件："
+        echo "${CHANGED_FILES}" | sed 's/^/     /'
       else
-        echo "⚠️ 触发 GitHub Actions 失败（HTTP=${DISPATCH_RESPONSE:-timeout}，exit=${DISPATCH_EXIT}），不影响镜像同步"
-        echo "   若需自动 CI：确认 GITHUB_PUSH_TOKEN 为 GitHub PAT 且勾选 workflow scope"
-        echo "   （github.com > Settings > Developer settings > Personal access tokens）"
+        set +e
+        DISPATCH_RESPONSE=$(curl -sf -o /dev/null -w "%{http_code}" \
+          -X POST \
+          -H "Authorization: token ${GITHUB_PUSH_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/CodeFuckee/botler/actions/workflows/ci.yml/dispatches" \
+          -d '{"ref":"main"}')
+        DISPATCH_EXIT=$?
+        set -e
+        if [ "$DISPATCH_EXIT" -eq 0 ] && [ "$DISPATCH_RESPONSE" = "204" ]; then
+          echo "✓ 已触发 GitHub Actions workflow（https://github.com/CodeFuckee/botler/actions）"
+        else
+          echo "⚠️ 触发 GitHub Actions 失败（HTTP=${DISPATCH_RESPONSE:-timeout}，exit=${DISPATCH_EXIT}），不影响镜像同步"
+          echo "   若需自动 CI：确认 GITHUB_PUSH_TOKEN 为 GitHub PAT 且勾选 workflow scope"
+          echo "   （github.com > Settings > Developer settings > Personal access tokens）"
+        fi
       fi

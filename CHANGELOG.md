@@ -102,6 +102,28 @@
 
 ### Changed
 
+- **docs-only 提交跳过 CI/CD 流水线（issue #57）**：此前任何 main 分支
+  push 都会触发完整流水线（前端构建 + 后端测试 + 部署），即使提交只改了
+  文档（README / CHANGELOG / docs/ 等）也会白跑 5 分钟以上的 runner
+  资源。现改为：仅文档变更的提交跳过构建/测试/部署，只保留 GitHub
+  镜像同步（docs 变更也需及时镜像）。
+  - GitLab（`.gitlab-ci.yml`）：新增公共规则 `.docs_only_skip`
+    （frontend:build / backend:test / deploy_to_code01 三 job 复用）——
+    rules 按顺序求值，第一条「代码/配置白名单」优先于第二条「docs 跳过」，
+    保证代码提交通常伴随的 CHANGELOG.md 变更不会把混合提交误判为
+    docs-only；docs-only 判定仅对 main 分支 push 生效，其他分支 /
+    MR / tag / schedule 维持原行为；
+  - GitLab（sync_to_github）：docs-only 提交仍同步镜像，但按
+    `CI_COMMIT_BEFORE_SHA..CI_COMMIT_SHA` 的变更文件判断跳过
+    workflow_dispatch 触发（GitHub push 事件已被下方白名单拦截，
+    dispatch 是补充入口，docs-only 时一并跳过避免白跑）；
+  - GitHub（`.github/workflows/ci.yml`）：push 触发增加 paths 白名单
+    （backend/frontend/deploy/scripts 等代码路径），docs-only 的镜像
+    push 不再触发 Actions，与 GitLab 侧使用同一套「代码文件」定义；
+  - 验证：GitLab API `ci/lint` 通过；本地全量测试通过；流水线实测
+    ——代码提交跑全套 success，后续 docs-only 提交流水线只跑 sync
+    （build/deploy skipped）。
+
 - **模版页面默认全部展开，折叠方式对齐任务详情页聊天记录（issue #56）**：
   提示词模版页此前（issue #55）默认折叠为 6 行小窗口，每次进入页面都要
   点「展开全部」才能看到完整模版。现改为默认全部展开：textarea 高度
