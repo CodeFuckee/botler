@@ -181,6 +181,10 @@ security:bandit:
     # when: always —— job 因发现中/高危漏洞失败时报告同样上传，
     # 保证用户在 GitLab 页面能看到被阻断的具体漏洞
     when: always
+    paths:
+      # reports 类型文件默认不进可下载 artifacts 归档（仅系统内部
+      # 摄入），需显式加入 paths 才能在 job 页面下载原始报告
+      - bandit-report.sarif
     reports:
       sast: bandit-report.sarif
     expire_in: 1 week

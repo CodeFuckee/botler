@@ -32,8 +32,9 @@
   阻断门禁语义（中/高危退出码非 0 阻断流水线）。
   - `.gitlab-ci.yml`：`security:bandit` 新增 SARIF 输出与
     `artifacts:reports:sast` 上传（`when: always`——门禁失败时报告
-    同样上传，页面仍能看到被阻断的漏洞），扫描后从 SARIF 提取摘要
-    打印到 job 日志；
+    同样上传，页面仍能看到被阻断的漏洞），报告同时加入
+    `artifacts:paths` 保留原始文件下载（reports 类型文件默认不进
+    可下载归档），扫描后从 SARIF 提取摘要打印到 job 日志；
   - 文档：新增 `docs/bandit-扫描结果查看指南.md`（三个查看入口、
     原始报告下载、常见问题），README 安全说明章节同步补充入口。
 
