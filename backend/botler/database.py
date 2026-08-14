@@ -274,12 +274,14 @@ class Database:
         """列出仓库；默认过滤已软删除（deleted_at 非空）的行（issue #62）。
 
         任务历史的仓库名解析等场景需要包含已删除仓库时传 include_deleted=True。
+        两种过滤条件写成完整 SQL 常量（不拼接），避免 bandit B608 告警。
         """
         with self._conn() as conn:
-            where = "" if include_deleted else " WHERE deleted_at IS NULL"
             # 按优先级升序（数字小在前），同优先级按 id（issue #51）
-            return conn.execute(
-                f"SELECT * FROM repos{where} ORDER BY priority, id").fetchall()
+            sql = ("SELECT * FROM repos ORDER BY priority, id"
+                   if include_deleted else
+                   "SELECT * FROM repos WHERE deleted_at IS NULL ORDER BY priority, id")
+            return conn.execute(sql).fetchall()
 
     def get_repo(self, repo_id: int) -> sqlite3.Row | None:
         with self._conn() as conn:
@@ -289,10 +291,10 @@ class Database:
                                include_deleted: bool = False) -> sqlite3.Row | None:
         """按 gitlab project_id 查询；默认不返回已软删除的行（issue #62）。"""
         with self._conn() as conn:
-            where = "" if include_deleted else " AND deleted_at IS NULL"
-            return conn.execute(
-                f"SELECT * FROM repos WHERE gitlab_project_id=?{where}",
-                (project_id,)).fetchone()
+            sql = ("SELECT * FROM repos WHERE gitlab_project_id=?"
+                   if include_deleted else
+                   "SELECT * FROM repos WHERE gitlab_project_id=? AND deleted_at IS NULL")
+            return conn.execute(sql, (project_id,)).fetchone()
 
     def soft_delete_repo(self, repo_id: int) -> None:
         """软删除仓库（issue #62）：写 deleted_at 标记 + enabled=0。
