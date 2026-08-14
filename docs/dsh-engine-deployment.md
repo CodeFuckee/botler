@@ -71,7 +71,7 @@ dsh:
 ```
 
 切回 claude 引擎只需把 `worker.engine` 改回 `claude`，dsh 段可保留。
-dsh 段同样可通过设置页 API 写回（`PATCH /api/settings/dsh`），
+dsh 段同样可通过设置页 API 写回（`PUT /api/settings` 的 dsh 段），
 `api_key` 回显掩码。
 
 ## 4. 停止 / 超时语义（与子进程引擎的差异）
