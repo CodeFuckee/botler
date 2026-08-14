@@ -202,6 +202,84 @@ class TestBrowseDirectories:
         assert resp.status_code == 400
 
 
+class TestPriority:
+    """仓库优先级字段（issue #51）：整数 1~999，默认 100，数字越小越优先。"""
+
+    def _add_repo(self, client, monkeypatch, **extra):
+        """添加一个 url 方式的仓库（webhook 注册打桩），返回响应。"""
+        tc, stub, _ = client
+        monkeypatch.setattr(
+            GitLabClient, "register_webhook",
+            lambda self, project_id, secret: {"id": 1})
+        return tc.post("/api/repos", json={"url": "https://gitlab.example.com/group/p.git",
+                                           **extra})
+
+    def test_add_repo_default_priority(self, client, monkeypatch):
+        """不带 priority 添加时默认 100。"""
+        resp = self._add_repo(client, monkeypatch, name="demo")
+        assert resp.status_code == 201
+        assert resp.json()["priority"] == 100
+
+    def test_add_repo_custom_priority(self, client, monkeypatch):
+        """带 priority 添加时按指定值落库。"""
+        resp = self._add_repo(client, monkeypatch, name="demo", priority=1)
+        assert resp.status_code == 201
+        assert resp.json()["priority"] == 1
+
+    def test_add_repo_invalid_priority_rejected(self, client, monkeypatch):
+        """越界/非整数 priority 一律拒绝（pydantic 校验 422）。"""
+        for bad in [0, 1000, -5, "high", 1.5]:
+            resp = self._add_repo(client, monkeypatch, name="demo", priority=bad)
+            assert resp.status_code == 422, f"priority={bad!r} 应返回 422"
+
+    def test_update_priority(self, client):
+        """PUT 更新优先级生效并返回。"""
+        tc, stub, tmp_path = client
+        repo_id = tc.app.state.ctx.db.upsert_repo(
+            42, "demo", "https://gitlab.example.com/group/demo.git")
+        resp = tc.put(f"/api/repos/{repo_id}", json={"priority": 50})
+        assert resp.status_code == 200
+        assert resp.json()["priority"] == 50
+        row = tc.app.state.ctx.db.get_repo(repo_id)
+        assert row["priority"] == 50, "优先级应落库"
+
+    def test_update_invalid_priority_rejected(self, client):
+        """更新时越界值拒绝，原值不变。"""
+        tc, stub, tmp_path = client
+        repo_id = tc.app.state.ctx.db.upsert_repo(
+            42, "demo", "https://gitlab.example.com/group/demo.git")
+        for bad in [0, 1000, "high"]:
+            resp = tc.put(f"/api/repos/{repo_id}", json={"priority": bad})
+            assert resp.status_code == 422, f"priority={bad!r} 应返回 422"
+        assert tc.app.state.ctx.db.get_repo(repo_id)["priority"] == 100
+
+    def test_update_name_and_enabled_with_priority(self, client):
+        """编辑弹窗一次提交 name/enabled/priority 全部生效。"""
+        tc, stub, tmp_path = client
+        repo_id = tc.app.state.ctx.db.upsert_repo(
+            42, "demo", "https://gitlab.example.com/group/demo.git")
+        resp = tc.put(f"/api/repos/{repo_id}",
+                      json={"name": "新名字", "enabled": False, "priority": 30})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "新名字"
+        assert data["enabled"] is False
+        assert data["priority"] == 30
+
+    def test_list_repos_sorted_by_priority(self, client):
+        """列表按 priority 升序（数字小在前），同优先级按 id。"""
+        tc, stub, tmp_path = client
+        db = tc.app.state.ctx.db
+        db.upsert_repo(11, "low", "https://gitlab.example.com/group/low.git", priority=100)
+        db.upsert_repo(22, "mid", "https://gitlab.example.com/group/mid.git", priority=50)
+        db.upsert_repo(33, "high", "https://gitlab.example.com/group/high.git", priority=1)
+        resp = tc.get("/api/repos")
+        assert resp.status_code == 200
+        repos = resp.json()["repos"]
+        assert [r["priority"] for r in repos] == [1, 50, 100]
+        assert [r["name"] for r in repos] == ["high", "mid", "low"]
+
+
 class TestBrowseDefaultPath:
     def test_configured_default_path_used(self, client, tmp_path):
         """配置了 browse.default_path 时，不带 path 请求定位到该目录。"""

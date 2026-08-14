@@ -33,6 +33,9 @@ STATUS_INTERRUPTED = "interrupted"
 # 活跃状态（去重索引覆盖范围）
 ACTIVE_STATUSES = (STATUS_QUEUED, STATUS_RUNNING, STATUS_RETRYING)
 
+# 仓库默认优先级（issue #51）：整数 1~999，数字越小越优先
+DEFAULT_PRIORITY = 100
+
 # set_task_status / finish_task 可写的附加字段白名单
 _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
@@ -48,6 +51,7 @@ CREATE TABLE IF NOT EXISTS repos (
   remote_name TEXT,
   prompt_template TEXT,
   enabled INTEGER DEFAULT 1,
+  priority INTEGER DEFAULT 100,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -162,6 +166,14 @@ class Database:
             if fixed:
                 logger.info("迁移：已修正 %s 个旧版 CST 时间戳字段为 UTC（issue #49）", fixed)
             conn.execute("PRAGMA user_version = 2")
+            ver = 2
+        if ver < 3:
+            # issue #51：仓库优先级（1~999，默认 100，数字越小越优先）
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+            if "priority" not in cols:
+                conn.execute(
+                    "ALTER TABLE repos ADD COLUMN priority INTEGER DEFAULT 100")
+            conn.execute("PRAGMA user_version = 3")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -226,25 +238,28 @@ class Database:
     def upsert_repo(self, project_id: int, name: str, url: str,
                     prompt_template: str | None = None,
                     enabled: bool = True, local_path: str | None = None,
-                    remote_name: str | None = None) -> int:
+                    remote_name: str | None = None,
+                    priority: int = DEFAULT_PRIORITY) -> int:
         with self._conn() as conn:
             cur = conn.execute(
-                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, priority)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(gitlab_project_id) DO UPDATE SET
                      name=excluded.name, url=excluded.url,
                      prompt_template=excluded.prompt_template,
                      enabled=excluded.enabled, local_path=excluded.local_path,
-                     remote_name=excluded.remote_name""",
+                     remote_name=excluded.remote_name,
+                     priority=excluded.priority""",
                 (project_id, name, url, prompt_template, 1 if enabled else 0,
-                 local_path, remote_name),
+                 local_path, remote_name, priority),
             )
             return cur.lastrowid
 
     def list_repos(self) -> list[sqlite3.Row]:
         with self._conn() as conn:
+            # 按优先级升序（数字小在前），同优先级按 id（issue #51）
             return conn.execute(
-                "SELECT * FROM repos ORDER BY id").fetchall()
+                "SELECT * FROM repos ORDER BY priority, id").fetchall()
 
     def get_repo(self, repo_id: int) -> sqlite3.Row | None:
         with self._conn() as conn:
@@ -256,7 +271,7 @@ class Database:
                 "SELECT * FROM repos WHERE gitlab_project_id=?", (project_id,)).fetchone()
 
     def update_repo(self, repo_id: int, **fields) -> None:
-        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name"}
+        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "priority"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return

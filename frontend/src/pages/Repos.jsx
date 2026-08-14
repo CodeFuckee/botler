@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api.js'
 import FolderPicker from '../components/FolderPicker.jsx'
+import RepoEditModal from '../components/RepoEditModal.jsx'
 
 export default function Repos() {
   const [repos, setRepos] = useState([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // 设置弹窗编辑中的仓库（null = 关闭；issue #51）
+  const [editing, setEditing] = useState(null)
 
   // 添加表单（method: 'url' = GitLab URL 方式，'local' = 本地文件夹方式；默认本地文件夹方式）
   const [method, setMethod] = useState('local')
@@ -220,6 +223,9 @@ export default function Repos() {
               <div className="repo-name">
                 {repo.name}
                 {!repo.enabled && <span className="badge badge-muted">已停用</span>}
+                <span className="badge badge-muted" title="调度优先级：数字越小越优先">
+                  优先级 {repo.priority ?? 100}
+                </span>
               </div>
               <div className="muted small">{repo.url} · project_id={repo.gitlab_project_id}</div>
               {repo.local_path && (
@@ -240,6 +246,7 @@ export default function Repos() {
                 {reconcileResults[repo.id]?.loading ? '对账中…' : '对账'}
               </button>
               <Link className="btn" to={`/templates?repo=${repo.id}`}>模版</Link>
+              <button className="btn" onClick={() => setEditing(repo)}>设置</button>
               <button className="btn" onClick={() => toggle(repo)}>
                 {repo.enabled ? '停用' : '启用'}
               </button>
@@ -248,6 +255,17 @@ export default function Repos() {
           </div>
         ))}
       </div>
+
+      {editing && (
+        <RepoEditModal
+          repo={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null)
+            await load()
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -14,7 +14,7 @@
 用户在 GitLab 把 issue 指派给 bot 账号
         │  webhook（issue 事件）
         ▼
-Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库并行）
+Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库并行，按仓库优先级派发）
         ▲                 │
         │                 ▼
 对账兜底调度器 ◄──── Claude Code 执行器（干净工作区 + 模版渲染 + 超时/重试）
@@ -39,7 +39,7 @@ backend/
     database.py      SQLite 模型（repos / tasks / task_logs）
     gitlab_client.py GitLab REST API 封装（webhook 注册、issue 评论等）
     webhook.py       webhook 接收器（secret 校验 + assignee 判定 + 去重）
-    scheduler.py     任务调度器（每仓库 FIFO 串行、跨仓库并行）
+    scheduler.py     任务调度器（每仓库 FIFO 串行、跨仓库并行、按仓库优先级派发）
     executor.py      执行器（claude / hermes 双引擎，干净工作区 / 超时 / 重试 / 失败评论）
     hermes_runner.py hermes 引擎 runner 脚本（hermes venv 进程内调用 AIAgent，stdin/stdout JSON 协议）
     reconciler.py    对账兜底（APScheduler 定时扫描补漏）
@@ -164,6 +164,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `gitlab.bot_token` | — | bot PAT，经 `GITLAB_BOT_TOKEN` 环境变量引用 |
 | `gitlab.webhook_secret` | — | webhook 校验 secret |
 | `worker.max_concurrent_repos` | 3 | 跨仓库并行上限 |
+| `repos[].priority` | 100 | 仓库调度优先级（1~999 整数，数字越小越优先；多个仓库同时有排队任务时按优先级派发，同优先级按任务提交时间排序） |
 | `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟） |
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
@@ -186,10 +187,10 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 ```
 GET    /api/health                    健康检查
 GET    /api/repos                     仓库列表
-POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook）
+POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook；priority 1~999 缺省 100）
 GET    /api/repos/browse              浏览服务器目录（无 path 时初始定位到 browse.default_path，默认服务器用户主目录 ~）
 POST   /api/repos/discover            读取本地文件夹的 git remote 列表
-PUT    /api/repos/{id}                更新仓库（启用/停用/模版覆盖）
+PUT    /api/repos/{id}                更新仓库（名称/启用/优先级/模版覆盖）
 DELETE /api/repos/{id}                删除仓库
 POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook）
 GET/PUT /api/repos/{id}/template      仓库模版

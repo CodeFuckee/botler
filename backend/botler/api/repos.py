@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..config import RepoConfig
+from ..database import DEFAULT_PRIORITY
 from ..gitlab_client import GitLabError
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,9 @@ class RepoCreate(BaseModel):
     name: str | None = None
     prompt_template: str | None = None
     enabled: bool = True
+    priority: int | None = Field(
+        default=None, ge=1, le=999,
+        description="调度优先级（issue #51）：1~999 整数，数字越小越优先，缺省 100")
     webhook_url: str | None = Field(
         default=None, description="webhook 回调地址覆盖（默认用当前请求的 base_url）")
 
@@ -63,6 +67,9 @@ class RepoUpdate(BaseModel):
     url: str | None = None
     prompt_template: str | None = None
     enabled: bool | None = None
+    priority: int | None = Field(
+        default=None, ge=1, le=999,
+        description="调度优先级（issue #51）：1~999 整数，数字越小越优先")
 
 
 def _repo_row_to_dict(row) -> dict:
@@ -75,6 +82,7 @@ def _repo_row_to_dict(row) -> dict:
         "remote_name": row["remote_name"],
         "prompt_template": row["prompt_template"],
         "enabled": bool(row["enabled"]),
+        "priority": row["priority"],
         "created_at": row["created_at"],
     }
 
@@ -92,6 +100,7 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
         prompt_template=repo_dict["prompt_template"] or None,
         local_path=repo_dict.get("local_path"),
         remote_name=repo_dict.get("remote_name"),
+        priority=repo_dict["priority"],
     ))
     config.update_repos([config.repo_to_config_dict(r) for r in kept])
 
@@ -171,7 +180,8 @@ def add_repo(request: Request, body: RepoCreate):
     repo_id = c.db.upsert_repo(
         project_id=project_id, name=name, url=url,
         prompt_template=body.prompt_template, enabled=body.enabled,
-        local_path=local_path, remote_name=remote_name)
+        local_path=local_path, remote_name=remote_name,
+        priority=body.priority if body.priority is not None else DEFAULT_PRIORITY)
     _sync_repo_to_config(request.app, _repo_row_to_dict(c.db.get_repo(repo_id)))
 
     source = f"local_path={local_path}" if local_path else f"url={url}"

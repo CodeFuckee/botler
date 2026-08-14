@@ -62,6 +62,7 @@ class RepoConfig:
     prompt_template: str | None = None
     local_path: str | None = None
     remote_name: str | None = None
+    priority: int = 100  # 调度优先级（issue #51）：1~999，数字越小越优先
 
 
 @dataclass
@@ -235,6 +236,7 @@ class ConfigManager:
                 prompt_template=r.get("prompt_template"),
                 local_path=r.get("local_path"),
                 remote_name=r.get("remote_name"),
+                priority=int(r.get("priority", 100)),
             ))
 
         bot_id = gitlab.get("bot_id")
@@ -442,6 +444,7 @@ class ConfigManager:
             "name": repo.name,
             "url": repo.url,
             "enabled": repo.enabled,
+            "priority": repo.priority,
         }
         if repo.prompt_template:
             d["prompt_template"] = repo.prompt_template

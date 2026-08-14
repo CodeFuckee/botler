@@ -38,6 +38,31 @@ def _build_old_db(path) -> None:
     conn.close()
 
 
+OLD_REPOS_SCHEMA = """
+CREATE TABLE repos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  gitlab_project_id INTEGER NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  local_path TEXT,
+  remote_name TEXT,
+  prompt_template TEXT,
+  enabled INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+
+def _build_old_repos_db(path) -> None:
+    """手工构造无 priority 列的 repos 旧库（issue #51 迁移前）。"""
+    conn = sqlite3.connect(str(path))
+    conn.executescript(OLD_REPOS_SCHEMA)
+    conn.execute(
+        "INSERT INTO repos (gitlab_project_id, name, url) VALUES (42, '旧仓库', 'https://x/old.git')")
+    conn.commit()
+    conn.close()
+
+
 class TestMigrateCommitSha:
     def test_old_db_gets_commit_sha_column(self, tmp_path):
         """旧库初始化后 tasks 表应补出 commit_sha 列。"""
@@ -62,3 +87,39 @@ class TestMigrateCommitSha:
         task_id = db.create_task(repo_id, 42, 1, "任务")
         db.set_task_status(task_id, "succeeded", commit_sha="deadbeef00")
         assert db.get_task(task_id)["commit_sha"] == "deadbeef00"
+
+
+class TestMigrateRepoPriority:
+    """repos 表 priority 列迁移（issue #51）。"""
+
+    def test_old_db_gets_priority_column_default_100(self, tmp_path):
+        """旧库初始化后 repos 表补出 priority 列，存量行默认 100。"""
+        path = tmp_path / "old.db"
+        _build_old_repos_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+        assert "priority" in cols, "旧库应补出 priority 列"
+        row = db.get_repo_by_project_id(42)
+        assert row["priority"] == 100, "存量仓库优先级应默认 100"
+
+    def test_new_db_has_priority_column(self, tmp_path):
+        """新库建表语句应直接含 priority 列（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+        assert "priority" in cols
+
+    def test_upsert_repo_accepts_priority(self, tmp_path):
+        """upsert_repo 应支持 priority 参数（添加仓库带优先级）。"""
+        db = Database(str(tmp_path / "p.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git",
+                                 priority=25)
+        assert db.get_repo(repo_id)["priority"] == 25
+
+    def test_update_repo_accepts_priority(self, tmp_path):
+        """update_repo 应支持更新 priority（设置弹窗保存）。"""
+        db = Database(str(tmp_path / "u.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        db.update_repo(repo_id, priority=77)
+        assert db.get_repo(repo_id)["priority"] == 77

@@ -2,6 +2,8 @@
 
 - 每个仓库一个 FIFO 队列（deque），同一仓库同一时刻最多一个 running
 - 跨仓库并行，受 max_concurrent_repos 限制
+- 派发选择按仓库优先级（issue #51）：priority 数字小先派发，
+  同优先级按队首任务提交时间（created_at）排序，再按 repo_id 兜底
 - 状态机：queued → running → retrying → succeeded / failed
 - 重启恢复：queued 重新入队，running/retrying 标记 interrupted 后重新入队
 - 任务持久化在 SQLite，调度器线程只负责派发，执行在 worker 线程
@@ -15,7 +17,7 @@ import time
 from collections import defaultdict, deque
 
 from .config import ConfigManager
-from .database import Database, STATUS_QUEUED, STATUS_RUNNING
+from .database import Database, DEFAULT_PRIORITY, STATUS_QUEUED, STATUS_RUNNING
 from .executor import ClaudeExecutor
 
 logger = logging.getLogger(__name__)
@@ -105,23 +107,36 @@ class TaskScheduler:
                 logger.exception("调度循环异常")
             time.sleep(_POLL_INTERVAL)
 
+    def _sort_key(self, repo_id: int, q: deque[int]) -> tuple[int, str, int]:
+        """候选仓库排序键（issue #51）：优先级升序（数字小先），
+        同优先级按队首任务提交时间（tasks.created_at，UTC 串可直接
+        比较）升序，再按 repo_id 兜底保证确定性。"""
+        row = self.db.get_repo(repo_id)
+        priority = DEFAULT_PRIORITY
+        if row is not None and row["priority"] is not None:
+            priority = int(row["priority"])
+        first = self.db.get_task(q[0])
+        created = first["created_at"] if first is not None else ""
+        return (priority, created, repo_id)
+
     def _dispatch(self) -> None:
         cfg = self.config.get()
         with self._lock:
             running_count = len(self._running)
             if running_count >= cfg.max_concurrent_repos:
                 return
-            # 找一个「无 running 任务」的仓库队首
-            for repo_id, q in list(self._queues.items()):
-                if repo_id in self._running or not q:
-                    continue
-                task_id = q.popleft()
-                if not q:
-                    self._queues.pop(repo_id, None)
-                self._running[repo_id] = task_id
-                break
-            else:
+            # 候选：无 running 任务且有排队任务的仓库
+            candidates = [
+                (repo_id, q) for repo_id, q in self._queues.items()
+                if repo_id not in self._running and q
+            ]
+            if not candidates:
                 return
+            repo_id, q = min(candidates, key=lambda item: self._sort_key(item[0], item[1]))
+            task_id = q.popleft()
+            if not q:
+                self._queues.pop(repo_id, None)
+            self._running[repo_id] = task_id
             repo_id_copy, task_id_copy = repo_id, task_id
 
         # 在锁外执行，避免阻塞调度循环
