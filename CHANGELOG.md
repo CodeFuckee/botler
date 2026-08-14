@@ -312,6 +312,29 @@
 
 ### Fixed
 
+- **任务完成后任务报告没有输出到 issue 评论（issue #79）**：任务成功
+  收尾只由平台打 bot-done 标签，结果评论依赖任务会话内 Claude 按模板
+  自行留言；全局 bot token 失效期间 Claude 侧 API 401 失败，任务
+  succeeded、bot-done 已打，但 issue 上没有任何报告评论。现改为平台
+  兜底：成功收尾时检查最后一条非系统评论的作者——是 bot 本人（含
+  remote token 账号，即 Claude 已用兜底 token 留过）则跳过，否则从
+  执行输出提取结果摘要（claude 的 result / hermes 的 final_response，
+  超长按 3000 字符截断）写一条完成报告评论（含提交 sha 与确认提示）；
+  检查/写评论失败均不阻塞任务成功（仅记 warn，与打标签一致）。
+  - 后端 `executor.py`：`_finish_succeeded` 新增 `_leave_success_comment`
+    平台兜底评论（防重集合 = 配置 bot_id + 调用客户端的 /user id，
+    经 `_call_with_fallback` 走 per-repo remote token 兜底）；新增
+    `_success_summary` 提取两引擎结果摘要；`_build_env` 注入会话
+    `GITLAB_TOKEN` 时优先取仓库 remote url 内嵌 token（新增
+    `_task_gitlab_token`，remote 无 token / 解析失败回退全局 token），
+    使全局 token 失效期间 Claude 会话内的 API（读 issue/写评论）仍可用；
+  - 测试：TDD 先行（复现测试红灯确认后实现），新增 9 用例（无人评论
+    时平台写报告评论、bot 已评论跳过、remote token 账号已评论跳过、
+    写评论失败不阻塞成功、hermes final_response 摘要、条件终态不评论、
+    remote token 注入 GITLAB_TOKEN / 无 token 回退全局 / 无 remote
+    回退全局），并更新受影响测试的 mock；后端全量 719 + 前端全量
+    253 通过。
+
 - **添加本地仓库报 401「无法识别项目: token 无效或已过期」（issue #77）**：
   本地文件夹方式添加仓库时，识别项目与注册 webhook 一律走平台全局
   bot token——全局 token 失效期间，即使本地仓库 remote url 里内嵌了

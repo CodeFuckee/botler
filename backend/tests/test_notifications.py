@@ -160,6 +160,8 @@ class TestExecutorNotificationEvents:
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"  # type: ignore[method-assign]
         executor.gitlab.find_commit_for_issue = lambda *a, **k: None  # type: ignore[method-assign]
         executor.gitlab.add_labels = lambda *a, **k: None  # type: ignore[method-assign]
+        executor.gitlab.add_comment = lambda *a, **k: None  # type: ignore[method-assign]
+        executor.gitlab.last_note_author_id = lambda *a, **k: None  # type: ignore[method-assign]
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
         executor._finish_succeeded(task_id, "ok")
         events = db.list_notifications(after_id=0)
@@ -232,6 +234,10 @@ class TestExecutorNotificationEvents:
         monkeypatch.setattr("botler.executor.subprocess.Popen",
                             lambda cmd, **kw: _FakeProc(
                                 json.dumps({"result": "ok", "session_id": "sid-n"})))
+        # _build_env 的 remote token 解析走 git_remote.list_local_remotes
+        # （内部 subprocess.run），与上方的 Popen 桩协议不兼容，直接桩掉
+        monkeypatch.setattr("botler.executor.list_local_remotes",
+                            lambda path: [])
         executor.gitlab = SimpleNamespace(
             get_issue=lambda pid, iid: {"state": "closed", "title": "标题",
                                         "description": "", "web_url": "",
@@ -239,6 +245,7 @@ class TestExecutorNotificationEvents:
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
             find_commit_for_issue=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None,
         )
         executor.run_task(task_id)
         events = db.list_notifications(after_id=0)

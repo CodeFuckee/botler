@@ -38,7 +38,8 @@ from .database import (
 )
 from .events import EventBus, parse_claude_stream_line, parse_hermes_event_line
 from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
-from .git_remote import build_repo_client_with_username
+from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
+                         list_local_remotes, parse_remote_url)
 from .templates import TemplateRenderer
 
 logger = logging.getLogger(__name__)
@@ -575,10 +576,31 @@ class ClaudeExecutor:
             repo["name"], issue, repo_url=_row_get(repo, "url") or "")
         return self.renderer.render(template, variables)
 
+    def _task_gitlab_token(self, repo: dict) -> str | None:
+        """任务会话 GITLAB_TOKEN 注入源：仓库 remote url 内嵌 token（issue #79）。
+
+        与平台 _call_with_fallback 的 per-repo 兜底（issue #65）对齐：
+        全局 bot token 失效后 Claude 会话内的 API（读 issue/写结果评论）
+        401 失败，改用 remote 内嵌 token（与仓库绑定的凭据通常更新鲜）。
+        解析失败 / 无 token 时返回 None（调用方回退全局 token）。
+        """
+        try:
+            remotes = list_local_remotes(str(self._repo_workdir(repo)))
+        except NoGitRemoteError:
+            return None
+        remote_name = _row_get(repo, "remote_name") or "origin"
+        match = next((r for r in remotes if r["name"] == remote_name), None)
+        if match is None:
+            return None
+        return parse_remote_url(match["url"])["token"]
+
     def _build_env(self, repo: dict, issue: dict) -> dict:
         cfg = self.config.get()
         env = self._clean_process_env()
-        env["GITLAB_TOKEN"] = cfg.gitlab_token
+        # issue #79：全局 bot token 失效后 Claude 侧 API（写结果评论等）
+        # 401 失败。优先注入仓库 remote url 内嵌 token（与平台侧
+        # _call_with_fallback 的 per-repo 兜底对齐），否则回退全局 token。
+        env["GITLAB_TOKEN"] = self._task_gitlab_token(repo) or cfg.gitlab_token
         env["GITLAB_URL"] = cfg.gitlab_url
         env["PROJECT_ID"] = str(issue["project_id"])
         env["ISSUE_IID"] = str(issue["iid"])
@@ -1475,9 +1497,79 @@ class ClaudeExecutor:
                 self.db.add_log(task_id, "info", "已在 issue 上打 bot-done 标签，等待用户确认后手动关闭")
             except GitLabError as e:
                 self.db.add_log(task_id, "warn", f"打 bot-done 标签失败: {e}")
+        # issue #79：结果评论不再依赖 Claude 按模板自行留言，平台兜底写
+        # 完成报告（防重：最后一条评论是 bot 本人则跳过）；写评论失败
+        # 不阻塞任务成功（与打标签一致的容错策略）。
+        if task is not None:
+            self._leave_success_comment(task, output, repo)
         # 网页通知：issue 完成（issue #21）
         self._emit_task_event(task_id, "task_succeeded")
         logger.info("任务 %s 成功", task_id)
+
+    def _leave_success_comment(self, task: dict, output: str,
+                               repo: dict | None = None) -> None:
+        """任务成功时平台兜底写完成评论（issue #79）。
+
+        此前结果评论依赖 Claude 按模板自行留言，全局 bot token 失效后
+        Claude 侧 API 401 失败，任务成功（bot-done 已打）但 issue 上没
+        有任何报告评论。防重：最后一条非系统评论是 bot 本人（Claude 已
+        留）→ 跳过；检查/写评论失败均不阻塞任务成功（仅记 warn 日志）。
+        """
+        project_id, issue_iid = task["project_id"], task["issue_iid"]
+        try:
+            last_author, client = self._call_with_fallback(
+                repo, lambda c: c.last_note_author_id(project_id, issue_iid))
+        except GitLabError as e:
+            self.db.add_log(task["id"], "warn", f"检查最后评论作者失败: {e}")
+            return
+        cfg = self.config.get()
+        bot_ids = {cfg.bot_id} if getattr(cfg, "bot_id", None) else set()
+        try:
+            # remote 兜底客户端（如有）的账号同样视为 bot 本人——
+            # 会话内 Claude 可能用 remote token 写评论（issue #79 修复后）
+            bot_ids.add(client.get_bot_id())
+        except Exception:  # noqa: BLE001 查询失败/无该方法不阻塞防重
+            pass
+        if last_author in bot_ids:
+            self.db.add_log(task["id"], "info", "Claude 已留结果评论，平台不重复写")
+            return
+        parts = ["🤖 Botler 自动回复：任务已完成。"]
+        sha = (task["commit_sha"] or "")[:8]  # task 为 sqlite3.Row，用索引访问
+        if sha:
+            parts.append(f"提交: {sha}")
+        summary = self._success_summary(output)
+        if summary:
+            parts.append(f"结果摘要:\n{summary}")
+        parts.append("开发已完成，请确认后手动关闭本 issue"
+                     "（平台已打 bot-done 标签）。")
+        body = "\n\n".join(parts)
+        try:
+            self._call_with_fallback(
+                repo, lambda c: c.add_comment(project_id, issue_iid, body))
+            self.db.add_log(task["id"], "info", "已在 issue 上留任务完成评论")
+        except GitLabError as e:
+            self.db.add_log(task["id"], "warn", f"留任务完成评论失败: {e}")
+
+    def _success_summary(self, output: str) -> str:
+        """从执行输出提取结果摘要（claude 的 result / hermes 的 final_response）。
+
+        供成功收尾评论使用（issue #79）：两引擎字段都没有 / 为空时返回
+        空串（评论省略摘要段）；超长按 COMMENT_TAIL_CHARS 截断。
+        """
+        data = self._last_json_object(output)
+        if not isinstance(data, dict):
+            return ""
+        summary = data.get("result")
+        if not isinstance(summary, str):
+            summary = data.get("final_response")
+        if not isinstance(summary, str):
+            return ""
+        summary = summary.strip()
+        if not summary:
+            return ""
+        if len(summary) > COMMENT_TAIL_CHARS:
+            summary = summary[:COMMENT_TAIL_CHARS] + "…"
+        return summary
 
     def _record_commit(self, task_id: int,
                        repo: dict | None = None) -> None:

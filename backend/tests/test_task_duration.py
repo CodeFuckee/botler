@@ -86,7 +86,9 @@ class TestFinishSucceededBotDoneTimestamp:
 
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
-            add_labels=fake_add_labels)
+            add_labels=fake_add_labels,
+            add_comment=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None)
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
 
         executor._finish_succeeded(task_id, "ok")
@@ -112,7 +114,9 @@ class TestFinishSucceededBotDoneTimestamp:
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
             add_labels=lambda *a, **k: (_ for _ in ()).throw(
-                GitLabError("GitLab API 错误 500: boom", 500)))
+                GitLabError("GitLab API 错误 500: boom", 500)),
+            add_comment=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None)
         db.claim_task(task_id)
 
         executor._finish_succeeded(task_id, "ok")

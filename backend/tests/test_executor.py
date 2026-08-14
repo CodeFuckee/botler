@@ -9,6 +9,7 @@ import io
 import itertools
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -267,6 +268,7 @@ class TestRunTaskSuccessCriteria:
             add_comment=lambda *a, **k: calls.append(("comment", a)),
             add_labels=lambda *a, **k: calls.append(("labels", a)),
             find_commit_for_issue=lambda pid, iid: None,
+            last_note_author_id=lambda pid, iid: None,
         )
         monkeypatch.setattr(executor, "_run_once", run_once)
         monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
@@ -338,10 +340,20 @@ class _FakeStdout:
     def readline(self) -> str:
         return self._lines.pop(0) if self._lines else ""
 
+    def read(self) -> str:
+        """subprocess.run 兼容：Popen 桩被 run() 以 communicate 读取时
+        一次性返回全部剩余输出（如 git_remote.list_local_remotes）。"""
+        text = "".join(self._lines)
+        self._lines = []
+        return text
+
 
 class _FakeProc:
     def __init__(self, output: str, exit_code: int = 0):
         self.stdout = _FakeStdout(output)
+        self.stdin = None
+        self.stderr = None
+        self.args = []  # subprocess.run 构造 CompletedProcess 需要
         self._exit = exit_code
 
     def poll(self):
@@ -349,6 +361,17 @@ class _FakeProc:
 
     def wait(self, timeout=None):
         return self._exit
+
+    # subprocess.run 兼容（run 内部用 with + communicate 包装 Popen）
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def communicate(self, input=None, timeout=None):
+        out = self.stdout.read() if self.stdout else ""
+        return out, ""
 
 
 class TestSessionResume:
@@ -447,6 +470,7 @@ class TestSessionResume:
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
             find_commit_for_issue=lambda pid, iid: None,
+            last_note_author_id=lambda pid, iid: None,
         )
 
         executor.run_task(task_id)
@@ -473,6 +497,7 @@ class TestSessionResume:
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
             find_commit_for_issue=lambda pid, iid: None,
+            last_note_author_id=lambda pid, iid: None,
         )
 
         executor.run_task(task_id)
@@ -525,6 +550,7 @@ class TestRepoSqlite3RowCompat:
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
             find_commit_for_issue=lambda pid, iid: None,
+            last_note_author_id=lambda pid, iid: None,
         )
 
         executor.run_task(task_id)
@@ -568,6 +594,7 @@ class TestAwaitingDecision:
             find_commit_for_issue=lambda pid, iid: commit_sha,
             get_latest_pipeline=lambda pid: {"id": 1, "status": "success",
                                              "sha": "other-sha"},
+            last_note_author_id=lambda pid, iid: None,
         )
         monkeypatch.setattr(executor, "_run_once", run_once)
         monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
@@ -670,7 +697,9 @@ class TestCommitRecording:
         task_id = _mk_task(db, repo_id)
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: self._commit_sha(),
-            add_labels=lambda *a, **k: None)
+            add_labels=lambda *a, **k: None,
+            add_comment=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
@@ -689,7 +718,9 @@ class TestCommitRecording:
         task_id = _mk_task(db, repo_id)
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
-            add_labels=lambda *a, **k: None)
+            add_labels=lambda *a, **k: None,
+            add_comment=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
@@ -707,7 +738,9 @@ class TestCommitRecording:
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: (_ for _ in ()).throw(
                 GitLabError("GitLab API 错误 500: boom", 500)),
-            add_labels=lambda *a, **k: None)
+            add_labels=lambda *a, **k: None,
+            add_comment=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
@@ -738,6 +771,7 @@ class TestCommitRecording:
             add_comment=lambda *a, **k: None,
             add_labels=lambda *a, **k: None,
             find_commit_for_issue=lambda pid, iid: self._commit_sha(),
+            last_note_author_id=lambda pid, iid: None,
             # issue #40：成功路径会探测任务触发的流水线；无匹配 sha → 不等待
             get_latest_pipeline=lambda pid: {"id": 1, "status": "success", "sha": "other"},
         )
@@ -767,7 +801,9 @@ class TestSucceededAddsBotDoneLabel:
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
             add_labels=lambda pid, iid, labels, remove=None: labels_calls.append(
-                (pid, iid, labels, remove)))
+                (pid, iid, labels, remove)),
+            add_comment=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
@@ -787,7 +823,9 @@ class TestSucceededAddsBotDoneLabel:
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
             add_labels=lambda pid, iid, labels, remove=None: (_ for _ in ()).throw(
-                GitLabError("GitLab API 错误 500: boom", 500)))
+                GitLabError("GitLab API 错误 500: boom", 500)),
+            add_comment=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)
@@ -807,7 +845,9 @@ class TestSucceededAddsBotDoneLabel:
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
             add_labels=lambda pid, iid, labels, remove=None: labels_calls.append(
-                (pid, iid, labels, remove)))
+                (pid, iid, labels, remove)),
+            add_comment=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None)
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)
@@ -815,6 +855,178 @@ class TestSucceededAddsBotDoneLabel:
         executor._finish_succeeded(task_id, "ok")
 
         assert labels_calls == []
+
+
+class TestSucceededResultComment:
+    """issue #79：任务成功收尾由平台兜底写结果评论。
+
+    此前结果评论依赖 Claude 按模板自行留言（DEFAULT_TEMPLATE 第 4 条）；
+    全局 bot token 失效后 Claude 侧 API 401 失败，任务成功（bot-done 已打）
+    但 issue 上没有任何报告评论。改为平台兜底：最后一条非系统评论非 bot
+    本人发出时，从执行输出提取结果摘要写一条完成报告；写评论失败不阻塞
+    任务成功（仅记 warn，与打标签一致）。
+    """
+
+    def _comment_mock(self, executor, tmp_path, last_author=None,
+                      bot_id=7):
+        comments = []
+        executor.gitlab = SimpleNamespace(
+            find_commit_for_issue=lambda pid, iid: "deadbeef" * 5,
+            add_labels=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: last_author,
+            get_bot_id=lambda: bot_id,
+            add_comment=lambda pid, iid, body: comments.append((pid, iid, body)))
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+        return comments
+
+    def test_success_leaves_result_comment_when_none_exists(self, executor,
+                                                            tmp_path):
+        """issue 无人评论（Claude 没写/写失败）→ 平台写完成报告评论。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = self._comment_mock(executor, tmp_path, last_author=None)
+
+        db.claim_task(task_id)
+        output = json.dumps({"result": "开发完成，全部测试通过"}, ensure_ascii=False)
+        executor._finish_succeeded(task_id, output)
+
+        assert len(comments) == 1
+        pid, iid, body = comments[0]
+        assert (pid, iid) == (42, 1)
+        assert "任务已完成" in body
+        assert "开发完成，全部测试通过" in body  # 结果摘要提取
+        assert "deadbeef" in body  # commit sha
+        assert db.get_task(task_id)["status"] == "succeeded"
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("任务完成评论" in m for m in logs)
+
+    def test_skips_comment_when_bot_already_commented(self, executor, tmp_path):
+        """最后一条评论是 bot 本人（Claude 已留结果评论）→ 平台不重复写。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = self._comment_mock(executor, tmp_path, last_author=7,
+                                      bot_id=7)
+
+        db.claim_task(task_id)
+        executor._finish_succeeded(task_id, "ok")
+
+        assert comments == []
+        assert db.get_task(task_id)["status"] == "succeeded"
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("不重复写" in m for m in logs)
+
+    def test_skips_comment_when_last_author_is_remote_token_bot(self, executor,
+                                                                tmp_path):
+        """最后评论作者是 remote token 账号（Claude 用兜底 token 写过）→ 不重复。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = self._comment_mock(executor, tmp_path, last_author=99,
+                                      bot_id=99)
+
+        db.claim_task(task_id)
+        executor._finish_succeeded(task_id, "ok")
+
+        assert comments == []
+
+    def test_comment_error_keeps_success(self, executor, tmp_path):
+        """写评论 GitLab API 报错：任务仍成功，仅记 warn 日志。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        executor.gitlab = SimpleNamespace(
+            find_commit_for_issue=lambda pid, iid: None,
+            add_labels=lambda *a, **k: None,
+            last_note_author_id=lambda pid, iid: None,
+            get_bot_id=lambda: 7,
+            add_comment=lambda pid, iid, body: (_ for _ in ()).throw(
+                GitLabError("GitLab API 错误 500: boom", 500)))
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+
+        db.claim_task(task_id)
+        executor._finish_succeeded(task_id, "ok")
+
+        assert db.get_task(task_id)["status"] == "succeeded"
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("任务完成评论失败" in m for m in logs)
+
+    def test_hermes_final_response_as_summary(self, executor, tmp_path):
+        """hermes 引擎：摘要取 final_response（issue #47 输出协议）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = self._comment_mock(executor, tmp_path, last_author=None)
+
+        db.claim_task(task_id)
+        output = json.dumps({"final_response": "hermes 已完成处理"},
+                            ensure_ascii=False)
+        executor._finish_succeeded(task_id, output)
+
+        assert len(comments) == 1
+        assert "hermes 已完成处理" in comments[0][2]
+
+    def test_no_comment_when_finish_skipped(self, executor, tmp_path):
+        """条件终态（issue #24）：已被其他实例收尾时不写评论（避免重复）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = self._comment_mock(executor, tmp_path, last_author=None)
+
+        db.claim_task(task_id)
+        db.finish_task(task_id, "succeeded")  # 模拟其他实例已收尾
+        executor._finish_succeeded(task_id, "ok")
+
+        assert comments == []
+
+
+class TestBuildEnvTokenFallback:
+    """issue #79：任务会话 GITLAB_TOKEN 注入兜底（remote 内嵌 token 优先）。
+
+    全局 bot token 失效后 Claude 侧 API（读 issue/写结果评论）401 失败；
+    与平台 _call_with_fallback 的 per-repo 兜底（issue #65）对齐，会话
+    GITLAB_TOKEN 优先取仓库 remote url 内嵌 token，无 token 时回退全局。
+    """
+
+    def _repo(self, tmp_path, url):
+        local = tmp_path / "repo"
+        local.mkdir()
+        subprocess.run(["git", "init", "-q", str(local)], check=True)
+        subprocess.run(["git", "-C", str(local), "remote", "add",
+                        "origin", url], check=True)
+        return {"name": "demo", "prompt_template": None,
+                "local_path": str(local), "remote_name": "origin"}
+
+    @staticmethod
+    def _issue():
+        return {"project_id": 42, "iid": 7}
+
+    def test_env_uses_remote_token_when_embedded(self, executor, tmp_path):
+        """remote url 内嵌 token → 会话 GITLAB_TOKEN 用 remote token。"""
+        repo = self._repo(
+            tmp_path,
+            "https://user:remote-token-123@gitlab.example.com/group/demo.git")
+        env = executor._build_env(repo, self._issue())
+        assert env["GITLAB_TOKEN"] == "remote-token-123"
+
+    def test_env_falls_back_to_global_token_without_embedded(self, executor,
+                                                             tmp_path):
+        """remote url 无内嵌 token → 回退全局 bot token。"""
+        repo = self._repo(tmp_path,
+                          "https://gitlab.example.com/group/demo.git")
+        env = executor._build_env(repo, self._issue())
+        assert env["GITLAB_TOKEN"] == "test-token"
+
+    def test_env_falls_back_when_repo_has_no_remote(self, executor, tmp_path):
+        """仓库无 remote（新 clone 前 / 非 git 目录）→ 回退全局 token。"""
+        local = tmp_path / "empty"
+        local.mkdir()
+        subprocess.run(["git", "init", "-q", str(local)], check=True)
+        repo = {"name": "demo", "prompt_template": None,
+                "local_path": str(local), "remote_name": "origin"}
+        env = executor._build_env(repo, self._issue())
+        assert env["GITLAB_TOKEN"] == "test-token"
 
 
 class TestRunTaskConcurrency:
@@ -903,6 +1115,7 @@ class TestWaitPipelineBeforeSucceed:
             add_comment=lambda *a, **k: calls.append(("comment", a)),
             add_labels=lambda *a, **k: calls.append(("labels", a)),
             find_commit_for_issue=lambda pid, iid: self.SHA,
+            last_note_author_id=lambda pid, iid: None,
             get_latest_pipeline=latest_pipeline,
             get_pipeline=lambda pid, pid2: {"id": pid2, "status": pipeline_status(),
                                             "sha": self.SHA},
@@ -1147,7 +1360,8 @@ class TestGitlabFallbackOnGlobalTokenFailure:
         executor.gitlab = SimpleNamespace(
             get_issue=self._boom, add_comment=self._boom,
             add_labels=self._boom, find_commit_for_issue=self._boom,
-            get_latest_pipeline=self._boom, get_pipeline=self._boom)
+            get_latest_pipeline=self._boom, get_pipeline=self._boom,
+            last_note_author_id=self._boom)
         monkeypatch.setattr(executor, "_log_file",
                             lambda tid: tmp_path / f"task_{tid}.log")
         monkeypatch.setattr("botler.executor.build_repo_client_with_username",
@@ -1171,6 +1385,8 @@ class TestGitlabFallbackOnGlobalTokenFailure:
             add_comment=lambda *a, **k: calls.append(("comment", a)),
             add_labels=lambda *a, **k: calls.append(("labels", a)),
             find_commit_for_issue=lambda pid, iid: None,
+            last_note_author_id=lambda pid, iid: None,
+            get_bot_id=lambda: 7,
             get_latest_pipeline=lambda pid: {"id": 1, "status": "success",
                                              "sha": "other-sha"},
         )
@@ -1261,11 +1477,16 @@ class TestGitlabFallbackOnGlobalTokenFailure:
         calls = []
         fallback = SimpleNamespace(
             add_labels=lambda *a, **k: calls.append(("labels", a)),
-            find_commit_for_issue=lambda pid, iid: None)
+            find_commit_for_issue=lambda pid, iid: None,
+            add_comment=lambda *a, **k: calls.append(("comment", a)),
+            last_note_author_id=lambda pid, iid: None,
+            get_bot_id=lambda: 7)
         self._install(executor, monkeypatch, tmp_path, fallback)
         db.claim_task(task_id)
 
         executor._finish_succeeded(task_id, "ok", repo=repo)
 
         assert ("labels", (42, 1, ["bot-done"])) in calls
+        assert any("任务已完成" in a[2]
+                   for kind, a in calls if kind == "comment")
         assert db.get_task(task_id)["status"] == "succeeded"

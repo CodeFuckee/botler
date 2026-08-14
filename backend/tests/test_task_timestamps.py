@@ -99,6 +99,7 @@ def _stub_gitlab(executor):
         add_comment=lambda *a, **k: None,
         add_labels=lambda *a, **k: None,
         find_commit_for_issue=lambda pid, iid: None,
+        last_note_author_id=lambda pid, iid: None,
     )
 
 
