@@ -306,3 +306,82 @@ class TestAiProvidersSettings:
             assert data[0]["api_key_masked"].endswith("-env")
         finally:
             os.environ.pop("BOTLER_TEST_DEEPSEEK_KEY", None)
+
+
+class TestDshSettings:
+    """dsh 段（issue #84）：GET 掩码返回 + PUT 更新与校验。"""
+
+    def test_get_settings_includes_dsh_defaults(self, client):
+        tc, _ = client
+        data = tc.get("/api/settings").json()
+        dsh = data["dsh"]
+        assert dsh["provider"] == "deepseek-official"
+        assert dsh["model"] == "deepseek-v4-flash"
+        assert dsh["max_tokens"] is None
+        assert dsh["session_root"] == ""
+        assert dsh["api_key_masked"] == ""
+
+    def test_update_dsh_persists(self, client):
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"dsh": {
+            "provider": "deepseek-official",
+            "model": "deepseek-chat",
+            "max_tokens": 8192,
+            "session_root": "/var/dsh-sessions",
+        }})
+        assert resp.status_code == 200
+        dsh = resp.json()["dsh"]
+        assert dsh["model"] == "deepseek-chat"
+        assert dsh["max_tokens"] == 8192
+        assert dsh["session_root"] == "/var/dsh-sessions"
+        # 写回 config.yaml 生效（重读磁盘）
+        config = ConfigManager(str(tmp_path / "config.yaml"))
+        s = config.load()
+        assert s.dsh_model == "deepseek-chat"
+        assert s.dsh_max_tokens == 8192
+
+    def test_update_dsh_api_key_masked(self, client):
+        """api_key 明文写入；GET 只返回掩码。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"dsh": {"api_key": "sk-secret"}})
+        assert resp.status_code == 200
+        dsh = resp.json()["dsh"]
+        assert "*" in dsh["api_key_masked"]  # 有掩码占位
+        assert "sk-secret" not in str(resp.json())  # 明文不回流
+
+    def test_update_dsh_masked_key_not_overwritten(self, client):
+        """回传掩码值（含 *）视为未修改，保留现有凭据（同 sso 模式）。"""
+        tc, _ = client
+        tc.put("/api/settings", json={"dsh": {"api_key": "sk-real"}})
+        before = tc.get("/api/settings").json()["dsh"]["api_key_masked"]
+        resp = tc.put("/api/settings", json={"dsh": {"api_key": "sk-****"}})
+        assert resp.status_code == 200
+        after = resp.json()["dsh"]["api_key_masked"]
+        assert after == before  # 掩码回传不覆盖，凭据未变
+
+    def test_update_dsh_blank_api_key_keeps_existing(self, client):
+        tc, _ = client
+        tc.put("/api/settings", json={"dsh": {"api_key": "sk-real"}})
+        before = tc.get("/api/settings").json()["dsh"]["api_key_masked"]
+        resp = tc.put("/api/settings", json={"dsh": {"api_key": ""}})
+        assert resp.json()["dsh"]["api_key_masked"] == before
+
+    def test_update_dsh_rejects_non_string(self, client):
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"dsh": {"model": 123}})
+        assert resp.status_code == 400
+        assert "dsh.model 必须是字符串" in resp.json()["detail"]
+
+    def test_update_dsh_rejects_bad_max_tokens(self, client):
+        tc, _ = client
+        for bad in (0, -1, "8192", 1.5):
+            resp = tc.put("/api/settings", json={"dsh": {"max_tokens": bad}})
+            assert resp.status_code == 400, f"max_tokens={bad} 应拒绝"
+
+    def test_update_dsh_accepts_null_max_tokens(self, client):
+        """max_tokens: null = 恢复 provider 默认。"""
+        tc, _ = client
+        tc.put("/api/settings", json={"dsh": {"max_tokens": 8192}})
+        resp = tc.put("/api/settings", json={"dsh": {"max_tokens": None}})
+        assert resp.status_code == 200
+        assert resp.json()["dsh"]["max_tokens"] is None

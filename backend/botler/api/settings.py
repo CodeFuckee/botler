@@ -71,6 +71,17 @@ def get_settings(request: Request):
             "command": s.claude_command,
             "args": s.claude_args,
         },
+        "dsh": {
+            # dsh 引擎（issue #84）：api_key 只返回掩码，明文不流转到界面
+            "provider": s.dsh_provider,
+            "model": s.dsh_model,
+            "max_tokens": s.dsh_max_tokens,
+            "session_root": s.dsh_session_root,
+            "cordis": s.dsh_cordis,
+            "runtime_bin": s.dsh_runtime_bin,
+            "base_url": s.dsh_base_url,
+            "api_key_masked": _mask(s.dsh_api_key),
+        },
         "templates": {
             "default": s.default_template,
             # 全局模板也可用全部占位符（issue #25：模板页全局视图
@@ -169,6 +180,11 @@ def update_settings(request: Request, body: dict):
         _validate_claude(claude_patch)
         c.config.update_claude(claude_patch)
 
+    dsh_patch = body.get("dsh")
+    if dsh_patch is not None:
+        _validate_dsh(dsh_patch)
+        c.config.update_dsh(dsh_patch)
+
     tpl = body.get("templates")
     if tpl is not None and "default" in tpl:
         c.config.update_default_template(tpl["default"])
@@ -246,6 +262,18 @@ def _validate_claude(patch: dict) -> None:
         raise HTTPException(400, "claude.command 必须是字符串")
     if "args" in patch and (not isinstance(patch["args"], list) or not all(isinstance(a, str) for a in patch["args"])):
         raise HTTPException(400, "claude.args 必须是字符串数组")
+
+
+def _validate_dsh(patch: dict) -> None:
+    """校验 dsh 段（issue #84）：字符串字段 + max_tokens 正整数或 null。"""
+    for key in ("provider", "model", "session_root", "cordis", "runtime_bin",
+                "base_url", "api_key"):
+        if key in patch and not isinstance(patch[key], str):
+            raise HTTPException(400, f"dsh.{key} 必须是字符串")
+    if "max_tokens" in patch and patch["max_tokens"] is not None:
+        val = patch["max_tokens"]
+        if not isinstance(val, int) or val <= 0:
+            raise HTTPException(400, "dsh.max_tokens 必须是正整数或 null")
 
 
 def _validate_browse(patch: dict) -> None:
