@@ -312,6 +312,19 @@
 
 ### Fixed
 
+- **概览页开放 Issue 长标题溢出遮挡评论数与时间（issue #81）**：概览页
+  开放 Issue 列表的标题链接 `.issue-link` 是 inline `<a>`，inline 元素上
+  `overflow:hidden` 与 `text-overflow:ellipsis` 不生效，长标题直接横向
+  溢出容器，遮挡右侧的评论数与最后更新时间。
+  - 前端 `styles.css`：`.issue-link` 显式声明 `display:block` 使省略号
+    截断生效（保留 overflow/ellipsis/nowrap）；`.issue-main` 补
+    `flex:1` 占据右侧元信息外的全部宽度（保留 `min-width:0`），
+    右侧 `.issue-side` 保持 `flex-shrink:0` 不被压缩；
+  - 测试：TDD 先行（复现测试红灯确认后实现），新增
+    `overview-issue-overflow.test.mjs` 2 用例（源码断言 issue-link
+    块级 display + 溢出三件套、issue-main flex:1 + min-width:0 与
+    issue-side flex-shrink:0）；前端全量 255 + 后端全量 719 通过。
+
 - **任务完成后任务报告没有输出到 issue 评论（issue #79）**：任务成功
   收尾只由平台打 bot-done 标签，结果评论依赖任务会话内 Claude 按模板
   自行留言；全局 bot token 失效期间 Claude 侧 API 401 失败，任务
