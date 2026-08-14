@@ -167,6 +167,58 @@ export default function Overview() {
   return (
     <div>
       <h1>概览</h1>
+
+      {/* issue #68：板块排序调整——开放 Issue 置于页面顶部，
+          其后依次为运行中任务、CI/CD 流水线 */}
+      <section className="issues-section">
+        <h2>开放 Issue</h2>
+        <p className="muted">已启用仓库的开放 issue，按仓库优先级排序（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
+        {issueError && (
+          <div className="alert alert-error" onClick={() => setIssueError('')}>{issueError}</div>
+        )}
+        {issueErrors.length > 0 && (
+          <div className="alert alert-error">
+            {issueErrors.map((e, i) => <div key={i}>{e}</div>)}
+          </div>
+        )}
+        {repoIssues.length === 0 || repoIssues.every((r) => !r.issues || r.issues.length === 0) ? (
+          <p className="muted">暂无开放 issue</p>
+        ) : (
+          <div className="issues-list">
+            {repoIssues.map((r) => (
+              <div key={r.repo_id} className="card issue-repo-card">
+                <div className="issue-repo-head">
+                  <span className="issue-repo-name" title="仓库">📁 {r.repo_name || '（已删除）'}</span>
+                  <span className="badge badge-muted" title="仓库优先级：数字越小越优先">
+                    优先级 {r.priority ?? 100}
+                  </span>
+                  <span className="muted">{r.issues.length} 个开放 issue</span>
+                </div>
+                {(r.issues || []).length === 0 ? (
+                  <p className="muted">该仓库暂无开放 issue</p>
+                ) : (
+                  <ul className="issue-list">
+                    {(r.issues || []).map((i) => (
+                      <li key={i.iid} className="issue-item">
+                        <a className="issue-link" href={i.web_url} target="_blank"
+                           rel="noreferrer" title="在 GitLab 中打开 issue">
+                          #{i.iid} — {i.title || '—'}
+                        </a>
+                        {i.updated_at && (
+                          <span className="issue-updated" title="最后更新时间">
+                            {fmtAgo(i.updated_at) || ''}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <p className="muted">正在执行的任务（每 {OVERVIEW_POLL_MS / 1000} 秒自动刷新）</p>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {tasks.length === 0 && !error ? (
@@ -261,55 +313,6 @@ export default function Overview() {
                 </div>
               )
             })}
-          </div>
-        )}
-      </section>
-
-      <section className="issues-section">
-        <h2>开放 Issue</h2>
-        <p className="muted">已启用仓库的开放 issue，按仓库优先级排序（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
-        {issueError && (
-          <div className="alert alert-error" onClick={() => setIssueError('')}>{issueError}</div>
-        )}
-        {issueErrors.length > 0 && (
-          <div className="alert alert-error">
-            {issueErrors.map((e, i) => <div key={i}>{e}</div>)}
-          </div>
-        )}
-        {repoIssues.length === 0 || repoIssues.every((r) => !r.issues || r.issues.length === 0) ? (
-          <p className="muted">暂无开放 issue</p>
-        ) : (
-          <div className="issues-list">
-            {repoIssues.map((r) => (
-              <div key={r.repo_id} className="card issue-repo-card">
-                <div className="issue-repo-head">
-                  <span className="issue-repo-name" title="仓库">📁 {r.repo_name || '（已删除）'}</span>
-                  <span className="badge badge-muted" title="仓库优先级：数字越小越优先">
-                    优先级 {r.priority ?? 100}
-                  </span>
-                  <span className="muted">{r.issues.length} 个开放 issue</span>
-                </div>
-                {(r.issues || []).length === 0 ? (
-                  <p className="muted">该仓库暂无开放 issue</p>
-                ) : (
-                  <ul className="issue-list">
-                    {(r.issues || []).map((i) => (
-                      <li key={i.iid} className="issue-item">
-                        <a className="issue-link" href={i.web_url} target="_blank"
-                           rel="noreferrer" title="在 GitLab 中打开 issue">
-                          #{i.iid} — {i.title || '—'}
-                        </a>
-                        {i.updated_at && (
-                          <span className="issue-updated" title="最后更新时间">
-                            {fmtAgo(i.updated_at) || ''}
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
           </div>
         )}
       </section>
