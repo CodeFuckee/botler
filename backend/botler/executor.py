@@ -52,6 +52,21 @@ UNRESOLVABLE_PATTERNS = [
 ]
 _UNRESOLVABLE_RE = re.compile("|".join(UNRESOLVABLE_PATTERNS), re.IGNORECASE)
 
+# 「等待用户决策」提问信号（issue #67）：无人值守执行中 Claude 停在
+# 需要用户选择/回答的节点时，最终回复的结尾会出现选项型提问
+# （「请选择 A 或 B」「请回复 1 或 2」「请问……？」等）。任务完成汇报的
+# 礼貌收尾（「请确认后关闭本 issue」「如有问题请回复我」）不在此列。
+# 命中的结尾再结合「无任务提交」双重确认才判定为等待用户决策。
+DECISION_QUESTION_RE = re.compile(
+    r"(请选择\s*[A-Za-zＡ-Ｚａ-ｚ][^。\n]{0,60}或|"
+    r"请选择\s*[A-Za-zＡ-Ｚａ-ｚ]\s*[/、]\s*[A-Za-zＡ-Ｚａ-ｚ]|"
+    r"请回复\s*[0-9１-９][^。\n]{0,60}(?:或|和)|"
+    r"请回复\s*[0-9１-９]\s*[/、]\s*[0-9１-９]|"
+    r"请决定[^。\n]{0,80}[?？]|"
+    r"请确认(?:是否|要|需)[^。\n]{0,80}[?？]|"
+    r"请问[^。\n]{0,120}[?？])"
+)
+
 # 日志保留行数（落盘 + 失败评论摘要）
 LOG_TAIL_LINES = 400
 COMMENT_TAIL_CHARS = 3000
@@ -1017,6 +1032,48 @@ class ClaudeExecutor:
     def _is_unresolvable(self, output: str) -> bool:
         return bool(_UNRESOLVABLE_RE.search(output))
 
+    def _result_text(self, output: str) -> str:
+        """提取引擎最终回复文本（claude result 行 / hermes final_response）。
+
+        输出非 JSON 时原样返回（与 _extract_error 的容错一致）。
+        """
+        data = self._last_json_object(output)
+        if data is None:
+            return output
+        if isinstance(data.get("result"), str):
+            return _decode_escapes(data["result"])
+        if isinstance(data.get("final_response"), str):
+            return data["final_response"]
+        return output
+
+    def _output_ends_with_question(self, output: str, window: int = 400) -> bool:
+        """最终回复结尾是否停在「等待用户决策」的提问上（issue #67）。
+
+        只看结尾 window 字符：提问信号出现在回复末尾才代表 Claude 停在
+        提问节点；中间提到过「请选择」但结尾是完成汇报的不算。
+        """
+        text = self._result_text(output)
+        if not text:
+            return False
+        return bool(DECISION_QUESTION_RE.search(text[-window:]))
+
+    def _extract_question(self, output: str, max_chars: int = 1000) -> str:
+        """提取最终回复中的提问段落（issue #67 反馈到 issue 评论用）。
+
+        从最后一个提问信号的所在行开始截到结尾（提问连同其上下文一起
+        反馈，用户才能理解要决策什么）；无提问信号时取回复尾部。
+        """
+        text = self._result_text(output)
+        if not text:
+            return ""
+        match = None
+        for match in DECISION_QUESTION_RE.finditer(text):
+            pass
+        start = 0
+        if match is not None:
+            start = text.rfind("\n", 0, match.start()) + 1
+        return text[start:][:max_chars]
+
     def _extract_error(self, output: str, max_chars: int = 3000) -> str:
         """从一次执行的输出中提取错误信息（trace 优先，否则取尾部）。
 
@@ -1106,12 +1163,15 @@ class ClaudeExecutor:
         return "timeout"
 
     def _await_task_pipeline(self, task_id: int, project_id: int,
-                             issue_iid: int,
+                             issue_iid: int, output: str = "",
                              repo: dict | None = None) -> str:
         """成功收尾前的流水线等待入口（issue #40）：拿任务提交 sha 并等待终态。
 
         查不到提交（Claude 未推送代码，仅评论/分析）→ "no_pipeline" 不等待；
         查询提交失败（GitLab 报错）→ 同样降级 "no_pipeline"（不阻塞成功收尾）。
+        查不到提交且最终回复以「等待用户决策」提问结尾（issue #67）→
+        "awaiting_decision"：无人值守下 Claude 停在提问节点后自行退出，
+        并无任何交付，任务不能判成功，提问应反馈到 issue 等待用户回复。
         """
         try:
             sha, _ = self._call_with_fallback(
@@ -1120,6 +1180,12 @@ class ClaudeExecutor:
             self.db.add_log(task_id, "warn", f"查询任务提交失败，跳过流水线等待: {e}")
             return "no_pipeline"
         if not sha:
+            if self._output_ends_with_question(output):
+                self.db.add_log(
+                    task_id, "info",
+                    "未找到任务提交，且 Claude 最终回复以提问结尾，"
+                    "判定为等待用户决策（问题反馈到 issue）")
+                return "awaiting_decision"
             self.db.add_log(task_id, "info", "未找到任务提交，无流水线可等，直接成功收尾")
             return "no_pipeline"
         self.db.add_log(task_id, "info", f"等待任务提交 {sha[:8]} 触发的 CI 流水线到达终态…")
@@ -1132,13 +1198,17 @@ class ClaudeExecutor:
 
         claude 与 hermes 两引擎共用：等待任务提交触发的 CI 流水线终态，
         failed/canceled/timeout → 失败收尾；success/skipped/no_pipeline →
-        成功收尾（打 bot-done、记录 commit、发通知）。
+        成功收尾（打 bot-done、记录 commit、发通知）；awaiting_decision →
+        提问反馈收尾（issue #67，任务未完成，等用户回复）。
         """
         # issue #40：成功收尾前等待任务提交触发的 CI 流水线终态。
         # 此前 claude exit 0 即判成功，流水线还在运行任务就显示
         # 已完成（任务 #63 于 13:31:45 收尾，流水线到 13:48:34 才结束）。
         pipeline_state = self._await_task_pipeline(task_id, project_id,
-                                                   issue_iid, repo)
+                                                   issue_iid, output, repo)
+        if pipeline_state == "awaiting_decision":
+            self._finish_asked(task_id, output, repo=repo)
+            return
         if pipeline_state == "stopped":
             self._finish_stopped(task_id)
             return
@@ -1385,13 +1455,16 @@ class ClaudeExecutor:
         self._record_commit(task_id, repo)
         # issue #34：成功时由平台代码直接打 bot-done 标签（幂等），不再依赖
         # Claude 按模板打——Claude 忘打会导致 issue 无终态标签被重复领取。
+        # issue #67：同步移除 in-progress（Claude 领取时打的处理中标签），
+        # 避免收尾后与终态标签并存。
         # 打标签失败不阻塞任务成功（仅记 warn，用户可手动补标签）。
         task = self.db.get_task(task_id)
         if task is not None:
             try:
                 self._call_with_fallback(
                     repo, lambda c: c.add_labels(
-                        task["project_id"], task["issue_iid"], ["bot-done"]))
+                        task["project_id"], task["issue_iid"], ["bot-done"],
+                        remove=["in-progress"]))
                 # issue #49：finished_at 语义 = 系统给 issue 打上 bot-done
                 # 标记的时间。打标签成功后把 finished_at 更新为打标时刻，
                 # 任务页「用时」以它与 created_at（系统接收时间）动态计算
@@ -1462,13 +1535,67 @@ class ClaudeExecutor:
             try:
                 self._call_with_fallback(
                     repo, lambda c: c.add_labels(
-                        task["project_id"], task["issue_iid"], ["bot-failed"]))
+                        task["project_id"], task["issue_iid"], ["bot-failed"],
+                        remove=["in-progress"]))
                 self.db.add_log(task_id, "info", "已打 bot-failed 标签")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"打 bot-failed 标签失败: {e}")
             # 网页通知：任务需要人工介入（issue #21）
             self._emit_task_event(task_id, "task_failed", reason)
         logger.warning("任务 %s 失败: %s", task_id, reason)
+
+    def _finish_asked(self, task_id: int, output: str,
+                      repo: dict | None = None) -> None:
+        """「等待用户决策」收尾（issue #67）：Claude 的提问反馈到 issue，任务判 failed。
+
+        无人值守下 Claude 停在需要用户决策的提问节点后自行退出，任务实际
+        未完成（无提交、无 CI）——不能判 succeeded 打 bot-done，也不能按
+        普通失败重试（重试仍会停在同一个问题）。把提问原文贴到 issue 评论，
+        打 blocked 标签（不在领取过滤标签中）：用户回复后经重新指派或
+        对账扫描再次入队，新任务可读到回复后继续处理。
+        """
+        task = self.db.get_task(task_id)
+        # 条件终态（issue #24）：任务已被其他实例先收尾时不再覆盖状态、
+        # 不重复评论/通知
+        if not self.db.finish_task(
+                task_id, STATUS_FAILED,
+                exit_code=None,
+                error_message="Claude 在执行中遇到需要用户决策的问题，"
+                              "提问已反馈至 issue，等待用户回复后重新处理",
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())):
+            logger.info("任务 %s 提问收尾被跳过（状态已非运行中，可能已被其他实例收尾）", task_id)
+            return
+        self.db.add_log(task_id, "error",
+                        "任务未完成：Claude 停在等待用户决策的提问节点，问题已反馈到 issue")
+        self._write_log_tail(task_id, output)
+
+        if task:
+            question = self._extract_question(output)
+            comment = (
+                "🤖 Botler 自动回复：Claude 在执行中遇到需要您决策的问题，"
+                "暂时无法继续，请回复后重新处理。\n\n"
+                "**Claude 的问题**：\n\n"
+                f"{question}\n\n"
+                "请在本 issue 直接回复您的选择，回复后 bot 会重新领取处理。")
+            try:
+                self._call_with_fallback(
+                    repo, lambda c: c.add_comment(
+                        task["project_id"], task["issue_iid"], comment))
+                self.db.add_log(task_id, "info", "已在 issue 上留提问评论，等待用户回复")
+            except GitLabError as e:
+                self.db.add_log(task_id, "error", f"留提问评论失败: {e}")
+            try:
+                self._call_with_fallback(
+                    repo, lambda c: c.add_labels(
+                        task["project_id"], task["issue_iid"], ["blocked"],
+                        remove=["in-progress"]))
+                self.db.add_log(task_id, "info", "已打 blocked 标签，等待用户回复")
+            except GitLabError as e:
+                self.db.add_log(task_id, "error", f"打 blocked 标签失败: {e}")
+            # 网页通知：任务需要用户决策（issue #21 渠道复用失败通知）
+            self._emit_task_event(task_id, "task_failed",
+                                  "Claude 等待用户决策，问题已反馈到 issue")
+        logger.warning("任务 %s 等待用户决策，问题已反馈到 issue", task_id)
 
     def _write_log_tail(self, task_id: int, output: str) -> None:
         tail = self._tail_output(output)

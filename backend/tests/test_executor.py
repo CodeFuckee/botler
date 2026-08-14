@@ -536,6 +536,120 @@ class TestRepoSqlite3RowCompat:
         assert not any("sqlite3.Row" in m for m in logs)
 
 
+class TestAwaitingDecision:
+    """issue #67：无人值守执行中 Claude 停在「需要用户决策」的提问节点。
+
+    复现缺陷：claude -p 无人值守时，Claude 遇到需要用户决策的问题
+    （如 fix-bug 流程评估多方案后提问「请选择 A 或 B」）只会把问题留在
+    终端输出里，随后自行退出（exit 0）。旧判定 exit 0 + result 行即
+    成功 → 任务被标 succeeded、issue 被打 bot-done，提问从未反馈给
+    用户（生产任务 #90 处理 issue #66：约 4 分钟跑完，无任何提交、
+    无 CI，却被判成功并打 bot-done）。
+    修复后：提问结尾且无任务提交 → 任务 failed（未完成），Claude 的
+    提问反馈到 issue 评论 + 打 blocked 标签（不在领取过滤标签中，
+    用户回复后经重新指派/对账可再次入队按回复继续处理）。
+    """
+
+    QUESTION_OUTPUT = json.dumps({
+        "result": "**第四阶段：评估修复方案，请用户决策**\n\n"
+                  "| | 方案 A | 方案 B |\n"
+                  "|做法| 断点降列 | auto-fit 自适应 |\n\n"
+                  "**建议方案 B**。\n\n请选择 A 或 B（或提出其他要求）。",
+    }, ensure_ascii=False)
+
+    def _install(self, executor, monkeypatch, tmp_path, run_once,
+                 commit_sha=None, issue_state="opened"):
+        """fake _run_once + fake gitlab；commit_sha 控制提交查询结果。"""
+        calls = []
+        executor.gitlab = SimpleNamespace(
+            get_issue=lambda pid, iid: {"state": issue_state},
+            add_comment=lambda *a, **k: calls.append(("comment", a, k)),
+            add_labels=lambda *a, **k: calls.append(("labels", a, k)),
+            find_commit_for_issue=lambda pid, iid: commit_sha,
+            get_latest_pipeline=lambda pid: {"id": 1, "status": "success",
+                                             "sha": "other-sha"},
+        )
+        monkeypatch.setattr(executor, "_run_once", run_once)
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+        return calls
+
+    def test_question_ending_without_commit_fails_and_posts_question(self, executor, monkeypatch, tmp_path):
+        """提问结尾 + 无任务提交：任务判 failed（未完成），提问反馈到 issue，打 blocked。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        calls = self._install(executor, monkeypatch, tmp_path,
+                              run_once=lambda *a: (0, self.QUESTION_OUTPUT))
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "failed", "任务未完成却被判成功（修复前为 succeeded）"
+        assert "用户决策" in task["error_message"]
+        assert task["attempt_count"] == 1
+        # 提问内容反馈到 issue 评论（不再是只在终端里）
+        comments = [a[2] for kind, a, k in calls if kind == "comment"]
+        assert any("请选择 A 或 B" in c for c in comments), \
+            f"提问未反馈到 issue 评论: {comments}"
+        # 打 blocked 等用户回复，而不是 bot-done
+        assert ("labels", (42, 1, ["blocked"]), {}) in calls or \
+            any(kind == "labels" and a[2] == ["blocked"] for kind, a, k in calls), \
+            f"未打 blocked 标签: {calls}"
+        assert not any(kind == "labels" and a[2] == ["bot-done"]
+                       for kind, a, k in calls), "不应打 bot-done"
+
+    def test_normal_completion_without_commit_still_succeeds(self, executor, monkeypatch, tmp_path):
+        """正常完成汇报结尾（非提问）+ 无提交（分析型任务）：仍判成功，不误伤。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps(
+            {"result": "开发完成，已推送代码，打了 bot-done 标签，请确认后关闭本 issue。"},
+            ensure_ascii=False)
+        calls = self._install(executor, monkeypatch, tmp_path,
+                              run_once=lambda *a: (0, output))
+        _shorten_ci_timeouts(executor, monkeypatch)
+
+        executor.run_task(task_id)
+
+        assert db.get_task(task_id)["status"] == "succeeded"
+        assert any(kind == "labels" and a[2] == ["bot-done"]
+                   for kind, a, k in calls)
+
+    def test_question_ending_with_commit_still_succeeds(self, executor, monkeypatch, tmp_path):
+        """提问结尾但有任务提交（已推送代码）：不判等待决策，走成功路径。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        sha = "deadbeef000111222333444555666777888999aa"
+        calls = self._install(executor, monkeypatch, tmp_path,
+                              run_once=lambda *a: (0, self.QUESTION_OUTPUT),
+                              commit_sha=sha)
+        _shorten_ci_timeouts(executor, monkeypatch)
+
+        executor.run_task(task_id)
+
+        assert db.get_task(task_id)["status"] == "succeeded"
+        assert any(kind == "labels" and a[2] == ["bot-done"]
+                   for kind, a, k in calls)
+
+    def test_output_ends_with_question_signal(self, executor):
+        """提问信号检测：选项型提问命中，完成汇报/礼貌收尾不命中。"""
+        assert executor._output_ends_with_question(json.dumps(
+            {"result": "请选择 A 或 B（或提出其他要求）。"}, ensure_ascii=False))
+        assert executor._output_ends_with_question(json.dumps(
+            {"result": "方案如下，请问需要我继续实施吗？"}, ensure_ascii=False))
+        assert executor._output_ends_with_question(json.dumps(
+            {"result": "请回复 1 或 2 以确认后续步骤。"}, ensure_ascii=False))
+        assert not executor._output_ends_with_question(json.dumps(
+            {"result": "开发已完成，请确认后关闭本 issue。"}, ensure_ascii=False))
+        assert not executor._output_ends_with_question(json.dumps(
+            {"result": "如有问题请回复我。"}, ensure_ascii=False))
+        assert not executor._output_ends_with_question(json.dumps(
+            {"result": "修复完成，已推送并等待 CI。"}, ensure_ascii=False))
+
+
 # ---- issue #19：任务成功时记录对应提交（任务页面 commit 链接） ----
 
 class TestCommitRecording:
@@ -645,20 +759,21 @@ class TestSucceededAddsBotDoneLabel:
     """
 
     def test_success_adds_bot_done_label(self, executor, tmp_path):
-        """_finish_succeeded 应调用 add_labels 打 bot-done。"""
+        """_finish_succeeded 应调用 add_labels 打 bot-done（issue #67：同步移除 in-progress）。"""
         db = executor.db
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id)
         labels_calls = []
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
-            add_labels=lambda pid, iid, labels: labels_calls.append((pid, iid, labels)))
+            add_labels=lambda pid, iid, labels, remove=None: labels_calls.append(
+                (pid, iid, labels, remove)))
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)  # 模拟执行中状态（finish 仅接受 running/retrying）
         executor._finish_succeeded(task_id, "ok")
 
-        assert labels_calls == [(42, 1, ["bot-done"])]
+        assert labels_calls == [(42, 1, ["bot-done"], ["in-progress"])]
         task = db.get_task(task_id)
         assert task["status"] == "succeeded"
         logs = [l["message"] for l in db.list_logs(task_id)]
@@ -671,7 +786,7 @@ class TestSucceededAddsBotDoneLabel:
         task_id = _mk_task(db, repo_id)
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
-            add_labels=lambda pid, iid, labels: (_ for _ in ()).throw(
+            add_labels=lambda pid, iid, labels, remove=None: (_ for _ in ()).throw(
                 GitLabError("GitLab API 错误 500: boom", 500)))
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
@@ -691,7 +806,8 @@ class TestSucceededAddsBotDoneLabel:
         labels_calls = []
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: None,
-            add_labels=lambda pid, iid, labels: labels_calls.append((pid, iid, labels)))
+            add_labels=lambda pid, iid, labels, remove=None: labels_calls.append(
+                (pid, iid, labels, remove)))
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         db.claim_task(task_id)

@@ -80,7 +80,7 @@ class TestFinishSucceededBotDoneTimestamp:
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
         label_done: list[str] = []
 
-        def fake_add_labels(pid, iid, labels):
+        def fake_add_labels(pid, iid, labels, remove=None):
             time.sleep(1.2)  # 模拟打标 API 耗时
             label_done.append(time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
 

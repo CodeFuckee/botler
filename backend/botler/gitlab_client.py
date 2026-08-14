@@ -328,10 +328,16 @@ class GitLabClient:
         assert isinstance(note, dict)
         return note
 
-    def add_labels(self, project_id: int, iid: int, labels: list[str]) -> dict:
+    def add_labels(self, project_id: int, iid: int, labels: list[str],
+                   remove: list[str] | None = None) -> dict:
+        """加标签；remove 非空时同一次请求移除对应标签（issue #67：收尾
+        移除 in-progress，避免与终态标签并存）。"""
+        body: dict = {"add_labels": ",".join(labels)}
+        if remove:
+            body["remove_labels"] = ",".join(remove)
         issue = self._request(
             "PUT", f"/projects/{project_id}/issues/{iid}",
-            json={"add_labels": ",".join(labels)})
+            json=body)
         assert isinstance(issue, dict)
         return issue
 
