@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import Repos from './pages/Repos.jsx'
 import Overview from './pages/Overview.jsx'
 import Templates from './pages/Templates.jsx'
@@ -67,7 +67,8 @@ export default function App() {
         <NavLink to="/overview" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           概览
         </NavLink>
-        <NavLink to="/" end className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+        {/* issue #54：默认页改为概览页，仓库页迁至 /repos */}
+        <NavLink to="/repos" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           仓库
         </NavLink>
         <NavLink to="/tasks" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
@@ -93,8 +94,11 @@ export default function App() {
       </nav>
       <main className="content">
         <Routes>
-          <Route path="/" element={<Repos />} />
+          {/* issue #54：默认页面改到概览页——/ 重定向到 /overview，
+              仓库页迁至 /repos（replace 避免后退键卡在重定向环） */}
+          <Route path="/" element={<Navigate to="/overview" replace />} />
           <Route path="/overview" element={<Overview />} />
+          <Route path="/repos" element={<Repos />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/tasks/:id" element={<TaskDetail />} />
           <Route path="/templates" element={<Templates />} />

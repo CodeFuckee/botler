@@ -42,9 +42,10 @@ after(() => vite.close())
 test('顶部导航「概览」位于「仓库」tab 左边', () => {
   const nav = app.match(/<nav[\s\S]*?<\/nav>/)[0]
   const overviewLink = nav.match(/<NavLink[^>]*to="\/overview"[^>]*>/)
-  const reposLink = nav.match(/<NavLink[^>]*to="\/"[^>]*>/)
+  // issue #54：默认页改为概览页后仓库页迁至 /repos
+  const reposLink = nav.match(/<NavLink[^>]*to="\/repos"[^>]*>/)
   assert.ok(overviewLink, '导航应有到 /overview 的 NavLink')
-  assert.ok(reposLink, '导航应有到 / 的仓库 NavLink')
+  assert.ok(reposLink, '导航应有到 /repos 的仓库 NavLink')
   assert.ok(
     overviewLink.index < reposLink.index,
     '「概览」NavLink 应位于「仓库」NavLink 之前（issue 要求放在仓库 tab 左边）',

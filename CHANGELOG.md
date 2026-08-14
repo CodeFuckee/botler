@@ -107,6 +107,17 @@
 
 ### Fixed
 
+- **默认页面改到概览页面（issue #54）**：打开平台默认落在仓库页，现改为
+  默认进入概览页。根路径 `/` 重定向到 `/overview`（replace 导航，后退键
+  不会卡在重定向环），仓库页迁至 `/repos`，顶部导航「仓库」链接同步指向
+  `/repos`。
+  - 前端 `App.jsx`：路由 `/` 由 `<Repos />` 改为
+    `<Navigate to="/overview" replace />`，新增 `/repos` 路由挂载仓库页，
+    「仓库」NavLink `to` 由 `/` 改为 `/repos`；
+  - 测试：新增 `app-default-page.test.mjs` 2 用例（访问 `/` 渲染概览页且
+    不渲染仓库页 / `/repos` 渲染仓库页）；`overview-page.test.mjs` 导航
+    断言随仓库页迁址更新；前端全量 199 passed + 后端全量 591 passed。
+
 - **任务页面两侧有空白时任务列表不再出现水平滚动条（issue #53）**：1440~
   1919px 视口下任务列表出现水平滚动条，页面左右两侧却还有大量空白。根因：
   border-box 下任务表格可用宽度 = `--content-width` − 80px（.content/.card
