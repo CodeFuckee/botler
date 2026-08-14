@@ -31,7 +31,7 @@
 ## 使用约定
 
 1. **一个 issue 至少一个类型标签 + 至多一个流程标签**：类型标签描述工作性质，流程标签描述当前进展（通常为 `in-progress` 或 `blocked`；`need-verify` 由人工标记、bot 领取任务时跳过；`bot-done` / `bot-failed` 由 bot 在收尾时打）。
-2. **优先级判定**（GitLab Issue Agent）：`test` > `bug` > `feature`；同优先级按 issue 更新时间升序处理。
+2. **优先级判定**（GitLab Issue Agent）：默认 `bug` > `test` > `feature`（同仓库队列内，bug 最优先）；顺序可在平台设置页「任务调度 → issue 标签优先级」自定义，未列出的标签排在最后；同优先级按 issue 更新时间升序处理。
 3. **禁止删除**：`bot-done` / `bot-failed` 由 bot 流程管理，人工不要移除；旧标签（如 `ci`）保留不删，仅新工作统一使用本规范标签。
 4. 新增标签需先更新本文件，再运行 `scripts/sync_labels.py` 同步到全部仓库。
 

@@ -105,6 +105,17 @@ export default function Settings() {
   const setWorkerField = (key, val) =>
     setSettings((s) => ({ ...s, worker: { ...s.worker, [key]: val } }))
 
+  // issue 标签优先级（issue #76）：文本框逗号分隔输入 ↔ 数组存储，
+  // 提交时作为 worker.issue_priority 数组写回
+  const setIssuePriority = (text) =>
+    setSettings((s) => ({
+      ...s,
+      worker: {
+        ...s.worker,
+        issue_priority: text.split(',').map((x) => x.trim()).filter(Boolean),
+      },
+    }))
+
   const setNotifyField = (key, val) =>
     setSettings((s) => ({ ...s, notifications: { ...s.notifications, [key]: val } }))
 
@@ -157,6 +168,8 @@ export default function Settings() {
       for (const k of Object.keys(FIELD_LABELS)) {
         worker[k] = Number(settings.worker[k])
       }
+      // issue 标签优先级（issue #76）：跟随全局「保存」提交 worker 段
+      worker.issue_priority = settings.worker.issue_priority || ['bug', 'test', 'feature']
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
@@ -340,8 +353,24 @@ export default function Settings() {
                 </td>
               </tr>
             ))}
+            <tr>
+              <th>issue 标签优先级 <code>worker.issue_priority</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  placeholder="bug, test, feature"
+                  value={(settings.worker.issue_priority || []).join(', ')}
+                  onChange={(e) => setIssuePriority(e.target.value)}
+                />
+              </td>
+            </tr>
           </tbody>
         </table>
+        <p className="muted small">
+          issue 标签优先级：同仓库有多个排队任务时，按此顺序优先派发标签命中靠前的
+          issue（默认 bug 最优先）；未列出的标签排在最后，同优先级按 issue 更新时间
+          升序处理。逗号分隔、可增删调整顺序，修改后点击「保存」对已排队任务立即生效。
+        </p>
         <div className="form-row">
           <button className="btn btn-primary" disabled={busy} onClick={save}>
             {busy ? '保存中…' : '保存'}

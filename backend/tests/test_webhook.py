@@ -393,3 +393,32 @@ class TestWebhookGlobalTokenFallback:
         assert result["accepted"] is False
         assert "查询 issue 失败" in result["reason"]
         assert ctx.db.count_tasks() == 0
+
+
+class TestWebhookStoresIssueLabelsForPriority:
+    """issue #76：webhook 入队时把 issue 标签与更新时间落库，供调度器排序。"""
+
+    def test_task_stores_api_labels(self, ctx):
+        """任务创建时记录 API 最新标签（供调度器标签权重排序）。"""
+        _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["bug", "ui"])
+        ctx.gitlab.current_issue["updated_at"] = "2026-08-14T08:00:00.000+08:00"
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        task = ctx.db.find_active_task(PROJECT_ID, IID)
+        assert task["issue_labels"] == '["bug", "ui"]'
+        assert task["issue_updated_at"] == "2026-08-14 00:00:00"  # 归一化 UTC
+
+    def test_task_stores_empty_labels_when_none(self, ctx):
+        """issue 无标签：写空数组（调度器把无标签任务排最后）。"""
+        _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=[])
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        task = ctx.db.find_active_task(PROJECT_ID, IID)
+        assert task["issue_labels"] == "[]"
+        assert task["issue_updated_at"] == ""  # 无 updated_at 时存空串

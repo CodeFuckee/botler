@@ -12,7 +12,7 @@ import hmac
 import logging
 
 from .config import ConfigManager
-from .database import Database
+from .database import Database, normalize_issue_updated_at
 from .gitlab_client import GitLabClient, GitLabError
 from .git_remote import build_repo_client_with_username
 from .labels import CLAIM_SKIP_LABELS
@@ -129,8 +129,12 @@ class WebhookHandler:
             return {"accepted": False, "reason": "仓库已停用"}
 
         title = issue.get("title") or attrs.get("title") or f"issue #{issue_iid}"
+        # issue #76：入队时记录 issue 标签与更新时间，调度器按配置的
+        # 标签优先级排序派发（标签以 API 最新状态为准，与步骤 4 一致）
         task_id = self.db.create_task(
-            repo["id"], project_id, issue_iid, title, triggered_by="webhook")
+            repo["id"], project_id, issue_iid, title, triggered_by="webhook",
+            issue_labels=cur_labels,
+            issue_updated_at=normalize_issue_updated_at(current.get("updated_at")))
         if task_id is None:
             return {"accepted": True, "reason": "已有活跃任务，跳过（去重）"}
         self.scheduler.enqueue(task_id)

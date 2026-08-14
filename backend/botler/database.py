@@ -16,7 +16,7 @@ import os
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   finished_at TEXT,
   commit_sha TEXT,
   hermes_history TEXT,
+  issue_labels TEXT DEFAULT '[]',
+  issue_updated_at TEXT DEFAULT '',
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -106,6 +108,21 @@ CREATE TABLE IF NOT EXISTS notification_events (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_task
   ON notification_events(task_id) WHERE task_id IS NOT NULL;
 """
+
+
+def normalize_issue_updated_at(value: str | None) -> str:
+    """归一化 GitLab issue 更新时间（issue #76）：ISO8601（含时区）→
+    UTC 'YYYY-MM-DD HH:MM:SS'（与 tasks.created_at 同格式，字符串可直接
+    比较）。解析失败/空值返回空串（调度器用 created_at 兜底）。"""
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)  # 无时区按 UTC 语义（与 created_at 一致）
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_db_ts(s: str) -> datetime | None:
@@ -191,6 +208,16 @@ class Database:
             if "dsh_session_id" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN dsh_session_id TEXT")
             conn.execute("PRAGMA user_version = 5")
+        if ver < 6:
+            # issue #76：issue 标签优先级排序——入队时记录 issue 标签
+            # （JSON 数组）与 GitLab issue 更新时间（UTC 串），调度器按
+            # 配置的标签顺序选任务派发
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "issue_labels" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN issue_labels TEXT DEFAULT '[]'")
+            if "issue_updated_at" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN issue_updated_at TEXT DEFAULT ''")
+            conn.execute("PRAGMA user_version = 6")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -333,8 +360,15 @@ class Database:
     # ---- tasks ----
 
     def create_task(self, repo_id: int, project_id: int, issue_iid: int,
-                    issue_title: str, triggered_by: str = "webhook") -> int | None:
-        """创建任务。若已有活跃任务则返回 None（去重）。"""
+                    issue_title: str, triggered_by: str = "webhook",
+                    issue_labels: list[str] | None = None,
+                    issue_updated_at: str | None = None) -> int | None:
+        """创建任务。若已有活跃任务则返回 None（去重）。
+
+        issue_labels / issue_updated_at（issue #76）：入队时记录 issue 标签
+        与更新时间，调度器按配置的标签优先级选任务派发。
+        """
+        labels_json = json.dumps(issue_labels or [], ensure_ascii=False)
         with self._conn() as conn:
             dup = conn.execute(
                 """SELECT id FROM tasks WHERE project_id=? AND issue_iid=?
@@ -343,9 +377,11 @@ class Database:
             if dup:
                 return None
             cur = conn.execute(
-                """INSERT INTO tasks (repo_id, project_id, issue_iid, issue_title, status, triggered_by)
-                   VALUES (?, ?, ?, ?, 'queued', ?)""",
-                (repo_id, project_id, issue_iid, issue_title, triggered_by))
+                """INSERT INTO tasks (repo_id, project_id, issue_iid, issue_title, status, triggered_by,
+                                      issue_labels, issue_updated_at)
+                   VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)""",
+                (repo_id, project_id, issue_iid, issue_title, triggered_by,
+                 labels_json, issue_updated_at or ""))
             return cur.lastrowid
 
     def get_task(self, task_id: int) -> sqlite3.Row | None:

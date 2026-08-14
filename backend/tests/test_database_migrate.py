@@ -220,3 +220,75 @@ class TestMigrateDshSessionId:
         db.set_task_status(task_id, "running")
         assert db.finish_task(task_id, "failed", dsh_session_id="dsh-sess-2")
         assert db.get_task(task_id)["dsh_session_id"] == "dsh-sess-2"
+
+
+class TestMigrateIssueLabels:
+    """v6 迁移（issue #76）：tasks 新增 issue_labels / issue_updated_at。"""
+
+    def test_old_db_gets_issue_labels_columns(self, tmp_path):
+        """旧库迁移补 issue_labels / issue_updated_at 列。"""
+        _build_old_db(tmp_path / "old.db")
+        db = Database(str(tmp_path / "old.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "issue_labels" in cols
+        assert "issue_updated_at" in cols
+
+    def test_new_db_has_issue_labels_columns(self, tmp_path):
+        """新库建表语句应直接含 issue_labels / issue_updated_at 列。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "issue_labels" in cols
+        assert "issue_updated_at" in cols
+
+    def test_create_task_stores_issue_labels(self, tmp_path):
+        """create_task 写入 issue_labels（JSON 数组）与 issue_updated_at。"""
+        db = Database(str(tmp_path / "w.db"))
+        db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo_id = db.get_repo_by_project_id(42)["id"]
+        task_id = db.create_task(
+            repo_id, 42, 7, "标题", issue_labels=["bug", "ui"],
+            issue_updated_at="2026-08-14 08:00:00")
+        task = db.get_task(task_id)
+        assert task["issue_labels"] == '["bug", "ui"]'
+        assert task["issue_updated_at"] == "2026-08-14 08:00:00"
+
+    def test_create_task_defaults_labels_empty(self, tmp_path):
+        """不传 issue_labels 时写空数组（不是 NULL），调度排序统一处理。"""
+        db = Database(str(tmp_path / "d.db"))
+        db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo_id = db.get_repo_by_project_id(42)["id"]
+        task_id = db.create_task(repo_id, 42, 7, "标题")
+        task = db.get_task(task_id)
+        assert task["issue_labels"] == "[]"
+        assert task["issue_updated_at"] == ""
+
+
+class TestNormalizeIssueUpdatedAt:
+    """GitLab issue 更新时间归一化（issue #76）。"""
+
+    def test_iso_with_timezone_normalized_to_utc(self):
+        from botler.database import normalize_issue_updated_at
+        # GitLab API 返回 +08:00 时间 → 转 UTC
+        assert normalize_issue_updated_at("2026-08-14T08:00:00.000+08:00") \
+            == "2026-08-14 00:00:00"
+        assert normalize_issue_updated_at("2026-08-14T08:00:00+08:00") \
+            == "2026-08-14 00:00:00"
+
+    def test_utc_z_suffix(self):
+        from botler.database import normalize_issue_updated_at
+        assert normalize_issue_updated_at("2026-08-14T08:00:00Z") \
+            == "2026-08-14 08:00:00"
+
+    def test_naive_treated_as_utc(self):
+        from botler.database import normalize_issue_updated_at
+        assert normalize_issue_updated_at("2026-08-14 08:00:00") \
+            == "2026-08-14 08:00:00"
+
+    def test_empty_and_invalid_return_empty(self):
+        from botler.database import normalize_issue_updated_at
+        assert normalize_issue_updated_at(None) == ""
+        assert normalize_issue_updated_at("") == ""
+        assert normalize_issue_updated_at("not-a-time") == ""
+        assert normalize_issue_updated_at("2026-13-45T99:99:99Z") == ""

@@ -385,3 +385,69 @@ class TestDshSettings:
         resp = tc.put("/api/settings", json={"dsh": {"max_tokens": None}})
         assert resp.status_code == 200
         assert resp.json()["dsh"]["max_tokens"] is None
+
+
+class TestIssuePrioritySettings:
+    """worker.issue_priority 段（issue #76）：issue 标签处理优先级顺序配置。"""
+
+    def test_get_settings_includes_issue_priority_default(self, client):
+        """未配置时返回默认顺序 bug > test > feature。"""
+        tc, _ = client
+        data = tc.get("/api/settings").json()
+        assert data["worker"]["issue_priority"] == ["bug", "test", "feature"]
+
+    def test_update_issue_priority_persists(self, client):
+        """更新标签顺序并写回 config.yaml。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "issue_priority": ["bug", "feature", "test"]}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["issue_priority"] == ["bug", "feature", "test"]
+        # 写回 config.yaml 生效（重读磁盘）
+        config = ConfigManager(str(tmp_path / "config.yaml"))
+        s = config.load()
+        assert s.issue_priority_labels == ["bug", "feature", "test"]
+
+    def test_update_issue_priority_keeps_other_worker_fields(self, client):
+        """部分更新：只提交 issue_priority 不影响 worker 其他字段。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"worker": {"max_concurrent_repos": 5}})
+        resp = tc.put("/api/settings", json={"worker": {
+            "issue_priority": ["feature", "bug"]}})
+        assert resp.status_code == 200
+        config = ConfigManager(str(tmp_path / "config.yaml"))
+        s = config.load()
+        assert s.max_concurrent_repos == 5
+        assert s.issue_priority_labels == ["feature", "bug"]
+
+    def test_update_issue_priority_rejects_non_list(self, client):
+        tc, _ = client
+        for bad in ("bug,test", 123, {"bug": 1}, None):
+            resp = tc.put("/api/settings", json={"worker": {"issue_priority": bad}})
+            assert resp.status_code == 400, f"issue_priority={bad} 应拒绝"
+
+    def test_update_issue_priority_rejects_empty_list(self, client):
+        """空列表拒绝：至少保留一个标签（全未命中 = 全部排最后，无意义）。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {"issue_priority": []}})
+        assert resp.status_code == 400
+
+    def test_update_issue_priority_rejects_non_string_item(self, client):
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "issue_priority": ["bug", 123]}})
+        assert resp.status_code == 400
+
+    def test_update_issue_priority_rejects_invalid_label_name(self, client):
+        """标签名须符合 GitLab 标签规则（字母/数字开头）。"""
+        tc, _ = client
+        for bad in ("", " ", "-bug", "bug label 中文", "a" * 61):
+            resp = tc.put("/api/settings", json={"worker": {
+                "issue_priority": [bad, "feature"]}})
+            assert resp.status_code == 400, f"标签名 {bad!r} 应拒绝"
+
+    def test_update_issue_priority_rejects_duplicate(self, client):
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "issue_priority": ["bug", "test", "bug"]}})
+        assert resp.status_code == 400

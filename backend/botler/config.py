@@ -53,6 +53,20 @@ def _notify_default(notify: dict, key: str, default: bool) -> bool:
     return val if isinstance(val, bool) else default
 
 
+# issue 标签优先级默认顺序（issue #76）：设置页可自定义，写回 worker.issue_priority
+DEFAULT_ISSUE_PRIORITY = ["bug", "test", "feature"]
+
+
+def _issue_priority_labels(worker: dict) -> list[str]:
+    """读取 worker.issue_priority（issue #76）：必须是字符串列表且非空，
+    否则回退默认顺序（防御手动编辑 config.yaml 写坏的情况）。"""
+    val = worker.get("issue_priority")
+    if (isinstance(val, list) and val
+            and all(isinstance(x, str) and x.strip() for x in val)):
+        return [x.strip() for x in val]
+    return list(DEFAULT_ISSUE_PRIORITY)
+
+
 @dataclass
 class RepoConfig:
     project_id: int
@@ -81,6 +95,11 @@ class Settings:
     task_timeout_seconds: int = 1800
     max_retries: int = 2
     reconcile_interval_seconds: int = 300
+    # issue 标签处理优先级（issue #76）：同仓库队列内按此顺序选任务派发，
+    # 越靠前的标签越先处理；未列出的标签排在最后；同权重按 issue 更新时间
+    # 升序。设置页「任务调度」卡片可修改（默认 bug > test > feature）。
+    issue_priority_labels: list[str] = field(
+        default_factory=lambda: ["bug", "test", "feature"])
     # CI 流水线等待（issue #40）：任务成功收尾前等待任务提交触发的流水线
     # 到终态。detect = 探测窗口（GitLab 收到 push 即创建流水线记录，
     # 窗口内找不到匹配 sha 说明仓库无 CI）；timeout = 等待终态总上限；
@@ -149,7 +168,7 @@ KNOWN_FIELDS = {
     "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries",
                "reconcile_interval_seconds", "ci_wait_detect_seconds",
                "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
-               "engine"},
+               "engine", "issue_priority"},
     "claude": {"command", "args"},
     "hermes": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "session_root", "cordis",
@@ -272,6 +291,7 @@ class ConfigManager:
             task_timeout_seconds=int(worker.get("task_timeout_seconds", 1800)),
             max_retries=int(worker.get("max_retries", 2)),
             reconcile_interval_seconds=int(worker.get("reconcile_interval_seconds", 300)),
+            issue_priority_labels=_issue_priority_labels(worker),
             ci_wait_detect_seconds=int(worker.get("ci_wait_detect_seconds", 120)),
             ci_wait_interval_seconds=int(worker.get("ci_wait_interval_seconds", 15)),
             ci_wait_timeout_seconds=int(worker.get("ci_wait_timeout_seconds", 1800)),

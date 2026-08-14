@@ -6,6 +6,25 @@
 
 ### Added
 
+- **issue 标签优先级调度（issue #76，方案 C）**：同仓库队列内按 issue 标签
+  权重排序派发，默认 bug 最优先，标签顺序可在设置页自定义。
+  - 调度器：队内派发改按「标签权重 → issue 更新时间 → task_id」选任务
+    （权重 = 任务标签在 `worker.issue_priority` 中首个命中的索引，未命中
+    配置标签或无标签排最后）；派发时动态读配置，设置页修改后已排队任务
+    即时生效；仓库优先级（issue #51）仍优先于队列内标签权重；
+  - 数据层：tasks 表新增 `issue_labels`（JSON 数组）与 `issue_updated_at`
+    （UTC 串，GitLab ISO8601 归一化）列（迁移 v6）；webhook 与对账两条
+    入队路径均落库（标签以 API 最新状态为准）；
+  - 配置：新增 `worker.issue_priority`（默认 `["bug","test","feature"]`），
+    设置页「任务调度」卡片可编辑（逗号分隔输入框，保存写回 config.yaml），
+    API 校验（非空字符串数组 / 标签名合法 / 无重复，非法回退默认）；
+  - 文档：`docs/labels.md` 优先级判定、`docs/设计方案.md` §5.4、README
+    架构图与配置表同步；
+  - 测试：TDD 先行（红灯确认后实现），新增 38 用例（调度器标签权重排序
+    12、webhook/对账标签落库 5、迁移与时间归一化 8、设置 API 8，前端
+    设置页 5，另更新迁移版本断言 1 处）；后端全量 847 通过、前端 268
+    通过。
+
 - **执行引擎集成 deepseek-harness（issue #84）**：按 issue #74 方案B 以
   Python SDK 进程内调用方式接入第三执行引擎 `dsh`（deepseek-harness 官方
   `deepseek-harness-sdk`，stdio JSON-RPC 驱动捆绑运行时，无需 Node.js）。

@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..config import KNOWN_FIELDS
+from ..labels import validate_label
 from ..templates import PLACEHOLDERS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -66,6 +67,9 @@ def get_settings(request: Request):
             "task_timeout_seconds": s.task_timeout_seconds,
             "max_retries": s.max_retries,
             "reconcile_interval_seconds": s.reconcile_interval_seconds,
+            # issue 标签处理优先级（issue #76）：同仓库队列内按此顺序
+            # 选任务派发，越靠前越先处理；未列出的标签排最后
+            "issue_priority": s.issue_priority_labels,
         },
         "claude": {
             "command": s.claude_command,
@@ -249,12 +253,40 @@ def _validate_worker(patch: dict) -> None:
     for key in KNOWN_FIELDS["worker"]:
         if key in patch:
             val = patch[key]
+            if key == "issue_priority":
+                # issue #76：标签优先级顺序单独校验（字符串数组）
+                patch[key] = _validate_issue_priority(val)
+                continue
             if not isinstance(val, int) or val <= 0:
                 raise HTTPException(400, f"{key} 必须是正整数")
             if key == "max_concurrent_repos" and val > 16:
                 raise HTTPException(400, "max_concurrent_repos 过大（上限 16）")
             if key == "task_timeout_seconds" and val > 7200:
                 raise HTTPException(400, "task_timeout_seconds 过大（上限 7200s）")
+
+
+def _validate_issue_priority(val) -> list[str]:
+    """校验 worker.issue_priority（issue #76）：非空字符串数组、标签名
+    合法（复用标记库规则）、无重复；返回 strip 归一化后的列表。"""
+    if not isinstance(val, list):
+        raise HTTPException(400,
+                            "worker.issue_priority 必须是标签名数组（如 [\"bug\", \"test\"]）")
+    if not val:
+        raise HTTPException(400, "worker.issue_priority 不能为空（至少保留一个标签）")
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for item in val:
+        if not isinstance(item, str):
+            raise HTTPException(400, "worker.issue_priority 每项必须是字符串")
+        name = item.strip()
+        err = validate_label(name)
+        if err:
+            raise HTTPException(400, f"worker.issue_priority 包含非法标签名 {item!r}: {err}")
+        if name in seen:
+            raise HTTPException(400, f"worker.issue_priority 标签重复: {name}")
+        seen.add(name)
+        cleaned.append(name)
+    return cleaned
 
 
 def _validate_claude(patch: dict) -> None:

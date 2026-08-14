@@ -541,3 +541,46 @@ class TestReconcileRemoteTokenIdentityMismatch:
 
         assert result == {"scanned": 1, "enqueued": 1}
         assert ctx.db.count_tasks() == 1
+
+
+class TestReconcileStoresIssueLabelsForPriority:
+    """issue #76：对账补入队时把 issue 标签与更新时间落库，供调度器排序。"""
+
+    def test_task_stores_issue_labels(self, ctx):
+        """补入队任务记录 issue 标签（供调度器标签权重排序）。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {
+            42: [make_issue(1, labels=["feature"]),
+                 make_issue(2, labels=["bug"])]}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 2, "enqueued": 2}
+        bug_task = ctx.db.find_active_task(42, 2)
+        feature_task = ctx.db.find_active_task(42, 1)
+        assert bug_task["issue_labels"] == '["bug"]'
+        assert feature_task["issue_labels"] == '["feature"]'
+
+    def test_task_stores_issue_updated_at(self, ctx):
+        """补入队任务记录 issue 更新时间（同权重排序键）。"""
+        repo_id = _add_repo(ctx.db)
+        issue = make_issue(1, labels=["bug"])
+        issue["updated_at"] = "2026-08-14T08:00:00.000+08:00"
+        ctx.gitlab.issues_by_project = {42: [issue]}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        task = ctx.db.find_active_task(42, 1)
+        assert task["issue_updated_at"] == "2026-08-14 00:00:00"  # 归一化 UTC
+
+    def test_task_without_updated_at_stores_empty(self, ctx):
+        """issue 无 updated_at（桩默认）：存空串，调度器按创建时间兜底。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {42: [make_issue(1, labels=["bug"])]}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        task = ctx.db.find_active_task(42, 1)
+        assert task["issue_updated_at"] == ""

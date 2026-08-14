@@ -18,6 +18,12 @@ worker:
   task_timeout_seconds: 1800          # 单任务超时 30 分钟
   max_retries: 2                      # 失败重试次数（"无法解决"不重试）
   reconcile_interval_seconds: 300     # 对账兜底扫描间隔
+  issue_priority: ["bug", "test", "feature"]
+                                      # issue 标签处理优先级（issue #76）：
+                                      #   同仓库队列内按此顺序派发，越靠前越先
+                                      #   处理；未列出的标签排在最后，同优先级
+                                      #   按 issue 更新时间升序。设置页
+                                      #   「任务调度」卡片可修改
   engine: claude                      # 任务执行引擎：claude（Claude Code CLI，
                                       #   默认）/ hermes（部署机已装好的
                                       #   hermes-agent，经 hermes_runner.py 调用）
