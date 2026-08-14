@@ -312,6 +312,27 @@
 
 ### Fixed
 
+- **添加本地仓库报 401「无法识别项目: token 无效或已过期」（issue #77）**：
+  本地文件夹方式添加仓库时，识别项目与注册 webhook 一律走平台全局
+  bot token——全局 token 失效期间，即使本地仓库 remote url 里内嵌了
+  有效 token（用户 git pull/push 正常），添加仓库仍直接报 401。
+  现与 executor / reconciler 的 per-repo 兜底模式对齐：识别项目遇
+  401/403 且 remote URL 内嵌 token 时，用该 token 与 remote host 构建
+  临时 client 重试；webhook 注册同理（识别已兜底则复用同一 client，
+  全局注册遇 401/403 也兜底重试）。remote 无内嵌 token 或重试仍失败
+  时保持原有错误信息（非认证类错误不兜底，原样抛出）。
+  - 后端 `git_remote.py`：新增 `build_client_from_url`（从单个 remote
+    URL 解析内嵌 token 构建 GitLabClient，添加场景无仓库行可用时的
+    兜底入口，`webhook_base_url` 透传保证回调地址始终是平台地址）；
+  - 后端 `api/repos.py`：`add_repo` 保存原始 remote URL（识别成功后
+    url 会被替换为 API 返回的干净 url，兜底解析 token 必须用原始值）、
+    webhook 回调地址计算提前；识别与 webhook 注册两个 401/403 点均
+    按上述逻辑兜底；
+  - 测试：TDD 先行（复现测试红灯确认后实现），新增 3 用例
+    （全局 401 时用 remote token 识别成功且 webhook 注册同 token、
+    remote 无 token 时保持 400 原错误、识别成功但注册 401 时单独
+    兜底）；后端全量 710 + 前端全量 253 通过。
+
 - **仓库管理页添加仓库方式选项顺序调整（issue #73）**：此前「添加仓库」
   表单中「GitLab URL / project_id」排在第一个选项、「本地文件夹（读取
   git remote）」排在第二个，而默认选中的方式是本地文件夹——视觉顺序

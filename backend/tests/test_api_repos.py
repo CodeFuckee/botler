@@ -495,3 +495,92 @@ class TestDeleteRepo:
         listing = tc.get("/api/repos")
         ids = [r["id"] for r in listing.json()["repos"]]
         assert repo_id in ids
+
+
+class TestAddRepoGlobalToken401Fallback:
+    """issue #77：全局 bot token 失效（401）时，remote URL 内嵌 token 兜底。
+
+    用户场景：本地仓库 remote url 带用户名和 token（git pull/push 正常），
+    但平台全局 token 失效，添加本地仓库时报「无法识别项目: token 无效或
+    已过期（401）」。修复后：识别项目与注册 webhook 均改用 remote 内嵌
+    token 的临时 client 重试。
+    """
+
+    def test_add_repo_global_401_falls_back_to_remote_token(self, client, monkeypatch):
+        tc, stub, tmp_path = client
+        repo_dir = tmp_path / "repo"
+        _init_repo_with_remotes(repo_dir, {
+            "origin": "https://user:secret-token@gitlab.example.com/group/project.git",
+        })
+
+        # 全局 client 桩：token 失效，识别项目抛 401
+        def resolve_401(url_or_id):
+            raise GitLabError("token 无效或已过期（401）", 401)
+        stub.resolve_project = resolve_401
+
+        # 真实 GitLabClient 网络层按 token 区分：
+        # remote 内嵌 token 有效；全局 token（test-token）仍 401
+        def fake_request(self, method, path, **kwargs):
+            if self.token == "secret-token":
+                return {"id": 42, "path": "group/project", "name": "project",
+                        "http_url_to_repo": "https://gitlab.example.com/group/project.git"}
+            raise GitLabError("token 无效或已过期（401）", 401)
+        monkeypatch.setattr(GitLabClient, "_request", fake_request)
+
+        # 记录 webhook 注册所用 client 的 token
+        webhook_tokens: list[str] = []
+        monkeypatch.setattr(
+            GitLabClient, "register_webhook",
+            lambda self, project_id, secret: webhook_tokens.append(self.token) or {"id": 1})
+
+        resp = tc.post("/api/repos", json={
+            "local_path": str(repo_dir),
+            "remote_name": "origin",
+            "name": "graph2plan",
+            "webhook_url": "https://hooks.example.com",
+        })
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["gitlab_project_id"] == 42
+        # 识别与 webhook 注册均走 remote 内嵌 token，而非失效的全局 token
+        assert webhook_tokens == ["secret-token"]
+
+    def test_add_repo_global_401_without_remote_token_still_fails(self, client):
+        tc, stub, tmp_path = client
+        repo_dir = tmp_path / "repo"
+        _init_repo_with_remotes(repo_dir, {
+            "origin": "https://gitlab.example.com/group/project.git",
+        })
+
+        def resolve_401(url_or_id):
+            raise GitLabError("token 无效或已过期（401）", 401)
+        stub.resolve_project = resolve_401
+
+        resp = tc.post("/api/repos", json={
+            "local_path": str(repo_dir), "remote_name": "origin"})
+        assert resp.status_code == 400
+        assert "无法识别项目" in resp.json()["detail"]
+
+    def test_add_repo_webhook_register_401_falls_back_to_remote_token(self, client, monkeypatch):
+        """识别成功（全局 token 有效）但 webhook 注册 401 时同样兜底。
+
+        识别成功后入库 url 会被替换为 API 返回的干净 url（无 token），
+        兜底必须用原始 remote URL 解析 token（识别前的值）。
+        """
+        tc, stub, tmp_path = client
+        repo_dir = tmp_path / "repo"
+        _init_repo_with_remotes(repo_dir, {
+            "origin": "https://user:secret-token@gitlab.example.com/group/project.git",
+        })
+
+        # 全局 token 注册 webhook 失效；remote 内嵌 token 有效
+        def fake_register(self, project_id, secret):
+            if self.token == "secret-token":
+                return {"id": 1}
+            raise GitLabError("token 无效或已过期（401）", 401)
+        monkeypatch.setattr(GitLabClient, "register_webhook", fake_register)
+
+        resp = tc.post("/api/repos", json={
+            "local_path": str(repo_dir), "remote_name": "origin"})
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["gitlab_project_id"] == 42

@@ -171,3 +171,25 @@ def build_repo_client(row, verify_ssl: bool = True):
     """
     client, _ = build_repo_client_with_username(row, verify_ssl=verify_ssl)
     return client
+
+
+def build_client_from_url(url: str | None, verify_ssl: bool = True,
+                          webhook_base_url: str | None = None):
+    """从单个 remote URL 解析内嵌 token 构建 GitLabClient（issue #77）。
+
+    添加仓库场景：仓库尚未入库、没有仓库行可读 remote，但 URL 字符串
+    本身可能内嵌凭据（https://user:token@host:port/path.git）。有 token
+    时用 remote 的 scheme + host + token 建客户端；无 token / 解析失败
+    返回 None（调用方回退全局 client，保留原错误）。
+
+    webhook_base_url 透传给 GitLabClient：注册 webhook 的回调地址始终
+    是平台地址，与用哪个 token 调 API 无关。
+    """
+    from .gitlab_client import GitLabClient
+
+    info = parse_remote_url(url)
+    token, host, scheme = info["token"], info["host"], info["scheme"]
+    if not token or not host or not scheme:
+        return None
+    return GitLabClient(f"{scheme}://{host}", token,
+                        verify_ssl=verify_ssl, webhook_base_url=webhook_base_url)

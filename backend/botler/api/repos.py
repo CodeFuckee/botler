@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from ..config import RepoConfig
 from ..database import DEFAULT_PRIORITY
 from ..gitlab_client import GitLabError
-from ..git_remote import mask_url_token
+from ..git_remote import build_client_from_url, mask_url_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/repos", tags=["repos"])
@@ -167,10 +167,34 @@ def add_repo(request: Request, body: RepoCreate):
     config = c.config.get()
 
     url, local_path, remote_name = _resolve_repo_source(body, c)
+    # 原始 remote URL（可能内嵌 token）：识别成功后 url 会被替换为 API
+    # 返回的干净 url，兜底解析 token 必须用这个原始值（issue #77）
+    remote_url = url
+    # webhook 回调地址（默认当前请求 base_url，允许覆盖）；提前计算，
+    # 兜底 client 构建时一并传入（issue #77）
+    webhook_base = body.webhook_url or str(request.base_url).rstrip("/")
+    # issue #77：识别项目默认走全局 token；全局 token 失效（401/403）而
+    # remote URL 内嵌 token 时，用内嵌 token 的临时 client 兜底重试
+    # （与 executor / reconciler 的 per-repo 兜底模式一致）。用户场景：
+    # 本地仓库 remote url 带用户名和 token、git pull/push 正常，但平台
+    # 全局 token 失效 → 添加仓库报「无法识别项目: token 无效或已过期」。
+    fallback_client = None
     try:
         project = c.gitlab.resolve_project(url)
     except GitLabError as e:
-        raise HTTPException(400, f"无法识别项目: {e}")
+        if e.status_code not in (401, 403):
+            raise
+        fallback = build_client_from_url(remote_url, config.verify_ssl,
+                                         webhook_base_url=webhook_base)
+        if fallback is None:
+            # remote 无内嵌 token，兜底不可用，保持原有 400 错误
+            raise HTTPException(400, f"无法识别项目: {e}")
+        logger.info("添加仓库：全局 token 失效（%s），改用 remote url 内嵌 token 识别项目", e)
+        try:
+            project = fallback.resolve_project(remote_url)
+        except GitLabError as e2:
+            raise HTTPException(400, f"无法识别项目: {e2}")
+        fallback_client = fallback
 
     project_id = int(project["id"])
     name = body.name or project.get("path") or project.get("name") or str(project_id)
@@ -180,16 +204,32 @@ def add_repo(request: Request, body: RepoCreate):
     if existing:
         raise HTTPException(409, f"仓库已存在（id={existing['id']}，name={existing['name']}）")
 
-    # 注册 webhook（默认用当前请求的 base_url，允许覆盖）
-    webhook_base = body.webhook_url or str(request.base_url).rstrip("/")
+    # 注册 webhook：识别已用 remote token 兜底时复用同一 client，
+    # 全局 client 注册 401/403 时同样用 remote token 兜底重试
     from ..gitlab_client import GitLabClient
     temp_client = GitLabClient(config.gitlab_url, config.gitlab_token,
                                verify_ssl=config.verify_ssl,
                                webhook_base_url=webhook_base)
     try:
-        temp_client.register_webhook(project_id, config.webhook_secret)
+        if fallback_client is not None:
+            fallback_client.register_webhook(project_id, config.webhook_secret)
+        else:
+            temp_client.register_webhook(project_id, config.webhook_secret)
     except GitLabError as e:
-        raise HTTPException(502, f"注册 webhook 失败: {e}")
+        if fallback_client is None and e.status_code in (401, 403):
+            retry_client = build_client_from_url(remote_url, config.verify_ssl,
+                                                 webhook_base_url=webhook_base)
+            if retry_client is not None:
+                logger.info("添加仓库：注册 webhook 全局 token 失效（%s），"
+                            "改用 remote url 内嵌 token 重试", e)
+                try:
+                    retry_client.register_webhook(project_id, config.webhook_secret)
+                except GitLabError as e2:
+                    raise HTTPException(502, f"注册 webhook 失败: {e2}")
+            else:
+                raise HTTPException(502, f"注册 webhook 失败: {e}")
+        else:
+            raise HTTPException(502, f"注册 webhook 失败: {e}")
 
     repo_id = c.db.upsert_repo(
         project_id=project_id, name=name, url=url,
