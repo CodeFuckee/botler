@@ -212,8 +212,9 @@ class Database:
                 if _near_any(t, log_times, tolerance):        # H_UTC：已是 UTC
                     continue
                 if _near_any(t - cst_offset, log_times, tolerance):  # H_CST：存量本地串
+                    # 列名来自上方固定元组 ("started_at", "finished_at")，无注入风险
                     conn.execute(
-                        f"UPDATE tasks SET {col}=? WHERE id=?",
+                        f"UPDATE tasks SET {col}=? WHERE id=?",  # nosec B608
                         ((t - cst_offset).strftime("%Y-%m-%d %H:%M:%S"), row["id"]))
                     fixed += 1
         return fixed
@@ -277,7 +278,7 @@ class Database:
             return
         cols = ", ".join(f"{k}=?" for k in sets)
         with self._conn() as conn:
-            conn.execute(f"UPDATE repos SET {cols} WHERE id=?",
+            conn.execute(f"UPDATE repos SET {cols} WHERE id=?",  # nosec B608
                          (*sets.values(), repo_id))
 
     def delete_repo(self, repo_id: int) -> None:
@@ -378,7 +379,7 @@ class Database:
             return
         vals.append(task_id)
         with self._conn() as conn:
-            conn.execute(f"UPDATE tasks SET {', '.join(cols)} WHERE id=?", vals)
+            conn.execute(f"UPDATE tasks SET {', '.join(cols)} WHERE id=?", vals)  # nosec B608
 
     def claim_task(self, task_id: int) -> bool:
         """原子抢占任务（防多实例并发执行同一任务，issue #24）。
@@ -409,7 +410,7 @@ class Database:
         vals.extend([task_id, STATUS_RUNNING, STATUS_RETRYING])
         with self._conn() as conn:
             cur = conn.execute(
-                f"UPDATE tasks SET {', '.join(cols)} WHERE id=? AND status IN (?, ?)",
+                f"UPDATE tasks SET {', '.join(cols)} WHERE id=? AND status IN (?, ?)",  # nosec B608
                 vals)
             return cur.rowcount > 0
 

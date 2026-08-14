@@ -7,13 +7,15 @@
 #
 # Stage 拓扑（依赖关系）：
 #
-#   build（并行）                    deploy
-#   ┌──────────────────────┐
-#   │ frontend:build ────────────► deploy_to_code01
-#   │   (React/Vite 构建)   │      (pm2 本机部署 + 健康检查)
-#   └──────────────────────┘
+#   security ──► build（并行）────────────► deploy ──► sync
+#   ┌──────────────┐   ┌──────────────────────┐
+#   │ bandit 安全    │   │ frontend:build ────────────► deploy_to_code01
+#   │ 扫描（阻断门禁）│   │   (React/Vite 构建)   │      (pm2 本机部署 + 健康检查)
+#   └──────────────┘   └──────────────────────┘
 #
 # 说明：
+#   - 第零阶段 security：security:bandit 用 bandit 静态扫描后端生产代码，
+#     存在高危/中危漏洞时 job 失败，阻断后续所有 stage（issue #58）
 #   - 第一阶段 build：frontend:build（npm 构建前端，产出 dist 产物）与
 #     backend:test（uv 安装依赖 + pytest/语法检查）并行执行
 #   - 第二阶段 deploy：必须等 frontend:build 成功且拿到 dist 产物后才
@@ -37,6 +39,7 @@
 # ================================================================
 
 stages:
+  - security
   - build
   - deploy
   - sync
@@ -140,6 +143,67 @@ variables:
       echo "CI_PROJECT_DIR: $CI_PROJECT_DIR"
       echo "Python 版本: $(python3 --version 2>/dev/null || echo '未安装')"
       echo "uv 版本: $(uv --version 2>/dev/null || echo '未安装')"
+
+# ================================================================
+# Stage: security —— 第零阶段：bandit 安全静态扫描（issue #58）
+# ================================================================
+
+# --- 后端：bandit 安全扫描（流水线最前置阻断门禁）---
+# 扫描 backend 生产代码（botler 包 + hermes_runner.py），存在高危/
+# 中危（--severity-level medium）漏洞时 bandit 退出码非 0，job 失败
+# 阻断整个流水线（后续 build/deploy/sync 全部不运行）；低危漏洞仅
+# 记录不阻断。allow_failure: false 显式声明阻断语义。
+# 误报处理：database.py 4 处动态列名拼接（# nosec B608）——列名均
+# 来自模块级常量白名单（_TASK_FIELDS / allowed / 固定元组），非
+# 外部输入，SQL 列名本身无法参数化。
+# bandit 版本不 pin（取最新，与 requirements.txt 宽松风格一致）：
+# 安全扫描工具的新规则本应让流水线发现新漏洞并阻断。
+security:bandit:
+  extends: [.backend_setup, .docs_only_skip]
+  stage: security
+  tags:
+    - linux
+    - code01
+  timeout: 10m
+  allow_failure: false
+  cache:
+    key: uv-cache-${CI_COMMIT_REF_SLUG}
+    paths:
+      - backend/.uv-cache/
+    policy: pull-push
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      # uv 缓存目录（与 backend:test 共享，CI 缓存持久化）
+      export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
+
+      echo "=== 1. 确保 uv 可用 ==="
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+      echo "=== 2. 复用持久化虚拟环境（shell executor 工作目录跨 job 保留）==="
+      if [ ! -x .venv/bin/python ]; then
+        rm -rf .venv
+        uv venv .venv
+      fi
+
+      echo "=== 3. 安装 bandit（uv pip install 幂等）==="
+      uv pip install bandit -i ${PIP_INDEX_URL}
+
+      echo "=== 4. bandit 安全扫描（severity ≥ medium 即阻断）==="
+      .venv/bin/python -m bandit -r botler hermes_runner.py --severity-level medium
+      echo "✓ 未发现高危/中危漏洞（低危漏洞仅记录不阻断）"
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [security:bandit] 总用时: ${DURATION} 秒"
+      echo "========================================="
 
 # ================================================================
 # Stage: build —— 第一阶段：前端构建 + 后端测试（并行）

@@ -6,6 +6,23 @@
 
 ### Added
 
+- **CI/CD 接入 bandit 安全扫描（issue #58）**：流水线最前置安全门禁，
+  存在高危/中危漏洞时阻断整条流水线，放在所有阶段之前。
+  - GitLab 侧：新增 `security` stage（stages 首位）+ `security:bandit`
+    job——复用 `.backend_setup`/`.docs_only_skip` 公共配置，扫描
+    `botler` 包与 `hermes_runner.py`，`--severity-level medium`
+    （高危/中危即 job 失败，后续 build/deploy/sync 全部不运行），
+    `allow_failure: false` 显式声明阻断语义；bandit 装进持久化
+    .venv，版本不 pin（新规则本应发现新漏洞）；
+  - GitHub 侧：新增 `bandit-scan` job（jobs 首位），
+    `frontend-build`/`backend-test` 加 `needs: bandit-scan` 门禁——
+    bandit 失败时两者跳过、workflow 失败，与 GitLab 语义一致；
+  - 误报处理：database.py 4 处动态列名拼接加 `# nosec B608`
+    （列名均来自模块级常量白名单 `_TASK_FIELDS`/`allowed`/固定元组，
+    非外部输入，SQL 列名无法参数化）；
+  - 验证：本地 bandit 实测 4 个 Medium 告警（B608）处理后清零，
+    exit 0；注入高危/中危漏洞时 exit 非 0 阻断（见 issue 评论）。
+
 - **仓库设置编辑与调度优先级（issue #51）**：仓库页面每项新增「设置」
   按钮，弹窗可重新编辑显示名称、启用状态与新增的优先级字段（URL /
   本地路径不在编辑范围，涉及 webhook 重注册风险高）；列表展示各仓库

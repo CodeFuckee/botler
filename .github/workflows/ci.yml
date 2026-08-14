@@ -4,8 +4,12 @@
 # 参考 .gitlab-ci.yml 的 job 拓扑，剔除部署阶段（GitHub 仓库是
 # 公开展示镜像，不做部署；部署仍由 GitLab 流水线负责）：
 #
-#   frontend-build（npm ci → npm test → vite build → 产物验证）
-#   backend-test   （uv 装依赖 → pytest）
+#   bandit-scan ──► frontend-build（npm ci → npm test → vite build → 产物验证）
+#             └──► backend-test   （uv 装依赖 → pytest）
+#
+# bandit-scan 为安全门禁（issue #58）：中/高危漏洞时 job 失败，通过
+# needs 依赖使 frontend-build / backend-test 跳过，整体 workflow 失败
+# 阻断（与 GitLab security stage 语义一致）。
 #
 # 触发方式：
 #   - push（main）：主入口。镜像同步 commit 不含跳过标记（见
@@ -63,12 +67,45 @@ on:
 
 jobs:
   # ================================================================
+  # 安全：bandit 静态扫描（与 GitLab security:bandit 对应，issue #58）
+  # 存在高危/中危（--severity-level medium）漏洞时 bandit 退出码非 0，
+  # 本 job 失败；frontend-build / backend-test 通过 needs 依赖本 job，
+  # 失败时两者跳过，整体 workflow 失败（阻断语义）。低危仅记录不阻断。
+  # 误报处理与 GitLab 侧一致（database.py 4 处 # nosec B608，列名
+  # 来自模块级常量白名单）。
+  # ================================================================
+  bandit-scan:
+    name: 后端 bandit 安全扫描（中/高危阻断）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # 与 backend-test 一致（部署环境 Python 3.11）
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: bandit 安全扫描（severity ≥ medium 即失败）
+        run: |
+          cd backend
+          uv venv .venv
+          # --python 显式指定本 job 的 venv（同 backend-test 说明：setup-uv
+          # 的 python-version 参数会激活 workspace/.venv，不显式指定会装错环境）
+          uv pip install --python .venv/bin/python bandit
+          .venv/bin/python -m bandit -r botler hermes_runner.py --severity-level medium
+          echo "✓ 未发现高危/中危漏洞（低危漏洞仅记录不阻断）"
+
+  # ================================================================
   # 前端：React/Vite 构建与测试（与 GitLab frontend:build 对应）
   # ================================================================
   frontend-build:
     name: 前端 React/Vite 构建与测试
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # 安全门禁（issue #58）：bandit-scan 失败时本 job 跳过
+    needs: bandit-scan
     steps:
       - uses: actions/checkout@v4
 
@@ -117,6 +154,8 @@ jobs:
     name: 后端 Python 单元测试
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # 安全门禁（issue #58）：bandit-scan 失败时本 job 跳过
+    needs: bandit-scan
     steps:
       - uses: actions/checkout@v4
 
