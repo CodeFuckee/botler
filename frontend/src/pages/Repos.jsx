@@ -131,12 +131,12 @@ export default function Repos() {
         <h2>添加仓库</h2>
         <div className="form-row">
           <label className="add-method">
-            <input type="radio" checked={method === 'url'} onChange={() => { setMethod('url'); setRemotes([]); }} />
-            GitLab URL / project_id
-          </label>
-          <label className="add-method">
             <input type="radio" checked={method === 'local'} onChange={() => { setMethod('local'); setRemotes([]); }} />
             本地文件夹（读取 git remote）
+          </label>
+          <label className="add-method">
+            <input type="radio" checked={method === 'url'} onChange={() => { setMethod('url'); setRemotes([]); }} />
+            GitLab URL / project_id
           </label>
         </div>
 

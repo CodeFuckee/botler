@@ -312,6 +312,20 @@
 
 ### Fixed
 
+- **仓库管理页添加仓库方式选项顺序调整（issue #73）**：此前「添加仓库」
+  表单中「GitLab URL / project_id」排在第一个选项、「本地文件夹（读取
+  git remote）」排在第二个，而默认选中的方式是本地文件夹——视觉顺序
+  与选中态脱节，用户容易误选。现调整为：本地文件夹（读取 git remote）
+  为第一个选项（默认选中，展开本地路径输入框与 remote 选择），
+  GitLab URL / project_id 为第二个选项。
+  - 前端 `Repos.jsx`：交换两个 `add-method` radio 选项的渲染顺序，
+    默认方式仍为 `'local'`，与第一个选项一致；
+  - 测试：TDD 先行（复现测试红灯确认后实现），新增
+    `repos-add-method-order.test.mjs` 5 用例（源码级选项顺序 /
+    渲染级选项文本顺序 / 第一个选项默认选中、第二个未选中 /
+    默认展开本地表单不渲染 URL 输入框 / 交互切换后表单随之切换）；
+    前端全量 253 + 后端全量 707 通过。
+
 - **全局 token 失效后任务领取/留评论全 401：executor 与 webhook 补上
   remote token 兜底（issue #65 补充）**：全局 bot token 被撤销期间，
   executor 全部 GitLab 操作（任务领取 get_issue、「处理中」评论、
