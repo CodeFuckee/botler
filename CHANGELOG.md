@@ -86,6 +86,25 @@
 
 ### Changed
 
+- **模版页面默认全部展开，折叠方式对齐任务详情页聊天记录（issue #56）**：
+  提示词模版页此前（issue #55）默认折叠为 6 行小窗口，每次进入页面都要
+  点「展开全部」才能看到完整模版。现改为默认全部展开：textarea 高度
+  自适应内容行数完整展示、无内层滚动条（滚动交给页面最外层，与
+  issue #52 交互原则一致）；折叠方式改成与任务详情页聊天记录一致的
+  标题行切换——「模版内容（N 行）」标题行带 chevron ▾/▸ 可点击
+  折叠/展开，折叠时编辑器与操作按钮整体隐藏（非截断小窗口），再次
+  展开内容不丢失。
+  - 前端 `Templates.jsx`：`expanded` 默认改为 `true`；移除
+    「展开全部（N 行）/收起」按钮，新增 `section-toggle` 风格标题行
+    （chevron + 行数提示，`aria-expanded` 同步），折叠态不渲染
+    textarea 与操作按钮行；
+  - 前端 `styles.css`：移除不再使用的
+    `.input.textarea.template-collapsed` 截断样式；
+  - 测试：重写 `templates-collapsible-editor.test.mjs` 4 用例（默认展开
+    rows 自适应 / 标题行折叠隐藏编辑器与保存按钮、再展开内容不丢失 /
+    空模版与单行模版边界 / styles.css 无 template-collapsed 残留）；
+    前端全量 203 passed + 后端全量 591 passed + vite build 成功。
+
 - **任务详情页滚动与折叠优化（issue #52）**：详情页只保留页面最外层的
   垂直滚动条；事件流、聊天记录、执行日志、claude 输出尾部四个区块取消
   各自内部的垂直滚动条、内容直线完整展示，标题改为可点击折叠/展开

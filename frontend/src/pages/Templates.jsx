@@ -12,9 +12,10 @@ export default function Templates() {
   const [text, setText] = useState('')
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
-  // 模版编辑器折叠状态（issue #55）：默认折叠为小高度窗口，
-  // 展开时高度自适应内容完整展示，取消 textarea 内层垂直滚动
-  const [expanded, setExpanded] = useState(false)
+  // 模版编辑器折叠状态（issue #56）：默认全部展开，高度自适应内容
+  // 完整展示、无内层垂直滚动；折叠方式与任务详情页聊天记录一致
+  // （issue #52 SectionToggle 标题行切换），折叠时编辑器整体隐藏
+  const [expanded, setExpanded] = useState(true)
 
   const load = async () => {
     const [reposData, settings] = await Promise.all([
@@ -112,28 +113,36 @@ export default function Templates() {
               : '该仓库未配置覆盖，当前显示全局默认模版。编辑并保存即创建覆盖。'}
         </p>
 
-        <textarea
-          className={'input textarea' + (expanded ? '' : ' template-collapsed')}
-          rows={expanded ? text.split('\n').length + 1 : 6}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          spellCheck={false}
-        />
+        <button
+          type="button"
+          className="section-toggle section-toggle-h3"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className="chevron">{expanded ? '▾' : '▸'}</span>
+          模版内容
+          <span className="muted small">（{text.split('\n').length} 行）</span>
+        </button>
 
-        <div className="form-row">
-          <button
-            className="btn"
-            onClick={() => setExpanded(!expanded)}
-            aria-expanded={expanded}
-          >
-            {expanded ? '收起' : `展开全部（${text.split('\n').length} 行）`}
-          </button>
-          <button className="btn btn-primary" onClick={save}>保存</button>
-          {saved && <span className="saved-hint">✓ 已保存</span>}
-          {selected?.repoId !== null && selected?.isOverride && (
-            <button className="btn" onClick={clearOverride}>清空覆盖</button>
-          )}
-        </div>
+        {expanded && (
+          <>
+            <textarea
+              className="input textarea"
+              rows={text.split('\n').length + 1}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              spellCheck={false}
+            />
+
+            <div className="form-row">
+              <button className="btn btn-primary" onClick={save}>保存</button>
+              {saved && <span className="saved-hint">✓ 已保存</span>}
+              {selected?.repoId !== null && selected?.isOverride && (
+                <button className="btn" onClick={clearOverride}>清空覆盖</button>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="card">
