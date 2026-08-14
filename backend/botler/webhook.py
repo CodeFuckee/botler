@@ -70,7 +70,15 @@ class WebhookHandler:
         # 3. assignee 判定：事件快照可能不可靠，一律以 API 最新状态为准
         #    （顺带取最新标签供终态过滤，见步骤 4）
         issue = body.get("issue") or {}
-        bot_id = cfg.bot_id or self.gitlab.get_bot_id()
+        bot_id = cfg.bot_id
+        try:
+            if bot_id is None:
+                bot_id = self.gitlab.get_bot_id()
+        except GitLabError as e:
+            # issue #65：全局 token 失效时 bot 身份不可用，不整体拒绝——
+            # 后续按仓库 remote 身份集合判定 assignee（与对账兜底对齐）
+            logger.warning("webhook 获取全局 bot 身份失败（%s），将按仓库 remote 身份判定", e)
+            bot_id = None
         try:
             current = self.gitlab.get_issue(project_id, issue_iid)
         except GitLabError as e:
@@ -81,7 +89,8 @@ class WebhookHandler:
             return {"accepted": False, "reason": "查询 issue 失败，拒绝入队"}
 
         cur_assignees = [a.get("id") for a in (current.get("assignees") or [])]
-        if bot_id not in cur_assignees:
+        bot_ids = [bot_id] if bot_id is not None else self._repo_bot_ids(project_id, cfg)
+        if not (set(cur_assignees) & set(bot_ids)):
             return {"accepted": False, "reason": "issue 未指派给 bot 账号"}
 
         # 4. 领取过滤标签（issue #30 / #41）：bot-done（完成待用户确认）/
@@ -104,7 +113,7 @@ class WebhookHandler:
         except GitLabError as e:
             logger.warning("webhook 查询 issue %s#%s 评论失败: %s", project_id, issue_iid, e)
             return {"accepted": False, "reason": "查询 issue 评论失败，拒绝入队"}
-        if last_author is not None and last_author == bot_id:
+        if last_author is not None and last_author in bot_ids:
             logger.info("webhook 忽略最后发言人为 bot 的 issue %s#%s", project_id, issue_iid)
             return {"accepted": False, "reason": "最后一个发言人是 bot，等待用户回复，跳过"}
 
@@ -124,3 +133,31 @@ class WebhookHandler:
         self.scheduler.enqueue(task_id)
         logger.info("webhook 入队: 任务 %s (%s#%s)", task_id, project_id, issue_iid)
         return {"accepted": True, "task_id": task_id}
+
+    def _repo_bot_ids(self, project_id: int, cfg) -> list[int]:
+        """全局 bot 身份不可用时，按仓库 remote 解析候选身份（issue #65）。
+
+        remote token 账号 + remote URL 用户名的对应账号（如 agent）一并
+        纳入；仓库未注册 / remote 无 token / 解析失败时返回空列表。
+        """
+        repo = self.db.get_repo_by_project_id(project_id)
+        if repo is None:
+            return []
+        from .git_remote import build_repo_client_with_username
+        fallback, username = build_repo_client_with_username(repo, cfg.verify_ssl)
+        if fallback is None:
+            return []
+        try:
+            ids = [fallback.get_bot_id()]
+        except GitLabError as e:
+            logger.warning("webhook 解析 remote token 身份失败: %s", e)
+            ids = []
+        if username:
+            try:
+                uid = fallback.get_user_id_by_username(username)
+            except GitLabError as e:
+                logger.warning("webhook 按用户名 %s 解析 bot 身份失败: %s", username, e)
+                uid = None
+            if uid and uid not in ids:
+                ids.append(uid)
+        return ids

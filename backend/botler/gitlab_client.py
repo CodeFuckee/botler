@@ -126,6 +126,20 @@ class GitLabClient:
             self._bot_id = int(user["id"])
         return self._bot_id
 
+    def get_user_id_by_username(self, username: str) -> int | None:
+        """按用户名查用户 id；用户不存在返回 None。
+
+        issue #65：remote URL userinfo 的用户名（如 agent）作为 bot 身份
+        提示时，用它解析真实账号 id 加入身份集合。
+        """
+        username = (username or "").strip()
+        if not username:
+            return None
+        users = self._request("GET", "/users", params={"username": username})
+        if isinstance(users, list) and users:
+            return int(users[0]["id"])
+        return None
+
     # ---- 项目 ----
 
     def get_project(self, project_id: int) -> dict:

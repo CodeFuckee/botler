@@ -126,14 +126,14 @@ def mask_url_token(url: str | None) -> str:
     return f"{scheme}://{username}:***@{tail}"
 
 
-def build_repo_client(row, verify_ssl: bool = True):
-    """为仓库构建 per-repo GitLabClient（issue #60 / #63 公共函数）。
+def build_repo_client_with_username(row, verify_ssl: bool = True):
+    """为仓库构建 per-repo GitLabClient 并返回 (client, remote_username)。
 
-    在仓库本地目录（local_path 优先，否则 workspace/<name>，与 executor
-    工作区一致）运行 git remote -v，从 remote_name（缺省 origin）对应的
-    URL 解析内嵌 token：有 token 则用该 token 与 remote host 建客户端，
-    每个仓库使用自己的 token。remote 无 token / 本地目录不存在 / 不是
-    git 仓库时返回 None（调用方回退全局 bot token 客户端，兼容旧仓库）。
+    与 build_repo_client 相同，额外返回 remote URL userinfo 的用户名
+    （无内嵌凭据 / 解析失败时为 None）。issue #65：用户名可作为 bot
+    身份提示——全局 token 失效后对账/webhook 以 remote token 账号为
+    身份，而用户通常把 issue 分配给 remote URL 里填的账号名（如 agent），
+    将其一并纳入身份集合才能扫到这些 issue。
     """
     from .gitlab_client import GitLabClient
 
@@ -147,13 +147,27 @@ def build_repo_client(row, verify_ssl: bool = True):
     try:
         remotes = list_local_remotes(str(workdir))
     except NoGitRemoteError:
-        return None
+        return None, None
     remote_name = d.get("remote_name") or "origin"
     match = next((r for r in remotes if r["name"] == remote_name), None)
     if match is None:
-        return None
+        return None, None
     info = parse_remote_url(match["url"])
     token, host, scheme = info["token"], info["host"], info["scheme"]
     if not token or not host or not scheme:
-        return None
-    return GitLabClient(f"{scheme}://{host}", token, verify_ssl=verify_ssl)
+        return None, info["username"]
+    client = GitLabClient(f"{scheme}://{host}", token, verify_ssl=verify_ssl)
+    return client, info["username"]
+
+
+def build_repo_client(row, verify_ssl: bool = True):
+    """为仓库构建 per-repo GitLabClient（issue #60 / #63 公共函数）。
+
+    在仓库本地目录（local_path 优先，否则 workspace/<name>，与 executor
+    工作区一致）运行 git remote -v，从 remote_name（缺省 origin）对应的
+    URL 解析内嵌 token：有 token 则用该 token 与 remote host 建客户端，
+    每个仓库使用自己的 token。remote 无 token / 本地目录不存在 / 不是
+    git 仓库时返回 None（调用方回退全局 bot token 客户端，兼容旧仓库）。
+    """
+    client, _ = build_repo_client_with_username(row, verify_ssl=verify_ssl)
+    return client

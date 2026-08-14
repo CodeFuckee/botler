@@ -15,6 +15,8 @@ from botler.config import ConfigManager
 from botler.database import Database
 from botler.gitlab_client import GitLabError
 from botler.webhook import WebhookHandler
+import botler.webhook as webhook_mod
+import botler.git_remote as git_remote_mod
 
 CONFIG_TEXT = """\
 gitlab:
@@ -217,3 +219,99 @@ class TestWebhookSkipsWhenBotLastSpoke:
 
         assert result["accepted"] is True
         assert ctx.db.find_active_task(PROJECT_ID, IID) is not None
+
+
+class TestWebhookBotIdentityFallback:
+    """issue #65：全局 token 失效时 webhook 的 bot 身份判定降级。
+
+    全局 token 失效（get_bot_id 抛 401）时 webhook 不应直接 500，而是
+    改用仓库 remote 身份（remote token 账号 + remote URL 用户名对应账号）
+    判定 assignee——分配给 @agent 的 issue 照常入队，与对账修复对齐。
+    """
+
+    @staticmethod
+    def _add_local_repo(db, tmp_path, project_id=PROJECT_ID, name="demo") -> int:
+        import subprocess
+        repo_dir = tmp_path / name
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo_dir)],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo_dir), "remote", "add", "origin",
+                        "https://agent:glpat-repo@gitlab.example.com/group/repo.git"],
+                       check=True)
+        return db.upsert_repo(
+            project_id=project_id, name=name,
+            url=f"https://gitlab.example.com/{name}.git",
+            local_path=str(repo_dir), remote_name="origin")
+
+    @staticmethod
+    def _fail_global_bot_id(ctx) -> None:
+        def fail_bot_id(force=False):
+            raise GitLabError("token 无效或已过期（401）", 401)
+        ctx.gitlab.get_bot_id = fail_bot_id
+
+    class _FallbackStub:
+        """remote token 兜底客户端桩。"""
+
+        def __init__(self, bot_id: int = 11,
+                     username_ids: dict[str, int] | None = None):
+            self.bot_id = bot_id
+            self.username_ids = username_ids or {}
+
+        def get_bot_id(self):
+            return self.bot_id
+
+        def get_user_id_by_username(self, username):
+            return self.username_ids.get(username)
+
+    def test_accepts_with_remote_identity_when_global_fails(
+            self, ctx, tmp_path, monkeypatch):
+        """全局 token 失效、issue 分配给 @agent（remote URL 用户名对应
+        id=3）：webhook 应接受入队。
+
+        修复前：get_bot_id 抛 401 未捕获，webhook 直接 500，
+        issue 只能等对账兜底（且对账身份漂移扫不到 → 完全漏任务）。
+        """
+        self._add_local_repo(ctx.db, tmp_path)
+        self._fail_global_bot_id(ctx)
+        ctx.gitlab.current_issue = make_api_issue(
+            labels=["bug"], assignees=[{"id": 3, "username": "agent"}])
+        fallback = self._FallbackStub(bot_id=11, username_ids={"agent": 3})
+        monkeypatch.setattr(git_remote_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        assert ctx.db.find_active_task(PROJECT_ID, IID) is not None
+
+    def test_rejects_when_identity_unavailable(self, ctx, monkeypatch):
+        """全局身份失败且仓库 remote 无可用身份：拒绝入队而非崩溃。"""
+        _add_repo(ctx.db)  # 无 local_path，remote 身份不可解析
+        self._fail_global_bot_id(ctx)
+        ctx.gitlab.current_issue = make_api_issue(
+            labels=["bug"], assignees=[{"id": 3, "username": "agent"}])
+        monkeypatch.setattr(git_remote_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (None, None), raising=False)
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert "bot" in result["reason"]
+        assert ctx.db.count_tasks() == 0
+
+    def test_rejects_when_issue_not_assigned_to_bot(self, ctx, monkeypatch):
+        """身份集合与 issue assignee 不匹配：拒绝入队（不误领取）。"""
+        _add_repo(ctx.db)
+        self._fail_global_bot_id(ctx)
+        ctx.gitlab.current_issue = make_api_issue(
+            labels=["bug"], assignees=[{"id": 3, "username": "agent"}])
+        # remote 身份是 id=11，issue 分配给 id=3 且 remote username 查无此人
+        fallback = self._FallbackStub(bot_id=11, username_ids={})
+        monkeypatch.setattr(git_remote_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert "bot" in result["reason"]
+        assert ctx.db.count_tasks() == 0

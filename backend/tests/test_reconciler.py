@@ -14,6 +14,7 @@ from botler.config import ConfigManager
 from botler.database import Database
 from botler.gitlab_client import GitLabError
 from botler.reconciler import Reconciler
+import botler.reconciler as reconciler_mod
 
 CONFIG_TEXT = """\
 gitlab:
@@ -44,6 +45,10 @@ class StubGitLab:
 
     def get_bot_id(self):
         return BOT_ID
+
+    def get_user_id_by_username(self, username):
+        """按用户名查用户 id（issue #65 身份提示用）；桩默认查不到。"""
+        return None
 
     def list_open_issues(self, project_id, assignee_id=None):
         if project_id in self.fail_projects:
@@ -321,8 +326,8 @@ class TestReconcileFallsBackToRemoteToken:
         ctx.gitlab.list_open_issues = fail_list
         fallback = StubGitLab()
         fallback.issues_by_project = {42: [make_issue(1, labels=["bug"])]}
-        monkeypatch.setattr("botler.reconciler.build_repo_client",
-                            lambda repo, verify_ssl: fallback)
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
 
         result = ctx.reconciler.reconcile_once(repo_id=repo_id)
 
@@ -339,8 +344,8 @@ class TestReconcileFallsBackToRemoteToken:
         ctx.gitlab.list_open_issues = fail_list
         fallback = StubGitLab()
         fallback.issues_by_project = {42: [make_issue(2, labels=["bug"])]}
-        monkeypatch.setattr("botler.reconciler.build_repo_client",
-                            lambda repo, verify_ssl: fallback)
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
 
         result = ctx.reconciler.reconcile_once(repo_id=repo_id)
 
@@ -355,8 +360,8 @@ class TestReconcileFallsBackToRemoteToken:
             raise GitLabError("token 无效或已过期（401）", 401)
 
         ctx.gitlab.list_open_issues = fail_list
-        monkeypatch.setattr("botler.reconciler.build_repo_client",
-                            lambda repo, verify_ssl: None)
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (None, None), raising=False)
 
         result = ctx.reconciler.reconcile_once(repo_id=repo_id)
 
@@ -380,8 +385,8 @@ class TestReconcileFallsBackToRemoteToken:
         fallback.list_open_issues = lambda project_id, assignee_id=None: (
             seen_assignee.append(assignee_id)
             or fallback.issues_by_project.get(project_id, []))
-        monkeypatch.setattr("botler.reconciler.build_repo_client",
-                            lambda repo, verify_ssl: fallback)
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
 
         result = ctx.reconciler.reconcile_once(repo_id=repo_id)
 
@@ -400,8 +405,8 @@ class TestReconcileFallsBackToRemoteToken:
 
         ctx.gitlab.add_labels = fail_add_labels
         fallback = StubGitLab()
-        monkeypatch.setattr("botler.reconciler.build_repo_client",
-                            lambda repo, verify_ssl: fallback)
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
 
         ctx.reconciler.reconcile_once(repo_id=repo_id)
 
@@ -417,11 +422,122 @@ class TestReconcileFallsBackToRemoteToken:
         ctx.gitlab.list_open_issues = fail_list
         fallback = StubGitLab()
         fallback.fail_projects = {42}
-        monkeypatch.setattr("botler.reconciler.build_repo_client",
-                            lambda repo, verify_ssl: fallback)
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
 
         result = ctx.reconciler.reconcile_once(repo_id=repo_id)
 
         assert result["scanned"] == 0
         assert result["enqueued"] == 0
         assert any("仓库 demo" in e for e in result["errors"])
+
+
+class TestReconcileRemoteTokenIdentityMismatch:
+    """issue #65：全局 token 失效后对账 bot 身份漂移。
+
+    全局 token 失效 → 对账降级用 remote 内嵌 token 的账号（如项目 bot，
+    id=11）作为 bot 身份，而用户把新 issue 分配给 @agent（id=3，即 remote
+    URL userinfo 里的用户名对应账号），assignee_id=11 过滤后扫描为 0——
+    API 正常返回，无任何权限报错，新 issue 被静默漏扫。
+
+    修复：remote URL 的用户名也作为 bot 身份候选（agent → id=3），对账
+    以全部候选身份分别扫描后合并去重，扫到分配给 @agent 的 issue。
+    """
+
+    @staticmethod
+    def _add_local_repo(db, tmp_path, project_id=42, name="demo") -> int:
+        import subprocess
+        repo_dir = tmp_path / name
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo_dir)],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo_dir), "remote", "add", "origin",
+                        "https://agent:glpat-repo@gitlab.example.com/group/repo.git"],
+                       check=True)
+        return db.upsert_repo(
+            project_id=project_id, name=name,
+            url=f"https://gitlab.example.com/{name}.git",
+            local_path=str(repo_dir), remote_name="origin")
+
+    @staticmethod
+    def _fail_global_bot_id(ctx) -> None:
+        def fail_bot_id(force=False):
+            raise GitLabError("token 无效或已过期（401）", 401)
+        ctx.gitlab.get_bot_id = fail_bot_id
+
+    @staticmethod
+    def _remote_stub(issues_by_assignee: dict[int, list[dict]],
+                     bot_id: int = 11,
+                     username_ids: dict[str, int] | None = None) -> StubGitLab:
+        """remote token 兜底桩：按 assignee_id 返回不同 issue 列表。
+
+        bot_id 为 remote token 账号 id；username_ids 模拟按用户名查用户 id
+        （如 remote URL 用户名 agent → id=3）。"""
+        stub = StubGitLab()
+        stub.get_bot_id = lambda: bot_id
+        stub.get_user_id_by_username = lambda u: (username_ids or {}).get(u)
+        seen: list = []
+        stub.list_open_issues = lambda project_id, assignee_id=None: (
+            seen.append(assignee_id)
+            or issues_by_assignee.get(assignee_id, []))
+        stub.seen_assignees = seen
+        return stub
+
+    def test_scans_issue_assigned_to_remote_username(
+            self, ctx, tmp_path, monkeypatch):
+        """全局 token 失效、新 issue 分配给 @agent（remote URL 用户名对应
+        id=3）：对账应扫到并补入队。
+
+        修复前：只以 remote token 账号（id=11）扫描，assignee_id=11 为空，
+        静默返回 scanned=0、enqueued=0，无任何错误。
+        """
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+        self._fail_global_bot_id(ctx)
+        fallback = self._remote_stub(
+            {3: [make_issue(1, labels=["bug"])], 11: []},
+            bot_id=11, username_ids={"agent": 3})
+        # 修复前接口：让测试在旧实现下精确失败于 scanned=0（而非网络错误）
+        monkeypatch.setattr(reconciler_mod, "build_repo_client",
+                            lambda repo, verify_ssl: fallback, raising=False)
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert ctx.db.find_active_task(42, 1) is not None
+        assert set(fallback.seen_assignees) == {3, 11}
+
+    def test_unknown_remote_username_only_scans_token_account(
+            self, ctx, tmp_path, monkeypatch):
+        """remote URL 用户名不是真实用户（查无此人）：忽略该身份，
+        只用 remote token 账号扫描，行为与修复前一致。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+        self._fail_global_bot_id(ctx)
+        fallback = self._remote_stub(
+            {3: [make_issue(1, labels=["bug"])], 11: []},
+            bot_id=11, username_ids={})  # agent 查无此人
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 0, "enqueued": 0}
+        assert set(fallback.seen_assignees) == {11}
+
+    def test_dedupes_issue_assigned_to_multiple_identities(
+            self, ctx, tmp_path, monkeypatch):
+        """同一 issue 同时分配给两个 bot 身份：两个身份各扫到一次，
+        按 iid 去重后只补入队一次。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+        self._fail_global_bot_id(ctx)
+        shared = make_issue(1, labels=["bug"])
+        fallback = self._remote_stub(
+            {3: [shared], 11: [shared]},
+            bot_id=11, username_ids={"agent": 3})
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"), raising=False)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert ctx.db.count_tasks() == 1

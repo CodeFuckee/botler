@@ -15,7 +15,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .config import ConfigManager
 from .database import Database, STATUS_FAILED, STATUS_SUCCEEDED
 from .gitlab_client import GitLabClient, GitLabError
-from .git_remote import build_repo_client
+from .git_remote import build_repo_client_with_username
 from .labels import CLAIM_SKIP_LABELS
 from .scheduler import TaskScheduler
 
@@ -107,7 +107,7 @@ class Reconciler:
         except GitLabError as e:
             if e.status_code not in (401, 403) or client is not self.gitlab:
                 raise
-            fallback = build_repo_client(repo, verify_ssl)
+            fallback, _ = build_repo_client_with_username(repo, verify_ssl)
             if fallback is None:
                 raise
             logger.info("对账仓库 %s：token 失效（%s），改用 remote url 内嵌 token 重试",
@@ -123,21 +123,44 @@ class Reconciler:
         的 bot 身份；remote 无可用 token 则记错跳过。
         """
         client = self.gitlab
-        if bot_id is None:
-            fallback = build_repo_client(repo, cfg.verify_ssl)
+        bot_ids: list[int] = []
+        if bot_id is not None:
+            bot_ids = [bot_id]
+        else:
+            fallback, username = build_repo_client_with_username(repo, cfg.verify_ssl)
             if fallback is None:
                 return 0, 0, [f"仓库 {repo['name']}: 全局 token 失效且 remote 无内嵌 token"]
             client = fallback
             try:
-                bot_id = client.get_bot_id()
+                bot_ids = [client.get_bot_id()]
             except GitLabError as e:
                 return 0, 0, [f"仓库 {repo['name']}: {e}"]
-            logger.info("对账仓库 %s：全局 bot 身份不可用，改用 remote token 账号（id=%s）",
-                        repo["name"], bot_id)
+            # issue #65：remote URL 用户名（如 agent）也作为 bot 身份候选——
+            # 用户通常把 issue 分配给该账号，仅以 remote token 账号扫描会
+            # 静默漏扫（扫描为 0 且无任何报错）
+            if username:
+                try:
+                    uid = client.get_user_id_by_username(username)
+                except GitLabError as e:
+                    logger.warning("对账仓库 %s：按用户名 %s 解析 bot 身份失败: %s",
+                                   repo["name"], username, e)
+                    uid = None
+                if uid and uid not in bot_ids:
+                    bot_ids.append(uid)
+            logger.info("对账仓库 %s：全局 bot 身份不可用，改用 remote 身份 %s",
+                        repo["name"], bot_ids)
+        issues: list[dict] = []
         try:
-            issues, client = self._call_with_fallback(
-                repo, cfg.verify_ssl, client,
-                lambda c: c.list_open_issues(repo["gitlab_project_id"], assignee_id=bot_id))
+            seen_iids: set[int] = set()
+            for uid in bot_ids:
+                batch, client = self._call_with_fallback(
+                    repo, cfg.verify_ssl, client,
+                    lambda c, u=uid: c.list_open_issues(
+                        repo["gitlab_project_id"], assignee_id=u))
+                for issue in batch:
+                    if issue["iid"] not in seen_iids:
+                        seen_iids.add(issue["iid"])
+                        issues.append(issue)
         except GitLabError as e:
             msg = f"仓库 {repo['name']}: {e}"
             logger.warning("对账失败：%s", msg)
@@ -167,7 +190,7 @@ class Reconciler:
                                repo["gitlab_project_id"], issue["iid"], e)
                 errors.append(f"仓库 {repo['name']} issue #{issue['iid']}: {e}")
                 continue
-            if last_author is not None and last_author == bot_id:
+            if last_author is not None and last_author in bot_ids:
                 logger.info("对账跳过最后发言人为 bot 的 issue %s#%s",
                             repo["gitlab_project_id"], issue["iid"])
                 continue

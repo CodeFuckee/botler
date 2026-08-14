@@ -214,6 +214,34 @@
 
 ### Fixed
 
+- **对账扫描为 0：全局 token 失效后 bot 身份漂移漏扫新 issue（issue #65）**：
+  全局 bot token 被撤销后，对账降级以仓库 remote 内嵌 token 的账号
+  （project access token 账号，如 project_123_bot / code01）作为 bot
+  身份，而用户把新 issue 分配给 @agent——两者 id 不一致，
+  `assignee_id` 过滤后扫描为 0，且 API 正常返回（无任何权限报错），
+  新 issue 被静默漏扫。现改为 remote URL userinfo 的用户名（如 agent）
+  也作为 bot 身份候选：对账以「remote token 账号 + remote 用户名对应
+  账号」身份集合分别扫描、按 iid 去重合并；webhook 全局身份获取失败
+  （401）时不再直接 500，同样按仓库 remote 身份集合判定 assignee。
+  - 后端 `git_remote.py`：新增 `build_repo_client_with_username`
+    （返回 (client, remote_username)，`build_repo_client` 改为其薄
+    封装，概览页调用不变）；
+  - 后端 `gitlab_client.py`：新增 `get_user_id_by_username`（按用户名
+    查用户 id，用户不存在返回 None）；
+  - 后端 `reconciler.py`：`_reconcile_repo` 全局 bot 身份不可用时，
+    以身份集合（remote token 账号 + remote URL 用户名对应账号）分别
+    扫描合并；「最后发言人是 bot」判定改用身份集合；
+  - 后端 `webhook.py`：`get_bot_id` 401 时降级为 `_repo_bot_ids`
+    （仓库 remote 身份集合），assignee 与最后发言人判定同样用集合，
+    不再抛 500；
+  - 测试：TDD 先行（复现测试红灯：身份漂移场景 scanned=0 无报错、
+    webhook 直接抛 401），新增用例 6（对账扫到 remote 用户名账号
+    assignee 的 issue / 用户名查无此人只扫 token 账号 / 多身份重复
+    assignee 去重 / webhook 全局身份失效降级入队 / 身份不可用拒绝 /
+    assignee 不匹配不误领取），更新 issue #63 用例 6 处
+    （`build_repo_client` monkeypatch 改为新函数）；后端全量
+    667（+6）通过，前端 217 全量通过。
+
 - **仓库对账遇 token 失效时用 remote url 内嵌 token 兜底（issue #63）**：
   对账（定时兜底 + 仓库页「对账」按钮）完全依赖全局 bot token；全局
   token 失效（401）后 `get_bot_id` 失败即整体放弃，各仓库 remote url
