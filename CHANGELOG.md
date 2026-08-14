@@ -6,6 +6,40 @@
 
 ### Added
 
+- **设置页新增 Owner GitLab Token 配置与申请教程（issue #87）**：设置页
+  增加 owner gitlab token 设置，该 token 专门用来编辑 issue（写评论/
+  打标签），严禁用于推送代码与处理流水线；页面内展示「如何申请一个只有
+  处理 issue 权限的 token」教程（折叠区，后端读 docs/ 单一文档来源）。
+  - 后端 `config.py`：Settings 新增 `gitlab_owner_token`（空串 = 未配置）；
+    KNOWN_FIELDS 新增 `gitlab` 段；`update_gitlab` 掩码值/空串 = 保持现有
+    （与 sso.client_secret 同模式，支持 ${ENV} 引用）；
+  - 后端 `api/settings.py`：GET 返回 `owner_token_masked`（明文不外流）；
+    PUT 支持 `gitlab` 段部分更新（类型校验 400）；新增
+    `GET /api/settings/owner-token-guide` 教程端点（缺失 404 前端降级）；
+  - 后端 `executor.py`：`_call_with_fallback` 新增 `prefer_owner` 参数 +
+    `_owner_gitlab_client`（按 token 值缓存重建）；7 处 issue 编辑调用点
+    （处理中/成功/失败/提问的评论与标签）传 `prefer_owner=True` 优先
+    owner token，owner 401/403 回退原链路（全局 → remote）；会话
+    `GITLAB_TOKEN` 注入优先级改为 owner > remote > 全局。git 推送凭据
+    （`_askpass_script`）与流水线操作仍只用 bot token——从代码路径保证
+    「严禁推送代码/处理流水线」；
+  - 后端 `reconciler.py`：终态标签补打（编辑 issue）同样优先 owner
+    token，owner 失效回退原链路；
+  - 文档：新增 `docs/GitLab-Owner-Token-申请教程.md`（推荐 Reporter 角色
+    低权限账号申请 PAT，从账号层面杜绝越权；含方案对比/安全提示/FAQ）；
+    `config.example.yaml` gitlab 段新增 owner_token 注释示例；
+  - 前端 `Settings.jsx`：新增「Owner GitLab Token（issue 编辑专用）」卡片
+    （GitLab 凭据卡片之前）：密码输入框（掩码占位 + 留空 = 保持现有）、
+    独立保存按钮（只提交 `{gitlab:{owner_token}}` 段）、用途边界说明、
+    「查看 token 申请教程」折叠区（Markdown 渲染，与 SSO 指南同模式）；
+  - 测试：TDD 先行（红灯确认后实现），后端新增 22 用例（API 掩码/保存/
+    掩码回传保持/空串保持/非字符串 400/${ENV} 展开/教程端点与 404、
+    executor 编辑优先 owner/401/403 回退/默认调用不受影响/未配置无影响/
+    _build_env 三级优先级/askpass 不含 owner、成功与失败收尾 prefer 分布、
+    reconciler 补打优先 owner 与回退）；前端新增 8 用例（卡片位置、密码
+    输入框与保存按钮、提交段隔离、用途边界文案、教程折叠、渲染掩码占位、
+    保存交互 PUT 载荷、教程展开渲染）；全量 741（后端）+ 263（前端）通过。
+
 - **概览页开放 Issue 板块美化（issue #71）**：参考 GitLab issue 列表页
   重新设计——每条 issue 左列 `#iid` 灰显 + 标题链接，下方渲染彩色
   标签胶囊（颜色与 GitLab 项目标签一致）与里程碑胶囊，右列显示

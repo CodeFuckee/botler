@@ -95,13 +95,39 @@ class Reconciler:
             result["errors"] = errors
         return result
 
-    def _call_with_fallback(self, repo: dict, verify_ssl: bool, client, call):
+    def _owner_client(self, verify_ssl: bool):
+        """Owner token 客户端（issue #87）：仅 issue 编辑（终态标签补打）使用。
+
+        未配置 owner token 返回 None（调用方沿用原链路）；严禁用于
+        git 推送与流水线操作。
+        """
+        cfg = self.config.get()
+        token = (cfg.gitlab_owner_token or "").strip()
+        if not token:
+            return None
+        return GitLabClient(cfg.gitlab_url, token, verify_ssl=verify_ssl)
+
+    def _call_with_fallback(self, repo: dict, verify_ssl: bool, client, call,
+                            prefer_owner: bool = False):
         """用 client 执行 call(client)；遇 401/403（token 失效）时尝试从仓库
         remote url 提取内嵌 token 构建 per-repo client 重试一次（issue #63）。
+
+        prefer_owner=True（issue #87）：编辑 issue（补打终态标签）优先用
+        owner token 客户端，owner 401/403 时回退原链路（全局 → remote）。
 
         返回 (result, client)。client 已是 per-repo 兜底客户端时不再重复
         兜底；remote 无可用 token 或重试仍失败时抛 GitLabError。
         """
+        if prefer_owner:
+            owner = self._owner_client(verify_ssl)
+            if owner is not None:
+                try:
+                    return call(owner), owner
+                except GitLabError as e:
+                    if e.status_code not in (401, 403):
+                        raise
+                    logger.info("对账仓库 %s：owner token 失效（%s），"
+                                "回退原链路重试", repo["name"], e)
         try:
             return call(client), client
         except GitLabError as e:
@@ -252,7 +278,8 @@ class Reconciler:
             try:
                 _, client = self._call_with_fallback(
                     repo, cfg.verify_ssl, client,
-                    lambda c: c.add_labels(project_id, iid, [want]))
+                    lambda c: c.add_labels(project_id, iid, [want]),
+                    prefer_owner=True)
             except GitLabError as e:
                 logger.warning("终态标签对账：补打 %s 失败（%s#%s）: %s",
                                want, project_id, iid, e)

@@ -48,6 +48,15 @@ export default function Settings() {
   const [guide, setGuide] = useState(null)
   const [guideError, setGuideError] = useState('')
   const [guideOpen, setGuideOpen] = useState(false)
+  // Owner GitLab Token（issue #87）：专用于编辑 issue（评论/标签）的
+  // 个人访问令牌。留空 = 保持现有（后端掩码不覆盖，与 SSO secret 同模式）
+  const [ownerTokenInput, setOwnerTokenInput] = useState('')
+  const [ownerBusy, setOwnerBusy] = useState(false)
+  const [ownerSaved, setOwnerSaved] = useState(false)
+  // 申请教程（issue #87）：与 SSO 指南同模式，后端读 docs/ 单一文档来源
+  const [ownerGuide, setOwnerGuide] = useState(null)
+  const [ownerGuideError, setOwnerGuideError] = useState('')
+  const [ownerGuideOpen, setOwnerGuideOpen] = useState(false)
 
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
@@ -86,6 +95,8 @@ export default function Settings() {
     api.get('/api/settings').then(setSettings).catch((e) => setError(e.message))
     api.get('/api/settings/sso-guide').then((d) => setGuide(d.content))
       .catch((e) => setGuideError(e.message))
+    api.get('/api/settings/owner-token-guide').then((d) => setOwnerGuide(d.content))
+      .catch((e) => setOwnerGuideError(e.message))
     loadEnv()
   }, [])
 
@@ -125,6 +136,18 @@ export default function Settings() {
       setSsoSaved(true)
       setTimeout(() => setSsoSaved(false), 2000)
     } catch (e) { setError(e.message) } finally { setSsoBusy(false) }
+  }
+
+  // Owner token 独立保存（issue #87）：只提交 gitlab 段（部分更新）。
+  // 留空 = 保持现有凭据（后端掩码不覆盖）；成功后清空输入框
+  const saveOwnerToken = async () => {
+    setOwnerBusy(true); setError(''); setOwnerSaved(false)
+    try {
+      await api.put('/api/settings', { gitlab: { owner_token: ownerTokenInput.trim() } })
+      setOwnerSaved(true)
+      setOwnerTokenInput('')
+      setTimeout(() => setOwnerSaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setOwnerBusy(false) }
   }
 
   const save = async () => {
@@ -496,6 +519,60 @@ export default function Settings() {
       </div>
 
       <BackupManager />
+
+      {/* Owner GitLab Token（issue #87）：专用于编辑 issue（评论/标签）的
+          个人访问令牌，严禁用于推送代码与处理流水线 */}
+      <div className="card">
+        <h2>Owner GitLab Token（issue 编辑专用）</h2>
+        <table className="table kv">
+          <tbody>
+            <tr>
+              <th>Token <code>gitlab.owner_token</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  type="password"
+                  placeholder={settings.gitlab?.owner_token_masked
+                    ? `已配置（${settings.gitlab.owner_token_masked}），留空 = 保持现有`
+                    : '粘贴 GitLab Personal Access Token（glpat-xxxx）'}
+                  value={ownerTokenInput}
+                  onChange={(e) => setOwnerTokenInput(e.target.value)}
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div className="form-row">
+          <button className="btn btn-primary" disabled={ownerBusy} onClick={saveOwnerToken}>
+            {ownerBusy ? '保存中…' : '保存 Owner Token'}
+          </button>
+          {ownerSaved && (
+            <span className="saved-hint">✓ Owner token 已保存（已写回 config.yaml）</span>
+          )}
+        </div>
+        <p className="muted small">
+          该 token 专门用来编辑 issue（写评论、打标签），botler 绝不会用它推送代码或处理
+          流水线——推送与流水线操作仍使用 bot token。推荐用仓库 Reporter 角色的低权限账号
+          申请（账号权限层面杜绝越权使用），申请步骤见下方「查看 token 申请教程」。
+          留空保存 = 保持现有 token。
+        </p>
+        <div className="guide-box">
+          <button className="btn" onClick={() => setOwnerGuideOpen((v) => !v)}>
+            {ownerGuideOpen ? '收起 token 申请教程' : '查看 token 申请教程'}
+          </button>
+          {ownerGuideOpen && (
+            <div className="guide-content">
+              {ownerGuideError && (
+                <div className="alert alert-error" onClick={() => setOwnerGuideError('')}>
+                  教程文档不可用：{ownerGuideError}
+                </div>
+              )}
+              {!ownerGuide && !ownerGuideError && <p className="muted">教程加载中…</p>}
+              {ownerGuide && <Markdown content={ownerGuide} />}
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="card">
         <h2>GitLab 凭据（只读）</h2>

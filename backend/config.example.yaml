@@ -4,6 +4,11 @@
 gitlab:
   url: https://home.chenkaidi.top:509
   bot_token: ${GITLAB_BOT_TOKEN}      # bot 账号 PAT，scope 至少 api + write_repository
+  # owner_token（issue #87，可选）：专用于编辑 issue（评论/标签）的 PAT。
+  # 推荐用仓库 Reporter 角色的低权限账号申请（账号层面杜绝推送代码/
+  # 操作流水线），教程见 docs/GitLab-Owner-Token-申请教程.md。
+  # 留空 = 未配置，编辑 issue 沿用 bot token / remote 内嵌 token。
+  # 也可用 ${ENV} 引用：owner_token: ${GITLAB_OWNER_TOKEN}
   webhook_secret: ${WEBHOOK_SECRET}   # webhook 校验 secret（任意随机串）
   bot_username: ""                    # 可选：bot 账号用户名（不填则自动识别）
   verify_ssl: false                   # 自建 GitLab 若为自签证书设 false

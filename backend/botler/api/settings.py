@@ -23,6 +23,10 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 # （backend/botler/api/settings.py → 上溯三级到项目根）。
 SSO_GUIDE_PATH = Path(__file__).resolve().parents[3] / "docs" / "Synology-SSO-配置指南.md"
 
+# Owner token 申请教程（issue #87）：设置页直接展示（与 SSO 指南同模式）
+OWNER_TOKEN_GUIDE_PATH = (
+    Path(__file__).resolve().parents[3] / "docs" / "GitLab-Owner-Token-申请教程.md")
+
 
 class WorkerPatch(BaseModel):
     max_concurrent_repos: int | None = None
@@ -53,6 +57,7 @@ def get_settings(request: Request):
             "url": s.gitlab_url,
             "bot_username": s.bot_username,
             "bot_token_masked": _mask(s.gitlab_token),
+            "owner_token_masked": _mask(s.gitlab_owner_token),
             "webhook_secret_masked": _mask(s.webhook_secret),
             "verify_ssl": s.verify_ssl,
         },
@@ -136,6 +141,19 @@ def get_sso_guide():
     return {"content": content}
 
 
+@router.get("/owner-token-guide")
+def get_owner_token_guide():
+    """Owner token 申请教程（issue #87）：返回 docs/ 教程 Markdown 原文。
+
+    与 SSO 指南同模式：设置页直接渲染；文档缺失 404，前端降级提示。
+    """
+    try:
+        content = OWNER_TOKEN_GUIDE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        raise HTTPException(status_code=404, detail="Owner token 申请教程文档不存在")
+    return {"content": content}
+
+
 @router.put("")
 def update_settings(request: Request, body: dict):
     """更新 worker / claude / templates.default。body 传哪些键就更新哪些。"""
@@ -185,6 +203,11 @@ def update_settings(request: Request, body: dict):
         cleaned = _validate_ai_providers(
             providers, current=c.config.get().ai_providers)
         c.config.update_ai_providers(cleaned)
+
+    gitlab_patch = body.get("gitlab")
+    if gitlab_patch is not None:
+        _validate_gitlab(gitlab_patch)
+        c.config.update_gitlab(gitlab_patch)
 
     return get_settings(request)
 
@@ -265,6 +288,16 @@ def _validate_notifications(patch: dict) -> None:
                 "queue_empty", "queue_no_work"):
         if key in patch and not isinstance(patch[key], bool):
             raise HTTPException(400, f"notifications.{key} 必须是布尔值")
+
+
+def _validate_gitlab(patch: dict) -> None:
+    """校验 gitlab 段（issue #87）：owner_token 必须是字符串或 null。
+
+    掩码值/空串 = 保持现有凭据（update_gitlab 处理），此处只查类型。
+    """
+    if "owner_token" in patch and patch["owner_token"] is not None \
+            and not isinstance(patch["owner_token"], str):
+        raise HTTPException(400, "gitlab.owner_token 必须是字符串")
 
 
 def _validate_sso(patch: dict, current) -> None:

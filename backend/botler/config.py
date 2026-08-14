@@ -73,6 +73,10 @@ class Settings:
     bot_id: int | None = None
     bot_username: str | None = None
     verify_ssl: bool = True
+    # Owner GitLab Token（issue #87）：专用于编辑 issue（评论/标签），
+    # 严禁用于 git 推送（推送凭据走 _askpass_script 的 bot token）与
+    # 流水线操作。空串 = 未配置，编辑 issue 沿用原链路。
+    gitlab_owner_token: str = ""
     max_concurrent_repos: int = 3
     task_timeout_seconds: int = 1800
     max_retries: int = 2
@@ -129,6 +133,7 @@ class Settings:
 
 # settings API 可写字段（写回 config.yaml 用）
 KNOWN_FIELDS = {
+    "gitlab": {"owner_token"},
     "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries",
                "reconcile_interval_seconds", "ci_wait_detect_seconds",
                "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
@@ -247,6 +252,7 @@ class ConfigManager:
             bot_id=int(bot_id) if bot_id not in (None, "") else None,
             bot_username=gitlab.get("bot_username"),
             verify_ssl=bool(gitlab.get("verify_ssl", True)),
+            gitlab_owner_token=gitlab.get("owner_token", ""),
             max_concurrent_repos=int(worker.get("max_concurrent_repos", 3)),
             task_timeout_seconds=int(worker.get("task_timeout_seconds", 1800)),
             max_retries=int(worker.get("max_retries", 2)),
@@ -331,6 +337,26 @@ class ConfigManager:
         for key in KNOWN_FIELDS["worker"]:
             if key in patch:
                 worker[key] = patch[key]
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_gitlab(self, patch: dict[str, Any]) -> Settings:
+        """更新 gitlab 配置并写回（owner token；issue #87）。
+
+        前端回传的掩码值（含 *）或空串视为"未修改"，不覆盖真实凭据
+        （与 sso.client_secret 同模式）。
+        """
+        self._reload_from_disk()
+        gitlab = self._data.setdefault("gitlab", {})
+        for key in KNOWN_FIELDS["gitlab"]:
+            if key not in patch:
+                continue
+            val = patch[key]
+            if key == "owner_token" and (val is None or "*" in str(val)
+                                         or not str(val).strip()):
+                continue  # 掩码占位符/空串：保持现有凭据
+            gitlab[key] = val
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings
