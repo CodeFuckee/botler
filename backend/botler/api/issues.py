@@ -1,4 +1,4 @@
-"""概览页开放 issue 聚合 API（issue #64）。
+"""概览页开放 issue 聚合 API（issue #64，issue #71 扩展美化字段）。
 
 GET /api/issues/overview：遍历所有「已启用」仓库，聚合各仓库的开放
 （opened）issue，供概览页展示：
@@ -13,11 +13,17 @@ pipelines 模块的 _repo_client 及其缓存），单仓库失败不中断整�
 200），失败明细进 errors 列表；结果带 10 秒 TTL 内存缓存。issue 的
 updated_at 统一转 UTC 无后缀（复用 pipelines._commit_time_utc），与
 前端 fmtAgo/fmtTime 解析约定对齐。
+
+issue #71（参考 GitLab issue 页面美化）：透传 labels（带 GitLab 标签色）、
+milestone、assignees、user_notes_count；每仓库额外查一次项目标签
+（labels API）建 name→color 映射——查询失败或颜色非法时标签降级为
+无色胶囊（中性样式），不中断整体、不进 errors（标签色只是视觉增强）。
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 
@@ -40,8 +46,13 @@ _CACHE: dict = {"expires_at": 0.0, "data": None}
 # 取前 N 条，即最新更新的 N 条）
 MAX_ISSUES_PER_REPO = 100
 
-# issue 对象透传给前端的字段（丢弃 description/author 等无关字段）
+# issue 对象透传给前端的字段（丢弃 description/author 等无关字段；
+# labels/milestone/assignees/user_notes_count 由 _trim_issue 二次加工）
 _ISSUE_KEYS = ("iid", "title", "updated_at", "web_url")
+
+# GitLab 标签颜色必须是 6 位 hex（labels API 约定），非法值不透传，
+# 防止拼进前端内联样式注入（issue #71）
+_HEX_COLOR = re.compile(r"^[0-9a-fA-F]{6}$")
 
 
 def clear_issue_cache() -> None:
@@ -51,15 +62,72 @@ def clear_issue_cache() -> None:
         _CACHE["data"] = None
 
 
-def _trim_issue(issue: dict) -> dict:
+def _trim_issue(issue: dict, label_colors: dict) -> dict:
     """精简 issue 对象：只保留概览页展示需要的字段。
 
     updated_at（GitLab ISO 8601 带时区）转 UTC 无后缀（前端 fmtAgo
     解析约定，与流水线 commit_time 一致）；缺失时静默为 None。
+
+    issue #71 美化字段：
+    - labels：名称数组 + label_colors 映射的 color/text_color（映射
+      缺失或颜色非法 → None，前端按中性胶囊降级）；
+    - milestone：对象只留 title；assignees：每条只留 name/username/
+      avatar_url（头像展示）；user_notes_count：原样透传。
     """
     trimmed = {k: issue.get(k) for k in _ISSUE_KEYS}
     trimmed["updated_at"] = _commit_time_utc(issue.get("updated_at"))
+    trimmed["labels"] = [
+        _label_entry(name, label_colors)
+        for name in (issue.get("labels") or [])
+        if isinstance(name, str)
+    ]
+    milestone = issue.get("milestone")
+    trimmed["milestone"] = (
+        milestone.get("title") if isinstance(milestone, dict) else None)
+    trimmed["assignees"] = [
+        {"name": a.get("name"), "username": a.get("username"),
+         "avatar_url": a.get("avatar_url")}
+        for a in (issue.get("assignees") or [])
+        if isinstance(a, dict)
+    ]
+    trimmed["user_notes_count"] = issue.get("user_notes_count")
     return trimmed
+
+
+def _label_entry(name: str, label_colors: dict) -> dict:
+    """标签名 → {name, color, text_color}：颜色从项目标签映射取，
+    缺失或非 6 位 hex → None（前端中性胶囊兜底）；color 为 None 时
+    text_color 一并置 None（无背景色时文字色无意义）。"""
+    meta = label_colors.get(name) if isinstance(label_colors, dict) else None
+    color = meta.get("color") if isinstance(meta, dict) else None
+    text_color = meta.get("text_color") if isinstance(meta, dict) else None
+    if not (isinstance(color, str) and _HEX_COLOR.match(color)):
+        color = None
+    if not (isinstance(text_color, str) and _HEX_COLOR.match(text_color)):
+        text_color = None
+    if color is None:
+        text_color = None
+    return {"name": name, "color": color, "text_color": text_color}
+
+
+def _fetch_label_colors(client, project_id: int) -> dict:
+    """查项目标签建 name→color 映射（issue #71）。
+
+    labels API 失败（GitLabError/网络错误）静默降级为空映射——标签色
+    只是视觉增强，不构成仓库数据不可用，不进 errors。
+    """
+    try:
+        labels = client.list_project_labels(project_id)
+    except (GitLabError, httpx.HTTPError):
+        return {}
+    mapping: dict = {}
+    for label in labels or []:
+        if isinstance(label, dict) and isinstance(label.get("name"), str):
+            mapping[label["name"]] = {
+                "color": label.get("color"),
+                "text_color": label.get("text_color"),
+            }
+    return mapping
 
 
 def _collect(c) -> dict:
@@ -84,7 +152,9 @@ def _collect(c) -> dict:
             # 此处保证字段缺失/API 不遵守排序时输出仍稳定（最新在前）
             ordered = sorted(
                 issues, key=lambda i: i.get("updated_at") or "", reverse=True)
-            entry["issues"] = [_trim_issue(i) for i in ordered]
+            # issue #71：项目标签色映射（labels API 失败时降级无色）
+            label_colors = _fetch_label_colors(client, row["gitlab_project_id"])
+            entry["issues"] = [_trim_issue(i, label_colors) for i in ordered]
             total += len(entry["issues"])
         except GitLabError as e:
             errors.append(f"仓库 {row['name']}: {e}")

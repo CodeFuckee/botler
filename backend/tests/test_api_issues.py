@@ -43,8 +43,14 @@ class StubGitLab:
     def __init__(self):
         self.issues_by_project: dict[int, list[dict]] = {}
         self.fail_projects: set[int] = set()
+        # labels 查询（issue #71）：labels_by_project 按 project_id 配置，
+        # 可单独故障注入（fail_label_projects）
+        self.labels_by_project: dict[int, list[dict]] = {}
+        self.fail_label_projects: set[int] = set()
         # (project_id, kwargs)：记录每次 list_open_issues 调用参数
         self.calls: list[tuple[int, dict]] = []
+        # 记录每次 list_project_labels 调用的 project_id（issue #71）
+        self.label_calls: list[int] = []
 
     def list_open_issues(self, project_id, assignee_id=None, scope="all",
                          order_by=None, sort=None, limit=None):
@@ -58,13 +64,28 @@ class StubGitLab:
         # 模拟真实 GitLabClient._paged 的 limit 截断契约
         return items[:limit] if limit is not None else items
 
+    def list_project_labels(self, project_id):
+        """项目标签查询（issue #71）：按 project_id 配置，可故障注入。"""
+        self.label_calls.append(project_id)
+        if project_id in self.fail_label_projects:
+            raise GitLabError("模拟标签 API 故障")
+        return list(self.labels_by_project.get(project_id, []))
+
 
 def make_issue(iid: int, title: str,
-               updated_at: str = "2026-08-14T10:00:00.000+08:00") -> dict:
+               updated_at: str = "2026-08-14T10:00:00.000+08:00",
+               labels: list[str] | None = None,
+               milestone: dict | None = None,
+               assignees: list[dict] | None = None,
+               user_notes_count: int | None = None) -> dict:
     return {
         "iid": iid, "title": title, "state": "opened",
         "updated_at": updated_at,
         "web_url": f"https://gitlab.example.com/group/proj/-/issues/{iid}",
+        "labels": labels or [],
+        "milestone": milestone,
+        "assignees": assignees or [],
+        "user_notes_count": user_notes_count,
     }
 
 
@@ -306,9 +327,10 @@ class TestIssuesOverview:
         assert len(stub.calls) == 2
 
     def test_issue_fields_trimmed(self, client):
-        """issue 精简字段透传：iid/title/updated_at/web_url（丢弃冗余字段）；
+        """issue 精简字段透传：iid/title/updated_at/web_url + 美化字段
+        labels/milestone/assignees/user_notes_count（issue #71 扩展）；
         updated_at 转 UTC 无后缀（前端 fmtAgo 解析约定，与流水线
-        commit_time 一致）。"""
+        commit_time 一致）。无对应数据时 labels 空列表、其余为 None。"""
         tc, stub, db, tmp_path = client
         _add_repo(db)
         stub.issues_by_project = {42: [{
@@ -326,7 +348,108 @@ class TestIssuesOverview:
             "iid": 7, "title": "精简",
             "updated_at": "2026-08-14 02:00:00",
             "web_url": "https://gitlab.example.com/group/proj/-/issues/7",
+            "labels": [{"name": "bug", "color": None, "text_color": None}],
+            "milestone": None,
+            "assignees": [],
+            "user_notes_count": None,
         }
+
+    def test_extended_fields_trimmed(self, client):
+        """美化字段透传（issue #71）：里程碑只留 title；assignees 每条只留
+        name/username/avatar_url；评论数原样透传；冗余字段（description/
+        author 等）丢弃。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.issues_by_project = {42: [{
+            **make_issue(7, "扩展"),
+            "labels": ["bug"],
+            "milestone": {"id": 1, "iid": 1, "title": "v1.0", "state": "active"},
+            "assignees": [{
+                "id": 1, "username": "agent", "name": "Agent",
+                "avatar_url": "https://gitlab.example.com/a.png",
+                "state": "active",
+            }],
+            "user_notes_count": 3,
+            "author": {"id": 2, "username": "someone"},
+            "description": "冗余字段应丢弃",
+        }]}
+
+        resp = tc.get("/api/issues/overview")
+
+        data = resp.json()
+        issue = data["repos"][0]["issues"][0]
+        assert issue == {
+            "iid": 7, "title": "扩展",
+            "updated_at": "2026-08-14 02:00:00",
+            "web_url": "https://gitlab.example.com/group/proj/-/issues/7",
+            "labels": [{"name": "bug", "color": None, "text_color": None}],
+            "milestone": "v1.0",
+            "assignees": [{
+                "name": "Agent", "username": "agent",
+                "avatar_url": "https://gitlab.example.com/a.png",
+            }],
+            "user_notes_count": 3,
+        }
+
+    def test_label_colors_attached(self, client):
+        """标签颜色（issue #71）：labels API 提供的 color/text_color 挂到
+        对应标签上；labels API 中不存在的标签降级为无色。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.labels_by_project = {42: [
+            {"name": "feature", "color": "428BCA", "text_color": "FFFFFF"},
+            {"name": "ui", "color": "69D100", "text_color": "FFFFFF"},
+        ]}
+        stub.issues_by_project = {42: [make_issue(
+            1, "a", labels=["feature", "ui", "unknown"])]}
+
+        resp = tc.get("/api/issues/overview")
+
+        data = resp.json()
+        assert data["errors"] == []
+        labels = data["repos"][0]["issues"][0]["labels"]
+        assert labels == [
+            {"name": "feature", "color": "428BCA", "text_color": "FFFFFF"},
+            {"name": "ui", "color": "69D100", "text_color": "FFFFFF"},
+            {"name": "unknown", "color": None, "text_color": None},
+        ]
+        # 每个仓库各查一次 labels API（与 issues 查询同一 per-repo client）
+        assert stub.label_calls == [42]
+
+    def test_label_colors_failure_degrades(self, client):
+        """labels API 故障（issue #71）：issue 照常返回、标签降级无色、
+        errors 不记录（标签色只是视觉增强，不构成数据不可用）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.fail_label_projects = {42}
+        stub.issues_by_project = {42: [make_issue(1, "a", labels=["bug"])]}
+
+        resp = tc.get("/api/issues/overview")
+
+        data = resp.json()
+        assert data["errors"] == []
+        labels = data["repos"][0]["issues"][0]["labels"]
+        assert labels == [{"name": "bug", "color": None, "text_color": None}]
+
+    def test_label_color_invalid_ignored(self, client):
+        """安全兜底（issue #71）：labels API 返回非 6 位 hex 的颜色值时
+        不透传给前端（避免样式注入），按无色处理。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.labels_by_project = {42: [
+            {"name": "x", "color": "not-hex", "text_color": "FFFFFF"},
+            {"name": "y", "color": "428BCA", "text_color": "333333"},
+        ]}
+        stub.issues_by_project = {42: [make_issue(1, "a", labels=["x", "y"])]}
+
+        resp = tc.get("/api/issues/overview")
+
+        data = resp.json()
+        labels = data["repos"][0]["issues"][0]["labels"]
+        assert labels == [
+            {"name": "x", "color": None, "text_color": None},
+            {"name": "y", "color": "428BCA", "text_color": "333333"},
+        ]
 
     def test_repo_entry_carries_priority(self, client):
         """每条仓库结果带 priority 字段供前端展示优先级徽章。"""

@@ -6,6 +6,26 @@
 
 ### Added
 
+- **概览页开放 Issue 板块美化（issue #71）**：参考 GitLab issue 列表页
+  重新设计——每条 issue 左列 `#iid` 灰显 + 标题链接，下方渲染彩色
+  标签胶囊（颜色与 GitLab 项目标签一致）与里程碑胶囊，右列显示
+  assignee 头像（无头像回退首字符占位）、最后更新时间与 💬 评论数。
+  - 后端：`gitlab_client.py` 新增 `list_project_labels`（labels API）；
+    `api/issues.py` 聚合时每仓库额外查一次项目标签建 name→color 映射，
+    issue 精简字段扩展 labels（带 color/text_color）/milestone（title）/
+    assignees（name/username/avatar_url）/user_notes_count；标签颜色
+    校验为 6 位 hex 防样式注入，labels API 失败或颜色非法时降级无色
+    胶囊（不中断整体、不进 errors——标签色只是视觉增强）；
+  - 前端：Overview.jsx issue 项改为 GitLab 列表页两列布局（issue-main
+    标签/里程碑胶囊 + issue-side 头像/时间/评论数），无颜色标签走
+    中性灰胶囊样式；styles.css 新增 label-pill/milestone-chip/
+    assignee-avatar/avatar-fallback 等样式；
+  - 测试：TDD 先行（红灯确认后实现），后端新增 4 用例（标签颜色附加、
+    labels API 故障降级、非法颜色兜底、美化字段透传）并更新 1 例；
+    前端新增 5 用例（彩色胶囊样式、里程碑/评论数、assignee 头像、
+    美化字段缺失兜底、无头像首字符占位）；全量 707（后端）+ 248
+    （前端）通过。
+
 - **任务页响应式列隐藏与「⋯」抽屉（issue #70）**：任务列表宽度不够时
   按优先级隐藏列（尝试→来源→创建时间→失败原因→用时），有列被隐藏时
   操作列最右侧出现「⋯」按钮，点击弹出右侧抽屉显示该任务全部数据。

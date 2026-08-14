@@ -1055,7 +1055,7 @@ code {
 .issue-item {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 8px;
   padding: 6px 0;
   border-top: 1px solid var(--border);
@@ -1063,6 +1063,9 @@ code {
 .issue-item:first-child {
   border-top: none;
   padding-top: 0;
+}
+.issue-main {
+  min-width: 0;
 }
 .issue-link {
   color: inherit;
@@ -1074,7 +1077,72 @@ code {
 .issue-link:hover {
   color: var(--primary);
 }
+.issue-iid {
+  color: var(--muted);
+  margin-right: 4px;
+}
+/* issue #71：标签/里程碑胶囊与元信息行（参考 GitLab issue 列表页） */
+.issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.label-pill {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 无颜色降级（labels API 失败/颜色非法）：中性灰胶囊 */
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--muted);
+}
+.milestone-chip {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.issue-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+.assignee-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  vertical-align: middle;
+  display: block;
+}
+.avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  background: var(--bg-active);
+  color: var(--muted);
+}
 .issue-updated {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.issue-notes {
   flex-shrink: 0;
   font-size: 12px;
   color: var(--muted);

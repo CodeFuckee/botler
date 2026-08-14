@@ -200,15 +200,57 @@ export default function Overview() {
                   <ul className="issue-list">
                     {(r.issues || []).map((i) => (
                       <li key={i.iid} className="issue-item">
-                        <a className="issue-link" href={i.web_url} target="_blank"
-                           rel="noreferrer" title="在 GitLab 中打开 issue">
-                          #{i.iid} — {i.title || '—'}
-                        </a>
-                        {i.updated_at && (
-                          <span className="issue-updated" title="最后更新时间">
-                            {fmtAgo(i.updated_at) || ''}
-                          </span>
-                        )}
+                        {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
+                            标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数 */}
+                        <div className="issue-main">
+                          <a className="issue-link" href={i.web_url} target="_blank"
+                             rel="noreferrer" title="在 GitLab 中打开 issue">
+                            <span className="issue-iid">#{i.iid}</span>
+                            {i.title || '—'}
+                          </a>
+                          {((i.labels || []).length > 0 || i.milestone) && (
+                            <div className="issue-meta">
+                              {(i.labels || []).map((l) => (
+                                <span key={l.name} className="label-pill"
+                                      style={l.color
+                                        ? { background: `#${l.color}`, color: `#${l.text_color}` }
+                                        : undefined}
+                                      title={`标签 ${l.name}`}>{l.name}</span>
+                              ))}
+                              {i.milestone && (
+                                <span className="milestone-chip" title={`里程碑 ${i.milestone}`}>
+                                  🏷️ {i.milestone}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <div className="issue-side">
+                          {(i.assignees || []).map((a) => (
+                            a.avatar_url ? (
+                              <img key={a.username || a.name}
+                                   className="assignee-avatar" src={a.avatar_url}
+                                   alt={a.name || a.username || ''}
+                                   title={`负责人 ${a.name || a.username || ''}`} />
+                            ) : (
+                              <span key={a.username || a.name}
+                                    className="assignee-avatar avatar-fallback"
+                                    title={`负责人 ${a.name || a.username || ''}`}>
+                                {(a.name || a.username || '?').slice(0, 1).toUpperCase()}
+                              </span>
+                            )
+                          ))}
+                          {i.updated_at && (
+                            <span className="issue-updated" title="最后更新时间">
+                              {fmtAgo(i.updated_at) || ''}
+                            </span>
+                          )}
+                          {typeof i.user_notes_count === 'number' && (
+                            <span className="issue-notes" title="评论数">
+                              💬 {i.user_notes_count}
+                            </span>
+                          )}
+                        </div>
                       </li>
                     ))}
                   </ul>
