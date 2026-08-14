@@ -222,6 +222,13 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   resize: vertical;
   white-space: pre;
 }
+/* 模版编辑器折叠态（issue #55）：取消 textarea 内层垂直滚动，
+   折叠时内容在小高度窗口内裁剪（无滚动条），展开时高度自适应
+   完整内容、滚动交给页面最外层 */
+.input.textarea.template-collapsed {
+  overflow: hidden;
+  resize: none;
+}
 .num-input { width: 110px; }
 
 .btn {

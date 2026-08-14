@@ -28,6 +28,10 @@ export function Link({ to, className, title, children }) {
 
 export const NavLink = Link
 
+export function Navigate() {
+  return null
+}
+
 export function Route() {
   return null
 }

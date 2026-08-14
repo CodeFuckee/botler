@@ -107,6 +107,25 @@
 
 ### Fixed
 
+- **全局模版取消内层的垂直滚动，改成折叠的方式（issue #55）**：提示词
+  模版页的 textarea 此前固定 18 行，全局默认模版（issue-agent 完整提示词）
+  远超 18 行，内容在 textarea 内部滚动查看（内层垂直滚动条）。现改为折叠
+  方式：默认折叠为 6 行小窗口（overflow hidden 裁剪、无滚动条），按钮
+  「展开全部（N 行）」展开后 textarea 高度自适应内容行数、完整展示，
+  滚动交给页面最外层（与 issue #52 交互原则一致）；「收起」恢复小窗口，
+  内容不丢失。
+  - 前端 `Templates.jsx`：新增 `expanded` 状态（默认折叠）；textarea
+    `rows` 折叠态 6 / 展开态内容行数 +1，折叠态追加
+    `template-collapsed` class；保存按钮行新增「展开全部（N 行）/收起」
+    切换按钮（`aria-expanded` 同步）；
+  - 前端 `styles.css`：新增 `.input.textarea.template-collapsed`
+    （`overflow: hidden; resize: none`）；
+  - 测试：新增 `templates-collapsible-editor.test.mjs` 3 用例（展开态
+    rows 自适应 40 行内容 / 默认折叠 + 展开收起往返切换内容不丢失 /
+    折叠态样式 overflow hidden）；`tests/helpers/mock-router.jsx` 补
+    `Navigate` 导出（issue #54 引入后 vite 依赖扫描报 missing export）；
+    前端全量 202 passed + 后端全量 591 passed + vite build 成功。
+
 - **默认页面改到概览页面（issue #54）**：打开平台默认落在仓库页，现改为
   默认进入概览页。根路径 `/` 重定向到 `/overview`（replace 导航，后退键
   不会卡在重定向环），仓库页迁至 `/repos`，顶部导航「仓库」链接同步指向

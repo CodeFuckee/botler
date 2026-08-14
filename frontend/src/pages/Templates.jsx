@@ -12,6 +12,9 @@ export default function Templates() {
   const [text, setText] = useState('')
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
+  // 模版编辑器折叠状态（issue #55）：默认折叠为小高度窗口，
+  // 展开时高度自适应内容完整展示，取消 textarea 内层垂直滚动
+  const [expanded, setExpanded] = useState(false)
 
   const load = async () => {
     const [reposData, settings] = await Promise.all([
@@ -110,14 +113,21 @@ export default function Templates() {
         </p>
 
         <textarea
-          className="input textarea"
-          rows={18}
+          className={'input textarea' + (expanded ? '' : ' template-collapsed')}
+          rows={expanded ? text.split('\n').length + 1 : 6}
           value={text}
           onChange={(e) => setText(e.target.value)}
           spellCheck={false}
         />
 
         <div className="form-row">
+          <button
+            className="btn"
+            onClick={() => setExpanded(!expanded)}
+            aria-expanded={expanded}
+          >
+            {expanded ? '收起' : `展开全部（${text.split('\n').length} 行）`}
+          </button>
           <button className="btn btn-primary" onClick={save}>保存</button>
           {saved && <span className="saved-hint">✓ 已保存</span>}
           {selected?.repoId !== null && selected?.isOverride && (
