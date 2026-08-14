@@ -214,6 +214,31 @@
 
 ### Fixed
 
+- **全局 token 失效后任务领取/留评论全 401：executor 与 webhook 补上
+  remote token 兜底（issue #65 补充）**：全局 bot token 被撤销期间，
+  executor 全部 GitLab 操作（任务领取 get_issue、「处理中」评论、
+  失败评论、bot-done/bot-failed 标签、流水线等待、提交查询）只走
+  全局 client——任务 1 秒内即失败（生产任务 #88/#89），issue 上
+  收不到任何评论；webhook 的 issue 查询与最后发言人查询 401 同样
+  直接拒绝入队，事件只能等对账兜底补入队（实时性受损）。现与对账
+  对齐：401/403 时按仓库 remote url 内嵌 token 构建 per-repo client
+  重试一次，remote 无可用 token 或重试仍失败才报错（非认证类错误
+  不兜底，原样抛出）。
+  - 后端 `executor.py`：新增 `_call_with_fallback`（镜像对账
+    `_call_with_fallback` 模式），应用到 get_issue、领取评论、
+    `_issue_state`、`_await_task_pipeline`/`_wait_pipeline_for_commit`
+    （流水线探测与轮询）、`_finish_succeeded`（bot-done 标签）、
+    `_finish_failed`（失败评论 + bot-failed 标签，且评论失败不再
+    阻断打标签）、`_record_commit`（提交查询）；
+  - 后端 `webhook.py`：新增 `_repo_client`（按仓库 remote 解析兜底
+    客户端）与 `_call_with_fallback`，issue 查询与最后发言人查询
+    遇 401/403 时用 remote token 重试；`_repo_bot_ids` 复用
+    `_repo_client`；
+  - 测试：TDD 先行（复现测试红灯：run_task 领取 401 任务立即失败、
+    `_finish_failed`/`_finish_succeeded` 401 评论标签落空、webhook
+    401 拒绝入队），新增用例 8（executor 6 + webhook 2），后端全量
+    675（+8）+ 前端 217 通过。
+
 - **对账扫描为 0：全局 token 失效后 bot 身份漂移漏扫新 issue（issue #65）**：
   全局 bot token 被撤销后，对账降级以仓库 remote 内嵌 token 的账号
   （project access token 账号，如 project_123_bot / code01）作为 bot

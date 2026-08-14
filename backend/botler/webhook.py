@@ -14,6 +14,7 @@ import logging
 from .config import ConfigManager
 from .database import Database
 from .gitlab_client import GitLabClient, GitLabError
+from .git_remote import build_repo_client_with_username
 from .labels import CLAIM_SKIP_LABELS
 from .scheduler import TaskScheduler
 
@@ -80,7 +81,8 @@ class WebhookHandler:
             logger.warning("webhook 获取全局 bot 身份失败（%s），将按仓库 remote 身份判定", e)
             bot_id = None
         try:
-            current = self.gitlab.get_issue(project_id, issue_iid)
+            current = self._call_with_fallback(
+                project_id, cfg, lambda c: c.get_issue(project_id, issue_iid))
         except GitLabError as e:
             logger.warning("webhook 查询 issue %s#%s 失败: %s", project_id, issue_iid, e)
             current = None
@@ -109,7 +111,8 @@ class WebhookHandler:
         #    也会触发 webhook，此时应等用户回复。用户回复后（或新任务无评论）
         #    再领取。
         try:
-            last_author = self.gitlab.last_note_author_id(project_id, issue_iid)
+            last_author = self._call_with_fallback(
+                project_id, cfg, lambda c: c.last_note_author_id(project_id, issue_iid))
         except GitLabError as e:
             logger.warning("webhook 查询 issue %s#%s 评论失败: %s", project_id, issue_iid, e)
             return {"accepted": False, "reason": "查询 issue 评论失败，拒绝入队"}
@@ -134,19 +137,49 @@ class WebhookHandler:
         logger.info("webhook 入队: 任务 %s (%s#%s)", task_id, project_id, issue_iid)
         return {"accepted": True, "task_id": task_id}
 
+    def _repo_client(self, project_id: int, cfg):
+        """按仓库 remote 解析 per-repo 兜底客户端（issue #63）。
+
+        仓库未注册 / remote 无可用 token / 本地目录不存在时返回 None。
+        """
+        repo = self.db.get_repo_by_project_id(project_id)
+        if repo is None:
+            return None
+        fallback, _ = build_repo_client_with_username(repo, cfg.verify_ssl)
+        return fallback
+
+    def _call_with_fallback(self, project_id: int, cfg, call):
+        """用全局 client 执行 call(client)；遇 401/403（全局 token 失效）
+        时用仓库 remote url 内嵌 token 构建 per-repo client 重试一次。
+
+        issue #65 补充：此前 webhook 的 issue 查询与最后发言人查询 401
+        直接拒绝入队——全局 token 被撤销期间 webhook 事件全部丢弃，
+        只能等对账兜底补入队（实时性受损）。remote 无可用 token 或
+        重试仍失败时抛 GitLabError。
+        """
+        try:
+            return call(self.gitlab)
+        except GitLabError as e:
+            if e.status_code not in (401, 403):
+                raise
+            fallback = self._repo_client(project_id, cfg)
+            if fallback is None:
+                raise
+            logger.info("webhook 项目 %s：全局 token 失效（%s），"
+                        "改用 remote url 内嵌 token 重试", project_id, e)
+            return call(fallback)
+
     def _repo_bot_ids(self, project_id: int, cfg) -> list[int]:
         """全局 bot 身份不可用时，按仓库 remote 解析候选身份（issue #65）。
 
         remote token 账号 + remote URL 用户名的对应账号（如 agent）一并
         纳入；仓库未注册 / remote 无 token / 解析失败时返回空列表。
         """
-        repo = self.db.get_repo_by_project_id(project_id)
-        if repo is None:
-            return []
-        from .git_remote import build_repo_client_with_username
-        fallback, username = build_repo_client_with_username(repo, cfg.verify_ssl)
+        fallback = self._repo_client(project_id, cfg)
         if fallback is None:
             return []
+        repo = self.db.get_repo_by_project_id(project_id)
+        _, username = build_repo_client_with_username(repo, cfg.verify_ssl)
         try:
             ids = [fallback.get_bot_id()]
         except GitLabError as e:

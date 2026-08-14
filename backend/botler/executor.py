@@ -38,6 +38,7 @@ from .database import (
 )
 from .events import EventBus, parse_claude_stream_line, parse_hermes_event_line
 from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
+from .git_remote import build_repo_client_with_username
 from .templates import TemplateRenderer
 
 logger = logging.getLogger(__name__)
@@ -383,6 +384,32 @@ class ClaudeExecutor:
         self._procs: dict[int, subprocess.Popen] = {}
         self._stop_requests: set[int] = set()
         self._proc_lock = threading.Lock()
+
+    # ---- GitLab 调用兜底 ----
+
+    def _call_with_fallback(self, repo, call):
+        """用全局 client 执行 call(client)；遇 401/403（全局 token 失效）
+        时用仓库 remote url 内嵌 token 构建 per-repo client 重试一次。
+
+        issue #65 补充：对账/webhook 已有此兜底，executor 的 issue 查询、
+        评论、打标签仍只走全局 client——全局 token 被撤销后任务领取即
+        401 失败、issue 上收不到任何评论（生产任务 #88/#89）。repo 为
+        None（无仓库上下文的测试等）时仅用全局 client（行为同旧）。
+        """
+        if repo is None:
+            return call(self.gitlab), self.gitlab
+        try:
+            return call(self.gitlab), self.gitlab
+        except GitLabError as e:
+            if e.status_code not in (401, 403):
+                raise
+            fallback, _ = build_repo_client_with_username(
+                repo, self.config.get().verify_ssl)
+            if fallback is None:
+                raise
+            logger.info("任务仓库 %s：全局 token 失效（%s），"
+                        "改用 remote url 内嵌 token 重试", repo["name"], e)
+            return call(fallback), fallback
 
     # ---- 工作区管理 ----
 
@@ -1008,14 +1035,18 @@ class ClaudeExecutor:
             text = text[idx:]
         return text[-max_chars:]
 
-    def _issue_state(self, project_id: int, iid: int) -> str:
+    def _issue_state(self, project_id: int, iid: int,
+                     repo: dict | None = None) -> str:
         try:
-            return self.gitlab.get_issue(project_id, iid).get("state", "unknown")
+            issue, _ = self._call_with_fallback(
+                repo, lambda c: c.get_issue(project_id, iid))
+            return issue.get("state", "unknown")
         except GitLabError as e:
             return f"error: {e}"
 
     def _wait_pipeline_for_commit(self, task_id: int, project_id: int,
                                   commit_sha: str,
+                                  repo: dict | None = None,
                                   detect_timeout: float | None = None,
                                   wait_timeout: float | None = None) -> str:
         """等待 commit_sha 触发的 CI 流水线到终态（issue #40）。
@@ -1045,7 +1076,8 @@ class ClaudeExecutor:
             if self._stop_requested(task_id):
                 return "stopped"
             try:
-                latest = self.gitlab.get_latest_pipeline(project_id)
+                latest, _ = self._call_with_fallback(
+                    repo, lambda c: c.get_latest_pipeline(project_id))
             except GitLabError as e:
                 self.db.add_log(task_id, "warn", f"查询最新流水线失败: {e}")
                 return "no_pipeline"
@@ -1067,20 +1099,23 @@ class ClaudeExecutor:
                 return status
             time.sleep(cfg.ci_wait_interval_seconds)
             try:
-                pipeline = self.gitlab.get_pipeline(project_id, pipeline["id"])
+                pipeline, _ = self._call_with_fallback(
+                    repo, lambda c: c.get_pipeline(project_id, pipeline["id"]))
             except GitLabError as e:
                 self.db.add_log(task_id, "warn", f"查询流水线 #{pipeline['id']} 失败: {e}")
         return "timeout"
 
     def _await_task_pipeline(self, task_id: int, project_id: int,
-                             issue_iid: int) -> str:
+                             issue_iid: int,
+                             repo: dict | None = None) -> str:
         """成功收尾前的流水线等待入口（issue #40）：拿任务提交 sha 并等待终态。
 
         查不到提交（Claude 未推送代码，仅评论/分析）→ "no_pipeline" 不等待；
         查询提交失败（GitLab 报错）→ 同样降级 "no_pipeline"（不阻塞成功收尾）。
         """
         try:
-            sha = self.gitlab.find_commit_for_issue(project_id, issue_iid)
+            sha, _ = self._call_with_fallback(
+                repo, lambda c: c.find_commit_for_issue(project_id, issue_iid))
         except GitLabError as e:
             self.db.add_log(task_id, "warn", f"查询任务提交失败，跳过流水线等待: {e}")
             return "no_pipeline"
@@ -1088,10 +1123,11 @@ class ClaudeExecutor:
             self.db.add_log(task_id, "info", "未找到任务提交，无流水线可等，直接成功收尾")
             return "no_pipeline"
         self.db.add_log(task_id, "info", f"等待任务提交 {sha[:8]} 触发的 CI 流水线到达终态…")
-        return self._wait_pipeline_for_commit(task_id, project_id, sha)
+        return self._wait_pipeline_for_commit(task_id, project_id, sha, repo)
 
     def _await_pipeline_and_finish_succeeded(self, task_id: int, project_id: int,
-                                             issue_iid: int, output: str) -> None:
+                                             issue_iid: int, output: str,
+                                             repo: dict | None = None) -> None:
         """成功收尾前的流水线等待与成功收尾（issue #40 + #47 抽取）。
 
         claude 与 hermes 两引擎共用：等待任务提交触发的 CI 流水线终态，
@@ -1101,7 +1137,8 @@ class ClaudeExecutor:
         # issue #40：成功收尾前等待任务提交触发的 CI 流水线终态。
         # 此前 claude exit 0 即判成功，流水线还在运行任务就显示
         # 已完成（任务 #63 于 13:31:45 收尾，流水线到 13:48:34 才结束）。
-        pipeline_state = self._await_task_pipeline(task_id, project_id, issue_iid)
+        pipeline_state = self._await_task_pipeline(task_id, project_id,
+                                                   issue_iid, repo)
         if pipeline_state == "stopped":
             self._finish_stopped(task_id)
             return
@@ -1109,16 +1146,16 @@ class ClaudeExecutor:
             self._finish_failed(
                 task_id,
                 f"CI 流水线状态为 {pipeline_state}，任务视为失败",
-                output)
+                output, repo=repo)
             return
         if pipeline_state == "timeout":
             self._finish_failed(
                 task_id,
                 "CI 流水线超时未完成，任务视为失败",
-                output)
+                output, repo=repo)
             return
         # success / skipped / no_pipeline → 成功收尾
-        self._finish_succeeded(task_id, output)
+        self._finish_succeeded(task_id, output, repo=repo)
 
     def run_task(self, task_id: int) -> None:
         """任务主流程：单次或重试执行，写状态机与收尾评论。"""
@@ -1151,9 +1188,12 @@ class ClaudeExecutor:
         project_id, issue_iid = task["project_id"], task["issue_iid"]
         self.db.set_task_status(task_id, None, log_path=str(self._log_file(task_id)))
         try:
-            issue = self.gitlab.get_issue(project_id, issue_iid)
+            issue, _ = self._call_with_fallback(
+                repo, lambda c: c.get_issue(project_id, issue_iid))
         except GitLabError as e:
-            self._finish_failed(task_id, f"获取 issue {project_id}#{issue_iid} 失败: {e}")
+            self._finish_failed(task_id,
+                                f"获取 issue {project_id}#{issue_iid} 失败: {e}",
+                                repo=repo)
             return
 
         max_retries = cfg.max_retries
@@ -1194,9 +1234,10 @@ class ClaudeExecutor:
             # 首次尝试时在 issue 上回复「处理中」，提升体验（不刷屏，重试不再重复）
             if attempt == 1:
                 try:
-                    self.gitlab.add_comment(
-                        project_id, issue_iid,
-                        "🤖 Botler 已收到该 issue，开始处理中…")
+                    self._call_with_fallback(
+                        repo, lambda c: c.add_comment(
+                            project_id, issue_iid,
+                            "🤖 Botler 已收到该 issue，开始处理中…"))
                 except GitLabError as e:
                     self.db.add_log(task_id, "warn", f"发送处理中评论失败: {e}")
 
@@ -1218,7 +1259,7 @@ class ClaudeExecutor:
                 return
 
             if exit_code == 0:
-                state = self._issue_state(project_id, issue_iid)
+                state = self._issue_state(project_id, issue_iid, repo)
                 self.db.add_log(task_id, "info", f"执行结束，issue 当前状态: {state}")
                 if engine == "hermes":
                     # issue #47 hermes 引擎：成功判定看 runner 输出 JSON
@@ -1230,13 +1271,14 @@ class ClaudeExecutor:
                                   "error": self._extract_error(output)}
                         self._finish_failed(task_id, "hermes 报告无法解决该 issue", output,
                                             error_detail=self._dump_error_detail(
-                                                [*attempt_details, detail], last_exit))
+                                                [*attempt_details, detail], last_exit),
+                                            repo=repo)
                         return
                     if result == "success":
                         # Q3-B：会话数据落库（断点续跑），收尾流程与 claude 引擎一致
                         self._persist_hermes_history(task_id, output)
                         self._await_pipeline_and_finish_succeeded(
-                            task_id, project_id, issue_iid, output)
+                            task_id, project_id, issue_iid, output, repo)
                         return
                 else:
                     # exit 0 但 Claude 自认无法解决 → 失败终态（不重试）
@@ -1245,7 +1287,8 @@ class ClaudeExecutor:
                                   "error": self._extract_error(output)}
                         self._finish_failed(task_id, "Claude Code 报告无法解决该 issue", output,
                                             error_detail=self._dump_error_detail(
-                                                [*attempt_details, detail], last_exit))
+                                                [*attempt_details, detail], last_exit),
+                                            repo=repo)
                         return
                     # 成功判定（issue #25 第二轮）：完成任务即成功，不再要求关闭 issue。
                     # 模版库规范（docs/labels.md）：任务完成后不关闭 issue——留结果评论、
@@ -1259,7 +1302,7 @@ class ClaudeExecutor:
                     # 不能作为成功依据（异常中断的输出同样含 init 行）
                     if self._result_line(output) is not None:
                         self._await_pipeline_and_finish_succeeded(
-                            task_id, project_id, issue_iid, output)
+                            task_id, project_id, issue_iid, output, repo)
                         return
 
             # 记录本次失败详情（含 trace 提取），供界面「查看详细原因」按钮展示
@@ -1279,7 +1322,8 @@ class ClaudeExecutor:
         self._finish_failed(
             task_id, f"重试耗尽（{max_retries} 次）后仍失败，最后退出码 {last_exit}",
             last_output,
-            error_detail=self._dump_error_detail(attempt_details, last_exit))
+            error_detail=self._dump_error_detail(attempt_details, last_exit),
+            repo=repo)
 
     # ---- 收尾 ----
 
@@ -1326,7 +1370,8 @@ class ClaudeExecutor:
             lines = lines[-LOG_TAIL_LINES:]
         return "\n".join(lines)
 
-    def _finish_succeeded(self, task_id: int, output: str) -> None:
+    def _finish_succeeded(self, task_id: int, output: str,
+                          repo: dict | None = None) -> None:
         # 条件终态（issue #24）：任务已被其他实例先收尾时不再覆盖状态、
         # 不重复评论/通知
         if not self.db.finish_task(
@@ -1337,14 +1382,16 @@ class ClaudeExecutor:
             return
         self.db.add_log(task_id, "info", "任务成功：Claude Code 已完成处理（issue 保持打开，等用户确认后手动关闭）")
         self._write_log_tail(task_id, output)
-        self._record_commit(task_id)
+        self._record_commit(task_id, repo)
         # issue #34：成功时由平台代码直接打 bot-done 标签（幂等），不再依赖
         # Claude 按模板打——Claude 忘打会导致 issue 无终态标签被重复领取。
         # 打标签失败不阻塞任务成功（仅记 warn，用户可手动补标签）。
         task = self.db.get_task(task_id)
         if task is not None:
             try:
-                self.gitlab.add_labels(task["project_id"], task["issue_iid"], ["bot-done"])
+                self._call_with_fallback(
+                    repo, lambda c: c.add_labels(
+                        task["project_id"], task["issue_iid"], ["bot-done"]))
                 # issue #49：finished_at 语义 = 系统给 issue 打上 bot-done
                 # 标记的时间。打标签成功后把 finished_at 更新为打标时刻，
                 # 任务页「用时」以它与 created_at（系统接收时间）动态计算
@@ -1359,7 +1406,8 @@ class ClaudeExecutor:
         self._emit_task_event(task_id, "task_succeeded")
         logger.info("任务 %s 成功", task_id)
 
-    def _record_commit(self, task_id: int) -> None:
+    def _record_commit(self, task_id: int,
+                       repo: dict | None = None) -> None:
         """任务成功时查询对应提交并落库（issue #19：任务页面 commit 链接）。
 
         Claude 按模板提交（message 含 "issue #N"）并关闭 issue 后，用
@@ -1370,8 +1418,9 @@ class ClaudeExecutor:
         if task is None:
             return
         try:
-            sha = self.gitlab.find_commit_for_issue(
-                task["project_id"], task["issue_iid"])
+            sha, _ = self._call_with_fallback(
+                repo, lambda c: c.find_commit_for_issue(
+                    task["project_id"], task["issue_iid"]))
         except GitLabError as e:
             self.db.add_log(task_id, "warn", f"查询任务提交失败: {e}")
             return
@@ -1380,7 +1429,8 @@ class ClaudeExecutor:
             self.db.add_log(task_id, "info", f"已记录任务提交 {sha[:8]}")
 
     def _finish_failed(self, task_id: int, reason: str, output: str = "",
-                       error_detail: str | None = None) -> None:
+                       error_detail: str | None = None,
+                       repo: dict | None = None) -> None:
         task = self.db.get_task(task_id)
         # 条件终态（issue #24）：任务已被其他实例先收尾时不再覆盖状态、
         # 不重复评论/通知
@@ -1402,13 +1452,20 @@ class ClaudeExecutor:
             if tail and tail != output.strip():
                 summary += f"\n\n日志尾部：\n```\n{tail[-COMMENT_TAIL_CHARS:]}\n```"
             try:
-                self.gitlab.add_comment(
-                    task["project_id"], task["issue_iid"],
-                    f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{summary}")
-                self.gitlab.add_labels(task["project_id"], task["issue_iid"], ["bot-failed"])
-                self.db.add_log(task_id, "info", "已在 issue 上留失败评论并打 bot-failed 标签")
+                self._call_with_fallback(
+                    repo, lambda c: c.add_comment(
+                        task["project_id"], task["issue_iid"],
+                        f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{summary}"))
+                self.db.add_log(task_id, "info", "已在 issue 上留失败评论")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"留失败评论失败: {e}")
+            try:
+                self._call_with_fallback(
+                    repo, lambda c: c.add_labels(
+                        task["project_id"], task["issue_iid"], ["bot-failed"]))
+                self.db.add_log(task_id, "info", "已打 bot-failed 标签")
+            except GitLabError as e:
+                self.db.add_log(task_id, "error", f"打 bot-failed 标签失败: {e}")
             # 网页通知：任务需要人工介入（issue #21）
             self._emit_task_event(task_id, "task_failed", reason)
         logger.warning("任务 %s 失败: %s", task_id, reason)

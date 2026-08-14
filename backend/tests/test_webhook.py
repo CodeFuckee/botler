@@ -16,7 +16,6 @@ from botler.database import Database
 from botler.gitlab_client import GitLabError
 from botler.webhook import WebhookHandler
 import botler.webhook as webhook_mod
-import botler.git_remote as git_remote_mod
 
 CONFIG_TEXT = """\
 gitlab:
@@ -276,7 +275,7 @@ class TestWebhookBotIdentityFallback:
         ctx.gitlab.current_issue = make_api_issue(
             labels=["bug"], assignees=[{"id": 3, "username": "agent"}])
         fallback = self._FallbackStub(bot_id=11, username_ids={"agent": 3})
-        monkeypatch.setattr(git_remote_mod, "build_repo_client_with_username",
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
                             lambda repo, verify_ssl: (fallback, "agent"), raising=False)
 
         result = ctx.handler.handle(make_event(), "test-secret")
@@ -290,7 +289,7 @@ class TestWebhookBotIdentityFallback:
         self._fail_global_bot_id(ctx)
         ctx.gitlab.current_issue = make_api_issue(
             labels=["bug"], assignees=[{"id": 3, "username": "agent"}])
-        monkeypatch.setattr(git_remote_mod, "build_repo_client_with_username",
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
                             lambda repo, verify_ssl: (None, None), raising=False)
 
         result = ctx.handler.handle(make_event(), "test-secret")
@@ -307,11 +306,90 @@ class TestWebhookBotIdentityFallback:
             labels=["bug"], assignees=[{"id": 3, "username": "agent"}])
         # remote 身份是 id=11，issue 分配给 id=3 且 remote username 查无此人
         fallback = self._FallbackStub(bot_id=11, username_ids={})
-        monkeypatch.setattr(git_remote_mod, "build_repo_client_with_username",
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
                             lambda repo, verify_ssl: (fallback, "agent"), raising=False)
 
         result = ctx.handler.handle(make_event(), "test-secret")
 
         assert result["accepted"] is False
         assert "bot" in result["reason"]
+        assert ctx.db.count_tasks() == 0
+
+
+class TestWebhookGlobalTokenFallback:
+    """issue #65 补充：全局 bot token 失效（401/403）时，webhook 的
+    issue 查询与最后发言人查询也应用仓库 remote 内嵌 token 兜底。
+
+    此前 401 直接「查询 issue 失败，拒绝入队」——全局 token 被撤销期间
+    webhook 事件全部丢弃（对账兜底 5 分钟一轮才补入队，实时性受损）。
+    """
+
+    class BoomGitLab:
+        """全局 client 桩：所有 API 调用一律 401。"""
+
+        def __init__(self):
+            self.get_bot_id_calls = 0
+
+        def get_bot_id(self):
+            self.get_bot_id_calls += 1
+            raise GitLabError("token 无效或已过期（401）", 401)
+
+        def get_issue(self, project_id, iid):
+            raise GitLabError("token 无效或已过期（401）", 401)
+
+        def last_note_author_id(self, project_id, iid):
+            raise GitLabError("token 无效或已过期（401）", 401)
+
+    class RemoteStub:
+        """remote token 客户端桩：正常返回，并记录调用。"""
+
+        def __init__(self, issue):
+            self.issue = issue
+            self.issue_calls = 0
+            self.last_note_author = None
+
+        def get_bot_id(self):
+            return BOT_ID
+
+        def get_user_id_by_username(self, username):
+            return BOT_ID if username == "agent" else None
+
+        def get_issue(self, project_id, iid):
+            self.issue_calls += 1
+            return self.issue
+
+        def last_note_author_id(self, project_id, iid):
+            return self.last_note_author
+
+    def test_global_401_falls_back_and_enqueues(self, ctx, monkeypatch):
+        """全局 401：issue 查询与发言人查询经 remote token 兜底，正常入队。"""
+        repo_id = _add_repo(ctx.db)
+        fallback = self.RemoteStub(make_api_issue(labels=["bug"]))
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"),
+                            raising=False)
+        ctx.gitlab = self.BoomGitLab()
+        ctx.handler.gitlab = ctx.gitlab
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        assert ctx.gitlab.get_bot_id_calls == 1
+        assert fallback.issue_calls == 1
+        task = ctx.db.find_active_task(PROJECT_ID, IID)
+        assert task is not None and task["status"] == "queued"
+
+    def test_global_401_without_remote_token_rejects(self, ctx, monkeypatch):
+        """全局 401 且 remote 无 token：维持「查询 issue 失败，拒绝入队」。"""
+        repo_id = _add_repo(ctx.db)
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (None, None),
+                            raising=False)
+        ctx.gitlab = self.BoomGitLab()
+        ctx.handler.gitlab = ctx.gitlab
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert "查询 issue 失败" in result["reason"]
         assert ctx.db.count_tasks() == 0
