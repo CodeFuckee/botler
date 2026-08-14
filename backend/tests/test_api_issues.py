@@ -77,8 +77,11 @@ def make_issue(iid: int, title: str,
                labels: list[str] | None = None,
                milestone: dict | None = None,
                assignees: list[dict] | None = None,
-               user_notes_count: int | None = None) -> dict:
-    return {
+               user_notes_count: int | None = None,
+               description: str | None = None,
+               author: dict | None = None,
+               created_at: str | None = None) -> dict:
+    issue = {
         "iid": iid, "title": title, "state": "opened",
         "updated_at": updated_at,
         "web_url": f"https://gitlab.example.com/group/proj/-/issues/{iid}",
@@ -87,6 +90,15 @@ def make_issue(iid: int, title: str,
         "assignees": assignees or [],
         "user_notes_count": user_notes_count,
     }
+    # issue #85：右边栏详情字段（description/author/created_at）——
+    # 仅在显式传入时附加，缺省时模拟字段缺失的旧数据
+    if description is not None:
+        issue["description"] = description
+    if author is not None:
+        issue["author"] = author
+    if created_at is not None:
+        issue["created_at"] = created_at
+    return issue
 
 
 @pytest.fixture
@@ -330,7 +342,9 @@ class TestIssuesOverview:
         """issue 精简字段透传：iid/title/updated_at/web_url + 美化字段
         labels/milestone/assignees/user_notes_count（issue #71 扩展）；
         updated_at 转 UTC 无后缀（前端 fmtAgo 解析约定，与流水线
-        commit_time 一致）。无对应数据时 labels 空列表、其余为 None。"""
+        commit_time 一致）。无对应数据时 labels 空列表、其余为 None。
+        issue #85 起 description/author/state/created_at 一并透传
+        （右边栏详情），缺失时 description/author/created_at 为 None。"""
         tc, stub, db, tmp_path = client
         _add_repo(db)
         stub.issues_by_project = {42: [{
@@ -346,8 +360,12 @@ class TestIssuesOverview:
         issue = data["repos"][0]["issues"][0]
         assert issue == {
             "iid": 7, "title": "精简",
+            "state": "opened",
             "updated_at": "2026-08-14 02:00:00",
             "web_url": "https://gitlab.example.com/group/proj/-/issues/7",
+            "description": "很长很长的描述……",
+            "author": {"name": None, "username": "someone"},
+            "created_at": None,
             "labels": [{"name": "bug", "color": None, "text_color": None}],
             "milestone": None,
             "assignees": [],
@@ -356,8 +374,8 @@ class TestIssuesOverview:
 
     def test_extended_fields_trimmed(self, client):
         """美化字段透传（issue #71）：里程碑只留 title；assignees 每条只留
-        name/username/avatar_url；评论数原样透传；冗余字段（description/
-        author 等）丢弃。"""
+        name/username/avatar_url；评论数原样透传。issue #85 起 description
+        原样透传、author 精简为 name/username、created_at 转 UTC 无后缀。"""
         tc, stub, db, tmp_path = client
         _add_repo(db)
         stub.issues_by_project = {42: [{
@@ -370,8 +388,10 @@ class TestIssuesOverview:
                 "state": "active",
             }],
             "user_notes_count": 3,
-            "author": {"id": 2, "username": "someone"},
-            "description": "冗余字段应丢弃",
+            "author": {"id": 2, "username": "someone", "name": "Someone",
+                       "avatar_url": "https://gitlab.example.com/s.png"},
+            "description": "正文原样透传",
+            "created_at": "2026-08-01T09:00:00.000+08:00",
         }]}
 
         resp = tc.get("/api/issues/overview")
@@ -380,8 +400,12 @@ class TestIssuesOverview:
         issue = data["repos"][0]["issues"][0]
         assert issue == {
             "iid": 7, "title": "扩展",
+            "state": "opened",
             "updated_at": "2026-08-14 02:00:00",
             "web_url": "https://gitlab.example.com/group/proj/-/issues/7",
+            "description": "正文原样透传",
+            "author": {"name": "Someone", "username": "someone"},
+            "created_at": "2026-08-01 01:00:00",
             "labels": [{"name": "bug", "color": None, "text_color": None}],
             "milestone": "v1.0",
             "assignees": [{
@@ -460,6 +484,94 @@ class TestIssuesOverview:
 
         data = resp.json()
         assert data["repos"][0]["priority"] == 5
+
+
+# ---- issue #85：右边栏详情字段透传（description/author/state/created_at）----
+
+class TestIssueDetailFields:
+    def test_description_preserved_as_is(self, client):
+        """正文原样透传：含 Markdown 语法与多行的 description 不做任何
+        加工（前端 Markdown 组件负责渲染）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        description = "**需求**\n\n- 要点一\n- 要点二\n\n```\ncode\n```"
+        stub.issues_by_project = {42: [make_issue(1, "右边栏", description=description)]}
+
+        resp = tc.get("/api/issues/overview")
+
+        issue = resp.json()["repos"][0]["issues"][0]
+        assert issue["description"] == description
+
+    def test_author_trimmed_to_name_username(self, client):
+        """author 精简为 {name, username}：丢弃 id/avatar_url 等冗余字段，
+        与 assignees 的精简风格一致。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.issues_by_project = {42: [make_issue(
+            1, "a",
+            author={"id": 9, "name": "Chen", "username": "chenkaidi",
+                    "avatar_url": "https://gitlab.example.com/a.png",
+                    "state": "active"})]}
+
+        resp = tc.get("/api/issues/overview")
+
+        issue = resp.json()["repos"][0]["issues"][0]
+        assert issue["author"] == {"name": "Chen", "username": "chenkaidi"}
+
+    def test_created_at_converted_to_utc(self, client):
+        """created_at 与 updated_at 同规则转 UTC 无后缀（前端 fmtTime
+        解析约定）；state 原样透传。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.issues_by_project = {42: [make_issue(
+            1, "a", created_at="2026-08-10T09:00:00.000+08:00")]}
+
+        resp = tc.get("/api/issues/overview")
+
+        issue = resp.json()["repos"][0]["issues"][0]
+        assert issue["created_at"] == "2026-08-10 01:00:00"
+        assert issue["state"] == "opened"
+
+    def test_detail_fields_missing_fallback(self, client):
+        """边界：description/author/created_at 全部缺失（旧版后端或缓存
+        数据）→ 均为 None，不 500；前端按占位文案兜底。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.issues_by_project = {42: [make_issue(1, "旧数据")]}
+
+        resp = tc.get("/api/issues/overview")
+
+        assert resp.status_code == 200
+        issue = resp.json()["repos"][0]["issues"][0]
+        assert issue["description"] is None
+        assert issue["author"] is None
+        assert issue["created_at"] is None
+        assert issue["state"] == "opened"
+
+    def test_author_empty_object_fallback(self, client):
+        """边界：author 为空对象 / 字段缺失 → name/username 为 None，
+        前端按「—」兜底。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.issues_by_project = {42: [make_issue(1, "a", author={})]}
+
+        resp = tc.get("/api/issues/overview")
+
+        issue = resp.json()["repos"][0]["issues"][0]
+        assert issue["author"] == {"name": None, "username": None}
+
+    def test_created_at_invalid_format_fallback(self, client):
+        """边界：created_at 非法格式（_commit_time_utc 解析失败）→ None，
+        不抛异常不 500。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.issues_by_project = {42: [make_issue(1, "a", created_at="not-a-date")]}
+
+        resp = tc.get("/api/issues/overview")
+
+        assert resp.status_code == 200
+        issue = resp.json()["repos"][0]["issues"][0]
+        assert issue["created_at"] is None
 
 
 # ---- per-repo token（与 pipelines 概览共用 _repo_client，issue #60）----

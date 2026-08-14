@@ -6,6 +6,24 @@
 
 ### Added
 
+- **概览页 issue 详情右边栏（issue #85）**：点击开放 issue 不再直接跳转
+  GitLab，改为打开右侧抽屉展示 issue 具体信息与正文；跳转统一走抽屉
+  右上角「在 GitLab 中打开」按钮（web_url 新窗口）。
+  - 后端 `/api/issues/overview`：issue 对象新增透传 description（Markdown
+    正文原样，前端渲染）、author（精简为 name/username）、state、
+    created_at（转 UTC 无后缀，与 updated_at 同规则），缺失时均为 None
+    兜底，不影响旧版缓存数据；
+  - 前端：新增 `components/IssueDrawer.jsx` 详情抽屉——状态徽章 / 作者 /
+    创建与更新时间 / 标签胶囊 / 里程碑 / 负责人 / 评论数 + 正文 Markdown
+    渲染（复用 issue #27 的 Markdown 组件，空正文显示「暂无描述」占位）；
+    关闭方式：右上角 × / 点击遮罩 / Esc 键；列表项标题由 `<a>` 改为
+    `<button>` 打开抽屉；样式复用 issue #70 drawer 模式加宽至 640px 容纳
+    正文；
+  - 测试：TDD 先行（红灯确认后实现），新增 18 用例（后端详情字段透传与
+    缺失兜底 6，前端抽屉打开 / 跳转按钮 / 三种关闭方式 / 切换与幂等 /
+    旧数据与空正文兜底 12），另更新行为变更断言 4 处（后端 2、前端 2）；
+    后端全量 853 通过、前端 280 通过。
+
 - **issue 标签优先级调度（issue #76，方案 C）**：同仓库队列内按 issue 标签
   权重排序派发，默认 bug 最优先，标签顺序可在设置页自定义。
   - 调度器：队内派发改按「标签权重 → issue 更新时间 → task_id」选任务

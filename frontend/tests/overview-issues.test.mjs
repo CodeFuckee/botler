@@ -1,11 +1,12 @@
 // 概览页「开放 Issue」板块测试（issue #64）：聚合读取所有已启用仓库的
 // 开放（opened）issue，外层按仓库优先级排序（后端保证），仓库内按最后
-// 更新时间降序；板块 15 秒轮询（与流水线板块同频），点击 issue 跳 GitLab。
+// 更新时间降序；板块 15 秒轮询（与流水线板块同频）。issue #85 起点击
+// issue 不再直接跳 GitLab，而是打开右边栏（见 overview-issue-drawer.test.mjs）。
 //
 // 断言：
 // 1. Overview.jsx 轮询 GET /api/issues/overview，渲染仓库分组卡片；
-// 2. 分组卡片显示仓库名与优先级徽章，组内每条 issue 渲染 #iid、标题链接
-//    （web_url 新窗口）、最后更新时间；
+// 2. 分组卡片显示仓库名与优先级徽章，组内每条 issue 渲染 #iid、标题按钮
+//    （点击打开右边栏）、最后更新时间；
 // 3. 空状态（无仓库 / 全部仓库无开放 issue）显示占位文案；
 // 4. 单仓库查询失败（errors 非空）与整体请求失败均不崩溃；
 // 5. issue 字段缺失兜底（无标题 / 无更新时间）。
@@ -118,7 +119,7 @@ const ISSUES_PAYLOAD = {
   total: 3,
 }
 
-test('渲染开放 issue 板块：仓库分组、优先级徽章、issue 链接与时间', async () => {
+test('渲染开放 issue 板块：仓库分组、优先级徽章、issue 按钮与时间', async () => {
   const { renderer, renderError } = await renderOverview(ISSUES_PAYLOAD)
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
@@ -129,14 +130,13 @@ test('渲染开放 issue 板块：仓库分组、优先级徽章、issue 链接�
     assert.ok(text.includes('优先级'), '应显示优先级徽章')
     assert.ok(text.includes('概览页面增加读取已启用的仓库issue'), '应显示 issue 标题')
     assert.ok(text.includes('修复登录问题'), '应显示第二个仓库的 issue 标题')
-    // 每条 issue 渲染为指向 GitLab 的新窗口链接
-    const links = root.findAllByType('a').filter((a) => a.props.href?.includes('/-/issues/'))
-    assert.equal(links.length, 3, '三条 issue 均应渲染为 GitLab 链接')
-    assert.ok(links.every((a) => a.props.target === '_blank'), '链接应新窗口打开')
-    assert.ok(
-      links.some((a) => a.props.href === ISSUES_PAYLOAD.repos[0].issues[0].web_url),
-      '链接 href 应为 issue web_url',
-    )
+    // issue #85：每条 issue 渲染为可点击按钮（点击打开右边栏），
+    // 不再是指向 GitLab 的跳转链接
+    const itemBtns = root.findAll(
+      (n) => n.type === 'button' && String(n.props.className || '').includes('issue-link'))
+    assert.equal(itemBtns.length, 3, '三条 issue 均应渲染为列表项按钮')
+    const jumpLinks = root.findAll((a) => a.props.href?.includes('/-/issues/'))
+    assert.equal(jumpLinks.length, 0, '未打开右边栏时不应渲染 GitLab 跳转链接')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
@@ -235,9 +235,9 @@ test('issue 字段缺失兜底：无标题显示占位、无更新时间不崩',
     assert.equal(renderError, null, '字段缺失时渲染不应崩溃')
     const root = renderer.root
     const text = JSON.stringify(renderer.toJSON())
-    // JSX 中 `#{i.iid} — {title}` 是分离的文本节点，拼接 span/a 文本断言
+    // JSX 中 `#{i.iid} — {title}` 是分离的文本节点，拼接 span/button 文本断言
     const issueText = root
-      .findAll((n) => n.type === 'span' || n.type === 'a')
+      .findAll((n) => n.type === 'span' || n.type === 'button')
       .flatMap((n) => n.props.children || [])
       .join('')
     assert.ok(issueText.includes('#9'), `应显示 issue 编号（实际: ${issueText}）`)

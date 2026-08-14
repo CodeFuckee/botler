@@ -1,4 +1,5 @@
-"""概览页开放 issue 聚合 API（issue #64，issue #71 扩展美化字段）。
+"""概览页开放 issue 聚合 API（issue #64，issue #71 扩展美化字段，
+issue #85 扩展右边栏详情字段）。
 
 GET /api/issues/overview：遍历所有「已启用」仓库，聚合各仓库的开放
 （opened）issue，供概览页展示：
@@ -46,9 +47,11 @@ _CACHE: dict = {"expires_at": 0.0, "data": None}
 # 取前 N 条，即最新更新的 N 条）
 MAX_ISSUES_PER_REPO = 100
 
-# issue 对象透传给前端的字段（丢弃 description/author 等无关字段；
-# labels/milestone/assignees/user_notes_count 由 _trim_issue 二次加工）
-_ISSUE_KEYS = ("iid", "title", "updated_at", "web_url")
+# issue 对象透传给前端的字段（issue #85：description/author/state/
+# created_at 供概览页右边栏展示详情，labels/milestone/assignees/
+# user_notes_count 由 _trim_issue 二次加工）
+_ISSUE_KEYS = ("iid", "title", "state", "updated_at", "created_at",
+               "web_url", "description")
 
 # GitLab 标签颜色必须是 6 位 hex（labels API 约定），非法值不透传，
 # 防止拼进前端内联样式注入（issue #71）
@@ -73,9 +76,21 @@ def _trim_issue(issue: dict, label_colors: dict) -> dict:
       缺失或颜色非法 → None，前端按中性胶囊降级）；
     - milestone：对象只留 title；assignees：每条只留 name/username/
       avatar_url（头像展示）；user_notes_count：原样透传。
+
+    issue #85 右边栏详情字段：
+    - created_at：与 updated_at 同规则转 UTC 无后缀（前端 fmtTime
+      解析约定）；
+    - author：对象只留 name/username（与 assignees 精简风格一致）；
+    - description：原样透传（Markdown 正文，前端 Markdown 组件渲染）；
+    - state：原样透传（右边栏状态徽章）。
     """
     trimmed = {k: issue.get(k) for k in _ISSUE_KEYS}
     trimmed["updated_at"] = _commit_time_utc(issue.get("updated_at"))
+    trimmed["created_at"] = _commit_time_utc(issue.get("created_at"))
+    author = issue.get("author")
+    trimmed["author"] = (
+        {"name": author.get("name"), "username": author.get("username")}
+        if isinstance(author, dict) else None)
     trimmed["labels"] = [
         _label_entry(name, label_colors)
         for name in (issue.get("labels") or [])

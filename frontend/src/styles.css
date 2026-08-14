@@ -492,6 +492,31 @@ code {
   flex-direction: column;
   gap: 12px;
 }
+/* issue #85：issue 详情右边栏——复用 drawer 基础样式，加宽容纳正文 */
+.issue-drawer {
+  width: 640px;
+}
+.issue-drawer-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.issue-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.issue-drawer-desc {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  overflow-wrap: break-word;
+}
+.issue-drawer-desc h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
 
 /* ---- 模态框 / 目录选择对话框 ---- */
 .modal-overlay {
@@ -1078,6 +1103,16 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* issue #85：标题由 <a> 改为 <button>（点击打开右边栏，
+     不再直接跳转 GitLab）——重置按钮默认样式，保留文本外观 */
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 .issue-link:hover {
   color: var(--primary);

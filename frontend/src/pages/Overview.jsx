@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, STATUS_META, shortSha, fmtTime, fmtAgo, summarizeToolInput } from '../api.js'
+import IssueDrawer from '../components/IssueDrawer.jsx'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
 export const LIVE_STATUSES = ['running', 'retrying']
@@ -73,6 +74,8 @@ export default function Overview() {
   const [repoIssues, setRepoIssues] = useState([])
   const [issueErrors, setIssueErrors] = useState([])
   const [issueError, setIssueError] = useState('')
+  // 详情右边栏选中的 issue（issue #85）：{issue, repoName}，null 表示关闭
+  const [selectedIssue, setSelectedIssue] = useState(null)
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
@@ -201,13 +204,18 @@ export default function Overview() {
                     {(r.issues || []).map((i) => (
                       <li key={i.iid} className="issue-item">
                         {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
-                            标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数 */}
+                            标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数
+                            issue #85：标题改为按钮——点击打开右边栏，不再直接
+                            跳转 GitLab（跳转统一走右边栏右上角按钮） */}
                         <div className="issue-main">
-                          <a className="issue-link" href={i.web_url} target="_blank"
-                             rel="noreferrer" title="在 GitLab 中打开 issue">
+                          <button type="button" className="issue-link"
+                                  onClick={() => setSelectedIssue({
+                                    issue: i, repoName: r.repo_name,
+                                  })}
+                                  title="查看 issue 详情">
                             <span className="issue-iid">#{i.iid}</span>
                             {i.title || '—'}
-                          </a>
+                          </button>
                           {((i.labels || []).length > 0 || i.milestone) && (
                             <div className="issue-meta">
                               {(i.labels || []).map((l) => (
@@ -358,6 +366,12 @@ export default function Overview() {
           </div>
         )}
       </section>
+
+      {/* issue #85：issue 详情右边栏——点击列表项打开，显示具体信息与正文 */}
+      {selectedIssue && (
+        <IssueDrawer issue={selectedIssue.issue} repoName={selectedIssue.repoName}
+                     onClose={() => setSelectedIssue(null)} />
+      )}
     </div>
   )
 }
