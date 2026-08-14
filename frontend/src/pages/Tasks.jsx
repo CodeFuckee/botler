@@ -5,6 +5,112 @@ import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 // 每页条数（与后端 limit 一致，issue #50 翻页）
 const PAGE_SIZE = 50
 
+// ---- 响应式列隐藏（issue #70）----
+// 窄视口下按「不显示优先级」排序的可隐藏列。列宽与 styles.css 的
+// .table.tasks-table th:nth-child(n) 规则保持一致（tasks-responsive-cols.test.mjs
+// 从 styles.css 提取列宽断言两者同步，改列宽时两处都要改）。
+export const HIDDEN_COL_PRIORITY = [
+  { key: 'attempt', label: '尝试', width: 88 }, // 第 6 列
+  { key: 'source', label: '来源', width: 76 }, // 第 7 列
+  { key: 'created', label: '创建时间', width: 165 }, // 第 10 列
+  { key: 'reason', label: '失败原因', width: 140 }, // 第 8 列
+  { key: 'duration', label: '用时', width: 120 }, // 第 11 列
+]
+
+// 12 列宽度总和（styles.css .table.tasks-table min-width 同值）
+export const TABLE_MIN_WIDTH = 1360
+
+// .content 与 .card 左右 padding 之和（styles.css 布局常量，issue #53）
+const CONTENT_CARD_PAD_X = 80
+
+// 视口宽度 → 内容区 --content-width（与 styles.css :root / 媒体查询断点同步；
+// issue #70 新增 1360/1280/1120/1000 四档，让列隐藏按优先级渐进生效）
+export function contentWidthAt(viewportWidth) {
+  if (viewportWidth >= 1920) return 1600
+  if (viewportWidth >= 1440) return 1440
+  if (viewportWidth >= 1360) return 1360
+  if (viewportWidth >= 1280) return 1280
+  if (viewportWidth >= 1120) return 1120
+  if (viewportWidth >= 1000) return 1000
+  return 1100
+}
+
+// 视口宽度下需要隐藏的列 key 集合（issue #70）：
+// 表格可用宽度 = min(--content-width, 视口) − 80px（.content/.card 左右 padding），
+// 按 HIDDEN_COL_PRIORITY 优先级逐个隐藏，直到剩余列宽 ≤ 可用宽度；
+// 全部隐藏后仍装不下时保留 .table-wrap 横向滚动兜底（issue #28）。
+// 异常输入（NaN/≤0/undefined/null）按最窄处理（5 列全隐藏），不越界不报错。
+export function hiddenColumnsForWidth(viewportWidth) {
+  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) {
+    return new Set(HIDDEN_COL_PRIORITY.map((c) => c.key))
+  }
+  const avail = Math.min(contentWidthAt(viewportWidth), viewportWidth) - CONTENT_CARD_PAD_X
+  const hidden = new Set()
+  let remain = TABLE_MIN_WIDTH
+  for (const c of HIDDEN_COL_PRIORITY) {
+    if (remain <= avail) break
+    hidden.add(c.key)
+    remain -= c.width
+  }
+  return hidden
+}
+
+// 来源列文案（表格与抽屉共用，issue #70）
+export function sourceLabel(t) {
+  return t.triggered_by === 'reconcile' ? '对账' : t.triggered_by === 'manual' ? '手动' : 'webhook'
+}
+
+// 任务抽屉（issue #70）：窄视口下部分列被隐藏时，点操作列「⋯」按钮
+// 弹出右侧抽屉显示该任务全部字段（含被隐藏列的数据）。
+function TaskDrawer({ task, onClose }) {
+  const meta = STATUS_META[task.status] || { label: task.status, cls: '' }
+  const failedReason =
+    (task.status === 'failed' || task.status === 'interrupted') && task.error_message
+      ? task.error_message
+      : ''
+  return (
+    <div className="drawer-overlay" onClick={onClose}>
+      <div className="drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <strong>任务 #{task.id} 全部数据 — #{task.issue_iid} {task.issue_title}</strong>
+          <button className="btn modal-close" onClick={onClose} title="关闭">×</button>
+        </div>
+        <table className="table kv">
+          <tbody>
+            <tr><th>任务</th><td><Link to={`/tasks/${task.id}`}>#{task.id}</Link></td></tr>
+            <tr><th>仓库</th><td>{task.repo_name || '—'}</td></tr>
+            <tr><th>Issue</th><td><Link to={`/tasks/${task.id}`}>#{task.issue_iid}</Link></td></tr>
+            <tr><th>标题</th><td className="pre-wrap">{task.issue_title || '—'}</td></tr>
+            <tr><th>状态</th><td><span className={'badge ' + meta.cls}>{meta.label}</span></td></tr>
+            <tr><th>尝试</th><td>
+              {task.attempt_count}
+              {task.resumed && (
+                <span className="badge resume" title="从上次中断的 claude 会话恢复执行（断点续跑）">恢复</span>
+              )}
+            </td></tr>
+            <tr><th>来源</th><td>{sourceLabel(task)}</td></tr>
+            <tr><th>失败原因</th><td className="pre-wrap">{failedReason || '—'}</td></tr>
+            <tr><th>提交</th><td>
+              {task.commit_url ? (
+                <a href={task.commit_url} target="_blank" rel="noreferrer"
+                   title={`查看提交 ${task.commit_sha}`}>{shortSha(task.commit_sha)}</a>
+              ) : (
+                <span className="muted">—</span>
+              )}
+            </td></tr>
+            <tr><th>创建时间</th><td>{fmtTime(task.created_at)}</td></tr>
+            <tr><th>用时</th><td>{fmtDuration(task.created_at, task.finished_at) || '—'}</td></tr>
+            <tr><th>操作</th><td>
+              <Link to={`/tasks/${task.id}?live=1`} className="btn btn-mini"
+                    title="实时查看 agent 执行进度与聊天记录（issue #20）">执行</Link>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // 翻页组件页码窗口（issue #50）：页数少（≤7）时全量显示；
 // 页数多时显示首尾页 + 当前页 ±1，中间省略号。返回数组元素为数字或 '…'。
 export function pageNumbers(totalPages, current) {
@@ -38,6 +144,8 @@ export default function Tasks() {
   const [reconcileMsg, setReconcileMsg] = useState('') // 一键对账成功提示（issue #38）
   const [reconciling, setReconciling] = useState(false) // 对账请求进行中
   const [refreshing, setRefreshing] = useState(false) // 手动刷新请求进行中（issue #59）
+  const [drawerTask, setDrawerTask] = useState(null) // ⋯ 按钮打开的右侧抽屉任务（issue #70）
+  const [hiddenCols, setHiddenCols] = useState(() => new Set()) // 窄视口隐藏的列 key 集合（issue #70）
   const timer = useRef(null)
 
   const load = useCallback(async () => {
@@ -75,6 +183,24 @@ export default function Tasks() {
   useEffect(() => {
     api.get('/api/repos').then((d) => setRepos(d.repos)).catch(() => {})
   }, [])
+
+  // 窄视口列隐藏（issue #70）：挂载时按视口宽度计算需隐藏的列，窗口缩放时重算。
+  // SSR 测试环境无 window、部分测试只 mock window.confirm 时保持默认全显示。
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
+    const update = () => setHiddenCols(hiddenColumnsForWidth(window.innerWidth))
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  // 有隐藏列时操作列最右侧出现「⋯」按钮（issue #70）
+  const hasHiddenCols = hiddenCols.size > 0
+  // 表格 min-width 随隐藏列缩减为剩余列宽总和，窄屏下不出现横向滚动条
+  const tableMinWidth = TABLE_MIN_WIDTH -
+    HIDDEN_COL_PRIORITY.reduce((sum, c) => sum + (hiddenCols.has(c.key) ? c.width : 0), 0)
+  // 隐藏列的 className（display:none 由 styles.css 提供，列保留 DOM 保持 nth-child 索引）
+  const colCls = (key) => (hiddenCols.has(key) ? 'col-hidden' : undefined)
 
   // 活跃任务数（issue #35）：排队 + 执行 + 重试
   const activeCount =
@@ -216,12 +342,20 @@ export default function Tasks() {
 
         {/* 12 列表格最小宽度超容器，外包滚动容器防止窄视口下内容溢出卡片（issue #28） */}
         <div className="table-wrap">
-          {/* table-layout: fixed 固定布局，表格宽度恒等于容器宽度，宽视口不出现水平滚动条（issue #28 第二轮） */}
-          <table className="table tasks-table">
+          {/* table-layout: fixed 固定布局，表格宽度恒等于容器宽度，宽视口不出现水平滚动条（issue #28 第二轮）；
+              窄视口隐藏列后 min-width 缩减为剩余列宽总和（issue #70） */}
+          <table className="table tasks-table" style={{ minWidth: tableMinWidth }}>
             <thead>
               <tr>
                 <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
-                <th>状态</th><th>尝试</th><th>来源</th><th>失败原因</th><th>提交</th><th>创建时间</th><th>用时</th><th>操作</th>
+                <th>状态</th>
+                <th className={colCls('attempt')}>尝试</th>
+                <th className={colCls('source')}>来源</th>
+                <th className={colCls('reason')}>失败原因</th>
+                <th>提交</th>
+                <th className={colCls('created')}>创建时间</th>
+                <th className={colCls('duration')}>用时</th>
+                <th>操作</th>
               </tr>
             </thead>
           <tbody>
@@ -244,14 +378,14 @@ export default function Tasks() {
                   <td><Link to={`/tasks/${t.id}`}>#{t.issue_iid}</Link></td>
                   <td className="ellipsis" title={t.issue_title}>{t.issue_title || '—'}</td>
                   <td><span className={'badge ' + meta.cls}>{meta.label}</span></td>
-                  <td>
+                  <td className={colCls('attempt')}>
                     {t.attempt_count}
                     {t.resumed && (
                       <span className="badge resume" title="从上次中断的 claude 会话恢复执行（断点续跑）">恢复</span>
                     )}
                   </td>
-                  <td>{t.triggered_by === 'reconcile' ? '对账' : t.triggered_by === 'manual' ? '手动' : 'webhook'}</td>
-                  <td className="ellipsis" title={failedReason}>
+                  <td className={colCls('source')}>{sourceLabel(t)}</td>
+                  <td className={colCls('reason') ? 'ellipsis col-hidden' : 'ellipsis'} title={failedReason}>
                     {failedReason || <span className="muted">—</span>}
                     {hasDetail && (
                       <button className="btn btn-mini btn-gap-left" onClick={() => setDetailTask(t)}>详情</button>
@@ -265,10 +399,10 @@ export default function Tasks() {
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td>{fmtTime(t.created_at)}</td>
+                  <td className={colCls('created')}>{fmtTime(t.created_at)}</td>
                   {/* 用时（issue #49）：系统接收时间 created_at → bot-done 打标时间
                       finished_at 的动态计算，不再用执行开始时间 started_at 作起点 */}
-                  <td>{fmtDuration(t.created_at, t.finished_at) || <span className="muted">—</span>}</td>
+                  <td className={colCls('duration')}>{fmtDuration(t.created_at, t.finished_at) || <span className="muted">—</span>}</td>
                   <td>
                     <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
                           title="实时查看 agent 执行进度与聊天记录（issue #20）">执行</Link>
@@ -281,6 +415,17 @@ export default function Tasks() {
                         title="手动重试：重新入队执行该任务（接续上次 claude 会话）"
                       >
                         {retryId === t.id ? '重试中…' : '重试'}
+                      </button>
+                    )}
+                    {/* ⋯ 按钮（issue #70）：有列被隐藏时出现在操作列最右侧，
+                        点击弹出右侧抽屉显示该任务全部数据 */}
+                    {hasHiddenCols && (
+                      <button
+                        className="btn btn-mini btn-gap-left"
+                        onClick={() => setDrawerTask(t)}
+                        title="查看全部字段（窄屏下部分列已隐藏）"
+                      >
+                        ⋯
                       </button>
                     )}
                   </td>
@@ -330,6 +475,9 @@ export default function Tasks() {
           </div>
         )}
       </div>
+
+      {/* 任务抽屉（issue #70）：⋯ 按钮打开，显示全部字段（含窄屏下被隐藏的列） */}
+      {drawerTask && <TaskDrawer task={drawerTask} onClose={() => setDrawerTask(null)} />}
 
       {detailTask && (
         <div className="modal-overlay" onClick={() => setDetailTask(null)}>

@@ -117,6 +117,26 @@ body {
   padding: 24px 20px 60px;
 }
 
+/* 窄视口内容区断点（issue #70）：任务表格按优先级渐进隐藏列
+   （尝试→来源→创建时间→失败原因→用时），每个断点保证内容区
+   恰好装下隐藏后剩余的列宽，窄屏下不出现水平滚动条：
+   1360 档装 11 列（1272px）→ 1280 档装 10 列（1196px）→
+   1120 档装 9 列（1031px）→ 1000 档装 8 列（891px）；
+   视口更窄时由 Tasks.jsx 继续按宽度计算隐藏（与 Tasks.jsx 的
+   contentWidthAt 保持同步，tasks-responsive-cols.test.mjs 断言一致）。
+   媒体查询按 min-width 升序声明，后声明覆盖先声明保证大档生效。 */
+@media (min-width: 1000px) {
+  :root { --content-width: 1000px; }
+}
+@media (min-width: 1120px) {
+  :root { --content-width: 1120px; }
+}
+@media (min-width: 1280px) {
+  :root { --content-width: 1280px; }
+}
+@media (min-width: 1360px) {
+  :root { --content-width: 1360px; }
+}
 /* 宽屏媒体查询（issue #15）：视口足够宽时放宽内容区，充分利用 2K（2560x1440）宽度，
    消除左右两侧大面积空白；表格省略列同步放宽，长标题/失败原因不再被压缩。
    断点 ≥1440px（issue #53）：任务表格 min-width 1360px + .content/.card 左右
@@ -323,6 +343,10 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .table.tasks-table td:nth-child(10),
 .table.tasks-table td:nth-child(11),
 .table.tasks-table td:nth-child(12) { white-space: nowrap; }
+/* 窄视口按优先级隐藏的列（issue #70）：Tasks.jsx 计算后加类；
+   列保留 DOM 仅 display:none，th:nth-child 列宽规则索引不受影响 */
+.table.tasks-table th.col-hidden,
+.table.tasks-table td.col-hidden { display: none; }
 .table th, .table td {
   text-align: left;
   padding: 9px 10px;
@@ -445,6 +469,28 @@ code {
   border-radius: 4px;
   font-family: var(--mono);
   font-size: 12px;
+}
+
+/* ---- 任务行「⋯」按钮右侧抽屉（issue #70）：窄视口列被隐藏时展示全部数据 ---- */
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 100;
+}
+.drawer {
+  background: var(--bg-card);
+  box-shadow: var(--shadow-pop);
+  width: 520px;
+  max-width: 92vw;
+  height: 100%;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 /* ---- 模态框 / 目录选择对话框 ---- */
