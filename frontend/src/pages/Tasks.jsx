@@ -37,6 +37,7 @@ export default function Tasks() {
   const [retryId, setRetryId] = useState(null) // 正在重试的任务 id（请求中禁用）
   const [reconcileMsg, setReconcileMsg] = useState('') // 一键对账成功提示（issue #38）
   const [reconciling, setReconciling] = useState(false) // 对账请求进行中
+  const [refreshing, setRefreshing] = useState(false) // 手动刷新请求进行中（issue #59）
   const timer = useRef(null)
 
   const load = useCallback(async () => {
@@ -138,6 +139,15 @@ export default function Tasks() {
     }
   }
 
+  // 手动刷新任务列表（issue #59）：重新拉取 /api/tasks 更新所有任务的显示状态。
+  // 页面仅在存在活跃任务时每 5s 自动轮询，全部结束后轮询停止，状态可能陈旧；
+  // 刷新为低危操作无需确认；load 内部已捕获错误并置 error 提示，请求中禁用防重复点击。
+  const refreshList = async () => {
+    setRefreshing(true)
+    await load()
+    setRefreshing(false)
+  }
+
   return (
     <div>
       <h1>任务列表</h1>
@@ -191,6 +201,16 @@ export default function Tasks() {
             title="立即扫描所有启用仓库，把漏掉的 issue 补入任务队列"
           >
             ↻ 对账所有仓库{reconciling ? '…' : ''}
+          </button>
+          {/* 手动刷新任务列表（issue #59）：无活跃任务时页面无自动轮询，
+              点此重新拉取更新所有任务状态；请求中禁用防重复点击 */}
+          <button
+            className="btn btn-gap-left"
+            onClick={refreshList}
+            disabled={refreshing}
+            title="重新加载任务列表，更新所有任务的显示状态"
+          >
+            ↻ 刷新{refreshing ? '…' : ''}
           </button>
         </div>
 
