@@ -707,6 +707,18 @@ class ClaudeExecutor:
         with self._proc_lock:
             return task_id in self._stop_requests
 
+    def clear_stop_request(self, task_id: int) -> None:
+        """清除停止请求登记（issue #69 手动重试时调用，幂等）。
+
+        一键停止登记的停止请求若不清除会永久残留：任务被停止后用户手动
+        重试，worker 领取任务时 run_task 开头的 _stop_requested 检查命中
+        旧请求，任务被 _finish_stopped 立即打回 interrupted（表现为「每次
+        手动重试过几秒就变成中断状态」，只有平台重启内存集合清空才能
+        逃脱）。手动重试即用户明确恢复执行，历史停止请求必须清除。
+        """
+        with self._proc_lock:
+            self._stop_requests.discard(task_id)
+
     def _engine(self, cfg) -> str:
         """任务执行引擎（issue #47）：claude（默认）/ hermes；非法值回退 claude。"""
         engine = str(getattr(cfg, "engine", "") or "claude").strip().lower()
@@ -1474,6 +1486,9 @@ class ClaudeExecutor:
                 finished_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())):
             return
         self.db.add_log(task_id, "warn", "任务已停止：用户一键停止所有任务")
+        # issue #69：停止请求已消费，收尾即清除登记——请求残留会导致任务
+        # 手动重试后 worker 领取时再次命中，被立即打回 interrupted
+        self.clear_stop_request(task_id)
 
     def _emit_task_event(self, task_id: int, event: str, reason: str = "") -> None:
         """任务收尾产生网页通知事件（issue #21）。查库失败不阻塞收尾。"""

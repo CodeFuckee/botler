@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **任务手动重试后过几秒又变中断（issue #69）**：一键停止所有任务时
+  executor 把 task_id 登记进 `_stop_requests` 内存集合后从未清除，任务
+  被停止后用户手动重试，worker 领取任务时 `run_task` 开头的
+  `_stop_requested` 检查命中残留的旧停止请求，任务被 `_finish_stopped`
+  立即打回 interrupted——表现为「每次手动重试过几秒就变成中断状态」，
+  只有平台重启（集合随内存清空）才能逃脱（生产日志 task_93/115 证实）。
+  - 后端 `executor.py`：新增 `clear_stop_request`（加锁 discard，幂等）；
+    `_finish_stopped` 落终态后消费清除停止请求（防止集合无限膨胀）；
+  - 后端 `api/tasks.py`：`POST /tasks/{id}/retry` 重置成功后清除该任务
+    的停止请求残留——手动重试即用户明确恢复执行，历史停止请求不再
+    影响新一次执行；重试后再次一键停止仍正常生效；
+  - 测试：TDD 先行（红灯确认后实现），新增 3 用例（重试清除残留请求、
+    停止收尾消费请求、重试后再次停止回归保障）；全量 744（后端）+
+    263（前端）通过。
+
 ### Added
 
 - **设置页新增 Owner GitLab Token 配置与申请教程（issue #87）**：设置页

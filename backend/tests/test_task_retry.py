@@ -224,3 +224,64 @@ class TestRetryApi:
 
         assert resp.status_code == 409
         assert db.get_task(failed_id)["status"] == "failed"
+
+
+# ---- issue #69：停止请求残留导致重试任务被打回 interrupted ----
+
+class TestRetryClearsStaleStopRequest:
+    """一键停止登记的停止请求残留 → 重试任务被立即打回 interrupted。
+
+    复现链路（生产日志 task_93/115 证实）：用户一键停止所有任务 →
+    executor.request_stop 把 task_id 登记进 _stop_requests 内存集合
+    （登记后从未清除）→ 任务落 interrupted → 用户手动重试 → 任务重置
+    queued 入队 → worker 领取后 run_task 开头 _stop_requested 命中旧
+    请求 → _finish_stopped 立即打回 interrupted。表现为「每次手动重试
+    过几秒就变成中断状态」，只有平台重启（集合随内存清空）才能逃脱。
+    """
+
+    def test_retry_clears_stale_stop_request(self, api_app):
+        """手动重试成功后，历史停止请求应被清除，worker 领取不再误命中。"""
+        app, db, _ = api_app
+        executor = app.state.ctx.executor
+        repo_id = _mk_repo(db)
+        tid = _mk_task(db, repo_id, status="interrupted",
+                       error_message="用户手动停止（一键停止所有任务）")
+        # 模拟一键停止时 executor 登记过停止请求（此后集合中一直残留）
+        executor.request_stop(tid)
+        assert executor._stop_requested(tid), "前置条件：停止请求已登记"
+
+        resp = TestClient(app).post(f"/api/tasks/{tid}/retry")
+
+        assert resp.status_code == 200
+        assert db.get_task(tid)["status"] == "queued"
+        assert not executor._stop_requested(tid), \
+            "重试后残留停止请求应被清除，否则 worker 领取时立即被打回 interrupted"
+
+    def test_finish_stopped_consumes_request(self, api_app):
+        """停止收尾消费请求：_finish_stopped 落终态后停止请求即清除。"""
+        app, db, _ = api_app
+        executor = app.state.ctx.executor
+        repo_id = _mk_repo(db)
+        # _finish_stopped 兜底的是「worker 已领取（claim → running）但尚未
+        # 被 stop_active_tasks 覆盖」的任务，前置状态应为 running
+        tid = _mk_task(db, repo_id, status="running")
+        executor.request_stop(tid)
+
+        executor._finish_stopped(tid)
+
+        assert db.get_task(tid)["status"] == "interrupted"
+        assert not executor._stop_requested(tid), "停止收尾后请求应被消费，防止集合无限膨胀"
+
+    def test_stop_after_retry_still_works(self, api_app):
+        """回归保障：重试后用户再次一键停止，停止机制仍正常生效。"""
+        app, db, _ = api_app
+        executor = app.state.ctx.executor
+        repo_id = _mk_repo(db)
+        tid = _mk_task(db, repo_id, status="interrupted")
+        executor.request_stop(tid)
+        assert TestClient(app).post(f"/api/tasks/{tid}/retry").status_code == 200
+
+        resp = TestClient(app).post("/api/tasks/stop-all")
+
+        assert tid in resp.json()["stopped"], "重试后的 queued 任务应被再次停止"
+        assert db.get_task(tid)["status"] == "interrupted"

@@ -161,6 +161,9 @@ def retry_task(request: Request, task_id: int):
         raise HTTPException(400, "仅失败（failed）或已中断（interrupted）的任务可手动重试")
     if result == "conflict":
         raise HTTPException(409, "该 issue 已有活跃任务，无法重试")
+    # issue #69：清除历史停止请求残留——一键停止过的任务重试后，若旧请求
+    # 仍登记在 executor，worker 领取时会命中检查被立即打回 interrupted
+    c.executor.clear_stop_request(task_id)
     c.scheduler.enqueue(task_id)
     return {"task_id": task_id, "status": "queued"}
 
