@@ -333,7 +333,7 @@ security:deps-python:
 
       echo "=== 4. 转换脚本回归测试（防脚本改动破坏阻断语义）==="
       cd "$CI_PROJECT_DIR"
-      .venv-audit/bin/python -m pytest ci/test_convert_audit_to_gitlab.py -q
+      backend/.venv-audit/bin/python -m pytest ci/test_convert_audit_to_gitlab.py -q
       cd backend
 
       echo "=== 5. pip-audit 扫描（默认 PyPI 数据源，失败自动切 OSV）==="
@@ -350,9 +350,11 @@ security:deps-python:
           # 交由转换脚本判定为 exit 2（服务不可用）后切换数据源
           echo "⚠️  pip-audit 退出码 ${AUDIT_EXIT}（可能数据源不可用）"
         fi
+        # || 捕获转换脚本退出码：exit 2（服务不可用）在 set -e 下会
+        # 直接终止整个 job，重试循环永不执行（issue #91 流水线诊断）
+        CONVERT_EXIT=0
         "$CI_PROJECT_DIR/ci/convert-audit-to-gitlab.py" pip \
-          pip-audit.json deps-python-report.json
-        CONVERT_EXIT=$?
+          pip-audit.json deps-python-report.json || CONVERT_EXIT=$?
         [ "$CONVERT_EXIT" -ne 2 ] && break
       done
 
@@ -421,9 +423,11 @@ security:deps-frontend:
         # npm audit 发现漏洞时退出码非 0 但 JSON 正常输出，忽略其退出码
         npm audit --json --registry=${REGISTRY} > npm-audit.json 2>npm-audit.err || true
         set -e
+        # || 捕获转换脚本退出码：exit 2（服务不可用）在 set -e 下会
+        # 直接终止整个 job，重试循环永不执行（issue #91 流水线诊断）
+        CONVERT_EXIT=0
         python3 "$CI_PROJECT_DIR/ci/convert-audit-to-gitlab.py" npm \
-          npm-audit.json deps-frontend-report.json
-        CONVERT_EXIT=$?
+          npm-audit.json deps-frontend-report.json || CONVERT_EXIT=$?
         [ "$CONVERT_EXIT" -ne 2 ] && break
         if [ "$REGISTRY" = "${NPM_REGISTRY_URL}" ]; then
           # npmmirror 审计端点不可用，清代理直连官方 registry 重试
@@ -496,7 +500,7 @@ security:semgrep:
       echo "=== 3. semgrep 扫描（前后端代码，ERROR/WARNING 阻断判定）==="
       cd "$CI_PROJECT_DIR"
       set +e
-      .venv-semgrep/bin/semgrep scan \
+      backend/.venv-semgrep/bin/semgrep scan \
         --config ci/semgrep-rules.yaml \
         --severity ERROR --severity WARNING \
         --error \
@@ -507,7 +511,7 @@ security:semgrep:
       set -e
 
       echo "=== 4. 规则健康检查 + 摘要输出（防规则解析失败假绿）==="
-      .venv-semgrep/bin/python - <<'PYEOF'
+      backend/.venv-semgrep/bin/python - <<'PYEOF'
       import json
       with open('semgrep-result.json', encoding='utf-8') as f:
           res = json.load(f)
@@ -532,10 +536,10 @@ security:semgrep:
       PYEOF
 
       echo "=== 5. 生成 SARIF 报告（GitLab Security 页面可视化）==="
-      .venv-semgrep/bin/semgrep scan \
+      backend/.venv-semgrep/bin/semgrep scan \
         --config ci/semgrep-rules.yaml \
         --severity ERROR --severity WARNING \
-        --sarif -o semgrep-report.sarif \
+        --sarif -o backend/semgrep-report.sarif \
         backend/botler backend/hermes_runner.py \
         frontend/src frontend/scripts frontend/vite.config.js 2>/dev/null || true
 

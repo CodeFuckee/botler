@@ -138,6 +138,25 @@
     非权限错误仍抛 ExecutorError）；全量 864（后端）+ 284（前端）+
     14（ci 转换脚本）通过。
 
+- **CI security 矩阵三个 job 自上线即失败（issue #91 流水线诊断发现）**：
+  issue #86 的 security 门禁从未真实跑通（历史流水线 #846/#847 同样
+  failed），两处缺陷：
+  - semgrep / deps-python：`.backend_setup` 的 before_script 会
+    `cd backend`，venv 实际创建在 `backend/.venv-*`，但脚本
+    `cd "$CI_PROJECT_DIR"` 后仍用相对路径 `.venv-semgrep/bin/...` /
+    `.venv-audit/bin/...` 引用 → No such file or directory（exit 127）；
+    semgrep 的 SARIF 报告输出到仓库根目录，与 artifacts 期望的
+    `backend/semgrep-report.sarif` 不符（失败时报告也传不上去）；
+  - deps-python / deps-frontend：`set -e` 下转换脚本 exit 2（审计服务
+    不可用）直接终止整个 job，「切备用数据源重试 → 仍失败警告放行」
+    的循环逻辑从未执行（deps-frontend 日志证实：npmmirror 不可用后
+    未尝试官方 registry 即 exit 2 失败）；
+  - 修复：semgrep 步骤 3/4/5 统一引用 `backend/.venv-semgrep/...` 且
+    SARIF 输出至 `backend/semgrep-report.sarif`；deps-python 步骤 4
+    改用 `backend/.venv-audit/bin/python`；两处转换脚本调用改为
+    `CONVERT_EXIT=0; ... || CONVERT_EXIT=$?`（|| 左侧失败不触发
+    set -e，重试循环得以执行）。
+
 - **任务详情聊天记录中用户提示词被截断、与全局模版不一致（issue #90）**：
   任务详情页聊天记录只显示到「推送后必须用」附近（#114 号任务复现），
   与全局模版比对不完整；根因是展示层两处缺陷——发送给 AI 的提示词本身
