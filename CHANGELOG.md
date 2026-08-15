@@ -6,6 +6,26 @@
 
 ### Added
 
+- **概览页开放 issue 高亮正在运行的 issue（issue #99）**：
+  概览页「开放 Issue」板块中，正在被 bot 执行（任务状态
+  running/retrying，即概览页活跃任务定义 LIVE_STATUSES）的 issue
+  列表项高亮——浅蓝背景 + 左侧蓝色竖条 + 标题旁「⚙️ 运行中」蓝色
+  徽章（与任务状态徽章 status-running 同色系）。数据复用概览页已有
+  的任务轮询（每 3 秒），按 `repo_id + issue_iid` 匹配，零新增接口；
+  任务结束从任务列表消失后高亮自动消失，任务失败重试（retrying）
+  期间持续高亮。覆盖边界：任务缺 repo_id/issue_iid、非活跃状态
+  （queued/succeeded/failed）不误标、跨仓库同 iid 不误高亮（repo_id
+  参与匹配）、数字/字符串类型归一、高亮与 bot 终态徽章及标签胶囊
+  并存不破坏既有分组。
+  - 前端：`Overview.jsx` 新增导出纯函数 `runningIssueKeys`（活跃任务
+    → `repo_id:iid` 键集合，Set 去重、字段缺失防御），渲染时命中项
+    加 `issue-item-running` 类与「运行中」徽章；`styles.css` 新增
+    `.issue-item-running`（浅蓝背景 + 左侧 3px 蓝色竖条）与
+    `.issue-status-running`（蓝色弱底徽章）样式；
+  - 测试：前端新增 `overview-issue-running-highlight.test.mjs`
+    16 用例（纯函数正常/边界/类型归一/去重/100 条混合、渲染高亮、
+    跨仓库同 iid、retrying、空任务列表、全不匹配、与分组及标签胶囊
+    并存）。
 - **概览页 issue 右边栏展示评论与活动（issue #97）**：
   点击开放 issue 打开右边栏后，描述下方新增「评论」与「活动」两个
   区块——评论（其他参与者的发言：作者头像/姓名/时间 + Markdown 正文）

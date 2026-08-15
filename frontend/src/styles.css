@@ -1252,6 +1252,13 @@ code {
   border-top: none;
   padding-top: 0;
 }
+/* issue #99：正在运行的 issue 高亮——浅蓝背景 + 左侧蓝色竖条，
+   视觉上与任务板块的运行中徽章（status-running）同色系呼应 */
+.issue-item-running {
+  background: var(--primary-weak);
+  border-left: 3px solid var(--primary);
+  padding-left: 8px;
+}
 .issue-main {
   min-width: 0;
   /* issue #81：占据右侧元信息外的全部宽度，长标题在列内截断 */
@@ -1304,6 +1311,11 @@ code {
 .issue-status-failed {
   background: var(--err-weak);
   color: var(--err);
+}
+/* issue #99：运行中徽章——蓝色弱底，与任务状态徽章 status-running 同色系 */
+.issue-status-running {
+  background: var(--primary-weak);
+  color: var(--primary);
 }
 /* issue #71：标签/里程碑胶囊与元信息行（参考 GitLab issue 列表页） */
 .issue-meta {

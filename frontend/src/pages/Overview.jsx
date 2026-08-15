@@ -66,6 +66,22 @@ export const ISSUE_GROUPS = [
   { key: 'other', title: '📋 其他', hint: '尚未处理或处理中的 issue' },
 ]
 
+// ---- issue #99：正在运行的 issue 高亮 ----
+// 正在执行的任务（running/retrying）与开放 issue 列表按 repo_id+issue_iid
+// 匹配，命中项高亮并显示「运行中」徽章。任务数据复用概览页已有轮询，
+// 任务结束从列表消失后高亮自动消失。键统一字符串化，避免数字/字符串
+// 类型差异导致匹配失败；Set 天然去重（同一 issue 的重复任务记录）
+export function runningIssueKeys(tasks) {
+  const keys = new Set()
+  if (!Array.isArray(tasks)) return keys
+  for (const t of tasks) {
+    if (!t || !LIVE_STATUSES.includes(t.status)) continue
+    if (t.repo_id == null || t.issue_iid == null) continue
+    keys.add(`${t.repo_id}:${t.issue_iid}`)
+  }
+  return keys
+}
+
 // 提取 issue 的 bot 终态键（done/failed），无则 null。labels 元素可能
 // 缺 name 或非对象（旧缓存/异常数据），逐一防御
 export function botStatusKey(issue) {
@@ -126,6 +142,10 @@ export default function Overview() {
   const [addIssueRepo, setAddIssueRepo] = useState(null)
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
+
+  // issue #99：正在运行的 issue 匹配键集合（repo_id:iid），任务每 3 秒
+  // 轮询刷新，任务结束（消失）后对应 issue 高亮自动消失
+  const runningKeys = runningIssueKeys(tasks)
 
   // 拉取全部正在执行的任务（running+retrying 多值过滤，issue #32）
   const load = useCallback(async () => {
@@ -269,11 +289,14 @@ export default function Overview() {
                           {items.map((i) => {
                             const bot = botStatusKey(i)
                             const statusMeta = bot ? BOT_STATUS_META[bot] : null
+                            // issue #99：任务（running/retrying）命中则该 issue 高亮
+                            const running = runningKeys.has(`${r.repo_id}:${i.iid}`)
                             // issue #80：终态标签由状态徽章替代展示，其余标签保留胶囊
                             const otherLabels = (i.labels || []).filter(
                               (l) => l && !BOT_STATUS_NAMES.has(l.name))
                             return (
-                              <li key={i.iid} className="issue-item">
+                              <li key={i.iid}
+                                  className={running ? 'issue-item issue-item-running' : 'issue-item'}>
                                 {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
                                     标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数
                                     issue #85：标题改为按钮——点击打开右边栏，不再直接
@@ -288,6 +311,12 @@ export default function Overview() {
                                     {statusMeta && (
                                       <span className={`issue-status ${statusMeta.cls}`}
                                             title={statusMeta.hint}>{statusMeta.label}</span>
+                                    )}
+                                    {/* issue #99：正在运行的 issue 显示「运行中」徽章
+                                        （任务结束后随任务列表轮询自动消失） */}
+                                    {running && (
+                                      <span className="issue-status issue-status-running"
+                                            title="该 issue 正在被 bot 执行中">⚙️ 运行中</span>
                                     )}
                                     {i.title || '—'}
                                   </button>
