@@ -264,7 +264,10 @@ export default function Overview() {
           </div>
         )}
         {repoIssues.length === 0 || repoIssues.every((r) => !r.issues || r.issues.length === 0) ? (
-          <p className="muted">暂无开放 issue</p>
+          <div className="empty-state">
+            <span className="empty-icon" aria-hidden="true">📋</span>
+            <p className="muted">暂无开放 issue</p>
+          </div>
         ) : (
           <div className="issues-list">
             {repoIssues.map((r) => (
@@ -282,7 +285,10 @@ export default function Overview() {
                           title="在该仓库创建新 issue">＋ 添加 Issue</button>
                 </div>
                 {(r.issues || []).length === 0 ? (
-                  <p className="muted">该仓库暂无开放 issue</p>
+                  <div className="empty-state small">
+                    <span className="empty-icon" aria-hidden="true">📋</span>
+                    <p className="muted">该仓库暂无开放 issue</p>
+                  </div>
                 ) : (
                   /* issue #80：按 bot 终态标签分组（bot-failed / bot-done /
                      其他），只渲染非空组，组标题带计数
@@ -393,7 +399,10 @@ export default function Overview() {
       <p className="muted">正在执行的任务（每 {OVERVIEW_POLL_MS / 1000} 秒自动刷新）</p>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {tasks.length === 0 && !error ? (
-        <p className="muted">当前没有正在执行的任务</p>
+        <div className="empty-state">
+          <span className="empty-icon" aria-hidden="true">⚙️</span>
+          <p className="muted">当前没有正在执行的任务</p>
+        </div>
       ) : (
         <div className="overview-grid">
           {tasks.map((t) => {
@@ -436,7 +445,10 @@ export default function Overview() {
           </div>
         )}
         {pipelines.length === 0 ? (
-          <p className="muted">暂无流水线</p>
+          <div className="empty-state">
+            <span className="empty-icon" aria-hidden="true">🚀</span>
+            <p className="muted">暂无流水线</p>
+          </div>
         ) : (
           <div className="pipelines-list">
             {pipelines.map((p) => {

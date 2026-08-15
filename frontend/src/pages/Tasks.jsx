@@ -76,7 +76,8 @@ function TaskDrawer({ task, onClose }) {
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong>任务 #{task.id} 全部数据 — #{task.issue_iid} {task.issue_title}</strong>
-          <button className="btn modal-close" onClick={onClose} title="关闭">×</button>
+          <button className="btn modal-close" onClick={onClose} title="关闭"
+                  aria-label="关闭抽屉">×</button>
         </div>
         <table className="table kv">
           <tbody>
@@ -366,7 +367,12 @@ export default function Tasks() {
             </thead>
           <tbody>
             {data.tasks.length === 0 && (
-              <tr><td colSpan={12} className="muted">暂无任务</td></tr>
+              <tr><td colSpan={12}>
+                <div className="empty-state">
+                  <span className="empty-icon" aria-hidden="true">🗂️</span>
+                  <p className="muted">暂无任务</p>
+                </div>
+              </td></tr>
             )}
             {data.tasks.map((t) => {
               const meta = STATUS_META[t.status] || { label: t.status, cls: '' }
@@ -490,7 +496,8 @@ export default function Tasks() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <strong>失败详细原因 — #{detailTask.issue_iid} {detailTask.issue_title}</strong>
-              <button className="btn modal-close" onClick={() => setDetailTask(null)} title="关闭">×</button>
+              <button className="btn modal-close" onClick={() => setDetailTask(null)}
+                      title="关闭" aria-label="关闭弹窗">×</button>
             </div>
             {detailTask.error_message && (
               <div className="error-summary">

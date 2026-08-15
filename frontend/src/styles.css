@@ -16,24 +16,37 @@
   --bg-card: #ffffff;
   --bg-hover: #fafafa;
   --bg-active: #f2f2f2;
+  /* 中性面（HIG 匠心：散落硬编码统一 token 化，深色模式随变量翻转） */
+  --bg-soft: rgba(0, 0, 0, 0.05);
+  --bg-hover-soft: rgba(0, 0, 0, 0.04);
+  --hairline: rgba(0, 0, 0, 0.08);
+  --overlay: rgba(0, 0, 0, 0.4);
   /* 文字 */
   --text: #171717;
   --muted: #666666;
   /* 边框(发丝线) */
   --border: #eaeaea;
   --border-hover: #d4d4d4;
-  /* 主色 */
+  /* 主色：--primary 用于文字/链接/弱底，--primary-strong 用于实底按钮
+     （深色模式下两者亮度解耦，保证蓝底白字与蓝字深底均达 WCAG AA） */
   --primary: #0070f3;
   --primary-hover: #005bd1;
+  --primary-strong: #0070f3;
+  --on-primary: #ffffff;
   --primary-weak: rgba(0, 112, 243, 0.08);
   --focus-ring: 0 0 0 3px rgba(0, 112, 243, 0.18);
-  /* 语义色 */
-  --ok: #17a34a;
+  /* 语义色（HIG 灵活：文字色对比度达 WCAG AA 正文 4.5:1——
+     原 #17a34a/#d97706/#e5484d 白底对比度仅 3.2~3.9:1 不达标，加深后达标） */
+  --ok: #12823d;
   --ok-weak: rgba(23, 163, 74, 0.1);
-  --warn: #d97706;
+  --warn: #b45309;
   --warn-weak: rgba(217, 119, 6, 0.12);
-  --err: #e5484d;
+  --err: #d13438;
   --err-weak: rgba(229, 72, 77, 0.08);
+  /* 流水线阶段图节点色（非文字，仅作状态区分） */
+  --stage-pending: #c9c9c9;
+  --stage-canceled: #8a8a8a;
+  --stage-skipped: #dcdcdc;
   /* 字体 */
   --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   /* 尺寸 */
@@ -42,9 +55,67 @@
   --shadow-border: 0 0 0 1px rgba(0, 0, 0, 0.08);
   --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.12);
+  /* 动效（HIG 匠心：时长 150–300ms、ease-out 自然缓动，不拖沓） */
+  --dur: 200ms;
+  --dur-fast: 150ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  /* 间距（HIG 匠心：4px / 8px 网格） */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
   /* 响应式（issue #15）：内容区宽度与表格省略列上限，宽屏媒体查询下放宽 */
   --content-width: 1100px;
   --ellipsis-max: 340px;
+}
+
+/* HIG 灵活：跟随系统深色模式（Geist Dark 基调）。仅翻转令牌，组件零改动 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --bg-card: #0a0a0a;
+    --bg-hover: #141414;
+    --bg-active: #1a1a1a;
+    --bg-soft: rgba(255, 255, 255, 0.06);
+    --bg-hover-soft: rgba(255, 255, 255, 0.06);
+    --hairline: rgba(255, 255, 255, 0.1);
+    --overlay: rgba(0, 0, 0, 0.6);
+    --text: #ededed;
+    --muted: #888888;
+    --border: #2a2a2a;
+    --border-hover: #444444;
+    --primary: #3291ff;
+    --primary-hover: #005bd1;
+    --primary-strong: #0070f3;
+    --on-primary: #ffffff;
+    --primary-weak: rgba(50, 145, 255, 0.16);
+    --focus-ring: 0 0 0 3px rgba(50, 145, 255, 0.3);
+    --ok: #4ade80;
+    --ok-weak: rgba(74, 222, 128, 0.12);
+    --warn: #e3a008;
+    --warn-weak: rgba(227, 160, 8, 0.14);
+    --err: #ff6166;
+    --err-weak: rgba(255, 97, 102, 0.14);
+    --stage-pending: #3a3a3a;
+    --stage-canceled: #666666;
+    --stage-skipped: #333333;
+    --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.12);
+    --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.6);
+  }
+}
+
+/* HIG 灵活：系统开启「减弱动态效果」时禁用/减弱动画与过渡 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -69,7 +140,7 @@ body {
   padding: 0 20px;
   height: 52px;
   background: var(--bg-card);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 0 var(--hairline);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -90,8 +161,10 @@ body {
   padding: 6px 12px;
   border-radius: var(--radius);
   font-weight: 500;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
-.navlink:hover { color: var(--text); background: rgba(0, 0, 0, 0.04); }
+.navlink:hover { color: var(--text); background: var(--bg-hover-soft); }
+.navlink:active { transform: scale(0.97); }
 .navlink.active { color: var(--primary); background: var(--primary-weak); }
 .navlink:focus-visible { box-shadow: var(--focus-ring); }
 
@@ -233,7 +306,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   font-size: 14px;
   outline: none;
   min-width: 0;
-  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .input:hover { border-color: var(--border-hover); }
 .input:focus { border-color: var(--primary); box-shadow: var(--focus-ring); }
@@ -260,15 +333,31 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   text-decoration: none;
   display: inline-block;
   white-space: nowrap;
-  transition: background 0.1s ease, border-color 0.1s ease;
+  /* HIG 匠心/愉悦感：150ms ease-out 过渡 + 按下微反馈（不喧宾夺主） */
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
 }
 .btn:hover { background: var(--bg-hover); border-color: var(--border-hover); }
 .btn:focus-visible { box-shadow: var(--focus-ring); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* HIG 熟悉感：active 态按下反馈，所有按钮（含主/危险变体）统一 */
+.btn:not(:disabled):active { transform: translateY(1px); background: var(--bg-active); }
+.btn-primary {
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+  color: var(--on-primary);
+}
 .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.btn-primary:not(:disabled):active {
+  background: var(--primary-hover);
+  transform: translateY(1px);
+}
 .btn-danger { color: var(--err); }
 .btn-danger:hover { background: var(--err-weak); border-color: var(--err); }
+.btn-danger:not(:disabled):active { background: var(--err-weak); transform: translateY(1px); }
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 .btn-wide { padding: 8px 36px; }
 .btn-upload { cursor: pointer; }
@@ -381,13 +470,13 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   white-space: nowrap;
   border: 1px solid transparent;
 }
-.status-queued { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
+.status-queued { background: var(--bg-soft); color: var(--muted); }
 .status-running { background: var(--primary-weak); color: var(--primary); }
 .status-retrying { background: var(--warn-weak); color: var(--warn); }
 .status-succeeded { background: var(--ok-weak); color: var(--ok); }
 .status-failed { background: var(--err-weak); color: var(--err); }
-.status-interrupted { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
-.badge-muted { background: rgba(0, 0, 0, 0.05); color: var(--muted); }
+.status-interrupted { background: var(--bg-soft); color: var(--muted); }
+.badge-muted { background: var(--bg-soft); color: var(--muted); }
 /* 断点续跑标记（issue #8）：任务从上次中断的 claude 会话恢复执行 */
 /* vertical-align: middle（issue #31）：badge 与尝试次数数值同行混排时，基线对齐
    会让胶囊 padding/border 下沉到基线以下、小字号视觉中心偏低，改为 middle 与
@@ -468,7 +557,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .small { font-size: 12.5px; }
 .pre-wrap { white-space: pre-wrap; }
 code {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--bg-soft);
   padding: 1px 6px;
   border-radius: 4px;
   font-family: var(--mono);
@@ -479,7 +568,7 @@ code {
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--overlay);
   display: flex;
   justify-content: flex-end;
   z-index: 100;
@@ -623,7 +712,7 @@ code {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -655,7 +744,8 @@ code {
   border: none;
   color: var(--muted);
 }
-.modal-close:hover { background: rgba(0, 0, 0, 0.04); color: var(--text); border: none; }
+.modal-close:hover { background: var(--bg-hover-soft); color: var(--text); border: none; }
+.modal-close:focus-visible { box-shadow: var(--focus-ring); }
 .folder-nav {
   display: flex;
   align-items: center;
@@ -688,6 +778,9 @@ code {
   background: var(--bg);
 }
 .folder-empty { padding: 24px; text-align: center; }
+.folder-empty .empty-icon { font-size: 24px; line-height: 1; display: block; margin-bottom: 8px; }
+/* 加载态行内排列（spinner + 文案） */
+.folder-empty.loading-hint { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .folder-item {
   display: flex;
   align-items: center;
@@ -914,6 +1007,94 @@ code {
   font-size: 13px;
 }
 
+/* ---- 焦点可见性补全（HIG 灵活：键盘 Tab 全遍历 + 焦点可见）----
+   .btn / .navlink / .input / .folder-item 已有 focus-visible，
+   以下覆盖其余可交互元素（图标按钮/折叠标题/列表项/自定义选项），
+   统一用主色焦点环，与既有元素视觉一致 */
+.section-toggle:focus-visible,
+.issue-link:focus-visible,
+.add-method:focus-visible,
+.remote-option:focus-visible,
+.label-choice:focus-visible,
+.folder-hidden-toggle:focus-visible,
+.checkbox-label:focus-visible,
+.pipeline-link:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius);
+  outline: none;
+}
+.issue-link:focus-visible { color: var(--primary); }
+.section-toggle:focus-visible { color: var(--primary); }
+
+/* ---- 空状态（HIG 匠心/愉悦感：图标 + 有温度文案，非裸文本）---- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--muted);
+}
+.empty-state .empty-icon {
+  font-size: 28px;
+  line-height: 1;
+  opacity: 0.85;
+}
+.empty-state p { margin: 0; }
+/* 小号空态：卡片/表格单元格内使用 */
+.empty-state.small {
+  padding: var(--space-4) var(--space-3);
+}
+.empty-state.small .empty-icon { font-size: 20px; }
+
+/* ---- 加载态（HIG 匠心：spinner 明确反馈，避免布局跳动）---- */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  animation: spin 0.8s linear infinite;
+  flex: none;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.loading-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+}
+/* 整页/大区块加载态：居中 spinner + 文案 */
+.app-loading {
+  min-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--muted);
+}
+.app-loading p { margin: 0; }
+
+/* ---- 触控目标（HIG 灵活：移动端最小 44×44px）----
+   仅触屏设备生效，桌面鼠标操作不受影响 */
+@media (pointer: coarse) {
+  .btn,
+  .navlink,
+  .folder-item,
+  .modal-close,
+  .issue-link,
+  .section-toggle {
+    min-height: 44px;
+  }
+  .btn-mini, .btn-sm, .btn-small { min-height: 44px; }
+}
+
 /* 网页通知设置（issue #21） */
 .check-input {
   width: 16px;
@@ -938,6 +1119,12 @@ code {
   width: 380px;
   max-width: 100%;
   text-align: center;
+}
+/* HIG 目标感：登录页品牌标识（首屏即明白产品身份） */
+.login-brand {
+  font-size: 44px;
+  line-height: 1;
+  margin-bottom: var(--space-3);
 }
 .login-card .alert {
   text-align: left;
@@ -1152,9 +1339,9 @@ code {
   background: var(--primary);
   animation: stage-pulse 1s ease-in-out infinite alternate;
 }
-.st-pending .pipeline-stage-dot { background: #c9c9c9; }
-.st-canceled .pipeline-stage-dot { background: #8a8a8a; }
-.st-skipped .pipeline-stage-dot { background: #dcdcdc; }
+.st-pending .pipeline-stage-dot { background: var(--stage-pending); }
+.st-canceled .pipeline-stage-dot { background: var(--stage-canceled); }
+.st-skipped .pipeline-stage-dot { background: var(--stage-skipped); }
 @keyframes stage-pulse {
   from { opacity: 1; }
   to { opacity: 0.35; }
@@ -1375,7 +1562,7 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   /* 无颜色降级（labels API 失败/颜色非法）：中性灰胶囊 */
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--bg-soft);
   color: var(--muted);
 }
 .milestone-chip {

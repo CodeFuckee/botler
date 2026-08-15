@@ -6,6 +6,42 @@
 
 ### Added
 
+- **按 Apple HIG 设计原则重新优化全部页面（issue #110）**：
+  需求「根据下面的苹果的ui设计原则，帮我重新优化项目中的每一个页面」——
+  依据 Apple Human Interface Guidelines 八原则（目标感/能动性/责任感/
+  熟悉感/灵活/简洁/匠心/愉悦感）与验收检查清单逐项落地：
+  - **交互状态补全（熟悉感/愉悦感）**：`.btn` 系列新增 `:active`
+    按下反馈微交互（主/危险变体各自加深），导航链接 hover/active
+    双态；transition 时长由 0.1s 统一为 150ms ease-out 缓动
+    （HIG 匠心 150–300ms 建议区间）。
+  - **design token 统一（匠心）**：新增动效 token（`--dur`/
+    `--dur-fast`/`--ease-out`）、4px/8px 网格间距 token（`--space-1~6`）、
+    主色实底拆分（`--primary-strong`/`--on-primary`）；散落硬编码
+    中性色（rgba 遮罩/发丝线/弱底、阶段图节点色）统一 token 化。
+  - **对比度达 WCAG AA（灵活）**：语义色加深（`--ok` #12823d、
+    `--warn` #b45309、`--err` #d13438，原色白底对比度仅 3.2~3.9:1
+    不达标），浅色/深色主题下语义色与 muted 文字对比度均 ≥ 4.5:1。
+  - **跟随系统深色模式（灵活）**：新增 `prefers-color-scheme: dark`
+    令牌翻转块（Geist Dark 基调），全部组件零改动自动适配。
+  - **减弱动画支持（灵活）**：新增 `prefers-reduced-motion: reduce`
+    降级规则，动画/过渡时长降为 0.01ms。
+  - **空状态与加载态设计（匠心/愉悦感）**：新增 `.empty-state`
+    （图标 + 文案）与 `.spinner`/`.loading-hint`/`.app-loading`
+    加载态；概览页三板块（开放 Issue/运行任务/流水线）、任务表格、
+    仓库列表、标记库、目录选择、App/任务详情/设置页加载态全部
+    由裸文本升级为设计态（文案文本保持不变，既有测试兼容）。
+  - **无障碍（灵活）**：键盘焦点可见性补全（`.section-toggle`/
+    `.issue-link`/`.add-method`/`.remote-option`/`.label-choice`/
+    `.folder-hidden-toggle`/`.modal-close` 等 focus-visible 焦点环）；
+    全部弹窗/抽屉关闭按钮补充 `aria-label`；顶部导航补充
+    `aria-label="主导航"`；触控设备（`pointer: coarse`）按钮最小
+    触控目标 44px。
+  - 测试：前端新增 `apple-hig.test.mjs` 15 用例（active 按下态、
+    spinner/空态渲染、token 化断言、浅色/深色语义色对比度计算、
+    reduced-motion、pointer: coarse、focus-visible 覆盖、aria-label、
+    深色模式令牌翻转），先复现失败再修复通过；全量测试
+    （前端 479 + 后端 942）通过。
+
 - **概览页 issue 右边栏新增标记编辑功能（issue #108）**：
   需求「概览页面，点击issue弹出的右边栏，增加issue的标记编辑功能，
   可以删除和添加标记」——抽屉「标签」行由只读展示升级为可编辑：

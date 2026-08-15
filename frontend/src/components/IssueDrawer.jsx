@@ -303,7 +303,8 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             )}
             <a className="btn" href={i.web_url} target="_blank" rel="noreferrer"
                title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
-            <button className="btn modal-close" onClick={onClose} title="关闭">×</button>
+            <button className="btn modal-close" onClick={onClose} title="关闭"
+                    aria-label="关闭右边栏">×</button>
           </span>
         </div>
         {closeErr && <div className="issue-drawer-error" role="alert">{closeErr}</div>}

@@ -108,7 +108,12 @@ export default function Labels() {
       <div className="card">
         <h2>自定义标签（{data?.custom?.length ?? 0} 个）</h2>
         {data?.custom?.length === 0
-          ? <p className="muted">还没有自定义标签，用上方表单添加。</p>
+          ? (
+            <div className="empty-state">
+              <span className="empty-icon" aria-hidden="true">🏷️</span>
+              <p className="muted">还没有自定义标签，用上方表单添加。</p>
+            </div>
+          )
           : (
             <ul className="label-list">
               {(data?.custom || []).map((l) => (

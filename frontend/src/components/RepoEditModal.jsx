@@ -48,7 +48,8 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
       <div className="modal repo-edit" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong>编辑仓库「{repo.name}」</strong>
-          <button className="btn modal-close" onClick={onClose} title="关闭">×</button>
+          <button className="btn modal-close" onClick={onClose} title="关闭"
+                  aria-label="关闭弹窗">×</button>
         </div>
 
         <label className="edit-field">

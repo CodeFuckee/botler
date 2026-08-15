@@ -100,7 +100,13 @@ export default function Settings() {
     loadEnv()
   }, [])
 
-  if (!settings) return <p className="muted">加载中…</p>
+  // HIG 匠心：加载态用 spinner，非裸文本
+  if (!settings) return (
+    <div className="loading-hint">
+      <span className="spinner" aria-hidden="true" />
+      <span className="muted">加载中…</span>
+    </div>
+  )
 
   const setWorkerField = (key, val) =>
     setSettings((s) => ({ ...s, worker: { ...s.worker, [key]: val } }))

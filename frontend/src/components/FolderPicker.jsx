@@ -55,7 +55,8 @@ export default function FolderPicker({ open, initialPath, onSelect, onClose }) {
       <div className="modal folder-picker" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong>选择服务器上的文件夹</strong>
-          <button className="btn modal-close" onClick={onClose} title="关闭">×</button>
+          <button className="btn modal-close" onClick={onClose} title="关闭"
+                  aria-label="关闭弹窗">×</button>
         </div>
 
         <div className="folder-nav">
@@ -85,9 +86,17 @@ export default function FolderPicker({ open, initialPath, onSelect, onClose }) {
         {error && <div className="alert alert-error">{error}</div>}
 
         <div className="folder-list">
-          {loading && <div className="muted folder-empty">加载中…</div>}
+          {loading && (
+            <div className="folder-empty loading-hint">
+              <span className="spinner" aria-hidden="true" />
+              <span>加载中…</span>
+            </div>
+          )}
           {!loading && visible.length === 0 && (
-            <div className="muted folder-empty">{showHidden ? '此文件夹没有子目录' : '此文件夹没有子目录（可勾选“显示隐藏”查看隐藏目录）'}</div>
+            <div className="folder-empty">
+              <span className="empty-icon" aria-hidden="true">📁</span>
+              <div className="muted">{showHidden ? '此文件夹没有子目录' : '此文件夹没有子目录（可勾选“显示隐藏”查看隐藏目录）'}</div>
+            </div>
           )}
           {!loading && visible.map((d) => (
             <button

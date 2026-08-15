@@ -191,7 +191,13 @@ export default function TaskDetail() {
   }, [location.search, live])
 
   if (error) return <div className="alert alert-error">{error}</div>
-  if (!task) return <p className="muted">加载中…</p>
+  // HIG 匠心：加载态用 spinner，非裸文本
+  if (!task) return (
+    <div className="loading-hint">
+      <span className="spinner" aria-hidden="true" />
+      <span className="muted">加载中…</span>
+    </div>
+  )
 
   const meta = STATUS_META[task.status] || { label: task.status, cls: '' }
 

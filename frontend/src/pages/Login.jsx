@@ -19,6 +19,8 @@ export default function Login() {
   return (
     <div className="login-page">
       <div className="card login-card">
+        {/* HIG 目标感：品牌标识让首屏 3 秒内明白「这是什么」 */}
+        <div className="login-brand" aria-hidden="true">🤖</div>
         <h2>登录 Botler</h2>
         <p className="muted small">
           此实例启用了 Synology SSO 登录，请使用群晖账号认证后使用管理界面。

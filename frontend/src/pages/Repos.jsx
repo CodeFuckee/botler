@@ -217,7 +217,12 @@ export default function Repos() {
 
       <div className="card">
         <h2>仓库列表（{repos.length}）</h2>
-        {repos.length === 0 && <p className="muted">还没有仓库。添加后平台会自动注册 webhook。</p>}
+        {repos.length === 0 && (
+          <div className="empty-state">
+            <span className="empty-icon" aria-hidden="true">📦</span>
+            <p className="muted">还没有仓库。添加后平台会自动注册 webhook。</p>
+          </div>
+        )}
         {repos.map((repo) => (
           <div key={repo.id} className="repo-item">
             <div className="repo-main">

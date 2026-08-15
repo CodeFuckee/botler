@@ -51,7 +51,15 @@ export default function App() {
     return () => clearInterval(timer)
   }, [auth])
 
-  if (!auth) return <p className="muted">加载中…</p>
+  // HIG 匠心：整页加载态用居中 spinner，非裸文本
+  if (!auth) {
+    return (
+      <div className="app-loading">
+        <span className="spinner" aria-hidden="true" />
+        <p className="muted">加载中…</p>
+      </div>
+    )
+  }
   if (auth.enabled && !auth.user) return <Login />
 
   const logout = async () => {
@@ -61,7 +69,8 @@ export default function App() {
 
   return (
     <div className="app">
-      <nav className="topnav">
+      {/* HIG 灵活：导航提供 aria-label 语义（屏幕阅读器可跳过） */}
+      <nav className="topnav" aria-label="主导航">
         <div className="brand">
           <span className="brand-dot">🤖</span> Botler
         </div>

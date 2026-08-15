@@ -101,7 +101,8 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
       <div className="modal add-issue" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong>添加 Issue「{repo.repo_name}」</strong>
-          <button className="btn modal-close" onClick={onClose} title="关闭">×</button>
+          <button className="btn modal-close" onClick={onClose} title="关闭"
+                  aria-label="关闭弹窗">×</button>
         </div>
 
         {loading ? (

@@ -48,6 +48,7 @@ export default function DialogHost() {
             className="btn modal-close"
             onClick={() => settleDialog(d.id, dismissValue)}
             title="关闭"
+            aria-label="关闭对话框"
           >
             ×
           </button>
