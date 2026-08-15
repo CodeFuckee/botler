@@ -44,6 +44,51 @@ export function stageClass(status) {
   }
 }
 
+// ---- issue #80：开放 issue 按 bot 终态标签分组 + 状态徽章 ----
+// bot-done = bot 已完成开发待用户确认；bot-failed = bot 处理失败待人工
+// 介入。判定优先级 bot-done 高于 bot-failed：失败后重试成功时两个标签
+// 会并存（executor 幂等 add_label 不移除旧标签），成功为最终态。
+export const BOT_STATUS_NAMES = new Set(['bot-done', 'bot-failed'])
+
+// bot 状态 → 标题旁徽章文案与样式类（复用任务状态徽章的弱底语义色风格）
+export const BOT_STATUS_META = {
+  done: { label: '✅ bot-done', cls: 'issue-status-done',
+          hint: 'bot 已完成开发，待人工确认关闭' },
+  failed: { label: '❌ bot-failed', cls: 'issue-status-failed',
+            hint: 'bot 处理失败，需人工介入' },
+}
+
+// 组显示顺序：用户指定 bot-failed → bot-done → 其他（issue #80 评论区）
+export const ISSUE_GROUPS = [
+  { key: 'failed', title: '❌ bot-failed', hint: 'bot 处理失败，需人工介入' },
+  { key: 'done', title: '✅ bot-done', hint: 'bot 已完成开发，待人工确认关闭' },
+  { key: 'other', title: '📋 其他', hint: '尚未处理或处理中的 issue' },
+]
+
+// 提取 issue 的 bot 终态键（done/failed），无则 null。labels 元素可能
+// 缺 name 或非对象（旧缓存/异常数据），逐一防御
+export function botStatusKey(issue) {
+  const labels = issue && issue.labels
+  if (!Array.isArray(labels)) return null
+  let hasFailed = false
+  for (const l of labels) {
+    const name = l && typeof l === 'object' ? l.name : null
+    if (name === 'bot-done') return 'done'
+    if (name === 'bot-failed') hasFailed = true
+  }
+  return hasFailed ? 'failed' : null
+}
+
+// 按 bot 终态标签分组：{ failed, done, other }。组内保持原始相对顺序
+// （后端已按 updated_at 降序），前端不重排
+export function groupIssuesByBotLabel(issues) {
+  const groups = { failed: [], done: [], other: [] }
+  for (const i of Array.isArray(issues) ? issues : []) {
+    groups[botStatusKey(i) || 'other'].push(i)
+  }
+  return groups
+}
+
 // 日志行尾部截取：总行数超过 max 时只保留最后 max 行
 export function trimLogTail(lines, max) {
   if (!Array.isArray(lines)) return []
@@ -200,68 +245,94 @@ export default function Overview() {
                 {(r.issues || []).length === 0 ? (
                   <p className="muted">该仓库暂无开放 issue</p>
                 ) : (
-                  <ul className="issue-list">
-                    {(r.issues || []).map((i) => (
-                      <li key={i.iid} className="issue-item">
-                        {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
-                            标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数
-                            issue #85：标题改为按钮——点击打开右边栏，不再直接
-                            跳转 GitLab（跳转统一走右边栏右上角按钮） */}
-                        <div className="issue-main">
-                          <button type="button" className="issue-link"
-                                  onClick={() => setSelectedIssue({
-                                    issue: i, repoName: r.repo_name,
-                                  })}
-                                  title="查看 issue 详情">
-                            <span className="issue-iid">#{i.iid}</span>
-                            {i.title || '—'}
-                          </button>
-                          {((i.labels || []).length > 0 || i.milestone) && (
-                            <div className="issue-meta">
-                              {(i.labels || []).map((l) => (
-                                <span key={l.name} className="label-pill"
-                                      style={l.color
-                                        ? { background: `#${l.color}`, color: `#${l.text_color}` }
-                                        : undefined}
-                                      title={`标签 ${l.name}`}>{l.name}</span>
-                              ))}
-                              {i.milestone && (
-                                <span className="milestone-chip" title={`里程碑 ${i.milestone}`}>
-                                  🏷️ {i.milestone}
-                                </span>
-                              )}
-                            </div>
-                          )}
+                  /* issue #80：按 bot 终态标签分组（bot-failed / bot-done /
+                     其他），只渲染非空组，组标题带计数 */
+                  ISSUE_GROUPS.map((g) => {
+                    const items = groupIssuesByBotLabel(r.issues)[g.key]
+                    if (items.length === 0) return null
+                    return (
+                      <div key={g.key} className="issue-group">
+                        <div className="issue-group-head">
+                          <span className="issue-group-title" title={g.hint}>{g.title}</span>
+                          <span className="issue-group-count"
+                                title="组内 issue 数量">{items.length} 个</span>
                         </div>
-                        <div className="issue-side">
-                          {(i.assignees || []).map((a) => (
-                            a.avatar_url ? (
-                              <img key={a.username || a.name}
-                                   className="assignee-avatar" src={a.avatar_url}
-                                   alt={a.name || a.username || ''}
-                                   title={`负责人 ${a.name || a.username || ''}`} />
-                            ) : (
-                              <span key={a.username || a.name}
-                                    className="assignee-avatar avatar-fallback"
-                                    title={`负责人 ${a.name || a.username || ''}`}>
-                                {(a.name || a.username || '?').slice(0, 1).toUpperCase()}
-                              </span>
+                        <ul className="issue-list">
+                          {items.map((i) => {
+                            const bot = botStatusKey(i)
+                            const statusMeta = bot ? BOT_STATUS_META[bot] : null
+                            // issue #80：终态标签由状态徽章替代展示，其余标签保留胶囊
+                            const otherLabels = (i.labels || []).filter(
+                              (l) => l && !BOT_STATUS_NAMES.has(l.name))
+                            return (
+                              <li key={i.iid} className="issue-item">
+                                {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
+                                    标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数
+                                    issue #85：标题改为按钮——点击打开右边栏，不再直接
+                                    跳转 GitLab（跳转统一走右边栏右上角按钮） */}
+                                <div className="issue-main">
+                                  <button type="button" className="issue-link"
+                                          onClick={() => setSelectedIssue({
+                                            issue: i, repoName: r.repo_name,
+                                          })}
+                                          title="查看 issue 详情">
+                                    <span className="issue-iid">#{i.iid}</span>
+                                    {statusMeta && (
+                                      <span className={`issue-status ${statusMeta.cls}`}
+                                            title={statusMeta.hint}>{statusMeta.label}</span>
+                                    )}
+                                    {i.title || '—'}
+                                  </button>
+                                  {(otherLabels.length > 0 || i.milestone) && (
+                                    <div className="issue-meta">
+                                      {otherLabels.map((l) => (
+                                        <span key={l.name} className="label-pill"
+                                              style={l.color
+                                                ? { background: `#${l.color}`, color: `#${l.text_color}` }
+                                                : undefined}
+                                              title={`标签 ${l.name}`}>{l.name}</span>
+                                      ))}
+                                      {i.milestone && (
+                                        <span className="milestone-chip" title={`里程碑 ${i.milestone}`}>
+                                          🏷️ {i.milestone}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="issue-side">
+                                  {(i.assignees || []).map((a) => (
+                                    a.avatar_url ? (
+                                      <img key={a.username || a.name}
+                                           className="assignee-avatar" src={a.avatar_url}
+                                           alt={a.name || a.username || ''}
+                                           title={`负责人 ${a.name || a.username || ''}`} />
+                                    ) : (
+                                      <span key={a.username || a.name}
+                                            className="assignee-avatar avatar-fallback"
+                                            title={`负责人 ${a.name || a.username || ''}`}>
+                                        {(a.name || a.username || '?').slice(0, 1).toUpperCase()}
+                                      </span>
+                                    )
+                                  ))}
+                                  {i.updated_at && (
+                                    <span className="issue-updated" title="最后更新时间">
+                                      {fmtAgo(i.updated_at) || ''}
+                                    </span>
+                                  )}
+                                  {typeof i.user_notes_count === 'number' && (
+                                    <span className="issue-notes" title="评论数">
+                                      💬 {i.user_notes_count}
+                                    </span>
+                                  )}
+                                </div>
+                              </li>
                             )
-                          ))}
-                          {i.updated_at && (
-                            <span className="issue-updated" title="最后更新时间">
-                              {fmtAgo(i.updated_at) || ''}
-                            </span>
-                          )}
-                          {typeof i.user_notes_count === 'number' && (
-                            <span className="issue-notes" title="评论数">
-                              💬 {i.user_notes_count}
-                            </span>
-                          )}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
+                          })}
+                        </ul>
+                      </div>
+                    )
+                  })
                 )}
               </div>
             ))}

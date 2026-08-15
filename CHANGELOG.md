@@ -6,6 +6,23 @@
 
 ### Added
 
+- **概览页开放 Issue 按 bot 终态标签分组 + 状态徽章（issue #80）**：
+  开放 issue 板块区分 bot 处理状态——每个仓库卡片内 issue 按三组分组
+  展示：`bot-failed`（处理失败）/ `bot-done`（已完成待确认）/ `其他`
+  （两种标签都不带，组顺序按用户指定 failed → done → other），只渲染
+  非空组、组标题带计数；带终态标签的 issue 在标题旁显示醒目状态徽章
+  （绿=done、红=failed，复用任务状态徽章弱底语义色风格），同时从普通
+  标签胶囊中过滤这两个标签，避免同一标签重复显示。判定优先级 bot-done
+  高于 bot-failed（失败后重试成功时两标签并存，成功为最终态）。
+  - 前端：`Overview.jsx` 新增导出 `BOT_STATUS_NAMES` / `BOT_STATUS_META` /
+    `ISSUE_GROUPS` / `botStatusKey` / `groupIssuesByBotLabel` 纯函数，
+    分组保持组内原始相对顺序（后端已按 updated_at 降序）；`styles.css`
+    新增组标题行与状态徽章样式；
+  - 测试：`frontend/tests/overview-issue-groups.test.mjs` 18 用例
+    （三组归类、组顺序、双标签并存归 done、labels 缺失/null/非数组/
+    元素缺 name、空数组、单元素、100 条混合不丢失、组标题顺序与计数、
+    徽章渲染与位置、标签胶囊过滤、全普通/空组/空仓库/缺字段渲染）。
+
 - **CI 静态代码分析矩阵：5 种免费工具、高危/中危中止流水线（issue #86）**：
   security 阶段由单一 bandit 扩展为 5 个并行 job，覆盖前后端「代码 SAST +
   依赖 CVE + 密钥泄露」三个维度，任一 job 发现高危/中危问题即失败阻断

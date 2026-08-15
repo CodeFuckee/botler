@@ -1072,6 +1072,29 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* issue #80：仓库卡片内按 bot 终态标签分组——组标题行 + 计数，
+   空组不渲染；组标题提供分组视觉分隔 */
+.issue-group {
+  margin-top: 10px;
+}
+.issue-group:first-child {
+  margin-top: 0;
+}
+.issue-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.issue-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.issue-group-count {
+  font-size: 12px;
+  color: var(--muted);
+}
 .issue-list {
   list-style: none;
   margin: 0;
@@ -1120,6 +1143,27 @@ code {
 .issue-iid {
   color: var(--muted);
   margin-right: 4px;
+}
+/* issue #80：bot 状态徽章（标题旁）——复用任务状态徽章的弱底语义色
+   风格：done 绿 / failed 红 */
+.issue-status {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.issue-status-done {
+  background: var(--ok-weak);
+  color: var(--ok);
+}
+.issue-status-failed {
+  background: var(--err-weak);
+  color: var(--err);
 }
 /* issue #71：标签/里程碑胶囊与元信息行（参考 GitLab issue 列表页） */
 .issue-meta {
