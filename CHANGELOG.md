@@ -116,6 +116,24 @@
 
 ### Fixed
 
+- **CI security 门禁两处失效与 venv 安装目标缺陷（issue #86 收尾，
+  issue #91 流水线诊断 #850 暴露）**：
+  - 门禁失效：`.docs_only_skip` 规则尾条款 `when: always` 会绕过
+    stage 失败传播——security 阶段因高危/中危漏洞失败时 build/deploy
+    仍照常执行（#846 起 deploy 在 security failed 下仍 success）；
+    改为 `when: on_success`（与 GitLab 默认行为一致）。另
+    `deploy_to_code01` 的 `needs` 仅依赖 frontend:build，needs 会
+    绕过 stage 顺序与失败传播，security 失败不阻止部署；needs 显式
+    补全 5 个 security job（任一失败即阻止部署）；
+  - venv 安装目标缺陷：uv 只自动发现 `VIRTUAL_ENV` / `.venv`，不会
+    使用 `.venv-audit` / `.venv-semgrep` 自定义名——deps-python 的
+    pip-audit/pytest 被装进主 `.venv`（随后 `.venv-audit` 报
+    No module named pytest），semgrep 则直接报 No virtual environment
+    found；改用 `uv pip install --python <venv>/bin/python` 显式指定
+    + 安装后 import 验证（shell executor 工作区跨 job 持久，坏 venv
+    残留会让 uv 误判已安装而跳过，验证失败自动重建重装）；
+  - 测试：本地模拟验证 `--python` 显式安装与坏 venv 重建路径。
+
 - **git clean 权限受限残留导致任务重试耗尽失败（issue #91）**：
   任务 #136（daymark 仓库 issue #7）连续 3 次失败，错误均为
   `git clean 失败 (exit 1): Permission denied`——用户曾以 root 身份在

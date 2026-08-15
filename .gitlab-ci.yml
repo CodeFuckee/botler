@@ -91,7 +91,7 @@ variables:
 # 到 GitHub）。rules 按顺序求值：第一条「代码/配置白名单」优先于第二
 # 条「docs 跳过」——代码提交通常伴随 CHANGELOG.md 变更，若先判定 docs
 # 会把混合提交误判为 docs-only 跳过。其余场景（其他分支 / MR / tag /
-# schedule 等）维持原行为（when: always）。
+# schedule 等）维持原行为（when: on_success，见规则 3 注释）。
 .docs_only_skip:
   rules:
     # 1) 任何代码/配置路径有变更 → 正常执行（docs+代码混合提交也执行）
@@ -129,8 +129,13 @@ variables:
         - docs/**/*
         - LICENSE
       when: never
-    # 3) 其他分支 / MR / tag / schedule 等 → 维持原行为
-    - when: always
+    # 3) 其他分支 / MR / tag / schedule 等 → 维持原行为。
+    # ⚠️ 必须用 on_success 而非 always：when: always 会绕过 stage 失败
+    # 传播——security 阶段门禁因高危/中危漏洞失败时，build/deploy 仍会
+    # 照常执行，阻断语义形同虚设（issue #91 流水线诊断：pipeline #846
+    # 起 security 失败但 deploy 仍 success）。on_success 与 GitLab 默认
+    # 行为一致：前序 stage 失败即跳过本 job。
+    - when: on_success
 
 # --- 前端公共配置 ---
 .frontend_setup:
@@ -325,11 +330,24 @@ security:deps-python:
       echo "=== 2. 独立 venv（.venv-audit，避免与 bandit/semgrep 并发竞态）==="
       if [ ! -x .venv-audit/bin/python ]; then
         rm -rf .venv-audit
-        uv venv .venv-audit
+        uv venv .venv-audit || { echo "✗ uv venv 创建失败"; exit 1; }
       fi
+      AUDIT_PY="$PWD/.venv-audit/bin/python"
 
       echo "=== 3. 安装 pip-audit + pytest（转换脚本回归测试用）==="
-      uv pip install pip-audit pytest -i ${PIP_INDEX_URL}
+      # ⚠️ 显式 --python 指定：uv 只自动发现 VIRTUAL_ENV / .venv，
+      # 不会使用 .venv-audit 自定义名——不指定会误装进 .venv 导致
+      # 「No module named pytest」（issue #91 流水线诊断 pipeline #850）
+      uv pip install --python "$AUDIT_PY" pip-audit pytest -i ${PIP_INDEX_URL}
+      # 安装后 import 验证：shell executor 工作区跨 job 持久，坏 venv
+      # 残留会让 uv 误判「已安装」而跳过；验证失败则重建重装
+      if ! "$AUDIT_PY" -c "import pip_audit, pytest" 2>/dev/null; then
+        echo "⚠️  .venv-audit 残留损坏，重建重装"
+        rm -rf .venv-audit
+        uv venv .venv-audit || { echo "✗ uv venv 重建失败"; exit 1; }
+        uv pip install --python "$AUDIT_PY" pip-audit pytest -i ${PIP_INDEX_URL}
+        "$AUDIT_PY" -c "import pip_audit, pytest" || { echo "✗ 依赖安装失败"; exit 1; }
+      fi
 
       echo "=== 4. 转换脚本回归测试（防脚本改动破坏阻断语义）==="
       cd "$CI_PROJECT_DIR"
@@ -341,7 +359,7 @@ security:deps-python:
       for SERVICE in "--vulnerability-service pypi" "--vulnerability-service osv"; do
         echo "--- 数据源: ${SERVICE} ---"
         set +e
-        .venv-audit/bin/pip-audit -r requirements.txt $SERVICE \
+        "$AUDIT_PY" -m pip_audit -r requirements.txt $SERVICE \
           --format json --progress-spinner off -o pip-audit.json
         AUDIT_EXIT=$?
         set -e
@@ -493,9 +511,22 @@ security:semgrep:
       echo "=== 2. 独立 venv（.venv-semgrep）+ 安装 semgrep ==="
       if [ ! -x .venv-semgrep/bin/python ]; then
         rm -rf .venv-semgrep
-        uv venv .venv-semgrep
+        uv venv .venv-semgrep || { echo "✗ uv venv 创建失败"; exit 1; }
       fi
-      uv pip install semgrep -i ${PIP_INDEX_URL}
+      SEMGREP_PY="$PWD/.venv-semgrep/bin/python"
+      # ⚠️ 显式 --python 指定：uv 只自动发现 VIRTUAL_ENV / .venv，
+      # 不会使用 .venv-semgrep 自定义名——不指定会报「No virtual
+      # environment found」（issue #91 流水线诊断 pipeline #850）
+      uv pip install --python "$SEMGREP_PY" semgrep -i ${PIP_INDEX_URL}
+      # 安装后 import 验证：shell executor 工作区跨 job 持久，坏 venv
+      # 残留会让 uv 误判「已安装」而跳过；验证失败则重建重装
+      if ! "$SEMGREP_PY" -c "import semgrep" 2>/dev/null; then
+        echo "⚠️  .venv-semgrep 残留损坏，重建重装"
+        rm -rf .venv-semgrep
+        uv venv .venv-semgrep || { echo "✗ uv venv 重建失败"; exit 1; }
+        uv pip install --python "$SEMGREP_PY" semgrep -i ${PIP_INDEX_URL}
+        "$SEMGREP_PY" -c "import semgrep" || { echo "✗ semgrep 安装失败"; exit 1; }
+      fi
 
       echo "=== 3. semgrep 扫描（前后端代码，ERROR/WARNING 阻断判定）==="
       cd "$CI_PROJECT_DIR"
@@ -796,9 +827,19 @@ deploy_to_code01:
   timeout: 30m
   # 第二阶段门禁：frontend:build 成功且拿到 dist 产物后才部署
   # （dist 下载位置恰好是 FastAPI 静态托管目录 frontend/dist）
+  # ⚠️ 同时依赖全部 5 个 security job：needs 会绕过 stage 顺序与
+  # rules 的失败传播判定，若不显式列出，security 门禁失败时 deploy
+  # 仍会执行（issue #91 流水线诊断：pipeline #846 起 security 失败
+  # 但 deploy 仍 success）。security 任一 job（allow_failure: false）
+  # 失败即阻止部署——高危/中危漏洞中止流水线的核心语义。
   needs:
     - job: frontend:build
       artifacts: true
+    - job: security:bandit
+    - job: security:deps-python
+    - job: security:deps-frontend
+    - job: security:semgrep
+    - job: security:secrets
   before_script:
     - |
       set +e
