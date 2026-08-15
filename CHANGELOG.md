@@ -156,6 +156,24 @@
 
 ### Fixed
 
+- **概览页「添加 Issue」弹窗分配人下拉为空（issue #93）**：
+  现象为点击仓库卡片「添加 Issue」按钮后，分配人下拉列表为空，但
+  GitLab 平台上该仓库有三个可分配成员——排查确认并非 token 权限问题
+  （仓库内嵌 token 实测可正常拿到成员清单），而是字段兼容缺陷：后端
+  `_trim_member` 硬依赖 members/all 返回项的 `user_id` 字段，而本实例
+  GitLab 19.0.1 的 members/all 实际只返回顶层 `id`（成员关系 id，不可
+  用作 assignee_ids）与 `username`/`name`，不含 `user_id`——所有成员
+  被当作异常元素过滤，form-meta 返回空 members，前端下拉自然为空。
+  - 后端 `api/issues.py`：`_trim_member` 放宽为 user_id 缺失但 username
+    存在时保留条目（id 暂置 None）；`issue_form_meta` 对这类成员按
+    username 调 `client.get_user_id_by_username`（issue #65 已有方法）
+    查 /users 补齐真实用户 id，查不到（用户已删除等）的成员剔除——
+    下拉不出现无法分配的条目；user_id 存在的成员不发额外查询；
+  - 测试：TDD 先行（红灯复现真实 GitLab 成员返回形态），新增 3 用例
+    （无 user_id 成员按 username 补齐、查不到时剔除、有 user_id 时零
+    额外查询），并更新原有异常元素过滤用例语义；后端全量 886 通过、
+    前端全量 313 通过。
+
 - **CI security 门禁两处失效与 venv 安装目标缺陷（issue #86 收尾，
   issue #91 流水线诊断 #850 暴露）**：
   - 门禁失效：`.docs_only_skip` 规则尾条款 `when: always` 会绕过

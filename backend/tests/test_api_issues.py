@@ -56,6 +56,10 @@ class StubGitLab:
         # 可故障注入 fail_create_projects、可配置返回对象
         self.members_by_project: dict[int, list[dict]] = {}
         self.fail_member_projects: set[int] = set()
+        # issue #93：按 username 查用户 id 的桩（users_by_username 配置
+        # username→用户 id；未配置返回 None，模拟用户不存在），记录查询顺序
+        self.users_by_username: dict[str, int | None] = {}
+        self.user_id_lookups: list[str] = []
         self.create_calls: list[tuple[int, dict]] = []
         self.fail_create_projects: set[int] = set()
         self.create_result: dict | None = None
@@ -65,6 +69,12 @@ class StubGitLab:
         if project_id in self.fail_member_projects:
             raise GitLabError("模拟成员 API 故障")
         return list(self.members_by_project.get(project_id, []))
+
+    def get_user_id_by_username(self, username):
+        """按 username 查用户 id（issue #93 复现桩）：记录查询顺序，
+        未配置的用户名返回 None（模拟用户不存在）。"""
+        self.user_id_lookups.append(username)
+        return self.users_by_username.get(username)
 
     def create_issue(self, project_id, title, description=None,
                      assignee_id=None, labels=None):
@@ -750,7 +760,7 @@ class TestIssueFormMeta:
         assert resp.json() == {"members": [], "labels": []}
 
     def test_invalid_member_entries_filtered(self, client):
-        """边界：成员元素非对象/缺 user_id 时被过滤，不 500。"""
+        """边界：成员元素非对象/缺 user_id 且 username 查不到时被过滤，不 500。"""
         tc, stub, db, tmp_path = client
         _add_repo(db, project_id=42, name="a")
         stub.members_by_project = {42: [
@@ -763,6 +773,65 @@ class TestIssueFormMeta:
         assert resp.status_code == 200
         assert resp.json()["members"] == [
             {"id": 20, "username": "agent", "name": "Agent"}]
+
+    # ---- issue #93：members/all 返回项无 user_id 字段（GitLab 19 实测
+    # 行为），成员按 username 查 /users 补齐用户 id，下拉不再为空 ----
+
+    def test_members_without_user_id_resolved_by_username(self, client):
+        """复现 issue #93：成员对象只有顶层 id（成员关系 id）与 username，
+        无 user_id——按 username 查 /users 补齐真实用户 id。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 1, "username": "chenkaidi", "name": "chenkaidi",
+             "access_level": 50},
+            {"id": 3, "username": "agent", "name": "agent",
+             "access_level": 40},
+        ]}
+        stub.users_by_username = {"chenkaidi": 1, "agent": 3}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == [
+            {"id": 1, "username": "chenkaidi", "name": "chenkaidi"},
+            {"id": 3, "username": "agent", "name": "agent"},
+        ]
+        assert stub.user_id_lookups == ["chenkaidi", "agent"]
+
+    def test_members_without_user_id_unresolvable_filtered(self, client):
+        """边界：username 查不到（用户已删除）的成员剔除，不 500、不影响其余。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 9, "username": "ghost", "name": "Ghost"},
+            {"id": 3, "username": "agent", "name": "agent"},
+        ]}
+        stub.users_by_username = {"agent": 3}  # ghost 未配置 → None
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == [
+            {"id": 3, "username": "agent", "name": "agent"}]
+
+    def test_members_with_user_id_skip_username_lookup(self, client):
+        """user_id 存在的成员不发起 /users 查询（避免无谓的 N+1 请求）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 113, "user_id": 20, "username": "agent", "name": "Agent"},
+            {"id": 114, "user_id": 21, "username": "dev", "name": "Dev"},
+        ]}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == [
+            {"id": 20, "username": "agent", "name": "Agent"},
+            {"id": 21, "username": "dev", "name": "Dev"},
+        ]
+        assert stub.user_id_lookups == []
 
     def test_uses_per_repo_client(self, client, monkeypatch):
         """per-repo client 优先（与 issue 查询一致，issue #60 模式）。"""

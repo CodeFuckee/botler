@@ -211,13 +211,20 @@ def _trim_member(member: dict) -> dict | None:
     """精简成员对象：只留 id/username/name。
 
     id 取 user_id（创建 issue 的 assignee_ids 需要 GitLab 用户 id，
-    而 members/all 顶层 id 是成员关系 id）；user_id 缺失的异常元素
-    返回 None（调用方过滤）。
+    而 members/all 顶层 id 是成员关系 id）；user_id 缺失但有 username
+    时 id 暂为 None，由调用方按 username 查 /users 补齐（issue #93：
+    GitLab 19 实测 members/all 返回项不含 user_id 字段，仅顶层 id 与
+    username/name）。既无 user_id 也无 username 的异常元素返回 None
+    （调用方过滤）。
     """
-    if not isinstance(member, dict) or member.get("user_id") is None:
+    if not isinstance(member, dict):
         return None
-    return {"id": member.get("user_id"),
-            "username": member.get("username"),
+    user_id = member.get("user_id")
+    username = (member.get("username")
+                if isinstance(member.get("username"), str) else None)
+    if user_id is None and username is None:
+        return None
+    return {"id": user_id, "username": username,
             "name": member.get("name")}
 
 
@@ -254,12 +261,23 @@ def issue_form_meta(request: Request, repo_id: int):
     try:
         members = client.list_project_members(row["gitlab_project_id"])
         labels = client.list_project_labels(row["gitlab_project_id"])
+        # issue #93：members/all 返回项可能不含 user_id（GitLab 19 实测），
+        # 按 username 查 /users 补齐真实用户 id；查不到（用户已删除等）
+        # 的成员剔除——分配人下拉不能出现无法分配的条目
+        member_entries = []
+        for m in (_trim_member(x) for x in members or []):
+            if m is None:
+                continue
+            if m["id"] is None:
+                m["id"] = client.get_user_id_by_username(m["username"])
+                if m["id"] is None:
+                    continue
+            member_entries.append(m)
     except GitLabError as e:
         raise HTTPException(502, f"获取仓库成员/标签失败: {e}") from e
     except httpx.HTTPError as e:
         # per-repo client 可能指向不可达 host（remote url 解析出的地址）
         raise HTTPException(502, f"获取仓库成员/标签网络错误: {str(e)[:200]}") from e
-    member_entries = [m for m in (_trim_member(x) for x in members or []) if m]
     return {"members": member_entries, "labels": _form_meta_labels(labels or [])}
 
 
