@@ -95,6 +95,11 @@ variables:
 .docs_only_skip:
   rules:
     # 1) 任何代码/配置路径有变更 → 正常执行（docs+代码混合提交也执行）
+    # ⚠️ when 必须用 on_success 而非 always：always 会绕过 stage 失败
+    # 传播与 needs 失败传播——security 门禁因高危/中危漏洞失败时，
+    # build/deploy 仍照常执行（流水线 #852 实测：deps-python failed
+    # 但 deploy 仍 success）。on_success 与 GitLab 默认行为一致：
+    # 前序 job 失败即跳过本 job，保证门禁真正阻断后续 stage。
     - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
       changes:
         - backend/**/*
@@ -121,7 +126,7 @@ variables:
         - "**/*.yml"
         - "**/*.toml"
         - "**/*.sh"
-      when: always
+      when: on_success
     # 2) 仅文档变更 → 跳过（不启动构建/测试/部署）
     - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
       changes:
@@ -370,8 +375,10 @@ security:deps-python:
         fi
         # || 捕获转换脚本退出码：exit 2（服务不可用）在 set -e 下会
         # 直接终止整个 job，重试循环永不执行（issue #91 流水线诊断）
+        # 用解释器前缀调用（不依赖文件 x 位，流水线 #852 曾因
+        # Permission denied 失败）
         CONVERT_EXIT=0
-        "$CI_PROJECT_DIR/ci/convert-audit-to-gitlab.py" pip \
+        "$AUDIT_PY" "$CI_PROJECT_DIR/ci/convert-audit-to-gitlab.py" pip \
           pip-audit.json deps-python-report.json || CONVERT_EXIT=$?
         [ "$CONVERT_EXIT" -ne 2 ] && break
       done
