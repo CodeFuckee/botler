@@ -240,10 +240,12 @@ SSO 登录」卡片填写 Well-known URL / Application ID / Secret 并启用后�
   由 compose 挂载持久化）
 - 风险认知：main 不保护 + bot 直接推，单点失误可能破坏 main；
   缓解：同仓库串行、干净工作区、模版强调「自测通过才推」。个人自用可接受，如需保护请对 main 加 push 保护。
-- CI 中 `security:bandit` job 每次流水线对后端代码做安全静态扫描
-  （中/高危漏洞阻断部署），结果以 SARIF 报告上传 GitLab，可在
-  `安全 → 漏洞报告` 页面可视化查看，详见
-  [`docs/bandit-扫描结果查看指南.md`](docs/bandit-扫描结果查看指南.md)。
+- CI 的 security 阶段（issue #86）用 5 种免费开源工具做静态代码分析
+  （高危/中危漏洞阻断部署）：bandit（后端代码 SAST）、pip-audit
+  （后端依赖 CVE）、npm audit（前端依赖 CVE）、semgrep（前后端代码
+  SAST）、gitleaks（密钥泄露检测），结果上传 GitLab Security 页面，
+  查看方式与误报豁免详见
+  [`docs/静态分析扫描结果查看指南.md`](docs/静态分析扫描结果查看指南.md)。
 
 ## License
 

@@ -5,6 +5,10 @@
 __pycache__/
 *.py[cod]
 backend/.venv/
+# CI 安全扫描专用 venv（security:deps-python / security:semgrep 各自独立，
+# 避免并发写同一 venv 竞态；issue #86）
+backend/.venv-audit/
+backend/.venv-semgrep/
 backend/botler.db*
 backend/config.yaml
 backend/.env

@@ -1,0 +1,46 @@
+# ================================================================
+# Botler gitleaks 配置（issue #86）
+#
+# 由 CI 的 security:secrets job 使用（gitleaks detect --no-git
+# --config ci/gitleaks.toml），扫描工作区中的硬编码密钥/凭据。
+#
+# rules 未定义 → 使用 gitleaks 内置默认规则集（AWS 密钥、GitHub
+# token、GitLab PAT、私钥、通用 API key 等 100+ 条）。
+#
+# allowlist.paths 排除运行时数据目录：data/（真实凭据 .env /
+# config.yaml，gitignore 排除不入库）、部署时生成的 workspace、
+# 依赖与构建产物等。这些目录在 shell executor 持久工作区中存在
+# （GIT_CLEAN_FLAGS: none），但属于运行时数据而非入库代码。
+#
+# allowlist.regexes 豁免测试 fixture 中的示例凭据（显式声明，
+# 避免假 token 阻断流水线；新示例凭据应在此登记）。
+# ================================================================
+
+title = "Botler gitleaks config（CI security:secrets）"
+
+[allowlist]
+  paths = [
+    # 运行时数据目录（data/ 含真实凭据，gitignore 排除不入库）
+    '''^data/''',
+    # 部署运行时目录/文件（部署时生成，gitignore 排除）
+    '''^backend/workspace/''',
+    '''^backend/logs/''',
+    '''^backend/\.env$''',
+    '''^backend/botler\.db''',
+    # 依赖与构建产物
+    '''^frontend/node_modules/''',
+    '''^frontend/dist/''',
+    '''^backend/\.venv/''',
+    '''^backend/\.venv[^/]*/''',
+    # Python 缓存
+    '''__pycache__/''',
+    '''\.pyc$''',
+    '''^\.pytest_cache/''',
+    # uv 依赖缓存
+    '''^backend/\.uv-cache/''',
+  ]
+  regexes = [
+    # 测试 fixture 示例凭据（backend/tests/test_owner_token.py，
+    # 形如 glpat-owner-1234567890 的编造值，非真实密钥）
+    '''glpat-owner-1234567890''',
+  ]

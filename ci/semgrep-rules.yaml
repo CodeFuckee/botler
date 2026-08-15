@@ -1,0 +1,245 @@
+# ================================================================
+# Botler 静态代码分析规则集（Semgrep 社区版，issue #86）
+#
+# 由 CI 的 security:semgrep job 使用（--config 指向本文件），
+# 规则内置仓库、不依赖外网规则下载（内网 CI 网络稳定优先）。
+# 覆盖前端 (JS/TS/JSX) 与后端 (Python) 的高频安全模式。
+#
+# severity 与流水线阻断的关系：
+#   ERROR   高危 —— 阻断流水线
+#   WARNING 中危 —— 阻断流水线
+#   INFO    低危 —— 仅记录进报告，不阻断
+# 与 bandit --severity-level medium（中危及以上阻断）语义一致。
+#
+# 误报豁免：
+#   - 行内注释 # nosemgrep: <rule-id>（Python/JS 通用）
+#   - CI 中 --exclude 排除的目录（见 .gitlab-ci.yml）
+# ================================================================
+rules:
+  # ----------------------------------------------------------
+  # 前端（JavaScript / TypeScript）
+  # ----------------------------------------------------------
+
+  # 高危：eval / new Function 动态执行 —— 任意代码执行
+  - id: js-eval-function
+    severity: ERROR
+    languages: [javascript, typescript]
+    message: |
+      禁止使用 eval() / new Function() 动态执行代码，可能引入任意
+      代码执行漏洞（CWE-95）。确需动态执行请改用安全替代方案。
+    metadata:
+      category: security
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: new Function(...)
+
+  # 高危：dangerouslySetInnerHTML —— React 显式 XSS 入口
+  # 用 JS 解析器匹配 identifier（不扫注释）：JSX 属性名本身即命中；
+  # 嵌套对象字面量写法（{{__html: ...}}）解析器无法解析，但属性名
+  # identifier 的匹配已覆盖该场景。
+  - id: js-dangerously-set-inner-html
+    severity: ERROR
+    languages: [javascript, typescript]
+    message: |
+      dangerouslySetInnerHTML 绕过 React 转义直接注入 HTML，是 XSS
+      入口（CWE-79）。除非内容经服务端严格白名单净化，否则禁止使用。
+    metadata:
+      category: security
+      cwe: "CWE-79: Improper Neutralization of Input During Web Page Generation"
+    patterns:
+      - pattern: dangerouslySetInnerHTML
+
+  # 中危：DOM 写入（document.write / innerHTML 赋值）—— DOM XSS
+  - id: js-unsafe-dom-write
+    severity: WARNING
+    languages: [javascript, typescript]
+    message: |
+      使用 document.write() 或直接给 innerHTML 赋值存在 DOM XSS 风险
+      （CWE-79）。改用 textContent / createElement 等安全 API。
+    metadata:
+      category: security
+      cwe: "CWE-79: Improper Neutralization of Input During Web Page Generation"
+    patterns:
+      - pattern-either:
+          - pattern: document.write(...)
+          - pattern: $OBJ.innerHTML = $HTML
+          - pattern: $OBJ.outerHTML = $HTML
+
+  # 中危：硬编码密钥（密码/token/API key 等敏感变量赋值长字符串）
+  # 占位符（example/placeholder/your-xxx 等）与测试值已排除
+  - id: js-hardcoded-secret
+    severity: WARNING
+    languages: [javascript, typescript]
+    message: |
+      疑似硬编码密钥：敏感变量名（password/token/secret/api_key 等）
+      被赋值为长字符串字面量（CWE-798）。密钥应通过环境变量或密钥
+      管理服务注入，严禁入库。误报请行内注释 # nosemgrep。
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+    patterns:
+      - pattern-either:
+          - pattern: const $NAME = "$VALUE"
+          - pattern: $NAME = "$VALUE"
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)(password|passwd|secret|token|api[_]?key|access[_]?key|private[_]?key)
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: (?i)^(?![^"]*(example|placeholder|your[_-]|changeme|xxx|dummy|test[_-]))[a-z0-9_\-+/=]{16,}$
+
+  # 中危：window.location / window.open 动态 URL —— 开放重定向/注入
+  - id: js-location-injection
+    severity: WARNING
+    languages: [javascript, typescript]
+    message: |
+      将用户可控输入（location.hash/search/params 等）拼入跳转地址
+      存在开放重定向与注入风险（CWE-601）。跳转目标应使用白名单。
+    metadata:
+      category: security
+      cwe: "CWE-601: URL Redirection to Untrusted Site"
+    patterns:
+      - pattern-either:
+          - pattern: window.location = location.$PART
+          - pattern: window.location.href = location.$PART
+          - pattern: window.open(location.$PART)
+          - pattern: location.href = location.$PART
+
+  # 低危（记录不阻断）：明文 http:// 字面量
+  - id: js-http-plaintext-url
+    severity: INFO
+    languages: [javascript, typescript]
+    message: |
+      代码中出现明文 http:// 地址字面量，生产环境应使用 HTTPS。
+    metadata:
+      category: security
+      cwe: "CWE-319: Cleartext Transmission of Sensitive Information"
+    pattern-regex: '["'']http://[^"'']+'
+
+  # ----------------------------------------------------------
+  # 后端（Python）
+  # ----------------------------------------------------------
+
+  # 高危：subprocess shell=True —— 命令注入
+  - id: py-subprocess-shell-true
+    severity: ERROR
+    languages: [python]
+    message: |
+      subprocess 使用 shell=True 存在命令注入风险（CWE-78）。
+      改用参数列表形式（shell=False）并避免拼接用户输入。
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$FUNC($CMD, shell=True)
+          - pattern: subprocess.$FUNC($CMD, shell = True)
+
+  # 高危：eval / exec 动态执行
+  - id: py-eval-exec
+    severity: ERROR
+    languages: [python]
+    message: |
+      禁止对非受控输入使用 eval() / exec()，可能导致任意代码执行
+      （CWE-95）。
+    metadata:
+      category: security
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+    patterns:
+      - pattern-either:
+          - pattern: eval($DATA)
+          - pattern: exec($DATA)
+
+  # 高危：pickle 反序列化不可信数据 —— 任意代码执行
+  - id: py-pickle-loads
+    severity: ERROR
+    languages: [python]
+    message: |
+      pickle 反序列化不可信数据可导致任意代码执行（CWE-502）。
+      跨信任边界的数据应使用 JSON 等安全格式。
+    metadata:
+      category: security
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+    patterns:
+      - pattern-either:
+          - pattern: pickle.load($FILE)
+          - pattern: pickle.loads($DATA)
+
+  # 中危：os.system 字符串拼接 —— 命令注入
+  - id: py-os-system
+    severity: WARNING
+    languages: [python]
+    message: |
+      os.system 直接执行 shell 字符串，存在命令注入风险（CWE-78）。
+      改用 subprocess 参数列表形式。
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+    patterns:
+      - pattern: os.system($CMD)
+
+  # 中危：弱哈希算法（md5/sha1）
+  - id: py-weak-hash
+    severity: WARNING
+    languages: [python]
+    message: |
+      使用 md5/sha1 等已破解的弱哈希算法（CWE-328）。安全场景
+      （密码存储、签名）应改用 sha256 及以上。
+    metadata:
+      category: security
+      cwe: "CWE-328: Use of Weak Hash"
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+
+  # 中危：yaml.load 未指定安全 Loader —— 任意对象反序列化
+  - id: py-unsafe-yaml-load
+    severity: WARNING
+    languages: [python]
+    message: |
+      yaml.load 未使用 SafeLoader 可被恶意 YAML 构造任意对象
+      （CWE-502）。改用 yaml.safe_load 或显式 Loader=yaml.SafeLoader。
+    metadata:
+      category: security
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+    patterns:
+      - pattern-either:
+          - pattern: yaml.load($DATA)
+          - pattern: yaml.load($DATA, Loader=$LOADER)
+      - pattern-not: yaml.load($DATA, Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load($DATA, Loader = yaml.SafeLoader)
+
+  # 中危：硬编码密钥（敏感变量名 + 长字符串字面量）
+  - id: py-hardcoded-secret
+    severity: WARNING
+    languages: [python]
+    message: |
+      疑似硬编码密钥：敏感变量名（password/token/secret/api_key 等）
+      被赋值为长字符串字面量（CWE-798）。密钥应通过环境变量注入，
+      严禁入库。误报请行内注释 # nosemgrep。
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+    patterns:
+      - pattern-either:
+          - pattern: $NAME = "$VALUE"
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)(password|passwd|secret|token|api[_]?key|access[_]?key|private[_]?key)
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: (?i)^(?![^"]*(example|placeholder|your[_-]|changeme|xxx|dummy|test[_-]))[a-z0-9_\-+/=]{16,}$
+
+  # 低危（记录不阻断）：明文 http:// 字面量
+  - id: py-http-plaintext-url
+    severity: INFO
+    languages: [python]
+    message: |
+      代码中出现明文 http:// 地址字面量，生产环境应使用 HTTPS。
+    metadata:
+      category: security
+      cwe: "CWE-319: Cleartext Transmission of Sensitive Information"
+    pattern-regex: '["'']http://[^"'']+'

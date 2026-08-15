@@ -7,15 +7,30 @@
 #
 # Stage 拓扑（依赖关系）：
 #
-#   security ──► build（并行）────────────► deploy ──► sync
-#   ┌──────────────┐   ┌──────────────────────┐
-#   │ bandit 安全    │   │ frontend:build ────────────► deploy_to_code01
-#   │ 扫描（阻断门禁）│   │   (React/Vite 构建)   │      (pm2 本机部署 + 健康检查)
-#   └──────────────┘   └──────────────────────┘
+#   security（5 job 并行）──► build（并行）──────► deploy ──► sync
+#   ┌──────────────────────┐   ┌──────────────────────┐
+#   │ bandit     后端代码SAST│   │ frontend:build ────────────► deploy_to_code01
+#   │ deps-python 后端依赖CVE│   │   (React/Vite 构建)   │      (pm2 本机部署 + 健康检查)
+#   │ deps-frontend 前端依赖│   └──────────────────────┘
+#   │ semgrep    前后端SAST │
+#   │ secrets    密钥泄露检测│
+#   └──────────────────────┘
 #
 # 说明：
-#   - 第零阶段 security：security:bandit 用 bandit 静态扫描后端生产代码，
-#     存在高危/中危漏洞时 job 失败，阻断后续所有 stage（issue #58）
+#   - 第零阶段 security：五种免费开源工具并行做静态代码分析
+#     （issue #86「增加静态代码分析，高危/中危漏洞中止流水线」），
+#     任一 job 失败即阻断后续所有 stage：
+#       * security:bandit        bandit 后端代码 SAST，中危及以上阻断
+#                               （issue #58，SARIF 报告）
+#       * security:deps-python   pip-audit 后端依赖已知 CVE 扫描，
+#                               保守阻断（PIP_AUDIT_IGNORE 可豁免）
+#       * security:deps-frontend npm audit 前端依赖 CVE 扫描，
+#                               moderate 及以上阻断
+#       * security:semgrep       semgrep 前后端代码 SAST（内置规则
+#                               文件 ci/semgrep-rules.yaml），ERROR/
+#                               WARNING（高危/中危）阻断
+#       * security:secrets       gitleaks 全仓库密钥泄露检测，
+#                               任何发现即阻断（ci/gitleaks.toml 豁免）
 #   - 第一阶段 build：frontend:build（npm 构建前端，产出 dist 产物）与
 #     backend:test（uv 安装依赖 + pytest/语法检查）并行执行
 #   - 第二阶段 deploy：必须等 frontend:build 成功且拿到 dist 产物后才
@@ -86,6 +101,7 @@ variables:
         - frontend/**/*
         - deploy/**/*
         - scripts/**/*
+        - ci/**/*
         - data/**/*
         - .github/**/*
         - Dockerfile
@@ -258,6 +274,372 @@ security:bandit:
       DURATION=$((JOB_END_TIME - JOB_START_TIME))
       echo "========================================="
       echo "⏱️  [security:bandit] 总用时: ${DURATION} 秒"
+      echo "========================================="
+
+# ----------------------------------------------------------
+# --- 后端：pip-audit 依赖已知漏洞扫描（issue #86）---
+# 扫描 backend/requirements.txt 声明的 Python 依赖，与 PyPA 官方
+# 漏洞数据库（PyPI JSON API / OSV）比对，发现已知 CVE 即阻断。
+# pip-audit 输出不含 severity 字段（数据源不提供），任何已公开
+# 漏洞保守按中危处理阻断（避免「无法定级」变成「静默放行」）；
+# 可人工评估后用 CI 变量 PIP_AUDIT_IGNORE 豁免（逗号分隔漏洞 ID，
+# 如 PYSEC-2024-38,GHSA-xxxx），见 ci/convert-audit-to-gitlab.py。
+# 报告经 ci/convert-audit-to-gitlab.py 转为 GitLab 依赖扫描报告
+# 格式，artifacts:reports:dependency_scanning 上传 Security 页面。
+# 使用独立 venv（.venv-audit）——security 阶段多个 job 并行，
+# 复用同一 .venv 并发安装会产生竞态。
+# 审计服务不可用时（转换脚本 exit 2）自动切换备用数据源重试，
+# 仍失败按基础设施故障处理（警告放行，不阻断流水线）。
+# ----------------------------------------------------------
+security:deps-python:
+  extends: [.backend_setup, .docs_only_skip]
+  stage: security
+  tags:
+    - linux
+    - code01
+  timeout: 15m
+  allow_failure: false
+  # 依赖扫描报告产物：GitLab Security 页面「依赖扫描」可视化
+  # 报告生成于 backend/（.backend_setup 会 cd backend），
+  # artifacts 路径相对 $CI_PROJECT_DIR 根目录
+  artifacts:
+    # when: always —— 阻断失败时报告同样上传，页面可见被阻断的漏洞
+    when: always
+    paths:
+      - backend/deps-python-report.json
+    reports:
+      dependency_scanning: backend/deps-python-report.json
+    expire_in: 1 week
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      echo "=== 1. 确保 uv 可用 ==="
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+      echo "=== 2. 独立 venv（.venv-audit，避免与 bandit/semgrep 并发竞态）==="
+      if [ ! -x .venv-audit/bin/python ]; then
+        rm -rf .venv-audit
+        uv venv .venv-audit
+      fi
+
+      echo "=== 3. 安装 pip-audit + pytest（转换脚本回归测试用）==="
+      uv pip install pip-audit pytest -i ${PIP_INDEX_URL}
+
+      echo "=== 4. 转换脚本回归测试（防脚本改动破坏阻断语义）==="
+      cd "$CI_PROJECT_DIR"
+      .venv-audit/bin/python -m pytest ci/test_convert_audit_to_gitlab.py -q
+      cd backend
+
+      echo "=== 5. pip-audit 扫描（默认 PyPI 数据源，失败自动切 OSV）==="
+      CONVERT_EXIT=2
+      for SERVICE in "--vulnerability-service pypi" "--vulnerability-service osv"; do
+        echo "--- 数据源: ${SERVICE} ---"
+        set +e
+        .venv-audit/bin/pip-audit -r requirements.txt $SERVICE \
+          --format json --progress-spinner off -o pip-audit.json
+        AUDIT_EXIT=$?
+        set -e
+        if [ "$AUDIT_EXIT" -ne 0 ]; then
+          # pip-audit 自身失败（网络/数据源不可用），输出多半不是有效 JSON，
+          # 交由转换脚本判定为 exit 2（服务不可用）后切换数据源
+          echo "⚠️  pip-audit 退出码 ${AUDIT_EXIT}（可能数据源不可用）"
+        fi
+        "$CI_PROJECT_DIR/ci/convert-audit-to-gitlab.py" pip \
+          pip-audit.json deps-python-report.json
+        CONVERT_EXIT=$?
+        [ "$CONVERT_EXIT" -ne 2 ] && break
+      done
+
+      if [ "$CONVERT_EXIT" -eq 2 ]; then
+        echo "⚠️  两个数据源均不可用（基础设施故障），本次放行不阻断"
+        echo "    （漏洞门禁仅在有审计数据时生效；人工可稍后手动重跑本 job）"
+        CONVERT_EXIT=0
+      fi
+      exit $CONVERT_EXIT
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [security:deps-python] 总用时: ${DURATION} 秒"
+      echo "========================================="
+
+# ----------------------------------------------------------
+# --- 前端：npm audit 依赖已知漏洞扫描（issue #86）---
+# 扫描 frontend/package-lock.json 锁定的 npm 依赖，与 npm 官方
+# 漏洞公告库（npmmirror 代理）比对。npm audit 输出自带 severity
+# （info/low/moderate/high/critical），moderate（中危）及以上阻断，
+# 低危/Info 仅记录进报告。报告经 ci/convert-audit-to-gitlab.py
+# 转为 GitLab 依赖扫描报告，Security 页面可视化。
+# audit 端点不可用时（转换脚本 exit 2）切官方 registry 重试，
+# 仍失败按基础设施故障处理（警告放行，不阻断流水线）。
+# ----------------------------------------------------------
+security:deps-frontend:
+  extends: [.frontend_setup, .docs_only_skip]
+  stage: security
+  tags:
+    - linux
+    - code01
+  timeout: 20m
+  allow_failure: false
+  # node_modules 缓存（与 frontend:build 共享 key：基于
+  # package-lock.json 哈希，依赖不变则跨 job 命中）
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+      prefix: frontend-npm
+    paths:
+      - frontend/node_modules/
+    policy: pull-push
+  artifacts:
+    when: always
+    paths:
+      - frontend/deps-frontend-report.json
+    reports:
+      dependency_scanning: frontend/deps-frontend-report.json
+    expire_in: 1 week
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+      # .frontend_setup 已 cd frontend
+
+      echo "=== 1. 安装依赖（npm ci，锁文件为准）==="
+      npm ci --registry=${NPM_REGISTRY_URL}
+
+      echo "=== 2. npm audit 扫描（npmmirror 审计端点）==="
+      CONVERT_EXIT=2
+      for REGISTRY in "${NPM_REGISTRY_URL}" "https://registry.npmjs.org"; do
+        echo "--- audit registry: ${REGISTRY} ---"
+        set +e
+        # npm audit 发现漏洞时退出码非 0 但 JSON 正常输出，忽略其退出码
+        npm audit --json --registry=${REGISTRY} > npm-audit.json 2>npm-audit.err || true
+        set -e
+        python3 "$CI_PROJECT_DIR/ci/convert-audit-to-gitlab.py" npm \
+          npm-audit.json deps-frontend-report.json
+        CONVERT_EXIT=$?
+        [ "$CONVERT_EXIT" -ne 2 ] && break
+        if [ "$REGISTRY" = "${NPM_REGISTRY_URL}" ]; then
+          # npmmirror 审计端点不可用，清代理直连官方 registry 重试
+          unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+        fi
+      done
+
+      if [ "$CONVERT_EXIT" -eq 2 ]; then
+        echo "⚠️  audit 端点均不可用（基础设施故障），本次放行不阻断"
+        echo "    （漏洞门禁仅在有审计数据时生效；人工可稍后手动重跑本 job）"
+        CONVERT_EXIT=0
+      fi
+      exit $CONVERT_EXIT
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [security:deps-frontend] 总用时: ${DURATION} 秒"
+      echo "========================================="
+
+# ----------------------------------------------------------
+# --- 前后端：semgrep 多语言代码静态分析（issue #86）---
+# 与 bandit（Python 专用）互补，同一规则集一次扫描前后端代码
+# （Python + JS/TS）。规则文件内置仓库（ci/semgrep-rules.yaml），
+# 不依赖外网规则下载（内网 CI 网络稳定优先）。ERROR/WARNING
+# （高危/中危）规则命中即阻断，INFO 仅记录。
+# 使用独立 venv（.venv-semgrep）避免与 bandit/deps-python 并发
+# 安装竞态。扫描跑两遍：--json 用于阻断判定与规则健康检查
+# （errors 非空说明规则文件解析失败，必须 fail 防假绿），
+# --sarif 用于 GitLab SAST 报告上传。
+# ----------------------------------------------------------
+security:semgrep:
+  extends: [.backend_setup, .docs_only_skip]
+  stage: security
+  tags:
+    - linux
+    - code01
+  timeout: 20m
+  allow_failure: false
+  artifacts:
+    when: always
+    paths:
+      - backend/semgrep-report.sarif
+    reports:
+      sast: backend/semgrep-report.sarif
+    expire_in: 1 week
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      # semgrep 关闭遥测与版本检查（内网 CI 无外网依赖）
+      export SEMGREP_SEND_METRICS=off
+      export SEMGREP_ENABLE_VERSION_CHECK=0
+
+      echo "=== 1. 确保 uv 可用 ==="
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+      echo "=== 2. 独立 venv（.venv-semgrep）+ 安装 semgrep ==="
+      if [ ! -x .venv-semgrep/bin/python ]; then
+        rm -rf .venv-semgrep
+        uv venv .venv-semgrep
+      fi
+      uv pip install semgrep -i ${PIP_INDEX_URL}
+
+      echo "=== 3. semgrep 扫描（前后端代码，ERROR/WARNING 阻断判定）==="
+      cd "$CI_PROJECT_DIR"
+      set +e
+      .venv-semgrep/bin/semgrep scan \
+        --config ci/semgrep-rules.yaml \
+        --severity ERROR --severity WARNING \
+        --error \
+        --json -o semgrep-result.json \
+        backend/botler backend/hermes_runner.py \
+        frontend/src frontend/scripts frontend/vite.config.js 2>semgrep-scan.log
+      SEMGREP_EXIT=$?
+      set -e
+
+      echo "=== 4. 规则健康检查 + 摘要输出（防规则解析失败假绿）==="
+      .venv-semgrep/bin/python - <<'PYEOF'
+      import json
+      with open('semgrep-result.json', encoding='utf-8') as f:
+          res = json.load(f)
+      errors = res.get('errors', [])
+      if errors:
+          print(f"✗ semgrep 规则文件解析失败 {len(errors)} 处，必须修复（防假绿）：")
+          for e in errors:
+              print("  " + (e.get('message') or '')[:200])
+          raise SystemExit(1)
+      hits = res.get('results', [])
+      if not hits:
+          print("未发现高危/中危问题")
+      else:
+          sev_count = {}
+          for h in hits:
+              sev = (h.get('extra') or {}).get('severity', '?')
+              sev_count[sev] = sev_count.get(sev, 0) + 1
+          print(f"发现 {len(hits)} 个问题（按严重级别统计：{sev_count}）")
+          for h in hits:
+              print(f"  [{h.get('extra', {}).get('severity')}] {h['check_id']} "
+                    f"{h['path']}:{h['start']['line']}")
+      PYEOF
+
+      echo "=== 5. 生成 SARIF 报告（GitLab Security 页面可视化）==="
+      .venv-semgrep/bin/semgrep scan \
+        --config ci/semgrep-rules.yaml \
+        --severity ERROR --severity WARNING \
+        --sarif -o semgrep-report.sarif \
+        backend/botler backend/hermes_runner.py \
+        frontend/src frontend/scripts frontend/vite.config.js 2>/dev/null || true
+
+      echo "=== 6. 阻断判定（semgrep 自身退出码）==="
+      exit $SEMGREP_EXIT
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [security:semgrep] 总用时: ${DURATION} 秒"
+      echo "========================================="
+
+# ----------------------------------------------------------
+# --- 全仓库：gitleaks 密钥泄露检测（issue #86）---
+# 扫描工作区全部文件中的硬编码密钥/凭据（GitLab PAT、GitHub
+# token、AWS 密钥、私钥等 100+ 条内置规则），任何发现即阻断。
+# 扫描范围排除运行时数据目录（data/ 含真实凭据、workspace、
+# node_modules、构建产物等），配置见 ci/gitleaks.toml。
+# 二进制优先复用 runner 持久目录（$HOME/.local/bin/gitleaks，
+# 已人工预置），缺失时自动下载（GitHub release 直连，网络异常
+# 时警告放行并提示人工预置——密钥门禁依赖二进制可用）。
+# SARIF 报告上传 GitLab SAST（与 bandit/semgrep 同渠道）。
+# ----------------------------------------------------------
+security:secrets:
+  extends: .docs_only_skip
+  stage: security
+  tags:
+    - linux
+    - code01
+  timeout: 10m
+  allow_failure: false
+  artifacts:
+    when: always
+    paths:
+      - gitleaks-report.sarif
+    reports:
+      sast: gitleaks-report.sarif
+    expire_in: 1 week
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      echo "=== 1. 确保 gitleaks 可用（复用持久目录，缺失时下载）==="
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+      if command -v gitleaks >/dev/null 2>&1; then
+        echo "gitleaks: $(gitleaks version)（复用已安装二进制）"
+      else
+        echo "gitleaks 未安装，从 GitHub release 下载（v8.24.3）..."
+        unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+        mkdir -p "$HOME/.local/bin"
+        curl -sL --connect-timeout 15 --max-time 300 \
+          -o /tmp/gitleaks.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz" \
+          && tar xzf /tmp/gitleaks.tgz -C "$HOME/.local/bin" gitleaks \
+          && chmod +x "$HOME/.local/bin/gitleaks" \
+          && echo "✓ gitleaks $(gitleaks version) 已安装到 $HOME/.local/bin"
+        if ! command -v gitleaks >/dev/null 2>&1; then
+          echo "⚠️  gitleaks 下载失败（网络异常），本次放行不阻断"
+          echo "    人工预置方法：下载 gitleaks 二进制放到 runner 用户"
+          echo "    $HOME/.local/bin/ 后重跑本 job（密钥门禁依赖二进制可用）"
+          exit 0
+        fi
+      fi
+
+      echo "=== 2. gitleaks 扫描工作区（--no-git：不扫历史，配置见 ci/gitleaks.toml）==="
+      set +e
+      gitleaks detect --no-git --source . \
+        --config ci/gitleaks.toml \
+        --report-path gitleaks-report.sarif \
+        --report-format sarif \
+        --redact 2>gitleaks-scan.log
+      GITLEAKS_EXIT=$?
+      set -e
+
+      echo "=== 3. 输出扫描摘要（SARIF → 日志）==="
+      python3 - <<'PYEOF'
+      import json
+      with open('gitleaks-report.sarif', encoding='utf-8') as f:
+          sarif = json.load(f)
+      results = sarif.get('runs', [{}])[0].get('results', [])
+      if not results:
+          print("未发现密钥泄露")
+      else:
+          print(f"发现 {len(results)} 处疑似密钥泄露：")
+          for r in results:
+              loc = r['locations'][0]['physicalLocation']
+              uri = loc['artifactLocation']['uri'].rsplit('/', 1)[-1]
+              line = loc['region'].get('startLine', '?')
+              rule = r.get('ruleId', '?')
+              print(f"  [{rule}] {uri}:{line}")
+      PYEOF
+
+      if [ "$GITLEAKS_EXIT" -ne 0 ]; then
+        echo "✗ 发现硬编码密钥/凭据，流水线阻断（详情见 GitLab Security 页面）"
+        echo "  误报处理：在 ci/gitleaks.toml 的 allowlist 中登记后重跑"
+        exit $GITLEAKS_EXIT
+      fi
+      echo "✓ 未发现密钥泄露"
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [security:secrets] 总用时: ${DURATION} 秒"
       echo "========================================="
 
 # ================================================================

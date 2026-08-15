@@ -6,6 +6,46 @@
 
 ### Added
 
+- **CI 静态代码分析矩阵：5 种免费工具、高危/中危中止流水线（issue #86）**：
+  security 阶段由单一 bandit 扩展为 5 个并行 job，覆盖前后端「代码 SAST +
+  依赖 CVE + 密钥泄露」三个维度，任一 job 发现高危/中危问题即失败阻断
+  后续所有 stage；审计服务不可用（基础设施故障）时警告放行不阻断。
+  - `security:bandit`（既有，issue #58）：后端 Python 代码 SAST，中危
+    及以上阻断（SARIF 报告），行为不变；
+  - `security:deps-python`（新增）：pip-audit 扫描 requirements.txt 依赖
+    已知 CVE（PyPI 数据源失败自动切 OSV 重试）；pip-audit 输出不含
+    severity，任何已公开漏洞保守按中危阻断，CI 变量 `PIP_AUDIT_IGNORE`
+    （逗号分隔漏洞 ID）可人工豁免；
+  - `security:deps-frontend`（新增）：npm audit 扫描 package-lock.json
+    依赖 CVE（npmmirror 审计端点不可用自动切官方 registry），moderate
+    及以上阻断，低危/Info 仅记录；`NPM_AUDIT_IGNORE`（逗号分隔包名）
+    可豁免；
+  - `security:semgrep`（新增）：semgrep 社区版一次扫描前后端代码
+    （Python + JS/TS），规则内置仓库 `ci/semgrep-rules.yaml`（12 条，
+    不依赖外网规则下载），ERROR/WARNING（高危/中危）阻断、INFO 仅
+    记录；扫描跑两遍（--json 阻断判定 + 规则健康检查防假绿、
+    --sarif 报告上传）；
+  - `security:secrets`（新增）：gitleaks 全仓库硬编码密钥检测（100+
+    内置规则），任何发现即阻断；扫描排除运行时数据目录（data/、
+    workspace、node_modules 等，配置见 `ci/gitleaks.toml`）；二进制
+    复用 runner 持久目录 `~/.local/bin/gitleaks`（已预置），缺失时
+    自动下载；
+  - 报告统一上传 GitLab Security 页面：bandit/semgrep/gitleaks 走
+    `reports:sast`（SARIF），pip-audit/npm audit 经新增
+    `ci/convert-audit-to-gitlab.py` 转为 GitLab 依赖扫描报告走
+    `reports:dependency_scanning`（JSON 15.0.0 schema），均为
+    `when: always` 上传（阻断失败时页面同样可见漏洞详情）；
+  - 依赖漏洞修复（门禁上线时暴露的既有漏洞）：react-router-dom
+    6.26.0 → 7.18.2（2 个 CVE：open redirect 与构造器注入）、
+    vite 5.4.0 → 7.3.6 + @vitejs/plugin-react 4.3.1 → 5.2.0
+    （esbuild dev server 任意请求读取，vite 高危传递依赖），
+    audit 清零、前端测试 280 通过、构建通过；
+  - 测试：`ci/test_convert_audit_to_gitlab.py` 14 用例（pip/npm 转换、
+    阻断判定、豁免机制、服务不可用 exit 2、severity 归一化边界），
+    CI 的 deps-python job 每次流水线回归执行；
+  - 文档：`docs/静态分析扫描结果查看指南.md` 汇总 5 种工具的报告
+    查看入口与误报豁免方式。
+
 - **概览页 issue 详情右边栏（issue #85）**：点击开放 issue 不再直接跳转
   GitLab，改为打开右侧抽屉展示 issue 具体信息与正文；跳转统一走抽屉
   右上角「在 GitLab 中打开」按钮（web_url 新窗口）。
