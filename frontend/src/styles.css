@@ -1072,6 +1072,42 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* issue #92：仓库卡片右上角「添加 Issue」按钮——推到卡片头最右侧 */
+.add-issue-btn {
+  margin-left: auto;
+  white-space: nowrap;
+}
+/* issue #92：添加 issue 弹窗——字段竖排（与 .repo-edit 一致），
+   标签多选横向流式排布 */
+.add-issue .edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.add-issue .edit-field .input { width: 100%; }
+.add-issue .add-issue-desc {
+  resize: vertical;
+  min-height: 100px;
+  font-family: inherit;
+}
+.label-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.label-choice {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.label-choice input[type='checkbox'] {
+  accent-color: var(--primary, #428bca);
+}
 /* issue #80：仓库卡片内按 bot 终态标签分组——组标题行 + 计数，
    空组不渲染；组标题提供分组视觉分隔 */
 .issue-group {

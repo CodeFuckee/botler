@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, STATUS_META, shortSha, fmtTime, fmtAgo, summarizeToolInput } from '../api.js'
 import IssueDrawer from '../components/IssueDrawer.jsx'
+import AddIssueModal from '../components/AddIssueModal.jsx'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
 export const LIVE_STATUSES = ['running', 'retrying']
@@ -121,6 +122,8 @@ export default function Overview() {
   const [issueError, setIssueError] = useState('')
   // 详情右边栏选中的 issue（issue #85）：{issue, repoName}，null 表示关闭
   const [selectedIssue, setSelectedIssue] = useState(null)
+  // 添加 issue 弹窗（issue #92）：打开的仓库卡片数据，null 表示关闭
+  const [addIssueRepo, setAddIssueRepo] = useState(null)
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
@@ -241,6 +244,11 @@ export default function Overview() {
                     优先级 {r.priority ?? 100}
                   </span>
                   <span className="muted">{r.issues.length} 个开放 issue</span>
+                  {/* issue #92：卡片右上角「添加 Issue」按钮——打开弹窗，
+                      提交后调用 GitLab API 在对应仓库创建 issue */}
+                  <button type="button" className="btn btn-small add-issue-btn"
+                          onClick={() => setAddIssueRepo(r)}
+                          title="在该仓库创建新 issue">＋ 添加 Issue</button>
                 </div>
                 {(r.issues || []).length === 0 ? (
                   <p className="muted">该仓库暂无开放 issue</p>
@@ -442,6 +450,16 @@ export default function Overview() {
       {selectedIssue && (
         <IssueDrawer issue={selectedIssue.issue} repoName={selectedIssue.repoName}
                      onClose={() => setSelectedIssue(null)} />
+      )}
+
+      {/* issue #92：添加 issue 弹窗——创建成功后关闭并立即刷新列表 */}
+      {addIssueRepo && (
+        <AddIssueModal repo={addIssueRepo}
+                       onClose={() => setAddIssueRepo(null)}
+                       onCreated={() => {
+                         setAddIssueRepo(null)
+                         loadIssues()
+                       }} />
       )}
     </div>
   )

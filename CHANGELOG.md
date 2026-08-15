@@ -6,6 +6,29 @@
 
 ### Added
 
+- **概览页「添加 Issue」按钮：弹窗表单直连 GitLab 创建 issue（issue #92）**：
+  开放 issue 板块每个仓库卡片右上角新增「添加 Issue」按钮，点击弹出
+  表单：标题（必填）、描述（选填）、分配人（项目成员下拉，必填，默认
+  选中 agent）、标签（仓库已有标签多选，必填，不可新建）；提交后调用
+  GitLab API 在对应仓库创建 issue，成功后关闭弹窗并立即刷新列表。
+  - 后端：`gitlab_client.py` 新增 `list_project_members`（members/all
+    含继承成员，取 user_id 作为 assignee_ids 的用户 id——members API
+    顶层 id 是成员关系 id 不可用）与 `create_issue`（标题/描述/分配人/
+    标签拼装）；`api/issues.py` 新增 `GET /api/issues/form-meta/{repo_id}`
+    （成员+标签元数据，二者为必填字段数据来源，任一查询失败 502 不降级）
+    与 `POST /api/issues`（标题/分配人/标签必填校验、空白标签元素过滤，
+    per-repo client 优先与 issue 查询一致，创建成功后清空 overview 缓存
+    保证前端刷新立即生效）；
+  - 前端：新增 `AddIssueModal.jsx`（表单交互、成员含 agent 时默认选中、
+    Esc/遮罩/× 三种关闭方式）；`Overview.jsx` 卡片头右上角按钮 + 创建
+    成功后关闭弹窗并重新拉取列表；`styles.css` 弹窗字段与标签多选样式；
+  - 测试：后端 `test_api_issues.py` 新增 19 用例（成员精简 user_id、
+    404/400/502、成员标签空列表、异常成员元素过滤、per-repo client 优先、
+    三项必填校验、描述选填、缓存失效后重新拉取）；前端
+    `overview-add-issue.test.mjs` 11 用例（按钮渲染、默认选中 agent、
+    三项必填校验不调 POST、提交成功参数/弹窗关闭/列表刷新、失败保持
+    弹窗、空标签/元数据失败/遮罩关闭边界）。
+
 - **概览页开放 Issue 按 bot 终态标签分组 + 状态徽章（issue #80）**：
   开放 issue 板块区分 bot 处理状态——每个仓库卡片内 issue 按三组分组
   展示：`bot-failed`（处理失败）/ `bot-done`（已完成待确认）/ `其他`

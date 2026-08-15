@@ -308,6 +308,38 @@ class GitLabClient:
         """
         return self._paged(f"/projects/{project_id}/labels")
 
+    def list_project_members(self, project_id: int) -> list[dict]:
+        """项目成员清单（含继承，members/all，issue #92：添加 issue 弹窗
+        的分配人下拉数据源）。
+
+        GitLab members/all 返回项包含 user_id（用户 ID，创建 issue 的
+        assignee_ids 需要该值）与 username/name/access_level；顶层 id
+        是成员关系 id，不能用于 assignee_ids。
+        """
+        return self._paged(f"/projects/{project_id}/members/all")
+
+    def create_issue(self, project_id: int, title: str,
+                     description: str | None = None,
+                     assignee_id: int | None = None,
+                     labels: list[str] | None = None) -> dict:
+        """在指定项目创建 issue（issue #92：概览页「添加 Issue」按钮）。
+
+        assignee_id 为 GitLab 用户 id（members/all 的 user_id）；labels
+        为标签名数组（GitLab API 接受逗号分隔字符串，不存在的标签会自动
+        创建——前端限定仓库已有标签多选，此处兜底拼逗号）。
+        """
+        body: dict = {"title": title}
+        if description:
+            body["description"] = description
+        if assignee_id is not None:
+            body["assignee_ids"] = [assignee_id]
+        if labels:
+            body["labels"] = ",".join(labels)
+        issue = self._request(
+            "POST", f"/projects/{project_id}/issues", json=body)
+        assert isinstance(issue, dict)
+        return issue
+
     def list_open_issues(self, project_id: int, assignee_id: int | None = None,
                          scope: str = "all", order_by: str | None = None,
                          sort: str | None = None,
