@@ -303,7 +303,8 @@ class GitLabClient:
         """项目标签清单（issue #71：概览页 issue 标签胶囊取 GitLab 标签色）。
 
         GitLab labels API 返回 [{id, name, color, text_color, description}]，
-        color/text_color 为 6 位 hex（不带 #）。标签数量通常远少于一页，
+        color/text_color 为 6 位 hex 且带 # 前缀（实测 "#6699cc"，issue
+        #100 起由 API 层归一化为无 # 透传）。标签数量通常远少于一页，
         直接用 _paged 默认分页拉全。
         """
         return self._paged(f"/projects/{project_id}/labels")

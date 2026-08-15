@@ -172,6 +172,51 @@ test('点击按钮打开弹窗：加载成员下拉与标签多选，默认选�
   }
 })
 
+test('标签胶囊显示 GitLab 标签颜色（issue #100）', async () => {
+  const { renderer, renderError } = await renderOverview()
+  try {
+    assert.equal(renderError, null)
+    await openAddIssueModal(renderer, 0)
+
+    // 后端归一化后传无 # 的 6 位 hex，前端拼 # 着色（background 背景色 +
+    // text_color 文字色，与 GitLab 标签外观一致）
+    const pills = renderer.root.findAll(
+      (n) => String(n.props.className || '').includes('label-pill'))
+    assert.equal(pills.length, 2, '应渲染两个标签胶囊')
+    assert.deepEqual(pills[0].props.style,
+      { background: '#FF0000', color: '#FFFFFF' },
+      'bug 胶囊应使用 GitLab 标签背景色与文字色')
+    assert.deepEqual(pills[1].props.style,
+      { background: '#69D100', color: '#FFFFFF' },
+      'ui 胶囊应使用 GitLab 标签背景色与文字色')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('边界：标签无颜色时胶囊无内联样式（中性降级）', async () => {
+  const { renderer, renderError } = await renderOverview({
+    formMeta: {
+      members: FORM_META.members,
+      labels: [{ name: 'bug', color: null, text_color: null }],
+    },
+  })
+  try {
+    assert.equal(renderError, null)
+    await openAddIssueModal(renderer, 0)
+
+    const pills = renderer.root.findAll(
+      (n) => String(n.props.className || '').includes('label-pill'))
+    assert.equal(pills.length, 1, '应渲染一个标签胶囊')
+    assert.equal(pills[0].props.style, undefined,
+                 '无色标签不应携带内联颜色样式（CSS 中性灰兜底）')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
 test('边界：成员不含 agent 时分配人不默认选择（提交时必填校验拦截）', async () => {
   const { renderer, renderError } = await renderOverview({
     formMeta: {

@@ -550,6 +550,55 @@ class TestIssuesOverview:
             {"name": "y", "color": "428BCA", "text_color": "333333"},
         ]
 
+    def test_label_colors_with_hash_prefix_normalized(self, client):
+        """issue #100：GitLab labels API 实际返回的颜色带 # 前缀（实测
+        {color: "#6699cc", text_color: "#FFFFFF"}），后端归一化为不带 # 的
+        6 位 hex 透传（前端内联样式自行拼 #，双重 # 会失效）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.labels_by_project = {42: [
+            {"name": "bug", "color": "#FF0000", "text_color": "#FFFFFF"},
+            {"name": "ui", "color": "#69d100", "text_color": "#FFFFFF"},
+        ]}
+        stub.issues_by_project = {42: [make_issue(1, "a", labels=["bug", "ui"])]}
+
+        resp = tc.get("/api/issues/overview")
+
+        data = resp.json()
+        labels = data["repos"][0]["issues"][0]["labels"]
+        assert labels == [
+            {"name": "bug", "color": "FF0000", "text_color": "FFFFFF"},
+            {"name": "ui", "color": "69d100", "text_color": "FFFFFF"},
+        ]
+
+    def test_label_color_invalid_hash_variants_ignored(self, client):
+        """issue #100 安全兜底扩展：# 前缀合法化后，仍拒绝畸形值
+        （# 后不足 6 位、重复 #、非 hex 字符、带空白）——防样式注入
+        的校验边界不能因兼容 # 前缀而放宽。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.labels_by_project = {42: [
+            {"name": "a", "color": "#12345", "text_color": "#FFFFFF"},
+            {"name": "b", "color": "##123456", "text_color": "#FFFFFF"},
+            {"name": "c", "color": "#GGGGGG", "text_color": "#FFFFFF"},
+            {"name": "d", "color": "#12 345", "text_color": "#FFFFFF"},
+            {"name": "e", "color": 123456, "text_color": None},
+        ]}
+        stub.issues_by_project = {42: [make_issue(1, "a",
+                                                  labels=["a", "b", "c", "d", "e"])]}
+
+        resp = tc.get("/api/issues/overview")
+
+        data = resp.json()
+        labels = data["repos"][0]["issues"][0]["labels"]
+        assert labels == [
+            {"name": "a", "color": None, "text_color": None},
+            {"name": "b", "color": None, "text_color": None},
+            {"name": "c", "color": None, "text_color": None},
+            {"name": "d", "color": None, "text_color": None},
+            {"name": "e", "color": None, "text_color": None},
+        ]
+
     def test_repo_entry_carries_priority(self, client):
         """每条仓库结果带 priority 字段供前端展示优先级徽章。"""
         tc, stub, db, tmp_path = client
@@ -856,6 +905,49 @@ class TestIssueFormMeta:
         assert data["labels"] == [
             {"name": "bug", "color": "FF0000", "text_color": "FFFFFF"},
             {"name": "ui", "color": "69D100", "text_color": "FFFFFF"},
+        ]
+
+    def test_labels_color_with_hash_prefix_normalized(self, client):
+        """issue #100：GitLab labels API 实际返回带 # 前缀的颜色
+        （#6699cc），添加 issue 弹窗的标签多选应拿到归一化后的无 # 6 位
+        hex——前端 label-pill 自行拼 #，不透传原样才能正确着色。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 1, "user_id": 20, "username": "agent", "name": "Agent"}]}
+        stub.labels_by_project = {42: [
+            {"name": "bug", "color": "#d9534f", "text_color": "#FFFFFF"},
+            {"name": "ui", "color": "#428BCA", "text_color": "#FFFFFF"},
+        ]}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["labels"] == [
+            {"name": "bug", "color": "d9534f", "text_color": "FFFFFF"},
+            {"name": "ui", "color": "428BCA", "text_color": "FFFFFF"},
+        ]
+
+    def test_labels_color_invalid_ignored(self, client):
+        """issue #100 安全兜底：标签颜色非法（含畸形 # 前缀）→ 无色降级，
+        不因兼容 # 前缀而放宽防样式注入校验。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 1, "user_id": 20, "username": "agent", "name": "Agent"}]}
+        stub.labels_by_project = {42: [
+            {"name": "ok", "color": "#6699cc", "text_color": "#FFFFFF"},
+            {"name": "bad", "color": "<script>", "text_color": "#FFFFFF"},
+            {"name": "half", "color": "#abc", "text_color": "#FFFFFF"},
+        ]}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["labels"] == [
+            {"name": "ok", "color": "6699cc", "text_color": "FFFFFF"},
+            {"name": "bad", "color": None, "text_color": None},
+            {"name": "half", "color": None, "text_color": None},
         ]
 
     def test_repo_not_found(self, client):

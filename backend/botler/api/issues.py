@@ -27,6 +27,12 @@ issue #92（概览页「添加 Issue」按钮）：
 - POST /api/issues：在指定仓库创建 issue（标题必填、描述选填、
   分配人必填、标签必填）；创建成功后清空 overview 缓存，前端刷新
   列表即可立即看到新 issue。
+
+issue #100（「添加 issue」界面同步 GitLab 标签颜色）：GitLab labels
+API 实际返回的颜色带 # 前缀（实测 "#6699cc"），_normalize_hex 统一
+归一化为无 # 的 6 位 hex 透传（overview 列表 / form-meta 弹窗 /
+右边栏共用 _label_entry，三处标签胶囊因此全部正确着色）；非法值仍
+置 None 中性降级，防样式注入校验不因兼容 # 前缀而放宽。
 """
 
 from __future__ import annotations
@@ -62,9 +68,21 @@ MAX_ISSUES_PER_REPO = 100
 _ISSUE_KEYS = ("iid", "title", "state", "updated_at", "created_at",
                "web_url", "description")
 
-# GitLab 标签颜色必须是 6 位 hex（labels API 约定），非法值不透传，
-# 防止拼进前端内联样式注入（issue #71）
-_HEX_COLOR = re.compile(r"^[0-9a-fA-F]{6}$")
+# GitLab 标签颜色为 6 位 hex；labels API 实际返回带 # 前缀（实测
+# {color: "#6699cc", text_color: "#FFFFFF"}，issue #100）。前端内联
+# 样式自行拼 #（`#${color}`），故后端归一化为不带 # 的 6 位 hex 透传；
+# 非法值不透传，防止拼进前端内联样式注入（issue #71）
+_HEX_COLOR = re.compile(r"^#?([0-9a-fA-F]{6})$")
+
+
+def _normalize_hex(value) -> str | None:
+    """归一化 GitLab 标签颜色（issue #100）：可选 # 前缀 + 6 位 hex →
+    无 # 前缀的 6 位 hex；非法值（含畸形 # 前缀、注入尝试）返回 None
+    （调用方降级为无色胶囊）。"""
+    if not isinstance(value, str):
+        return None
+    m = _HEX_COLOR.match(value.strip())
+    return m.group(1) if m else None
 
 
 def clear_issue_cache() -> None:
@@ -120,15 +138,14 @@ def _trim_issue(issue: dict, label_colors: dict) -> dict:
 
 def _label_entry(name: str, label_colors: dict) -> dict:
     """标签名 → {name, color, text_color}：颜色从项目标签映射取，
-    缺失或非 6 位 hex → None（前端中性胶囊兜底）；color 为 None 时
-    text_color 一并置 None（无背景色时文字色无意义）。"""
+    经 _normalize_hex 归一化（issue #100：GitLab 返回带 # 前缀，
+    统一转无 # 的 6 位 hex，前端拼 # 后即正确着色）；缺失或非法 →
+    None（前端中性胶囊兜底）；color 为 None 时 text_color 一并置
+    None（无背景色时文字色无意义）。"""
     meta = label_colors.get(name) if isinstance(label_colors, dict) else None
-    color = meta.get("color") if isinstance(meta, dict) else None
-    text_color = meta.get("text_color") if isinstance(meta, dict) else None
-    if not (isinstance(color, str) and _HEX_COLOR.match(color)):
-        color = None
-    if not (isinstance(text_color, str) and _HEX_COLOR.match(text_color)):
-        text_color = None
+    color = _normalize_hex(meta.get("color")) if isinstance(meta, dict) else None
+    text_color = _normalize_hex(meta.get("text_color")) \
+        if isinstance(meta, dict) else None
     if color is None:
         text_color = None
     return {"name": name, "color": color, "text_color": text_color}
@@ -334,7 +351,8 @@ def _trim_member(member: dict) -> dict | None:
 
 def _form_meta_labels(labels: list[dict]) -> list[dict]:
     """项目标签 → 前端多选展示条目：复用 _label_entry 的 name/color/
-    text_color 精简与颜色校验逻辑（issue #71 同款安全兜底）。"""
+    text_color 精简与颜色归一化逻辑（issue #100：GitLab 返回的 # 前缀
+    颜色在此归一化为无 # 的 6 位 hex，前端 label-pill 直接拼 # 着色）。"""
     color_map = {l["name"]: l for l in labels
                  if isinstance(l, dict) and isinstance(l.get("name"), str)}
     return [_label_entry(l["name"], color_map) for l in labels
