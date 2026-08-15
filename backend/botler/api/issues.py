@@ -208,6 +208,15 @@ def issues_overview(request: Request):
     return result
 
 
+def _enabled_repo_by_project_id(c, project_id: int) -> dict | None:
+    """按 GitLab project_id 查找「已启用」仓库（issue #94 关闭接口与
+    issue #97 详情接口共用）；无匹配返回 None。"""
+    for r in c.db.list_repos():
+        if r["gitlab_project_id"] == project_id and r["enabled"]:
+            return r
+    return None
+
+
 @router.post("/{project_id}/{iid}/close")
 def close_issue(request: Request, project_id: int, iid: int):
     """关闭指定 issue（issue #94：概览页右边栏「关闭 issue」按钮）。
@@ -222,11 +231,7 @@ def close_issue(request: Request, project_id: int, iid: int):
     issue 再次 close 幂等（返回 200），重复点击/多标签页并发安全。
     """
     c = request.app.state.ctx
-    row = None
-    for r in c.db.list_repos():
-        if r["gitlab_project_id"] == project_id and r["enabled"]:
-            row = r
-            break
+    row = _enabled_repo_by_project_id(c, project_id)
     if row is None:
         raise HTTPException(404, "仓库不存在或未启用")
     client = _repo_client(c, row) or c.gitlab
@@ -241,6 +246,66 @@ def close_issue(request: Request, project_id: int, iid: int):
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
     clear_issue_cache()
     return {"ok": True, "state": "closed"}
+
+
+# ---- issue #97：概览页右边栏评论与活动 ----
+
+# 每 issue 最多拉取的 notes 条数（升序后截尾，即时间线上最近的 N 条）
+MAX_NOTES_PER_ISSUE = 100
+
+
+def _trim_note(note: dict) -> dict:
+    """精简 note 对象（issue #97：评论/活动展示字段）。
+
+    - system：GitLab 系统事件标志（true=活动，false=用户评论，前端
+      按此分区渲染），缺失按 False（评论）兜底；
+    - author：对象只留 name/username/avatar_url（头像展示）；
+    - created_at：与 issue 时间同规则转 UTC 无后缀（前端 fmtTime
+      解析约定），缺失静默为 None；
+    - body：原样透传（评论正文前端 Markdown 渲染；系统活动为纯文本）。
+    """
+    author = note.get("author")
+    return {
+        "id": note.get("id"),
+        "body": note.get("body"),
+        "system": bool(note.get("system")),
+        "author": (
+            {"name": author.get("name"), "username": author.get("username"),
+             "avatar_url": author.get("avatar_url")}
+            if isinstance(author, dict) else None),
+        "created_at": _commit_time_utc(note.get("created_at")),
+    }
+
+
+@router.get("/{project_id}/{iid}/detail")
+def issue_detail(request: Request, project_id: int, iid: int):
+    """issue 评论与活动详情（issue #97：概览页右边栏展示）。
+
+    仓库定位与关闭接口一致（project_id 匹配「已启用」仓库，不存在/
+    未启用 → 404）；客户端选择与聚合一致（per-repo token 优先，回退
+    全局 bot token）。notes 升序拉取、每 issue 最多 100 条。不缓存
+    ——抽屉打开时按需拉取、关闭即弃，评论更新后重新打开立即生效。
+
+    错误映射：GitLab 404（issue 不存在）→ 404；GitLab 其他错误与
+    网络错误 → 502（上游故障如实上报，前端展示重试按钮）。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        notes = client.list_issue_notes(project_id, iid,
+                                        limit=MAX_NOTES_PER_ISSUE)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "issue 不存在") from e
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    # 异常元素（非 dict）防御性过滤，不因单条坏数据拖垮整个抽屉
+    return {"notes": [_trim_note(n) for n in notes or [] if isinstance(n, dict)]}
 
 
 # ---- issue #92：概览页添加 issue 表单与创建 ----

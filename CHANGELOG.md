@@ -6,6 +6,33 @@
 
 ### Added
 
+- **概览页 issue 右边栏展示评论与活动（issue #97）**：
+  点击开放 issue 打开右边栏后，描述下方新增「评论」与「活动」两个
+  区块——评论（其他参与者的发言：作者头像/姓名/时间 + Markdown 正文）
+  与活动（GitLab 系统事件：分配/标签/状态变更等，纯文本 + 时间）按
+  note 的 system 标志分区展示。抽屉打开时按需拉取详情、切换 issue
+  自动重新拉取；覆盖边界：加载中占位、接口失败错误横幅 + 重试按钮、
+  无评论/无活动空占位、旧缓存数据缺 project_id 时不发请求显示占位、
+  异常 note 字段（缺作者/时间/正文）兜底不崩溃。
+  - 后端：`gitlab_client.py` 新增 `list_issue_notes`（notes API
+    升序分页拉取，limit 截断防大 issue 翻页打爆 API）；`api/issues.py`
+    新增 `GET /api/issues/{project_id}/{iid}/detail` 薄路由——仓库
+    定位与关闭接口共用 `_enabled_repo_by_project_id`（不存在/未启用
+    → 404），客户端选择与聚合一致（per-repo token 优先，回退全局
+    bot token），note 精简 id/body/system/author{name,username,
+    avatar_url}/created_at（UTC 无后缀，前端 fmtTime 解析约定），
+    错误映射 GitLab 404 → 404、其他错误与网络错误 → 502；
+  - 前端：`IssueDrawer.jsx` 新增评论/活动区块（评论正文 Markdown
+    渲染复用 issue #27 组件、头像复用列表 assignee 的 avatar-fallback
+    兜底），`styles.css` 新增区块/评论卡片/活动行样式；README API
+    清单同步补充 detail 端点；
+  - 测试：后端 `test_api_issues.py` 新增 TestIssueDetail 10 用例
+    （字段精简与时间转换、limit 传参、空 notes、404/502 错误映射、
+    异常字段兜底、per-repo client 优先）；前端新增
+    `overview-issue-notes.test.mjs` 11 用例（接口路径、评论渲染、
+    活动分区、加载中/失败重试/空占位、缺 project_id 不发请求、
+    切换 issue 重拉、作者回退与空正文兜底）；关闭按钮测试随抽屉
+    新增详情拉取补 api.get mock。
 - **概览页「添加 Issue」按钮恢复——分支未合并回归修复（issue #95）**：
   排查发现 issue #92 实现的「添加 Issue」按钮只推送到
   `feat/overview-add-issue` 分支、从未合并回 main（也未创建 MR），

@@ -68,6 +68,12 @@ class StubGitLab:
         self.create_calls: list[tuple[int, dict]] = []
         self.fail_create_projects: set[int] = set()
         self.create_result: dict | None = None
+        # issue #97：评论/活动查询桩——notes_by_issue 按 (project_id,
+        # iid) 配置；fail_notes_errors[(project_id, iid)] 注入异常
+        # （None 表示成功）；notes_calls 记录 (project_id, iid, limit)
+        self.notes_by_issue: dict[tuple[int, int], list[dict]] = {}
+        self.fail_notes_errors: dict[tuple[int, int], Exception] = {}
+        self.notes_calls: list[tuple[int, int, int | None]] = []
 
     def list_project_members(self, project_id):
         """项目成员查询（issue #92）：按 project_id 配置，可故障注入。"""
@@ -126,6 +132,16 @@ class StubGitLab:
         if err is not None:
             raise err
         return {"iid": iid, "state": "closed"}
+
+    def list_issue_notes(self, project_id, iid, limit=None):
+        """评论/活动查询桩（issue #97）：记录参数，可注入异常。"""
+        self.notes_calls.append((project_id, iid, limit))
+        err = self.fail_notes_errors.get((project_id, iid))
+        if err is not None:
+            raise err
+        items = list(self.notes_by_issue.get((project_id, iid), []))
+        # 模拟真实 GitLabClient._paged 的 limit 截断契约
+        return items[:limit] if limit is not None else items
 
 
 def make_issue(iid: int, title: str,
@@ -1123,3 +1139,170 @@ class TestCreateIssue:
 
         tc.get("/api/issues/overview")
         assert len(stub.calls) == 2  # 缓存已失效，重新拉取
+
+
+# ---- issue #97：概览页右边栏 issue 评论与活动 ----
+
+def make_note(note_id: int, body: str, system: bool = False,
+              author: dict | None = None,
+              created_at: str | None = "2026-08-15T10:00:00.000+08:00") -> dict:
+    """构造 GitLab note 对象（评论 system=False / 活动 system=True）。"""
+    return {"id": note_id, "body": body, "system": system,
+            "author": author, "created_at": created_at}
+
+
+class TestIssueDetail:
+    """GET /api/issues/{project_id}/{iid}/detail：右边栏评论与活动数据
+    （issue #97）。
+
+    定位仓库与关闭接口一致（project_id 匹配「已启用」仓库，客户端选择
+    per-repo token 优先）；notes 升序拉取、最多 100 条；精简字段：
+    id/body/system/author{name,username,avatar_url}/created_at（UTC 无
+    后缀）。错误映射：仓库不存在/未启用 → 404，GitLab 404（issue
+    不存在）→ 404，GitLab 其他错误与网络错误 → 502。
+    """
+
+    def test_returns_notes_with_trimmed_fields(self, client):
+        """正常：返回评论与系统活动，字段精简且时间转 UTC 无后缀。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): [
+            make_note(101, "assigned to @agent", system=True,
+                      author={"id": 3, "name": "agent", "username": "agent",
+                              "avatar_url": "https://g.example.com/a.png"},
+                      created_at="2026-08-15T10:00:00.000+08:00"),
+            make_note(102, "**确认** 可行", system=False,
+                      author={"id": 11, "name": "code01",
+                              "username": "project_bot",
+                              "avatar_url": "https://g.example.com/b.png",
+                              "state": "active"},
+                      created_at="2026-08-15T11:30:00.000+08:00"),
+        ]}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        notes = resp.json()["notes"]
+        assert len(notes) == 2
+        # 评论（system=false）与活动（system=true）均透传，供前端分区渲染
+        assert notes[0]["system"] is True
+        assert notes[1]["system"] is False
+        # author 精简：只留 name/username/avatar_url（丢弃 id/state）
+        assert notes[0]["author"] == {"name": "agent", "username": "agent",
+                                      "avatar_url": "https://g.example.com/a.png"}
+        assert notes[1]["author"]["name"] == "code01"
+        # created_at 转 UTC 无后缀（前端 fmtTime 解析约定）
+        assert notes[0]["created_at"] == "2026-08-15 02:00:00"
+        assert notes[1]["created_at"] == "2026-08-15 03:30:00"
+        # body 原样透传（前端 Markdown 渲染）
+        assert notes[1]["body"] == "**确认** 可行"
+
+    def test_notes_limit_passed_to_client(self, client):
+        """每 issue 最多拉 100 条：list_issue_notes 收到 limit=100。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+
+        tc.get("/api/issues/42/64/detail")
+
+        assert stub.notes_calls == [(42, 64, 100)]
+
+    def test_empty_notes(self, client):
+        """边界：无评论无活动 → notes 为空列表（前端显示占位文案）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"notes": []}
+
+    def test_repo_not_found(self, client):
+        """GitLab project_id 无对应启用仓库 → 404，且不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.get("/api/issues/999/64/detail")
+
+        assert resp.status_code == 404
+        assert "仓库" in resp.json()["detail"]
+        assert stub.notes_calls == []
+
+    def test_repo_disabled(self, client):
+        """仓库未启用 → 404（与概览聚合只聚合启用仓库一致）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo", enabled=False)
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 404
+        assert stub.notes_calls == []
+
+    def test_issue_missing(self, client):
+        """GitLab 返回 404（issue 不存在/已被删除）→ 404。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.fail_notes_errors = {(42, 64): GitLabError("404 Not Found",
+                                                        status_code=404)}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 404
+        assert "不存在" in resp.json()["detail"]
+
+    def test_gitlab_server_error(self, client):
+        """GitLab 上游 5xx → 502，不假装成功。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.fail_notes_errors = {(42, 64): GitLabError("500 Internal Server Error",
+                                                        status_code=500)}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 502
+
+    def test_network_error(self, client):
+        """网络错误（httpx.HTTPError，per-repo host 不可达）→ 502。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.fail_notes_errors = {(42, 64): httpx.HTTPError("connect timeout")}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 502
+
+    def test_note_missing_fields_fallback(self, client):
+        """边界：note 缺 author/created_at/body（异常数据）→ None 兜底
+        不崩溃（前端显示占位符）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): [
+            {"id": 1, "body": None, "system": False, "author": None,
+             "created_at": None},
+            {"id": 2, "body": "changed due date", "system": True,
+             "author": None, "created_at": "2026-08-15T09:00:00.000+08:00"},
+        ]}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        notes = resp.json()["notes"]
+        assert notes[0]["body"] is None
+        assert notes[0]["author"] is None
+        assert notes[0]["created_at"] is None
+        assert notes[1]["system"] is True
+
+    def test_uses_per_repo_client(self, client, monkeypatch):
+        """per-repo client 优先（与概览聚合/关闭接口一致）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="a")
+        per = StubGitLab()
+        from botler.api import issues as issues_mod
+        monkeypatch.setattr(issues_mod, "_repo_client",
+                            lambda c, row: per if row["name"] == "a" else None)
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert len(per.notes_calls) == 1
+        assert stub.notes_calls == []
