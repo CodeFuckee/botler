@@ -137,25 +137,22 @@ body {
 @media (min-width: 1360px) {
   :root { --content-width: 1360px; }
 }
-/* 宽屏媒体查询（issue #15）：视口足够宽时放宽内容区，充分利用 2K（2560x1440）宽度，
+/* 宽屏媒体查询（issue #15/#96/#98）：视口足够宽时放宽内容区，充分利用横向空间，
    消除左右两侧大面积空白；表格省略列同步放宽，长标题/失败原因不再被压缩。
    断点 ≥1440px（issue #53）：任务表格 min-width 1360px + .content/.card 左右
    padding 共 80px 需要 --content-width ≥1440px 才装得下；此前 ≥1600px 才放宽到
    1360px，1440~1919px 视口下表格可用宽度（1280px）小于 min-width，页面两侧
    还有大量空白却出现水平滚动条。提前到 ≥1440px 放宽至 1440px 后，该区间
-   表格恰好无滚动（视口 <1440px 本身装不下表格，保持 .table-wrap 横向滚动）。 */
+   表格恰好无滚动（视口 <1440px 本身装不下表格，保持 .table-wrap 横向滚动）。
+   issue #98：固定宽屏档（1920→1840、2560→2480）改为动态跟随视口
+   max(1440px, calc(100vw - 100px))——1920~2559 区间视口越宽留白越大
+   （2542 视口单边 351px），且 4K 屏封顶 2480 留白 680px。动态化后
+   ≥1540 视口单边留白恒为 50px（含滚动条宽度的 100vw 会把系统滚动条
+   挤入右侧留白，留白 50px 大于滚动条宽，不会产生水平滚动条）；
+   1440~1539 视口取下限 1440px（单边 0~49.5px）平滑过渡无跳变。
+   contentWidthAt（Tasks.jsx）与测试断言同步。 */
 @media (min-width: 1440px) {
-  :root { --content-width: 1440px; --ellipsis-max: 520px; }
-}
-/* issue #96：宽屏进一步利用横向空间——1920 视口内容区 1840px、2K（2560）
-   视口内容区 2480px，两边各只留 40px 边距（此前封顶 1600px，2K 屏下
-   两边各留 480px 大面积空白）。配合 .issues-list 的 auto-fit 网格，
-   1920/2K 视口下 4 个仓库卡片一行放下。contentWidthAt（Tasks.jsx）同步。 */
-@media (min-width: 1920px) {
-  :root { --content-width: 1840px; }
-}
-@media (min-width: 2560px) {
-  :root { --content-width: 2480px; }
+  :root { --content-width: max(1440px, calc(100vw - 100px)); --ellipsis-max: 520px; }
 }
 
 h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 16px; }

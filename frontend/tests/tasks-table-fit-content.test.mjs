@@ -32,22 +32,35 @@ function defaultContentWidth(css) {
   return Number(m[1])
 }
 
-// 从 styles.css 提取所有 (min-width, --content-width) 断点，按视口阈值升序
+// 从 styles.css 提取所有 (min-width, --content-width) 断点，按视口阈值升序。
+// 断点两种形式：固定值（如 --content-width: 1000px）与动态跟随
+// （issue #98：--content-width: max(1440px, calc(100vw - 100px))），
+// 动态断点记录下限 width 与总边距 dynamic（单边 = dynamic/2）。
 function contentBreakpoints(css) {
   const breaks = []
   const re = /@media \(min-width:\s*(\d+)px\)\s*\{\s*:root\s*\{([^}]*)\}\s*\}/g
   let m
   while ((m = re.exec(css))) {
     const cw = m[2].match(/--content-width:\s*(\d+)px/)
-    if (cw) breaks.push({ min: Number(m[1]), width: Number(cw[1]) })
+    if (cw) {
+      breaks.push({ min: Number(m[1]), width: Number(cw[1]), dynamic: null })
+    } else {
+      const dyn = m[2].match(/--content-width:\s*max\((\d+)px,\s*calc\(100vw\s*-\s*(\d+)px\)\)/)
+      if (dyn) {
+        breaks.push({ min: Number(m[1]), width: Number(dyn[1]), dynamic: Number(dyn[2]) })
+      }
+    }
   }
   return breaks.sort((a, b) => a.min - b.min)
 }
 
-// 模拟指定视口宽度下生效的 --content-width（断点按 min-width 升序，后者覆盖前者）
+// 模拟指定视口宽度下生效的 --content-width（断点按 min-width 升序，后者覆盖前者）；
+// 动态断点 = max(下限, 视口 − 总边距)，与浏览器对 max()/calc(100vw−Npx) 的计算一致
 function contentWidthAt(viewport, breaks, defaultWidth) {
   let width = defaultWidth
-  for (const b of breaks) if (viewport >= b.min) width = b.width
+  for (const b of breaks) {
+    if (viewport >= b.min) width = b.dynamic ? Math.max(b.width, viewport - b.dynamic) : b.width
+  }
   return width
 }
 
@@ -73,8 +86,9 @@ test('styles.css 存在按视口放宽 --content-width 的媒体查询断点', (
 })
 
 test('视口宽度足够装下表格时，任务表格可用宽度 ≥ min-width，不出现水平滚动条', () => {
-  // 覆盖各断点区间：1440（恰好装下）、1500、1600、1750、1919、1920、2560（2K）
-  const viewports = [REQUIRED_VIEWPORT, 1500, 1600, 1750, 1919, 1920, 2560]
+  // 覆盖各断点区间：1440（恰好装下）、1500、1540（动态断点接管边界）、1600、
+  // 1750、1919、1920、2542（issue #98 用户场景）、2560（2K）
+  const viewports = [REQUIRED_VIEWPORT, 1500, 1540, 1600, 1750, 1919, 1920, 2542, 2560]
   for (const vp of viewports) {
     const contentWidth = contentWidthAt(vp, BREAKS, DEFAULT_WIDTH)
     // border-box 下表格可用宽度 = content-width − .content 左右 padding − .card 左右 padding

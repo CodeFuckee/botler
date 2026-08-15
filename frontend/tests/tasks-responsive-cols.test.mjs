@@ -70,22 +70,35 @@ function defaultContentWidth(css) {
   return Number(m[1])
 }
 
-// 提取所有 (min-width, --content-width) 断点，按视口阈值升序
+// 提取所有 (min-width, --content-width) 断点，按视口阈值升序。
+// 断点两种形式：固定值（如 --content-width: 1000px）与动态跟随
+// （issue #98：--content-width: max(1440px, calc(100vw - 100px))），
+// 动态断点记录下限 width 与总边距 dynamic（单边 = dynamic/2）。
 function contentBreakpoints(css) {
   const breaks = []
   const re = /@media \(min-width:\s*(\d+)px\)\s*\{\s*:root\s*\{([^}]*)\}\s*\}/g
   let m
   while ((m = re.exec(css))) {
     const cw = m[2].match(/--content-width:\s*(\d+)px/)
-    if (cw) breaks.push({ min: Number(m[1]), width: Number(cw[1]) })
+    if (cw) {
+      breaks.push({ min: Number(m[1]), width: Number(cw[1]), dynamic: null })
+    } else {
+      const dyn = m[2].match(/--content-width:\s*max\((\d+)px,\s*calc\(100vw\s*-\s*(\d+)px\)\)/)
+      if (dyn) {
+        breaks.push({ min: Number(m[1]), width: Number(dyn[1]), dynamic: Number(dyn[2]) })
+      }
+    }
   }
   return breaks.sort((a, b) => a.min - b.min)
 }
 
-// 模拟指定视口宽度下生效的 --content-width
+// 模拟指定视口宽度下生效的 --content-width；
+// 动态断点 = max(下限, 视口 − 总边距)，与浏览器对 max()/calc(100vw−Npx) 的计算一致
 function contentWidthAtCss(viewport, breaks, defaultWidth) {
   let width = defaultWidth
-  for (const b of breaks) if (viewport >= b.min) width = b.width
+  for (const b of breaks) {
+    if (viewport >= b.min) width = b.dynamic ? Math.max(b.width, viewport - b.dynamic) : b.width
+  }
   return width
 }
 
@@ -102,7 +115,8 @@ test('任务页源码含响应式列隐藏与 ⋯ 抽屉实现', () => {
 // ---- 纯函数：正常路径与断点边界 ----
 
 test('hiddenColumnsForWidth：视口 ≥1440 显示全部 12 列', () => {
-  for (const vp of [1440, 1500, 1600, 1919, 1920, 2560]) {
+  // 动态断点（issue #98）下宽屏可用宽度 = 视口 − 180 ≥ 1360，仍全显
+  for (const vp of [1440, 1500, 1540, 1600, 1919, 1920, 2542, 2560, 4000]) {
     assert.deepEqual(
       [...hiddenColumnsForWidth(vp)],
       [],
@@ -173,7 +187,8 @@ test('HIDDEN_COL_PRIORITY：宽度与 styles.css 列宽规则一致（防双源�
 test('contentWidthAt：与 styles.css 的 --content-width 断点一致', () => {
   const breaks = contentBreakpoints(styles)
   const def = defaultContentWidth(styles)
-  for (const vp of [320, 800, 1100, 1439, 1440, 1600, 1919, 1920, 2560]) {
+  // 覆盖固定断点区间与动态断点两侧边界（1539/1540）、issue #98 用户场景（2542）
+  for (const vp of [320, 800, 1100, 1439, 1440, 1539, 1540, 1600, 1919, 1920, 2542, 2560, 4000]) {
     assert.equal(
       contentWidthAt(vp),
       contentWidthAtCss(vp, breaks, def),
