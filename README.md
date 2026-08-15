@@ -213,6 +213,7 @@ GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录
 GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/文本/工具调用/结果逐事件实时可见；终态任务连接后回放历史事件，见实时输出功能）
 GET    /api/issues/overview           已启用仓库开放 issue 聚合（10s 缓存，issue #64）
 POST   /api/issues/{project_id}/{iid}/close   关闭指定 issue（概览页右边栏「关闭 issue」按钮，issue #94）
+GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
 GET    /api/auth/status               登录状态探测（SSO 是否启用 + 当前用户，issue #27）
@@ -223,6 +224,7 @@ GET    /api/auth/me                   当前登录用户
 GET    /api/issues/overview           概览页开放 issue 聚合（已启用仓库，10 秒 TTL 缓存，issue #64）
 GET    /api/issues/form-meta/{id}     添加 issue 表单元数据：项目成员（含继承，members/all）+ 项目标签（issue #92）
 POST   /api/issues                    在指定仓库创建 issue（标题/分配人/标签必填、描述选填；成功后清缓存，issue #92）
+GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97）
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 

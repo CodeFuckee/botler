@@ -369,6 +369,18 @@ class GitLabClient:
         assert isinstance(note, dict)
         return note
 
+    def list_issue_notes(self, project_id: int, iid: int,
+                         limit: int | None = None) -> list[dict]:
+        """issue 评论与活动流（issue #97：概览页右边栏展示）。
+
+        GitLab issue 页「活动」的数据源即 notes API——含用户评论
+        （system=false）与系统事件（system=true，如分配/标签/状态
+        变更）。升序拉取（时间线顺序）；limit 非空时最多取最近
+        limit 条（防大 issue 翻页打爆 API）。
+        """
+        return self._paged(f"/projects/{project_id}/issues/{iid}/notes",
+                           limit=limit, sort="asc", order_by="created_at")
+
     def add_labels(self, project_id: int, iid: int, labels: list[str],
                    remove: list[str] | None = None) -> dict:
         """加标签；remove 非空时同一次请求移除对应标签（issue #67：收尾

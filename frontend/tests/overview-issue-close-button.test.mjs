@@ -49,8 +49,11 @@ test('IssueDrawer 渲染「关闭 issue」按钮并调用关闭接口', () => {
 
 // ---- 组件渲染 ----
 
-// 渲染 IssueDrawer：props 最小集合（SSR 环境 Esc 监听自动跳过）
+// 渲染 IssueDrawer：props 最小集合（SSR 环境 Esc 监听自动跳过）。
+// issue #97：抽屉打开时按需拉取评论/活动详情，此处统一 mock 为空
+// 列表（本文件只关注关闭按钮行为）
 async function renderDrawer(issue, opts = {}) {
+  mock.method(api, 'get', async () => ({ notes: [] }))
   const onIssueClosed = opts.onIssueClosed || (() => {})
   let renderer = null
   let renderError = null
@@ -62,6 +65,7 @@ async function renderDrawer(issue, opts = {}) {
         onClose: () => {},
         onIssueClosed,
       }))
+      await new Promise((resolve) => setTimeout(resolve, 10))
     } catch (e) {
       renderError = e
     }

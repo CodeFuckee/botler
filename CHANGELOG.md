@@ -6,22 +6,33 @@
 
 ### Added
 
-- **概览页开放 issue 板块响应式布局优化（issue #96）**：
-  此前 `.issues-list` 固定 3 列（`repeat(3, 1fr)`），4 个仓库卡片
-  3+1 分两行；`.content` 宽屏封顶 1600px，2K（2560）屏下页面两旁
-  各留 480px 大面积空白。优化后：
-  - 网格改为 `repeat(auto-fit, minmax(280px, 1fr))` 自适应列数——
-    宽度足够时 4 个仓库一行放下，仓库更多时自动换行、更少时收起
-    空轨道，窄视口（<1280）自动降列回退不挤压卡片；
-  - 宽屏断点放宽：≥1920 视口内容区 1600→1840px，新增 ≥2560 视口
-    2480px——两边各只留约 40px 边距，充分利用横向空间；
-  - `Tasks.jsx` 的 `contentWidthAt` 与 CSS 断点同步更新（防双源
-    漂移，既有测试持续守护）。
-  测试：`frontend/tests/overview-responsive-layout.test.mjs` 新增
-  8 用例——源码级断言 auto-fit 网格与宽屏断点、模拟 auto-fit 列数
-  断言 1280/1360/1440/1920/2560 视口下 4 卡一行且每列 ≥280px、
-  窄视口降列回退、contentWidthAt 新值同步、渲染级 1/4/5 个仓库
-  卡片数量边界（不丢卡不崩溃）。
+- **概览页 issue 右边栏展示评论与活动（issue #97）**：
+  点击开放 issue 打开右边栏后，描述下方新增「评论」与「活动」两个
+  区块——评论（其他参与者的发言：作者头像/姓名/时间 + Markdown 正文）
+  与活动（GitLab 系统事件：分配/标签/状态变更等，纯文本 + 时间）按
+  note 的 system 标志分区展示。抽屉打开时按需拉取详情、切换 issue
+  自动重新拉取；覆盖边界：加载中占位、接口失败错误横幅 + 重试按钮、
+  无评论/无活动空占位、旧缓存数据缺 project_id 时不发请求显示占位、
+  异常 note 字段（缺作者/时间/正文）兜底不崩溃。
+  - 后端：`gitlab_client.py` 新增 `list_issue_notes`（notes API
+    升序分页拉取，limit 截断防大 issue 翻页打爆 API）；`api/issues.py`
+    新增 `GET /api/issues/{project_id}/{iid}/detail` 薄路由——仓库
+    定位与关闭接口共用 `_enabled_repo_by_project_id`（不存在/未启用
+    → 404），客户端选择与聚合一致（per-repo token 优先，回退全局
+    bot token），note 精简 id/body/system/author{name,username,
+    avatar_url}/created_at（UTC 无后缀，前端 fmtTime 解析约定），
+    错误映射 GitLab 404 → 404、其他错误与网络错误 → 502；
+  - 前端：`IssueDrawer.jsx` 新增评论/活动区块（评论正文 Markdown
+    渲染复用 issue #27 组件、头像复用列表 assignee 的 avatar-fallback
+    兜底），`styles.css` 新增区块/评论卡片/活动行样式；README API
+    清单同步补充 detail 端点；
+  - 测试：后端 `test_api_issues.py` 新增 TestIssueDetail 10 用例
+    （字段精简与时间转换、limit 传参、空 notes、404/502 错误映射、
+    异常字段兜底、per-repo client 优先）；前端新增
+    `overview-issue-notes.test.mjs` 11 用例（接口路径、评论渲染、
+    活动分区、加载中/失败重试/空占位、缺 project_id 不发请求、
+    切换 issue 重拉、作者回退与空正文兜底）；关闭按钮测试随抽屉
+    新增详情拉取补 api.get mock。
 - **概览页「添加 Issue」按钮恢复——分支未合并回归修复（issue #95）**：
   排查发现 issue #92 实现的「添加 Issue」按钮只推送到
   `feat/overview-add-issue` 分支、从未合并回 main（也未创建 MR），
