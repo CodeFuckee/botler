@@ -30,6 +30,23 @@
 
 ### Fixed
 
+- **概览页开放 Issue、正在执行任务、CI/CD 流水线三板块列数不统一（issue #107）**：
+  用户反馈「开放issue、正在执行任务、ci/cd流水线的列数统一，以开放
+  issue 为标准，先有些是三列，有些又是 4 列」——开放 Issue 板块
+  （issue #96）已改为自适应网格（auto-fit + minmax(280px, 1fr)），
+  宽屏下 4 列一行，而正在执行任务、CI/CD 流水线两个板块仍是固定
+  3 列（repeat(3, 1fr)），同一页面列数错落不一致。
+  - 前端：`styles.css` 中 `.overview-grid` 与 `.pipelines-list`
+    改为 `repeat(auto-fit, minmax(280px, 1fr))`，与 `.issues-list`
+    列数标准完全一致（最小列宽/网格间距一致，宽屏同为 4 列一行，
+    窄视口同步降列回退不溢出），并同步更新注释说明。
+  - 测试：新增 `tests/overview-columns-unified.test.mjs` 6 用例
+    （三板块均 auto-fit 断言、防固定 3 列回退、minmax 最小列宽与
+    间距三板块一致、多视口列数模拟一致+窄视口降列不溢出、任务/流水线
+    多卡片渲染不丢卡），先复现失败（4 断言失败）再修复通过；
+    `overview-page.test.mjs` 中编码旧固定 3 列行为的断言同步适配为
+    auto-fit 标准。
+
 - **「添加 issue」只输入标题时后端未在发送 GitLab API 时填充描述（issue #103，用户反馈修正）**：
   前一轮实现只在**前端**做标题→描述联动与提交兜底，后端创建
   issue 的 GitLab API 请求在描述为空时不发送 description 字段，

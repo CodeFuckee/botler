@@ -1,6 +1,7 @@
 // 概览页面测试（issue #32）：导航入口位于「仓库」tab 左边，页面实时展示
 // 正在执行的任务卡片（仓库名 / 对应 issue / agent 实时输出），多任务时以
-// 最多 2 行 × 3 列网格排布（超过 6 个继续换行、页面滚动）。
+// 自适应列数网格排布（issue #107：auto-fit + minmax(280px, 1fr)，与开放
+// Issue 板块列数统一，宽屏 4 列一行，超过自动换行、页面滚动）。
 //
 // 断言：
 // 1. App.jsx 顶部导航「概览」位于「仓库」之前，/overview 路由已注册；
@@ -8,7 +9,8 @@
 //    每个任务轮询 /api/tasks/{id}/execution 拉实时输出增量（字节偏移续读）；
 // 3. 卡片渲染仓库名、issue 链接（task.issue_url）、实时输出尾部；
 // 4. 无任务时显示空状态；任务字段缺失兜底（已删除 / — / 暂无输出）；
-// 5. styles.css 提供 overview-grid 网格样式（3 列，最多 2 行装下 6 卡）；
+// 5. styles.css 提供 overview-grid 网格样式（issue #107：auto-fit 自适应
+//    列数，与开放 Issue 板块统一）；
 // 6. trimLogTail 纯函数边界（空数组 / 超长截尾 / 非法 max）。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -90,12 +92,12 @@ test('空状态与日志缺失兜底文案', () => {
   assert.match(overview, /（暂无输出）/, '日志为空时应显示占位文案')
 })
 
-test('styles.css 提供概览网格样式（3 列，最多 2 行装下 6 卡）', () => {
+test('styles.css 提供概览网格样式（auto-fit 自适应列数，与开放 Issue 板块统一）', () => {
   assert.match(styles, /\.overview-grid\s*\{/, '应有 .overview-grid 容器样式')
   assert.match(
     styles,
-    /\.overview-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*1fr\)/s,
-    '网格应为 3 列（2 行 × 3 列 = 最多 6 个任务卡片，超过自动换行滚动）',
+    /\.overview-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(\d+px,\s*1fr\)\)/s,
+    '网格应为 auto-fit 自适应列数（issue #107：与开放 Issue 板块列数统一）',
   )
   assert.match(styles, /\.overview-card\s*\{/, '应有 .overview-card 卡片样式')
   assert.match(styles, /\.overview-log\s*\{/, '应有 .overview-log 实时输出样式')
