@@ -420,3 +420,40 @@ class TestCreateIssue:
                                   "description": "新 issue",
                                   "assignee_ids": [20],
                                   "labels": "bug,ui"}
+
+
+class TestReopenIssue:
+    """reopen_issue：autoclose 误关后平台侧恢复（issue #109）。"""
+
+    def _stub(self, client: GitLabClient) -> list:
+        """用桩替换 _request，记录 (method, path, kwargs) 调用序列。"""
+        captured: list = []
+
+        def fake_request(method, path, **kwargs):
+            captured.append((method, path, kwargs))
+            return {"id": 7, "iid": 24, "state": "opened"}
+
+        client._request = fake_request
+        return captured
+
+    def test_reopen_sends_state_event(self):
+        """reopen 通过 PUT state_event=reopen 实现（与 close_issue 对称）。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        issue = client.reopen_issue(125, 24)
+
+        assert issue["state"] == "opened"
+        assert captured == [("PUT", "/projects/125/issues/24",
+                             {"json": {"state_event": "reopen"}})]
+
+    def test_reopen_request_error_propagates(self):
+        """API 报错时抛 GitLabError（调用方决定容错策略）。"""
+        client = make_client()
+
+        def boom(method, path, **kwargs):
+            raise GitLabError("500 Internal Server Error")
+
+        client._request = boom
+        with pytest.raises(GitLabError):
+            client.reopen_issue(125, 24)

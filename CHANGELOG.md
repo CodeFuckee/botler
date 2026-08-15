@@ -55,6 +55,31 @@
 
 ### Fixed
 
+- **修复 graph2plan 任务 issue 被「自动关闭」的根因：GitLab autoclose 机制 + 三层防护（issue #109）**：
+  用户反馈「graph2plan 的 issue 运行时 agent 总是自己 close issue，但提示词已标明
+  严禁」——排查会话记录发现 agent **从未调用关闭 API**：graph2plan 提交信息写成
+  `fix: #24 …`，命中 GitLab 实例开启的 `autoclose_referenced_issues` 默认关闭模式，
+  推送默认主分支时 issue 被 GitLab 系统自动关闭（closed_by 为 project bot），
+  用户侧即表现为「agent 自己 close issue」（agent 会话中自查发现误关后曾手动
+  reopen + 说明评论）。三层防护：
+  - 平台兜底（治本）：`executor.py` 新增 `_restore_autoclosed_issue()`，任务成功
+    收尾时检测 issue 状态——closed 且 closed_by 是本项目 project bot（autoclose
+    特征）→ 自动 reopen + 补说明评论 + warn 日志；人工关闭不干预；任意步骤
+    失败仅记 warn 不阻塞任务成功。`gitlab_client.py` 新增 `reopen_issue()`
+    （与 `close_issue` 对称的 `state_event=reopen`）。
+  - 模板阻断（根因）：`config.example.yaml` 与内置兜底模板 `config.py
+    DEFAULT_TEMPLATE` 增加提交信息规范——严禁 `fix: #N` / `fixes #N` /
+    `closes #N` / `resolves #N` 等 autoclose 触发模式，issue 引用一律写全角
+    括号 `（issue #NN）`；同时移除旧示例模板中「curl state_event=close 关闭
+    issue」的指令（与「Agent 永不主动关闭 Issue」政策矛盾）。
+  - 文档同步：`docs/labels.md` 新增「提交信息规范（防 GitLab autoclose 自动
+    关闭）」章节。
+  - 测试：`test_executor_autoclose.py` 新增 7 用例（autoclose 恢复/opened 不
+    干预/人工关闭不干预/无 closed_by 容错/他项目 bot 不误判/查询失败与 reopen
+    失败不阻塞收尾）；`test_config_template.py` 更新旧断言（模板不得含关闭
+    指令、必须含 autoclose 禁用模式）；`test_gitlab_client.py` 新增
+    TestReopenIssue 2 用例，先复现失败再修复通过。
+
 - **概览页开放 Issue、正在执行任务、CI/CD 流水线三板块列数不统一（issue #107）**：
   用户反馈「开放issue、正在执行任务、ci/cd流水线的列数统一，以开放
   issue 为标准，先有些是三列，有些又是 4 列」——开放 Issue 板块

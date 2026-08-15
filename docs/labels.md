@@ -35,6 +35,19 @@
 3. **禁止删除**：`bot-done` / `bot-failed` 由 bot 流程管理，人工不要移除；旧标签（如 `ci`）保留不删，仅新工作统一使用本规范标签。
 4. 新增标签需先更新本文件，再运行 `scripts/sync_labels.py` 同步到全部仓库。
 
+## 提交信息规范（防 GitLab autoclose 自动关闭）
+
+GitLab 实例开启了 `autoclose_referenced_issues`：提交信息命中默认关闭模式
+（`fix: #N` / `fixes #N` / `closes #N` / `resolves #N` 等「关闭关键词 + #编号」）
+且推送到默认主分支时，**issue 会被 GitLab 系统自动关闭**（closed_by 显示为该
+项目的 project bot，非任何真人用户），用户侧表现为「agent 自己 close issue」。
+graph2plan 仓库曾因提交信息 `fix: #24 …` 反复触发（issue #109）。
+
+- **禁止**在提交信息中使用上述关闭模式引用 issue；
+- issue 引用一律写全角括号形式：`（issue #NN）`；
+- 若 issue 已被 autoclose 误关：重新打开（`state_event=reopen`）并补评论说明，
+  关闭操作仍保留人工执行（botler 平台已在任务收尾时自动检测并恢复）。
+
 ## 同步方法
 
 ```bash

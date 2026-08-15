@@ -428,6 +428,20 @@ class GitLabClient:
         assert isinstance(issue, dict)
         return issue
 
+    def reopen_issue(self, project_id: int, iid: int) -> dict:
+        """重新打开 issue（issue #109：autoclose 误关后平台侧恢复用）。
+
+        与 close_issue 对称：GitLab 实例开启 autoclose_referenced_issues
+        后，提交信息命中默认关闭模式（fix: #NN 等）推送即被系统自动
+        关闭（closed_by 为 project bot），executor 收尾时检测到该特征
+        调用本方法恢复 opened，关闭操作仍保留给人工。
+        """
+        issue = self._request(
+            "PUT", f"/projects/{project_id}/issues/{iid}",
+            json={"state_event": "reopen"})
+        assert isinstance(issue, dict)
+        return issue
+
     def wait_issue_state(self, project_id: int, iid: int,
                          expect: str, timeout: float = 60) -> bool:
         """轮询等待 issue 到达期望状态（如等待 Claude Code 关闭 issue）。"""

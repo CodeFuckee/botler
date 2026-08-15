@@ -202,10 +202,14 @@ DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以�
 1. 在本地工作区（已检出 main 最新代码）分析问题，定位根因
 2. 编写修复代码并自测通过（运行相关测试/构建验证）
 3. 自测通过后，直接推送到 main 分支：
-   git add -A && git commit -m "fix: 解决 issue #{issue_iid}" && git push origin main
+   git add -A && git commit -m "fix: 解决（issue #{issue_iid}）" && git push origin main
 4. 推送成功后，在 issue 上留结果评论（平台会自动打 bot-done 标签）；
    不要关闭该 issue——关闭动作留给用户确认后手动执行（模版库规范）
-5. 若确实无法解决，不要推送代码，如实汇报失败原因和已做的尝试
+5. 提交信息严禁 `fix: #N` / `fixes #N` / `closes #N` / `resolves #N` 等
+   「关闭关键词 + #编号」写法：GitLab 实例开启了 autoclose 机制，命中
+   默认关闭模式会在推送后自动关闭 issue（用户侧表现为「agent 自己
+   close issue」）；issue 引用一律写全角括号 `（issue #N）` 形式。
+6. 若确实无法解决，不要推送代码，如实汇报失败原因和已做的尝试
 
 注意：只修改与 issue 相关的代码，不要顺手重构无关部分。
 """

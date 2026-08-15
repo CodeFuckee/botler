@@ -1836,12 +1836,17 @@ class ClaudeExecutor:
         self.db.add_log(task_id, "info", "任务成功：Claude Code 已完成处理（issue 保持打开，等用户确认后手动关闭）")
         self._write_log_tail(task_id, output)
         self._record_commit(task_id, repo)
+        # issue #109：检测并恢复被 GitLab autoclose 自动关闭的 issue
+        # （提交信息命中默认关闭模式时 GitLab 系统自动关闭，用户侧表现为
+        # 「agent 自己 close issue」）；人工关闭不干预，检测失败不阻塞。
+        task = self.db.get_task(task_id)
+        if task is not None:
+            self._restore_autoclosed_issue(task, repo)
         # issue #34：成功时由平台代码直接打 bot-done 标签（幂等），不再依赖
         # Claude 按模板打——Claude 忘打会导致 issue 无终态标签被重复领取。
         # issue #67：同步移除 in-progress（Claude 领取时打的处理中标签），
         # 避免收尾后与终态标签并存。
         # 打标签失败不阻塞任务成功（仅记 warn，用户可手动补标签）。
-        task = self.db.get_task(task_id)
         if task is not None:
             try:
                 self._call_with_fallback(
@@ -1912,6 +1917,65 @@ class ClaudeExecutor:
             self.db.add_log(task["id"], "info", "已在 issue 上留任务完成评论")
         except GitLabError as e:
             self.db.add_log(task["id"], "warn", f"留任务完成评论失败: {e}")
+
+    def _restore_autoclosed_issue(self, task: dict,
+                                  repo: dict | None = None) -> None:
+        """检测并恢复被 GitLab autoclose 自动关闭的 issue（issue #109）。
+
+        背景：GitLab 实例开启了 autoclose_referenced_issues——提交信息
+        命中默认关闭模式（fix: #NN / fixes #NN / closes #NN 等）且推送
+        到默认主分支时，issue 被 GitLab 系统自动关闭（closed_by 为该
+        项目的 project bot，非任何真人用户）。graph2plan 任务的提交
+        信息「fix: #24 …」曾反复触发，用户侧表现为「agent 自己 close
+        issue」（实际 agent 从未调用关闭 API）。
+
+        恢复规则：
+        - closed 且 closed_by 是本项目的 project bot（autoclose 特征）
+          → reopen + 补说明评论 + warn 日志；
+        - closed 但 closed_by 是真实用户（人工关闭）→ 不干预；
+        - 任意步骤失败 → 仅记 warn，不阻塞任务成功收尾（本方法为
+          尽力而为护栏，任何异常都必须被吞掉）。
+        """
+        project_id, issue_iid = task["project_id"], task["issue_iid"]
+        try:
+            issue = self._call_with_fallback(
+                repo, lambda c: c.get_issue(project_id, issue_iid))[0]
+        except Exception as e:  # noqa: BLE001 护栏方法：任何查询异常都不阻塞收尾
+            self.db.add_log(task["id"], "warn",
+                            f"autoclose 检测失败（查询 issue 状态出错）: {e}")
+            return
+        issue = issue or {}
+        if issue.get("state") != "closed":
+            return
+        closed_by = issue.get("closed_by") or {}
+        username = closed_by.get("username") or ""
+        # autoclose 由该项目的 project bot 执行（username 形如
+        # project_<id>_bot_<hash>），其余关闭者视为人工操作
+        if not username.startswith(f"project_{project_id}_bot"):
+            self.db.add_log(task["id"], "info",
+                            "issue 为人工关闭（closed_by 非 project bot），平台不干预")
+            return
+        try:
+            self._call_with_fallback(
+                repo, lambda c: c.reopen_issue(project_id, issue_iid))
+        except Exception as e:  # noqa: BLE001 同上：reopen 失败不阻塞收尾
+            self.db.add_log(task["id"], "warn",
+                            f"重新打开被 autoclose 误关的 issue 失败: {e}")
+            return
+        body = ("补充说明：本 Issue 曾被 GitLab 的 autoclose 机制自动关闭"
+                "（提交信息中的 `fix: #N` / `closes #N` 等 issue 引用命中"
+                "实例默认关闭模式，随代码推送自动触发，非人工/Agent 主动"
+                "关闭操作）。平台已重新打开本 Issue，开发结果请人工验证后"
+                "手动关闭。")
+        try:
+            self._call_with_fallback(
+                repo, lambda c: c.add_comment(project_id, issue_iid, body))
+        except Exception as e:  # noqa: BLE001 同上：补评论失败不阻塞收尾
+            self.db.add_log(task["id"], "warn",
+                            f"autoclose 补充说明评论失败: {e}")
+        self.db.add_log(task["id"], "warn",
+                        "检测到 issue 被 GitLab autoclose 自动关闭，"
+                        "已重新打开并补说明评论")
 
     def _success_summary(self, output: str) -> str:
         """从执行输出提取结果摘要（claude 的 result / hermes 的 final_response）。

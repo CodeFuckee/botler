@@ -46,14 +46,30 @@ class TestDefaultTemplate:
         assert "强制提示用户" not in t
         assert "队列" not in t
 
-    def test_template_curl_close_issue_uses_insecure_flag(self):
-        """关闭 issue 的 curl 必须带 -k：自建 GitLab 为自签证书（verify_ssl:
-        false），不带 -k 时 curl 报证书错误 → issue 永远关不上、任务无法成功。"""
-        assert "curl -s -k -X PUT" in _example_template()
-        assert '"state_event=close"' in _example_template()
+    def test_template_does_not_instruct_closing_issue(self):
+        """模板不得指示关闭 issue（issue #109 政策）：关闭动作留给用户确认后
+        手动执行。旧模板曾内嵌「curl -X PUT state_event=close」关闭指令，
+        与「Agent 永不主动关闭 Issue」矛盾，且误导 Claude 主动关闭。"""
+        t = _example_template()
+        assert "state_event=close" not in t
+        assert "关闭该 issue" in t
+        assert "不要关闭" in t
+
+    def test_template_forbids_autoclose_commit_pattern(self):
+        """提交信息必须规避 GitLab autoclose 模式（issue #109）。
+
+        GitLab 实例开启了 autoclose_referenced_issues：提交信息「fix: #24」
+        等命中默认关闭模式，推送后 issue 被系统自动关闭（用户侧表现为
+        「agent 自己 close issue」）。模板必须：① 给出安全写法示例
+        （全角括号（issue #N））；② 明确列出禁用模式并说明后果。"""
+        t = _example_template()
+        assert "（issue #{issue_iid}）" in t  # 安全写法示例（全角括号）
+        assert "autoclose" in t              # 说明自动关闭机制
+        for pattern in ("fix: #N", "fixes #N", "closes #N", "resolves #N"):
+            assert pattern in t, f"模板应明确禁用 {pattern} 写法"
 
     def test_template_renders_issue_info(self):
-        """渲染后包含 issue 标题与关闭指令（executor 实际发给 Claude 的内容）。"""
+        """渲染后包含 issue 标题与推送/收尾指令（executor 实际发给 Claude 的内容）。"""
         t = _example_template()
         rendered = (t
                     .replace("{repo_name}", "botler")
@@ -66,7 +82,8 @@ class TestDefaultTemplate:
         assert "botler" in rendered
         assert "测试 issue" in rendered
         assert "git push origin main" in rendered
-        assert "state_event=close" in rendered
+        assert "state_event=close" not in rendered  # 渲染产物不得含关闭指令
+        assert "（issue #1）" in rendered            # 安全提交信息示例已渲染
 
 
 class TestProjectPathPlaceholder:
