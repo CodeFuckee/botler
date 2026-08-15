@@ -8,7 +8,6 @@ export default function BackupManager() {
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
-  const [file, setFile] = useState(null)
   const fileInput = useRef(null)
 
   const load = async () => {
@@ -70,19 +69,32 @@ export default function BackupManager() {
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
-  const restoreUpload = async () => {
-    if (!file) return
-    if (!window.confirm(`${RESTORE_WARNING}\n\n文件：${file.name}`)) return
+  // picked 由 onChange 直接传入：file 状态在调用 restoreUpload 时尚未更新
+  // （setState 异步），旧实现读闭包里的旧值导致首次选文件不触发确认/上传、
+  // 二次选择误用上一次的文件（issue #104 补测发现）
+  const restoreUpload = async (picked) => {
+    if (!picked) return
+    if (!window.confirm(`${RESTORE_WARNING}\n\n文件：${picked.name}`)) return
     setBusy(true); setError(''); setNote('')
     try {
-      await api.upload('/api/backups/restore/upload', file)
+      await api.upload('/api/backups/restore/upload', picked)
       setNote('✓ 上传恢复完成，服务正在自动重启，稍后请刷新页面')
-      setFile(null)
       if (fileInput.current) fileInput.current.value = ''
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
-  if (!data) return <p className="muted">加载中…</p>
+  if (!data) {
+    // 首次加载失败时不能只渲染「加载中…」：错误被吞掉用户会永久卡在加载态，
+    // 展示错误并支持点击重试（issue #104 补测发现）
+    return (
+      <div className="card">
+        <h2>数据备份</h2>
+        {error
+          ? <div className="alert alert-error" onClick={load}>{error}（点击重试）</div>
+          : <p className="muted">加载中…</p>}
+      </div>
+    )
+  }
 
   return (
     <div className="card">
@@ -136,7 +148,10 @@ export default function BackupManager() {
             type="file"
             accept=".tar.gz,application/gzip"
             style={{ display: 'none' }}
-            onChange={(e) => { setFile(e.target.files[0] || null); if (e.target.files[0]) restoreUpload() }}
+            onChange={(e) => {
+              const picked = e.target.files[0] || null
+              if (picked) restoreUpload(picked)
+            }}
           />
         </label>
         <span className="saved-hint">备份内容：config.yaml + botler.db，存于服务器 <code>data/backups/</code></span>

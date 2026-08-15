@@ -6,6 +6,24 @@
 
 ### Fixed
 
+- **数据备份卡片加载失败永久卡「加载中…」+ 上传恢复首次选文件不触发（issue #104）**：
+  前端补测 BackupManager 时发现两个缺陷：① 首次加载 `/api/backups`
+  失败时 `!data` 分支只渲染「加载中…」，catch 里写入的 error 永远
+  不可见，用户永久卡在加载态且无任何报错提示；② 「上传备份恢复」
+  文件选择框 onChange 里 setFile 后立即调用 restoreUpload()，但
+  restoreUpload 读的是当前渲染闭包里的旧 file 状态（首次为 null）——
+  首次选文件不弹确认也不上传，第二次选择会误用上一次的文件。修复：
+  ① 无数据分支区分 error 渲染 alert-error 并支持点击重试（error 为
+  空时才显示「加载中…」）；② restoreUpload 改为显式接收 picked 文件
+  参数（onChange 直接传入，不再依赖异步 setState 后的状态），移除
+  仅用于传参的 file 状态。
+  - 前端：`components/BackupManager.jsx` 无数据分支增加错误渲染与
+    点击重试；restoreUpload(picked) 参数化。
+  - 测试：前端新增 BackupManager 全量交互测试 13 用例（加载/空列表/
+    保存配置/立即备份/下载/删除确认/恢复确认/上传恢复/busy 防重复/
+    首次加载失败错误展示），其中「首次加载失败错误展示」「首次选
+    文件确认上传」2 用例先复现失败再修复通过。
+
 - **概览页竖屏平板浏览时开放 issue 区域仓库名显示不出来（issue #102）**：
   概览页「开放 Issue」仓库卡片头 `.issue-repo-head` 为不换行 flex，
   仓库名 `.issue-repo-name` 设了 `white-space: nowrap` +
@@ -44,6 +62,18 @@
     GitLab 颜色、无色标签无内联样式（中性兜底）2 用例。
 
 ### Added
+
+- **前端补充测试：fmtSize/登录页/目录选择器/数据备份卡片（issue #104）**：
+  前端测试框架为 Node.js 内置 node:test 运行器（`node --test
+  'tests/**/*.test.mjs'`，非 Vitest/Jest）+ react-test-renderer 渲染
+  + vite ssrLoadModule 加载 JSX + node:test mock.method 做 API mock。
+  此前 Login.jsx、FolderPicker.jsx、BackupManager.jsx 三个组件与
+  fmtSize 纯函数无任何测试覆盖，本次补齐：fmtSize B/KB/MB 三档
+  边界 8 用例；登录页 SSO 错误映射（login_failed/access_denied/
+  未知透传）与登录跳转 7 用例；目录选择器打开加载/隐藏目录过滤/
+  上级与路径跳转/空目录与错误提示/选择回调/ESC 与遮罩关闭 16 用例；
+  数据备份卡片交互 13 用例。新增 tests/helpers/mock-router-login.jsx
+  （useSearchParams 查询参数可注入，供登录页 error 分支渲染测试）。
 
 - **「添加 issue」界面只输入标题时描述自动复制标题内容（issue #103）**：
   概览页「添加 Issue」弹窗中，用户只输入标题、描述留空时，描述直接
