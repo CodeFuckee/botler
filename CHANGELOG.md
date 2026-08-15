@@ -116,6 +116,28 @@
 
 ### Fixed
 
+- **git clean 权限受限残留导致任务重试耗尽失败（issue #91）**：
+  任务 #136（daymark 仓库 issue #7）连续 3 次失败，错误均为
+  `git clean 失败 (exit 1): Permission denied`——用户曾以 root 身份在
+  local_path 工作区跑过 flutter build，留下 root 属主的
+  `linux/flutter/ephemeral_root_bak_20260812/.plugin_symlinks/` 残留
+  （内含指向 `/root/.pub-cache` 的符号链接），executor 以普通用户执行
+  `git clean -fd` 时删除其中条目受父目录写权限约束而 EACCES，整个
+  clean 退出非零 → ExecutorError → 重试耗尽 → 任务失败。
+  此类残留不影响 fetch / checkout / reset（只涉及 tracked 文件），
+  不应拖垮整个任务。
+  - 后端 `executor.py`：`prepare_workspace` 的 clean 步骤改走新增
+    `_clean_untracked`——首次 `git clean -fd` 因 Permission denied 失败
+    时，列出残留 untracked 条目并尝试 Python 层删除（`_force_remove`：
+    删除失败先恢复条目与父目录权限再重试一次），复检 clean 仍权限失败
+    则降级为警告继续执行（残留留给用户手动清理），非权限类失败保持
+    原行为直接抛错；新增 `_on_rmtree_error` 供 rmtree 恢复权限后重试
+    深层条目删除；
+  - 测试：TDD 先行（红灯复现与任务 #136 完全一致的错误信息），新增
+    3 用例（无写权限残留清理干净、root 属主删不掉时警告放行不阻塞、
+    非权限错误仍抛 ExecutorError）；全量 864（后端）+ 284（前端）+
+    14（ci 转换脚本）通过。
+
 - **任务详情聊天记录中用户提示词被截断、与全局模版不一致（issue #90）**：
   任务详情页聊天记录只显示到「推送后必须用」附近（#114 号任务复现），
   与全局模版比对不完整；根因是展示层两处缺陷——发送给 AI 的提示词本身

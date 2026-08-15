@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -120,6 +121,25 @@ def _row_get(row, key, default=None):
         return row[key]
     except (KeyError, IndexError):
         return default
+
+
+def _on_rmtree_error(func, path, exc_info) -> None:
+    """rmtree 删除条目失败时的恢复处理（issue #91）。
+
+    先尝试恢复该条目及其父目录的权限后重试一次：残留属主为本进程
+    用户时（如目录被 chmod 只读）可借此删除干净；属主是其他用户
+    （root 残留）时 chmod 同样失败，放弃该条目由 rmtree 继续处理
+    其余条目，最终残留项由 _force_remove 报告并降级警告。
+    """
+    for target in (path, str(Path(path).parent)):
+        try:
+            os.chmod(target, 0o700)
+        except OSError:
+            continue
+    try:
+        func(path)
+    except OSError:
+        pass
 
 
 def _load_json_output(output: str) -> dict | None:
@@ -659,12 +679,94 @@ class ClaudeExecutor:
                 branch = "master"
                 self._git(workdir, "checkout", "master", env=git_env)
             self._git(workdir, "reset", "--hard", f"{remote}/{branch}", env=git_env)
-            self._git(workdir, "clean", "-fd", env=git_env)
+            self._clean_untracked(workdir, git_env)
         # askpass 脚本保留不删除（issue #12）：并发任务/重试时序下脚本被删 →
         # fetch 回退 credential helper 旧凭据 → HTTP Basic: Access denied。
         # 脚本内容每次 prepare 覆盖刷新（token 轮换自动生效），权限 0700，
         # 且在工作区父目录，不受 clean -fd 波及。
         return workdir, git_env
+
+    def _clean_untracked(self, workdir: Path, git_env: dict) -> None:
+        """清理未跟踪文件，容忍无权限删除的外部残留（issue #91）。
+
+        用户以 root 等身份在 local_path 工作区跑过构建（如 flutter build
+        生成的 .plugin_symlinks）会留下属主非本进程用户的 untracked 目录，
+        git clean -fd 删除其中条目时 Permission denied 而整体失败（issue #91
+        诊断的任务 #136 场景：daymark 仓库重试 3 次全败）。
+        此类残留不影响 fetch / checkout / reset（只涉及 tracked 文件），
+        不应拖垮整个任务：先尝试 Python 层尽力删除，仍删不掉的降级为
+        警告继续执行，由用户手动清理。
+        """
+        try:
+            self._git(workdir, "clean", "-fd", env=git_env)
+            return
+        except ExecutorError as exc:
+            if "Permission denied" not in str(exc):
+                raise
+        logger.warning("%s: git clean 权限受限，尝试 Python 层清理残留", workdir)
+        for rel in self._untracked_paths(workdir, git_env):
+            path = workdir / rel
+            if not self._force_remove(path):
+                logger.warning("无法删除残留项（可能需要 root 权限手动清理）: %s", path)
+        # 复检：残留清干净则无感；仍权限失败则警告放行（不阻塞任务）
+        try:
+            self._git(workdir, "clean", "-fd", env=git_env)
+        except ExecutorError as exc:
+            if "Permission denied" in str(exc):
+                logger.warning("git clean 仍有权限受限残留，跳过继续执行: %s",
+                               str(exc)[:200])
+            else:
+                raise
+
+    @staticmethod
+    def _untracked_paths(workdir: Path, git_env: dict) -> list[str]:
+        """列出当前 untracked 条目（相对路径），供失败后的尽力清理使用。"""
+        cmd = ["git", "-c", "http.sslVerify=false",
+               "ls-files", "--others", "--exclude-standard"]
+        try:
+            result = subprocess.run(cmd, cwd=workdir, env=git_env,
+                                    capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            return []
+        if result.returncode != 0:
+            return []
+        paths = []
+        for line in result.stdout.splitlines():
+            rel = line.rstrip("/")
+            if rel and not rel.startswith("..") and not os.path.isabs(rel):
+                paths.append(rel)
+        return paths
+
+    @staticmethod
+    def _force_remove(path: Path) -> bool:
+        """尽力删除 untracked 残留（文件/符号链接/目录），返回是否删除成功。
+
+        issue #91：残留目录无写权限（chmod 只读 / 属主非本进程用户）时，
+        删除内部条目受父目录写权限约束而 EACCES。先常规删除，失败后尝试
+        恢复条目及父目录权限再重试一次；chmod 也失败（root 属主）则放弃。
+        """
+        for attempt in (False, True):
+            try:
+                if path.is_symlink() or not path.is_dir():
+                    path.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(path, onerror=_on_rmtree_error)
+                if not path.exists():
+                    return True
+            except OSError:
+                pass
+            if attempt:
+                return False
+            # 恢复权限后重试：条目 chmod 失败 = 非本进程用户属主，不再折腾
+            try:
+                os.chmod(path, 0o700)
+            except OSError:
+                return False
+            try:
+                os.chmod(path.parent, 0o700)
+            except OSError:
+                pass
+        return False
 
     # ---- 提示词与环境 ----
 

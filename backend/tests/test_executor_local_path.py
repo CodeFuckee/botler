@@ -1,5 +1,6 @@
 """ClaudeExecutor 本地工作区测试：local_path 仓库直接在该文件夹执行。"""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -147,3 +148,88 @@ class TestPrepareWorkspaceIssue12:
         executor.prepare_workspace(_repo_dict(str(repo)))
         script = executor.workspace_root / ".botler-askpass-project.sh"
         assert script.exists(), "askpass 脚本在 prepare 后被删除，fetch 凭据间歇失败"
+
+
+# ---- issue #91 复现：root 残留致 git clean Permission denied → 任务重试耗尽 ----
+
+class TestPrepareWorkspaceCleanTolerant:
+    """issue #91（诊断任务 #136）：local_path 工作区存在非本进程用户
+    （如 root 跑过 flutter build）留下的 untracked 目录时，git clean -fd
+    删除其中条目报 Permission denied 而整体失败 → 任务重试耗尽。
+    修复后：尽力 Python 层删除，仍删不掉的降级警告继续，不阻塞任务。
+    """
+
+    def _mk_root_leftover(self, repo: Path) -> Path:
+        """模拟 root 残留：untracked 目录 + 无写权限（等价非本进程用户属主）。"""
+        leftover = repo / "ephemeral_root_bak_20260812"
+        leftover.mkdir()
+        (leftover / "generated.cc").write_text("stale", encoding="utf-8")
+        symlinks = leftover / ".plugin_symlinks"
+        symlinks.mkdir()
+        (symlinks / "window_manager").symlink_to("/root/.pub-cache/never-exists")
+        leftover.chmod(0o555)  # 无写权限：git clean 删除内部条目 Permission denied
+        return leftover
+
+    def test_clean_permission_denied_does_not_fail_task(self, executor, tmp_path):
+        """无写权限残留导致 clean 权限失败时，prepare_workspace 应成功并清理干净。
+
+        修复前：git clean -fd exit 1 → ExecutorError → 任务失败重试耗尽；
+        修复后：残留属主为本进程用户（chmod 可恢复权限）→ Python 层删除
+        干净 → 任务正常继续。
+        """
+        repo = _make_local_repo(tmp_path)
+        leftover = self._mk_root_leftover(repo)
+        try:
+            workdir, _env = executor.prepare_workspace(_repo_dict(str(repo)))
+            assert Path(workdir) == repo
+            assert not leftover.exists(), "可恢复权限的残留应被清理干净"
+        finally:
+            # 修复后残留可能已被删除，chmod 需容错
+            if leftover.exists():
+                leftover.chmod(0o755)  # 恢复权限，避免 tmp_path 清理失败
+
+    def test_clean_permission_denied_unrecoverable_warns_and_continues(
+            self, executor, tmp_path, monkeypatch):
+        """残留属主非本进程用户（chmod 也失败）时，降级警告继续不阻塞任务。
+
+        修复前：git clean 权限失败 → ExecutorError → 任务失败；
+        修复后：残留删不掉（需 root 权限），记录警告后继续执行，
+        由用户手动清理，任务不再因此失败。
+        """
+        repo = _make_local_repo(tmp_path)
+        leftover = self._mk_root_leftover(repo)
+        real_chmod = os.chmod
+
+        def fake_chmod(path, *args, **kwargs):
+            # 模拟 root 属主：对残留目录恢复权限也失败（真实场景 EACCES）
+            if Path(path) == leftover:
+                raise PermissionError(13, "Permission denied")
+            return real_chmod(path, *args, **kwargs)
+
+        monkeypatch.setattr("botler.executor.os.chmod", fake_chmod)
+        try:
+            workdir, _env = executor.prepare_workspace(_repo_dict(str(repo)))
+            assert Path(workdir) == repo
+            # 残留仍在（进程无权限删除），但任务不再因此失败
+            assert leftover.exists(), "root 属主残留删不掉时应原样保留"
+        finally:
+            real_chmod(leftover, 0o755)  # 恢复权限，避免 tmp_path 清理失败
+
+    def test_clean_non_permission_error_still_raises(self, executor, tmp_path,
+                                                     monkeypatch):
+        """非权限类的 git clean 失败保持原行为：仍抛 ExecutorError。
+
+        宽容处理只针对 Permission denied（外部环境污染），其余错误
+        （如磁盘故障、git 损坏）不能静默吞掉。
+        """
+        repo = _make_local_repo(tmp_path)
+        real_git = executor._git
+
+        def fake_git(workdir, *args, **kwargs):
+            if args and args[0] == "clean":
+                raise ExecutorError("git clean 失败 (exit 1): fatal: index corrupted")
+            return real_git(workdir, *args, **kwargs)
+
+        monkeypatch.setattr(executor, "_git", fake_git)
+        with pytest.raises(ExecutorError):
+            executor.prepare_workspace(_repo_dict(str(repo)))
