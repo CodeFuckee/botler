@@ -48,10 +48,10 @@ test('Overview.jsx 导出分组函数与组定义，渲染使用分组逻辑', (
                '渲染应调用 groupIssuesByBotLabel 分组')
 })
 
-test('组显示顺序为 bot-failed → bot-done → 其他（用户指定顺序）', () => {
+test('组显示顺序为 运行中 → bot-failed → bot-done → 其他（运行中置顶，issue #101）', () => {
   assert.deepEqual(ISSUE_GROUPS.map((g) => g.key),
-                   ['failed', 'done', 'other'],
-                   '组顺序应为 failed/done/other')
+                   ['running', 'failed', 'done', 'other'],
+                   '组顺序应为 running/failed/done/other')
   assert.equal(BOT_STATUS_META.done.cls, 'issue-status-done')
   assert.equal(BOT_STATUS_META.failed.cls, 'issue-status-failed')
 })
@@ -117,9 +117,9 @@ test('边界：label 元素为 null / 缺 name 时忽略且不崩', () => {
   assert.equal(botStatusKey({ labels: [null] }), null, '仅 null 元素应判定为 null')
 })
 
-test('边界：空数组返回三组全空', () => {
+test('边界：空数组返回四组全空', () => {
   const g = groupIssuesByBotLabel([])
-  assert.deepEqual(g, { failed: [], done: [], other: [] })
+  assert.deepEqual(g, { running: [], failed: [], done: [], other: [] })
 })
 
 test('边界：单元素仅归一组', () => {

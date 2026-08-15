@@ -323,9 +323,10 @@ test('渲染：任务与 issue 全不匹配时不误高亮', async () => {
   }
 })
 
-test('渲染：高亮不破坏既有分组与标签胶囊', async () => {
+test('渲染：高亮与置顶分组并存，不破坏标签胶囊与终态分组', async () => {
   // 运行中的 issue 带 in-progress 标签（executor 处理中标签），应照常
-  // 渲染为标签胶囊，且仍按 bot 终态标签分组
+  // 渲染为标签胶囊；issue #101 起运行中的 issue 置顶为「⚙️ 运行中」组，
+  // bot-done 的 issue 仍留在「✅ bot-done」组
   const issues = {
     repos: [{
       repo_id: 1, repo_name: 'botler', priority: 10,
@@ -347,10 +348,11 @@ test('渲染：高亮不破坏既有分组与标签胶囊', async () => {
   try {
     assert.equal(renderError, null)
     const root = renderer.root
-    // 分组照常：bot-done 组 + 其他组
+    // 分组：运行中组置顶 + bot-done 组（issue #101 置顶分组）
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
     assert.deepEqual(titles.map((t) => t.props.children),
-                     ['✅ bot-done', '📋 其他'], '分组渲染不受高亮影响')
+                     ['⚙️ 运行中', '✅ bot-done'],
+                     '运行中的 issue 置顶为运行中组，bot-done 组照常')
     // 运行徽章与 in-progress 标签胶囊并存
     const pills = root.findAll((n) => n.props.className === 'label-pill')
     assert.deepEqual(pills.map((p) => p.props.children),

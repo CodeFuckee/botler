@@ -59,8 +59,11 @@ export const BOT_STATUS_META = {
             hint: 'bot 处理失败，需人工介入' },
 }
 
-// 组显示顺序：用户指定 bot-failed → bot-done → 其他（issue #80 评论区）
+// 组显示顺序：运行中 → bot-failed → bot-done → 其他。运行中置顶
+// （issue #101）；其后沿用用户指定 bot-failed → bot-done → 其他
+// （issue #80 评论区）
 export const ISSUE_GROUPS = [
+  { key: 'running', title: '⚙️ 运行中', hint: '正在被 bot 执行的 issue，置顶展示' },
   { key: 'failed', title: '❌ bot-failed', hint: 'bot 处理失败，需人工介入' },
   { key: 'done', title: '✅ bot-done', hint: 'bot 已完成开发，待人工确认关闭' },
   { key: 'other', title: '📋 其他', hint: '尚未处理或处理中的 issue' },
@@ -96,11 +99,19 @@ export function botStatusKey(issue) {
   return hasFailed ? 'failed' : null
 }
 
-// 按 bot 终态标签分组：{ failed, done, other }。组内保持原始相对顺序
-// （后端已按 updated_at 降序），前端不重排
-export function groupIssuesByBotLabel(issues) {
-  const groups = { failed: [], done: [], other: [] }
+// 按 bot 终态标签分组：{ running, failed, done, other }。issue #101：
+// 正在运行的 issue（任务 running/retrying 命中 runningKeys）独立成
+// running 组置顶展示，优先于终态标签分组；任务结束键消失后自动回落
+// 原分组。组内保持原始相对顺序（后端已按 updated_at 降序），前端不重排
+export function groupIssuesByBotLabel(issues, runningKeys, repoId) {
+  const groups = { running: [], failed: [], done: [], other: [] }
   for (const i of Array.isArray(issues) ? issues : []) {
+    // 运行中判定优先于终态标签（重试中的 bot-failed 等一并置顶）
+    if (runningKeys && typeof runningKeys.has === 'function'
+        && runningKeys.has(`${repoId}:${i.iid}`)) {
+      groups.running.push(i)
+      continue
+    }
     groups[botStatusKey(i) || 'other'].push(i)
   }
   return groups
@@ -243,7 +254,7 @@ export default function Overview() {
           其后依次为运行中任务、CI/CD 流水线 */}
       <section className="issues-section">
         <h2>开放 Issue</h2>
-        <p className="muted">已启用仓库的开放 issue，按仓库优先级排序（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
+        <p className="muted">已启用仓库的开放 issue，按仓库优先级排序，正在运行的 issue 置顶展示（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
         {issueError && (
           <div className="alert alert-error" onClick={() => setIssueError('')}>{issueError}</div>
         )}
@@ -274,9 +285,11 @@ export default function Overview() {
                   <p className="muted">该仓库暂无开放 issue</p>
                 ) : (
                   /* issue #80：按 bot 终态标签分组（bot-failed / bot-done /
-                     其他），只渲染非空组，组标题带计数 */
+                     其他），只渲染非空组，组标题带计数
+                     issue #101：正在运行的 issue 独立成 running 组置顶，
+                     任务结束键消失后自动回落原分组 */
                   ISSUE_GROUPS.map((g) => {
-                    const items = groupIssuesByBotLabel(r.issues)[g.key]
+                    const items = groupIssuesByBotLabel(r.issues, runningKeys, r.repo_id)[g.key]
                     if (items.length === 0) return null
                     return (
                       <div key={g.key} className="issue-group">

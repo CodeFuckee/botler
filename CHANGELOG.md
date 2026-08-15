@@ -25,6 +25,27 @@
 
 ### Added
 
+- **概览页正在运行的 issue 置顶展示（issue #101）**：
+  概览页「开放 Issue」板块中，正在被 bot 执行（任务状态
+  running/retrying，即 LIVE_STATUSES）的 issue 从原 bot 终态分组
+  （bot-failed / bot-done / 其他）中移出，单独成「⚙️ 运行中」组
+  置于该仓库 issue 列表最上方，优先于终态分组展示；任务结束从任务
+  列表消失后，issue 自动回落原分组。复用 issue #99 的
+  `runningIssueKeys` 匹配逻辑（按 `repo_id + issue_iid`），零新增
+  接口。覆盖边界：runningKeys 缺失/null/非 Set、repoId 数字/字符串
+  归一、running 与 bot-done/bot-failed 并存（运行中优先终态分组）、
+  多个运行中 issue 保持原始相对顺序、跨仓库同 iid 不误置顶、
+  100 条混合数据分组计数正确且总量不丢、置顶项保留 #99 高亮与
+  「运行中」徽章、任务结束后分组还原。
+  - 前端：`Overview.jsx` 的 `groupIssuesByBotLabel` 增加可选参数
+    `runningKeys`/`repoId`（命中即归 running 组，缺省行为与 #80
+    完全一致），`ISSUE_GROUPS` 置顶新增 running 组（标题
+    「⚙️ 运行中」），渲染处传入运行键集合与仓库 id；板块说明文案
+    同步注明置顶规则。
+  - 测试：前端新增 12 用例（纯函数分组归类/相对顺序/边界防御/
+    100 条计数 + 渲染置顶顺序/多运行中/跨仓库/回落），更新 #99 与
+    #80 既有 3 处断言以对齐置顶分组行为。
+
 - **概览页开放 issue 高亮正在运行的 issue（issue #99）**：
   概览页「开放 Issue」板块中，正在被 bot 执行（任务状态
   running/retrying，即概览页活跃任务定义 LIVE_STATUSES）的 issue
