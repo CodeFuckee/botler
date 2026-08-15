@@ -6,6 +6,22 @@
 
 ### Added
 
+- **概览页开放 issue 板块响应式布局优化（issue #96）**：
+  此前 `.issues-list` 固定 3 列（`repeat(3, 1fr)`），4 个仓库卡片
+  3+1 分两行；`.content` 宽屏封顶 1600px，2K（2560）屏下页面两旁
+  各留 480px 大面积空白。优化后：
+  - 网格改为 `repeat(auto-fit, minmax(280px, 1fr))` 自适应列数——
+    宽度足够时 4 个仓库一行放下，仓库更多时自动换行、更少时收起
+    空轨道，窄视口（<1280）自动降列回退不挤压卡片；
+  - 宽屏断点放宽：≥1920 视口内容区 1600→1840px，新增 ≥2560 视口
+    2480px——两边各只留约 40px 边距，充分利用横向空间；
+  - `Tasks.jsx` 的 `contentWidthAt` 与 CSS 断点同步更新（防双源
+    漂移，既有测试持续守护）。
+  测试：`frontend/tests/overview-responsive-layout.test.mjs` 新增
+  8 用例——源码级断言 auto-fit 网格与宽屏断点、模拟 auto-fit 列数
+  断言 1280/1360/1440/1920/2560 视口下 4 卡一行且每列 ≥280px、
+  窄视口降列回退、contentWidthAt 新值同步、渲染级 1/4/5 个仓库
+  卡片数量边界（不丢卡不崩溃）。
 - **概览页「添加 Issue」按钮恢复——分支未合并回归修复（issue #95）**：
   排查发现 issue #92 实现的「添加 Issue」按钮只推送到
   `feat/overview-add-issue` 分支、从未合并回 main（也未创建 MR），

@@ -24,9 +24,11 @@ export const TABLE_MIN_WIDTH = 1360
 const CONTENT_CARD_PAD_X = 80
 
 // 视口宽度 → 内容区 --content-width（与 styles.css :root / 媒体查询断点同步；
-// issue #70 新增 1360/1280/1120/1000 四档，让列隐藏按优先级渐进生效）
+// issue #70 新增 1360/1280/1120/1000 四档，让列隐藏按优先级渐进生效；
+// issue #96 宽屏档放宽至 1840/2480，两边仅留约 40px 边距）
 export function contentWidthAt(viewportWidth) {
-  if (viewportWidth >= 1920) return 1600
+  if (viewportWidth >= 2560) return 2480
+  if (viewportWidth >= 1920) return 1840
   if (viewportWidth >= 1440) return 1440
   if (viewportWidth >= 1360) return 1360
   if (viewportWidth >= 1280) return 1280

@@ -147,8 +147,15 @@ body {
 @media (min-width: 1440px) {
   :root { --content-width: 1440px; --ellipsis-max: 520px; }
 }
+/* issue #96：宽屏进一步利用横向空间——1920 视口内容区 1840px、2K（2560）
+   视口内容区 2480px，两边各只留 40px 边距（此前封顶 1600px，2K 屏下
+   两边各留 480px 大面积空白）。配合 .issues-list 的 auto-fit 网格，
+   1920/2K 视口下 4 个仓库卡片一行放下。contentWidthAt（Tasks.jsx）同步。 */
 @media (min-width: 1920px) {
-  :root { --content-width: 1600px; }
+  :root { --content-width: 1840px; }
+}
+@media (min-width: 2560px) {
+  :root { --content-width: 2480px; }
 }
 
 h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 16px; }
@@ -1057,9 +1064,12 @@ code {
   font-size: 16px;
   margin: 0 0 4px;
 }
+/* issue #96：自适应列网格——宽度足够时 4 个仓库卡片一行放下（此前固定
+   3 列，4 个仓库 3+1 分两行）；列最小宽 280px，窄视口自动降列回退，
+   卡片数多于轨道数时自动换行，少于时收起空轨道（auto-fit） */
 .issues-list {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
   align-items: start;
 }
