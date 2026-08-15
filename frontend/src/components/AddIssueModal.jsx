@@ -2,6 +2,11 @@
 // 表单包含标题（必填）/ 描述（选填）/ 分配人（项目成员下拉，必填，
 // 默认选中 agent）/ 标签（仓库已有标签多选，必填，不可新建）。
 //
+// issue #103：只输入标题时描述直接复制标题内容——输入时实时联动
+// （描述为空则跟随标题更新，用户可见）+ 提交时兜底（描述为空则用
+// 标题填充，保证最终创建的 issue 描述等于标题）；描述非空时标题
+// 改动不会覆盖用户手写内容。
+//
 // 交互约定（与 IssueDrawer / RepoEditModal 一致）：
 // - 打开时加载 /api/issues/form-meta/{repo_id}（项目成员 + 项目标签），
 //   成员含 agent 时分配人默认选中 agent（用户确认的默认值）；
@@ -73,10 +78,13 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
     }
     setBusy(true)
     try {
+      // issue #103：描述为空时兜底复制标题，保证「只输入标题」创建的
+      // issue 描述等于标题；描述非空时保留用户输入。
+      const trimmedDesc = description.trim()
       await api.post('/api/issues', {
         repo_id: repo.repo_id,
         title: trimmedTitle,
-        description: description.trim() || null,
+        description: trimmedDesc || trimmedTitle,
         assignee_id: Number(assigneeId),
         labels: selectedLabels,
       })
@@ -108,7 +116,17 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
                 className="input add-issue-title"
                 placeholder="必填"
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e) => {
+                  // issue #103：只输入标题时描述实时复制标题内容（用户
+                  // 可见）。跟随条件：描述为空，或描述仍是上次自动复制的
+                  // 旧标题（继续改标题时同步更新）；用户手写的描述不被覆盖。
+                  const v = e.target.value
+                  setTitle(v)
+                  if (!description.trim()
+                      || description.trim() === title.trim()) {
+                    setDescription(v)
+                  }
+                }}
               />
             </label>
 
