@@ -438,10 +438,13 @@ export default function Overview() {
         )}
       </section>
 
-      {/* issue #85：issue 详情右边栏——点击列表项打开，显示具体信息与正文 */}
+      {/* issue #85：issue 详情右边栏——点击列表项打开，显示具体信息与正文。
+          issue #94：关闭 issue 成功后刷新列表（后端已清缓存，该 issue
+          从开放列表消失）；抽屉保持打开，状态徽章由抽屉内部更新 */}
       {selectedIssue && (
         <IssueDrawer issue={selectedIssue.issue} repoName={selectedIssue.repoName}
-                     onClose={() => setSelectedIssue(null)} />
+                     onClose={() => setSelectedIssue(null)}
+                     onIssueClosed={() => loadIssues()} />
       )}
     </div>
   )

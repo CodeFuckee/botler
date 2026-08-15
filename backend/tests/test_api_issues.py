@@ -14,6 +14,7 @@
 import time
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -51,6 +52,10 @@ class StubGitLab:
         self.calls: list[tuple[int, dict]] = []
         # 记录每次 list_project_labels 调用的 project_id（issue #71）
         self.label_calls: list[int] = []
+        # issue #94：close 桩——记录 (project_id, iid) 调用参数；
+        # close_errors[project_id] 注入关闭异常（None 表示成功）
+        self.close_calls: list[tuple[int, int]] = []
+        self.close_errors: dict[int, Exception] = {}
 
     def list_open_issues(self, project_id, assignee_id=None, scope="all",
                          order_by=None, sort=None, limit=None):
@@ -70,6 +75,14 @@ class StubGitLab:
         if project_id in self.fail_label_projects:
             raise GitLabError("模拟标签 API 故障")
         return list(self.labels_by_project.get(project_id, []))
+
+    def close_issue(self, project_id, iid):
+        """关闭 issue 桩（issue #94）：记录参数，可注入异常。"""
+        self.close_calls.append((project_id, iid))
+        err = self.close_errors.get(project_id)
+        if err is not None:
+            raise err
+        return {"iid": iid, "state": "closed"}
 
 
 def make_issue(iid: int, title: str,
@@ -344,7 +357,8 @@ class TestIssuesOverview:
         updated_at 转 UTC 无后缀（前端 fmtAgo 解析约定，与流水线
         commit_time 一致）。无对应数据时 labels 空列表、其余为 None。
         issue #85 起 description/author/state/created_at 一并透传
-        （右边栏详情），缺失时 description/author/created_at 为 None。"""
+        （右边栏详情），缺失时 description/author/created_at 为 None。
+        issue #94 起注入 project_id（关闭按钮定位仓库用）。"""
         tc, stub, db, tmp_path = client
         _add_repo(db)
         stub.issues_by_project = {42: [{
@@ -370,6 +384,7 @@ class TestIssuesOverview:
             "milestone": None,
             "assignees": [],
             "user_notes_count": None,
+            "project_id": 42,
         }
 
     def test_extended_fields_trimmed(self, client):
@@ -413,6 +428,7 @@ class TestIssuesOverview:
                 "avatar_url": "https://gitlab.example.com/a.png",
             }],
             "user_notes_count": 3,
+            "project_id": 42,
         }
 
     def test_label_colors_attached(self, client):
@@ -625,3 +641,123 @@ class TestOverviewIssuesPerRepoToken:
         data = resp.json()
         assert len(data["errors"]) == 1
         assert "仓库 a" in data["errors"][0]
+
+
+class TestCloseIssue:
+    """POST /api/issues/{project_id}/{iid}/close：概览页右边栏关闭 issue
+    按钮（issue #94）。
+
+    定位仓库：按 GitLab project_id 匹配「已启用」仓库，客户端选择与
+    概览聚合一致（per-repo token 优先，回退全局）；成功后清空概览
+    缓存，下一轮轮询立即反映关闭状态。错误映射：仓库不存在/未启用
+    → 404，GitLab 404（issue 不存在）→ 404，GitLab 其他错误与网络
+    错误 → 502。
+    """
+
+    def test_close_success(self, client):
+        """正常关闭：stub 收到正确参数、返回 ok 与 closed 状态。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.post("/api/issues/42/64/close")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "state": "closed"}
+        assert stub.close_calls == [(42, 64)]
+
+    def test_close_clears_overview_cache(self, client):
+        """关闭成功后清空概览缓存：下次 overview 重新聚合、新数据生效。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.issues_by_project = {42: [make_issue(1, "x")]}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+        # 10 秒 TTL 内命中缓存：改数据后仍返回旧结果（证明缓存生效）
+        stub.issues_by_project = {42: []}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+
+        tc.post("/api/issues/42/64/close")
+
+        # 缓存被清 → 重新聚合，读到新的（空）数据
+        assert tc.get("/api/issues/overview").json()["total"] == 0
+
+    def test_close_repo_not_found(self, client):
+        """GitLab project_id 无对应启用仓库 → 404，且不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.post("/api/issues/999/64/close")
+
+        assert resp.status_code == 404
+        assert "仓库" in resp.json()["detail"]
+        assert stub.close_calls == []
+
+    def test_close_repo_disabled(self, client):
+        """仓库未启用 → 404（与概览聚合只聚合启用仓库一致）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo", enabled=False)
+
+        resp = tc.post("/api/issues/42/64/close")
+
+        assert resp.status_code == 404
+        assert stub.close_calls == []
+
+    def test_close_issue_missing(self, client):
+        """GitLab 返回 404（issue 不存在/已被删除）→ 404。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.close_errors[42] = GitLabError("404 Not Found", status_code=404)
+
+        resp = tc.post("/api/issues/42/64/close")
+
+        assert resp.status_code == 404
+        assert "不存在" in resp.json()["detail"]
+
+    def test_close_gitlab_server_error(self, client):
+        """GitLab 上游 5xx → 502，不假装成功。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.close_errors[42] = GitLabError("500 Internal Server Error",
+                                            status_code=500)
+
+        resp = tc.post("/api/issues/42/64/close")
+
+        assert resp.status_code == 502
+
+    def test_close_network_error(self, client):
+        """网络错误（httpx.HTTPError，per-repo host 不可达）→ 502。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.close_errors[42] = httpx.HTTPError("connect timeout")
+
+        resp = tc.post("/api/issues/42/64/close")
+
+        assert resp.status_code == 502
+
+    def test_repeat_close_idempotent(self, client):
+        """重复关闭同一 issue（如双标签页并发点击）：接口幂等成功。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        r1 = tc.post("/api/issues/42/64/close")
+        r2 = tc.post("/api/issues/42/64/close")
+
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert stub.close_calls == [(42, 64), (42, 64)]
+
+    def test_overview_issues_carry_project_id(self, client):
+        """overview 聚合结果的每条 issue 带 project_id（前端关闭按钮
+        定位仓库用，issue #94）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        _add_repo(db, project_id=7, name="other")
+        stub.issues_by_project = {
+            42: [make_issue(1, "x")],
+            7: [make_issue(2, "y")],
+        }
+
+        resp = tc.get("/api/issues/overview")
+
+        assert resp.status_code == 200
+        pairs = [(r["repo_name"], it.get("project_id"))
+                 for r in resp.json()["repos"] for it in r["issues"]]
+        assert pairs == [("demo", 42), ("other", 7)]

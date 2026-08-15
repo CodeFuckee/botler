@@ -6,6 +6,31 @@
 
 ### Added
 
+- **概览页 issue 右边栏「关闭 issue」按钮（issue #94）**：
+  点击开放 issue 打开右边栏后，右上角新增「关闭 issue」危险操作按钮
+  （btn-danger 样式）——点击先二次确认（window.confirm），确认后调用
+  后端关闭 GitLab issue；成功后按钮消失、状态徽章即时变「已关闭」并
+  通知父组件刷新开放 issue 列表（该 issue 从列表消失），失败展示错误
+  信息、按钮保留可重试，请求进行中按钮禁用（「关闭中…」）防重复点击。
+  已关闭（closed）或无 project_id 的旧缓存数据不显示按钮。
+  - 后端：`api/issues.py` 新增 `POST /api/issues/{project_id}/{iid}/close`
+    薄路由——按 GitLab project_id 匹配「已启用」仓库（不存在/未启用 →
+    404），复用 `GitLabClient.close_issue`（state_event=close，GitLab
+    幂等，重复关闭安全），客户端选择与聚合一致（per-repo token 优先，
+    回退全局 bot token）；错误映射 GitLab 404 → 404「issue 不存在」、
+    GitLab 其他错误与网络错误 → 502；成功后清空概览缓存，下一轮轮询
+    立即反映关闭状态；overview 聚合的每条 issue 注入 project_id 字段
+    （前端关闭按钮定位仓库用）；
+  - 前端：`IssueDrawer.jsx` 新增关闭按钮（confirm 二次确认、closing
+    禁用、closed 本地标记即时更新徽章）、`Overview.jsx` 传
+    onIssueClosed 回调刷新列表、`styles.css` 新增 `.issue-drawer-error`
+    错误提示样式；
+  - 测试：后端 `test_api_issues.py` 新增 TestCloseIssue 9 用例（正常
+    关闭、缓存清空、仓库不存在/未启用 404、GitLab 404/5xx、网络错误、
+    幂等重复关闭、project_id 注入），2 个既有字段断言随新字段更新；
+    前端新增 `overview-issue-close-button.test.mjs` 8 用例（按钮显隐、
+    确认/取消、接口参数、成功状态与回调、失败重试、请求中禁用）。
+
 - **概览页开放 Issue 按 bot 终态标签分组 + 状态徽章（issue #80）**：
   开放 issue 板块区分 bot 处理状态——每个仓库卡片内 issue 按三组分组
   展示：`bot-failed`（处理失败）/ `bot-done`（已完成待确认）/ `其他`

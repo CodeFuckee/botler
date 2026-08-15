@@ -211,6 +211,8 @@ GET    /api/tasks/{id}                任务详情（含日志、commit_sha/comm
 GET    /api/tasks/{id}/logs           任务日志
 GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
 GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/文本/工具调用/结果逐事件实时可见；终态任务连接后回放历史事件，见实时输出功能）
+GET    /api/issues/overview           已启用仓库开放 issue 聚合（10s 缓存，issue #64）
+POST   /api/issues/{project_id}/{iid}/close   关闭指定 issue（概览页右边栏「关闭 issue」按钮，issue #94）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
 GET    /api/auth/status               登录状态探测（SSO 是否启用 + 当前用户，issue #27）

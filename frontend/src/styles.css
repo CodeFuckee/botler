@@ -513,6 +513,12 @@ code {
   padding-top: 12px;
   overflow-wrap: break-word;
 }
+/* issue #94：关闭 issue 失败的错误提示（按钮下方一行红字） */
+.issue-drawer-error {
+  margin-top: 8px;
+  color: var(--err);
+  font-size: 13px;
+}
 .issue-drawer-desc h3 {
   margin: 0 0 8px;
   font-size: 14px;

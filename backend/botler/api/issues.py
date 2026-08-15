@@ -29,7 +29,7 @@ import threading
 import time
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from ..gitlab_client import GitLabError
 from .pipelines import _commit_time_utc, _repo_client
@@ -170,6 +170,10 @@ def _collect(c) -> dict:
             # issue #71：项目标签色映射（labels API 失败时降级无色）
             label_colors = _fetch_label_colors(client, row["gitlab_project_id"])
             entry["issues"] = [_trim_issue(i, label_colors) for i in ordered]
+            # issue #94：注入 project_id（GitLab 项目数字 ID）供前端
+            # 右边栏「关闭 issue」按钮定位仓库（关闭接口按 project_id 匹配）
+            for it in entry["issues"]:
+                it["project_id"] = row["gitlab_project_id"]
             total += len(entry["issues"])
         except GitLabError as e:
             errors.append(f"仓库 {row['name']}: {e}")
@@ -193,3 +197,38 @@ def issues_overview(request: Request):
         _CACHE["expires_at"] = time.monotonic() + CACHE_TTL_SECONDS
         _CACHE["data"] = result
     return result
+
+
+@router.post("/{project_id}/{iid}/close")
+def close_issue(request: Request, project_id: int, iid: int):
+    """关闭指定 issue（issue #94：概览页右边栏「关闭 issue」按钮）。
+
+    定位仓库：按 GitLab project_id 匹配「已启用」仓库（不存在/未启用
+    → 404，与概览聚合只聚合启用仓库一致）；客户端选择与聚合一致
+    （per-repo token 优先，回退全局 bot token）。成功后清空概览缓存，
+    下一轮轮询立即反映关闭状态（issue 从开放列表消失）。
+
+    错误映射：GitLab 404（issue 不存在）→ 404；GitLab 其他错误与
+    网络错误 → 502（上游故障如实上报，不假装成功）。GitLab 对已关闭
+    issue 再次 close 幂等（返回 200），重复点击/多标签页并发安全。
+    """
+    c = request.app.state.ctx
+    row = None
+    for r in c.db.list_repos():
+        if r["gitlab_project_id"] == project_id and r["enabled"]:
+            row = r
+            break
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        client.close_issue(project_id, iid)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "issue 不存在") from e
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    clear_issue_cache()
+    return {"ok": True, "state": "closed"}
