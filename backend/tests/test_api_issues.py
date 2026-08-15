@@ -56,6 +56,49 @@ class StubGitLab:
         # close_errors[project_id] 注入关闭异常（None 表示成功）
         self.close_calls: list[tuple[int, int]] = []
         self.close_errors: dict[int, Exception] = {}
+        # issue #92：项目成员查询（members_by_project 按 project_id 配置，
+        # 可故障注入 fail_member_projects）；create_issue 记录调用参数、
+        # 可故障注入 fail_create_projects、可配置返回对象
+        self.members_by_project: dict[int, list[dict]] = {}
+        self.fail_member_projects: set[int] = set()
+        # issue #93：按 username 查用户 id 的桩（users_by_username 配置
+        # username→用户 id；未配置返回 None，模拟用户不存在），记录查询顺序
+        self.users_by_username: dict[str, int | None] = {}
+        self.user_id_lookups: list[str] = []
+        self.create_calls: list[tuple[int, dict]] = []
+        self.fail_create_projects: set[int] = set()
+        self.create_result: dict | None = None
+
+    def list_project_members(self, project_id):
+        """项目成员查询（issue #92）：按 project_id 配置，可故障注入。"""
+        if project_id in self.fail_member_projects:
+            raise GitLabError("模拟成员 API 故障")
+        return list(self.members_by_project.get(project_id, []))
+
+    def get_user_id_by_username(self, username):
+        """按 username 查用户 id（issue #93 复现桩）：记录查询顺序，
+        未配置的用户名返回 None（模拟用户不存在）。"""
+        self.user_id_lookups.append(username)
+        return self.users_by_username.get(username)
+
+    def create_issue(self, project_id, title, description=None,
+                     assignee_id=None, labels=None):
+        """创建 issue（issue #92）：记录调用参数，可故障注入、可配置返回。"""
+        self.create_calls.append((project_id, {
+            "title": title, "description": description,
+            "assignee_id": assignee_id, "labels": labels,
+        }))
+        if project_id in self.fail_create_projects:
+            raise GitLabError("模拟创建 issue 故障")
+        if self.create_result is not None:
+            return self.create_result
+        return {"iid": 99, "title": title, "state": "opened",
+                "web_url": f"https://gitlab.example.com/x/-/issues/99",
+                "labels": labels or [], "updated_at": None,
+                "created_at": "2026-08-15T10:00:00.000+08:00",
+                "description": description, "author": None,
+                "milestone": None, "assignees": [],
+                "user_notes_count": 0}
 
     def list_open_issues(self, project_id, assignee_id=None, scope="all",
                          order_by=None, sort=None, limit=None):
@@ -761,3 +804,322 @@ class TestCloseIssue:
         pairs = [(r["repo_name"], it.get("project_id"))
                  for r in resp.json()["repos"] for it in r["issues"]]
         assert pairs == [("demo", 42), ("other", 7)]
+
+
+# ---- issue #92：概览页添加 Issue ----
+
+class TestIssueFormMeta:
+    """GET /api/issues/form-meta/{repo_id}：添加 issue 弹窗所需元数据
+    （项目成员下拉 + 项目标签多选）。"""
+
+    def test_returns_members_and_labels(self, client):
+        """正常路径：成员精简为 id/username/name（id 取 user_id——
+        GitLab 创建 issue 的 assignee_ids 需要用户 id，而 members API
+        顶层 id 是成员关系 id）；标签带颜色精简透传。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 113, "user_id": 20, "username": "agent",
+             "name": "Agent", "access_level": 40},
+            {"id": 114, "user_id": 21, "username": "dev",
+             "name": "Dev", "access_level": 30},
+        ]}
+        stub.labels_by_project = {42: [
+            {"name": "bug", "color": "FF0000", "text_color": "FFFFFF"},
+            {"name": "ui", "color": "69D100", "text_color": "FFFFFF"},
+        ]}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["members"] == [
+            {"id": 20, "username": "agent", "name": "Agent"},
+            {"id": 21, "username": "dev", "name": "Dev"},
+        ]
+        assert data["labels"] == [
+            {"name": "bug", "color": "FF0000", "text_color": "FFFFFF"},
+            {"name": "ui", "color": "69D100", "text_color": "FFFFFF"},
+        ]
+
+    def test_repo_not_found(self, client):
+        """仓库不存在 → 404。"""
+        tc, stub, db, tmp_path = client
+
+        resp = tc.get("/api/issues/form-meta/999")
+
+        assert resp.status_code == 404
+
+    def test_repo_disabled(self, client):
+        """仓库未启用 → 400（概览页只展示启用仓库，后端兜底拦截）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="off", enabled=False)
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 400
+
+    def test_members_query_failure_returns_502(self, client):
+        """成员查询失败 → 502（成员为必填字段来源，不可降级）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.fail_member_projects = {42}
+        stub.labels_by_project = {42: [{"name": "bug", "color": "FF0000",
+                                        "text_color": "FFFFFF"}]}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 502
+        assert "成员" in resp.json()["detail"]
+
+    def test_labels_query_failure_returns_502(self, client):
+        """标签查询失败 → 502（标签为必填字段来源，不可降级）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.fail_label_projects = {42}
+        stub.members_by_project = {42: [
+            {"id": 1, "user_id": 20, "username": "agent", "name": "Agent"}]}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 502
+        assert "标签" in resp.json()["detail"]
+
+    def test_empty_members_and_labels(self, client):
+        """边界：仓库无成员/无标签 → 空数组，200（前端按空状态提示）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"members": [], "labels": []}
+
+    def test_invalid_member_entries_filtered(self, client):
+        """边界：成员元素非对象/缺 user_id 且 username 查不到时被过滤，不 500。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            None, "junk", {"username": "no-id"},
+            {"id": 1, "user_id": 20, "username": "agent", "name": "Agent"},
+        ]}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == [
+            {"id": 20, "username": "agent", "name": "Agent"}]
+
+    # ---- issue #93：members/all 返回项无 user_id 字段（GitLab 19 实测
+    # 行为），成员按 username 查 /users 补齐用户 id，下拉不再为空 ----
+
+    def test_members_without_user_id_resolved_by_username(self, client):
+        """复现 issue #93：成员对象只有顶层 id（成员关系 id）与 username，
+        无 user_id——按 username 查 /users 补齐真实用户 id。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 1, "username": "chenkaidi", "name": "chenkaidi",
+             "access_level": 50},
+            {"id": 3, "username": "agent", "name": "agent",
+             "access_level": 40},
+        ]}
+        stub.users_by_username = {"chenkaidi": 1, "agent": 3}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == [
+            {"id": 1, "username": "chenkaidi", "name": "chenkaidi"},
+            {"id": 3, "username": "agent", "name": "agent"},
+        ]
+        assert stub.user_id_lookups == ["chenkaidi", "agent"]
+
+    def test_members_without_user_id_unresolvable_filtered(self, client):
+        """边界：username 查不到（用户已删除）的成员剔除，不 500、不影响其余。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 9, "username": "ghost", "name": "Ghost"},
+            {"id": 3, "username": "agent", "name": "agent"},
+        ]}
+        stub.users_by_username = {"agent": 3}  # ghost 未配置 → None
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == [
+            {"id": 3, "username": "agent", "name": "agent"}]
+
+    def test_members_with_user_id_skip_username_lookup(self, client):
+        """user_id 存在的成员不发起 /users 查询（避免无谓的 N+1 请求）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.members_by_project = {42: [
+            {"id": 113, "user_id": 20, "username": "agent", "name": "Agent"},
+            {"id": 114, "user_id": 21, "username": "dev", "name": "Dev"},
+        ]}
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == [
+            {"id": 20, "username": "agent", "name": "Agent"},
+            {"id": 21, "username": "dev", "name": "Dev"},
+        ]
+        assert stub.user_id_lookups == []
+
+    def test_uses_per_repo_client(self, client, monkeypatch):
+        """per-repo client 优先（与 issue 查询一致，issue #60 模式）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        per = StubGitLab()
+        per.members_by_project = {42: [
+            {"id": 1, "user_id": 20, "username": "agent", "name": "Agent"}]}
+        per.labels_by_project = {42: [
+            {"name": "bug", "color": "FF0000", "text_color": "FFFFFF"}]}
+        from botler.api import issues as issues_mod
+        monkeypatch.setattr(issues_mod, "_repo_client",
+                            lambda c, row: per if row["name"] == "a" else None)
+
+        resp = tc.get("/api/issues/form-meta/1")
+
+        assert resp.status_code == 200
+        assert len(resp.json()["members"]) == 1
+        # 全局桩未被调用
+        assert len(stub.calls) == 0
+
+
+class TestCreateIssue:
+    """POST /api/issues：在指定仓库创建 issue（标题/描述/分配人/标签）。"""
+
+    def _post(self, tc, **overrides):
+        body = {"repo_id": 1, "title": "新 issue",
+                "description": "描述", "assignee_id": 20,
+                "labels": ["bug", "ui"]}
+        body.update(overrides)
+        return tc.post("/api/issues", json=body)
+
+    def test_create_success(self, client):
+        """正常路径：调用 create_issue 传参正确（labels 保持数组由
+        GitLabClient 拼逗号），返回 201 与精简后的 issue 对象。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+
+        resp = self._post(tc)
+
+        assert resp.status_code == 201
+        assert stub.create_calls == [(42, {
+            "title": "新 issue", "description": "描述",
+            "assignee_id": 20, "labels": ["bug", "ui"],
+        })]
+        issue = resp.json()
+        assert issue["iid"] == 99
+        assert issue["title"] == "新 issue"
+        assert issue["state"] == "opened"
+
+    def test_title_required(self, client):
+        """边界：标题缺失/纯空白 → 400（GitLab 创建 issue 的硬性要求）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+
+        assert self._post(tc, title="").status_code == 400
+        assert self._post(tc, title="   ").status_code == 400
+
+        assert stub.create_calls == []
+
+    def test_labels_required(self, client):
+        """边界：标签空列表/全空白元素 → 400（用户确认标签必填）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+
+        assert self._post(tc, labels=[]).status_code == 400
+        assert self._post(tc, labels=["  ", ""]).status_code == 400
+
+        assert stub.create_calls == []
+
+    def test_blank_label_elements_filtered(self, client):
+        """边界：标签含空白元素时过滤后仍合法（空白项忽略）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+
+        resp = self._post(tc, labels=["bug", " ", "ui"])
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["labels"] == ["bug", "ui"]
+
+    def test_assignee_required(self, client):
+        """边界：分配人缺失 → 400（用户确认分配人必填）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+
+        assert self._post(tc, assignee_id=None).status_code == 400
+        assert stub.create_calls == []
+
+    def test_description_optional(self, client):
+        """边界：描述选填——缺失/空白时透传 None，不阻塞创建。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+
+        assert self._post(tc, description="").status_code == 201
+        assert self._post(tc, description=None).status_code == 201
+
+        assert stub.create_calls[0][1]["description"] is None
+        assert stub.create_calls[1][1]["description"] is None
+
+    def test_repo_not_found(self, client):
+        """仓库不存在 → 404。"""
+        tc, stub, db, tmp_path = client
+
+        assert self._post(tc, repo_id=999).status_code == 404
+        assert stub.create_calls == []
+
+    def test_repo_disabled(self, client):
+        """仓库未启用 → 400。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="off", enabled=False)
+
+        assert self._post(tc).status_code == 400
+        assert stub.create_calls == []
+
+    def test_create_failure_returns_502(self, client):
+        """GitLab 创建失败 → 502，错误信息透出。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.fail_create_projects = {42}
+
+        resp = self._post(tc)
+
+        assert resp.status_code == 502
+        assert "创建 issue 失败" in resp.json()["detail"]
+
+    def test_uses_per_repo_client(self, client, monkeypatch):
+        """per-repo client 优先（与 issue 查询一致，issue #60 模式）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        per = StubGitLab()
+        from botler.api import issues as issues_mod
+        monkeypatch.setattr(issues_mod, "_repo_client",
+                            lambda c, row: per if row["name"] == "a" else None)
+
+        resp = self._post(tc)
+
+        assert resp.status_code == 201
+        assert len(per.create_calls) == 1
+        assert stub.create_calls == []
+
+    def test_create_invalidates_overview_cache(self, client):
+        """创建成功后清空 overview 缓存：下一次 overview 请求重新拉取
+        （前端创建成功立即刷新列表，不能拿到 10 秒 TTL 旧缓存）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        stub.issues_by_project = {42: [make_issue(1, "旧 issue")]}
+
+        tc.get("/api/issues/overview")
+        assert len(stub.calls) == 1  # 首次拉取
+
+        resp = self._post(tc)
+        assert resp.status_code == 201
+
+        tc.get("/api/issues/overview")
+        assert len(stub.calls) == 2  # 缓存已失效，重新拉取

@@ -6,6 +6,16 @@
 
 ### Added
 
+- **概览页「添加 Issue」按钮恢复——分支未合并回归修复（issue #95）**：
+  排查发现 issue #92 实现的「添加 Issue」按钮只推送到
+  `feat/overview-add-issue` 分支、从未合并回 main（也未创建 MR），
+  main 上 issue #80/#94 独立演进，导致概览页开放 issue 板块仓库卡片
+  右上角的按钮在 main 上缺失。修复方式：将 `feat/overview-add-issue`
+  分支合并回 main（含 issue #92 按钮弹窗与 issue #93 分配人下拉修复），
+  按钮、后端 API、测试随 main 一并发布。
+  防回归：`frontend/tests/overview-add-issue.test.mjs` 11 用例随合并
+  进入 main，CI frontend:test job 持续守护按钮渲染与弹窗行为——按钮
+  再次丢失会立即测试失败阻断流水线。
 - **概览页 issue 右边栏「关闭 issue」按钮（issue #94）**：
   点击开放 issue 打开右边栏后，右上角新增「关闭 issue」危险操作按钮
   （btn-danger 样式）——点击先二次确认（window.confirm），确认后调用
@@ -30,6 +40,28 @@
     幂等重复关闭、project_id 注入），2 个既有字段断言随新字段更新；
     前端新增 `overview-issue-close-button.test.mjs` 8 用例（按钮显隐、
     确认/取消、接口参数、成功状态与回调、失败重试、请求中禁用）。
+- **概览页「添加 Issue」按钮：弹窗表单直连 GitLab 创建 issue（issue #92）**：
+  开放 issue 板块每个仓库卡片右上角新增「添加 Issue」按钮，点击弹出
+  表单：标题（必填）、描述（选填）、分配人（项目成员下拉，必填，默认
+  选中 agent）、标签（仓库已有标签多选，必填，不可新建）；提交后调用
+  GitLab API 在对应仓库创建 issue，成功后关闭弹窗并立即刷新列表。
+  - 后端：`gitlab_client.py` 新增 `list_project_members`（members/all
+    含继承成员，取 user_id 作为 assignee_ids 的用户 id——members API
+    顶层 id 是成员关系 id 不可用）与 `create_issue`（标题/描述/分配人/
+    标签拼装）；`api/issues.py` 新增 `GET /api/issues/form-meta/{repo_id}`
+    （成员+标签元数据，二者为必填字段数据来源，任一查询失败 502 不降级）
+    与 `POST /api/issues`（标题/分配人/标签必填校验、空白标签元素过滤，
+    per-repo client 优先与 issue 查询一致，创建成功后清空 overview 缓存
+    保证前端刷新立即生效）；
+  - 前端：新增 `AddIssueModal.jsx`（表单交互、成员含 agent 时默认选中、
+    Esc/遮罩/× 三种关闭方式）；`Overview.jsx` 卡片头右上角按钮 + 创建
+    成功后关闭弹窗并重新拉取列表；`styles.css` 弹窗字段与标签多选样式；
+  - 测试：后端 `test_api_issues.py` 新增 19 用例（成员精简 user_id、
+    404/400/502、成员标签空列表、异常成员元素过滤、per-repo client 优先、
+    三项必填校验、描述选填、缓存失效后重新拉取）；前端
+    `overview-add-issue.test.mjs` 11 用例（按钮渲染、默认选中 agent、
+    三项必填校验不调 POST、提交成功参数/弹窗关闭/列表刷新、失败保持
+    弹窗、空标签/元数据失败/遮罩关闭边界）。
 
 - **概览页开放 Issue 按 bot 终态标签分组 + 状态徽章（issue #80）**：
   开放 issue 板块区分 bot 处理状态——每个仓库卡片内 issue 按三组分组
@@ -157,6 +189,24 @@
     全量 814 通过）。
 
 ### Fixed
+
+- **概览页「添加 Issue」弹窗分配人下拉为空（issue #93）**：
+  现象为点击仓库卡片「添加 Issue」按钮后，分配人下拉列表为空，但
+  GitLab 平台上该仓库有三个可分配成员——排查确认并非 token 权限问题
+  （仓库内嵌 token 实测可正常拿到成员清单），而是字段兼容缺陷：后端
+  `_trim_member` 硬依赖 members/all 返回项的 `user_id` 字段，而本实例
+  GitLab 19.0.1 的 members/all 实际只返回顶层 `id`（成员关系 id，不可
+  用作 assignee_ids）与 `username`/`name`，不含 `user_id`——所有成员
+  被当作异常元素过滤，form-meta 返回空 members，前端下拉自然为空。
+  - 后端 `api/issues.py`：`_trim_member` 放宽为 user_id 缺失但 username
+    存在时保留条目（id 暂置 None）；`issue_form_meta` 对这类成员按
+    username 调 `client.get_user_id_by_username`（issue #65 已有方法）
+    查 /users 补齐真实用户 id，查不到（用户已删除等）的成员剔除——
+    下拉不出现无法分配的条目；user_id 存在的成员不发额外查询；
+  - 测试：TDD 先行（红灯复现真实 GitLab 成员返回形态），新增 3 用例
+    （无 user_id 成员按 username 补齐、查不到时剔除、有 user_id 时零
+    额外查询），并更新原有异常元素过滤用例语义；后端全量 886 通过、
+    前端全量 313 通过。
 
 - **CI security 门禁两处失效与 venv 安装目标缺陷（issue #86 收尾，
   issue #91 流水线诊断 #850 暴露）**：
