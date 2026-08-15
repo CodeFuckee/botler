@@ -6,6 +6,26 @@
 
 ### Fixed
 
+- **概览页竖屏平板浏览时开放 issue 区域仓库名显示不出来（issue #102）**：
+  概览页「开放 Issue」仓库卡片头 `.issue-repo-head` 为不换行 flex，
+  仓库名 `.issue-repo-name` 设了 `white-space: nowrap` +
+  `text-overflow: ellipsis` + `overflow: hidden`（flex 子项
+  overflow 非 visible 时自动最小尺寸为 0，可被压缩至 0），竖屏平板
+  窄视口下卡片网格 auto-fit 降为 1 列（约 280px 宽），优先级
+  badge、issue 计数、添加按钮占掉固定宽度后，仓库名被压缩至几乎
+  不可见。修复：头部 `flex-wrap: wrap` 允许换行；仓库名
+  `flex-basis: 100%` 独占首行 + `overflow-wrap: anywhere` 任意断行
+  （深路径 group/subgroup/project 无空格时也能断行完整显示），任何
+  视口宽度下仓库名均完整显示不再截断。
+  - 前端：`styles.css` 修改 `.issue-repo-head`（新增
+    `flex-wrap: wrap`）与 `.issue-repo-name`（`flex-basis: 100%`
+    + `overflow-wrap: anywhere`，移除 nowrap/ellipsis/overflow 截断
+    三件套）。
+  - 测试：前端新增 5 用例（CSS 规则断言头部换行、仓库名无
+    nowrap+ellipsis、overflow-wrap: anywhere、flex-basis 独占首行；
+    渲染级长仓库名深路径完整渲染进 issue-repo-name 不丢字符、多个
+    仓库各完整渲染）。
+
 - **「添加 issue」界面标签颜色不显示（issue #100）**：
   GitLab labels API 实际返回的颜色带 `#` 前缀（实测
   `{"color": "#6699cc", "text_color": "#FFFFFF"}`），而后端校验只

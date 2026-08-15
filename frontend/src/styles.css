@@ -1164,17 +1164,23 @@ code {
 .issue-repo-card {
   min-width: 0;
 }
+/* issue #102：头部允许换行——竖屏平板窄卡片（auto-fit 降为 1 列
+   ≈280px）中仓库名不再被优先级/计数/添加按钮等固定项压缩至不可见 */
 .issue-repo-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
 }
+/* issue #102：仓库名独占首行、任意断行完整显示——此前
+   nowrap+ellipsis+overflow:hidden 使 flex 子项自动最小尺寸为 0，
+   窄卡片中被压缩至几乎不可见；深路径（group/subgroup/project）
+   无空格时靠 overflow-wrap: anywhere 在任意字符处断行 */
 .issue-repo-name {
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
 }
 /* issue #92：仓库卡片右上角「添加 Issue」按钮——推到卡片头最右侧 */
 .add-issue-btn {
