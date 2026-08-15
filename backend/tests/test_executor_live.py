@@ -19,6 +19,7 @@ from botler.config import ConfigManager
 from botler.database import Database
 from botler.executor import (
     ClaudeExecutor, find_session_file, parse_transcript, read_log_delta,
+    read_session_prompt,
 )
 from botler.gitlab_client import GitLabClient
 from botler.templates import TemplateRenderer
@@ -177,15 +178,82 @@ class TestParseTranscript:
         msgs, truncated = parse_transcript(f, max_messages=50)
         assert truncated is True
         assert len(msgs) == 50
-        assert msgs[0]["text"] == "msg-70"  # 保留最后 50 条
+        # issue #90：首条 user 消息（提示词）不因消息数量截断丢失，置顶保留
+        assert msgs[0]["text"] == "msg-0"
         assert msgs[-1]["text"] == "msg-119"
 
     def test_long_text_truncated(self, tmp_path):
+        """非首条的长文本消息仍按 max_text_chars 截断（issue #90）。"""
         long_text = "x" * 10000
-        f = _write_session(tmp_path, [_user_text(long_text)])
+        # 第二条 user 消息（非提示词）→ 截断
+        f = _write_session(tmp_path, [_user_text("提示词"), _user_text(long_text)])
         msgs, _ = parse_transcript(f)
-        assert len(msgs[0]["text"]) == 5000
-        assert msgs[0]["truncated"] is True
+        assert len(msgs[0]["text"]) == 3          # 首条 user 完整保留
+        assert msgs[0]["truncated"] is False
+        assert len(msgs[1]["text"]) == 5000       # 后续长消息仍截断
+        assert msgs[1]["truncated"] is True
+        # 长 assistant 回复 → 仍截断
+        f2 = _write_session(tmp_path, [_assistant_text(long_text)])
+        msgs2, _ = parse_transcript(f2)
+        assert len(msgs2[0]["text"]) == 5000
+        assert msgs2[0]["truncated"] is True
+
+    def test_first_user_message_not_text_truncated(self, tmp_path):
+        """首条 user 消息为渲染后的完整提示词，跳过 5000 字符截断（issue #90）。
+
+        复现 #114：提示词 7066 字符 > 5000 上限，聊天记录只显示到
+        「推送后必须用」附近，与全局模版比对不完整。
+        """
+        prompt = "提示词开头\n- 推送后必须用 `glab ci status --branch` 监控流水线\n" + "z" * 7000
+        f = _write_session(tmp_path, [
+            _user_text(prompt),
+            _assistant_text("收到，开始处理"),
+        ])
+        msgs, truncated = parse_transcript(f)
+        assert truncated is False
+        assert msgs[0]["text"] == prompt        # 与全局模版逐字节一致
+        assert msgs[0]["truncated"] is False
+        assert "glab ci status" in msgs[0]["text"]
+        assert msgs[1]["text"] == "收到，开始处理"
+
+
+class TestReadSessionPrompt:
+    """read_session_prompt：会话文件首条 user 消息全文（issue #90 查看提示词）。
+
+    提示词不落库，仅存在于会话 jsonl 首条 user 消息；「查看提示词」按钮
+    通过该函数拿到完整渲染后的提示词供用户与全局模版比对。
+    """
+
+    def test_returns_full_first_user_text(self, tmp_path):
+        prompt = "完整提示词\n- 推送后必须用监控命令" + "w" * 6000
+        f = _write_session(tmp_path, [
+            _user_text(prompt),
+            _assistant_text("好的"),
+            _user_text("追问一句"),
+        ])
+        assert read_session_prompt(f) == prompt
+
+    def test_str_content_user_message(self, tmp_path):
+        f = _write_session(tmp_path, [_user_text_str_content("字符串形式的提示词")])
+        assert read_session_prompt(f) == "字符串形式的提示词"
+
+    def test_skips_empty_user_message(self, tmp_path):
+        # 首条 user 消息文本为空 → 继续找下一条有文本的 user 消息
+        f = _write_session(tmp_path, [
+            _user_text(""),
+            _user_text("真正的提示词"),
+        ])
+        assert read_session_prompt(f) == "真正的提示词"
+
+    def test_returns_none_when_no_user_message(self, tmp_path):
+        f = _write_session(tmp_path, [_assistant_text("只有助手消息")])
+        assert read_session_prompt(f) is None
+
+    def test_returns_none_when_file_missing_or_bad(self, tmp_path):
+        assert read_session_prompt(tmp_path / "nope.jsonl") is None
+        bad = tmp_path / "bad.jsonl"
+        bad.write_text("not-a-json\n", encoding="utf-8")
+        assert read_session_prompt(bad) is None
 
 
 class TestReadLogDelta:

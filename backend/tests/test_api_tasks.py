@@ -475,6 +475,37 @@ class TestTaskExecution:
         assert body["transcript"][1]["tool"] == "Bash"
         assert body["transcript_truncated"] is False
 
+    def test_execution_prompt_from_session_file(self, api_app, monkeypatch):
+        """execution 响应带 prompt 字段：首条 user 消息全文（issue #90）。
+
+        「查看提示词」按钮数据源——聊天记录首条 user 完整保留的同时，
+        单独提供 prompt 字段供前端展示，与全局模版逐字节比对。
+        """
+        app, db, tmp_path = api_app
+        monkeypatch.setattr("botler.executor.Path.home", lambda: tmp_path)
+        prompt = "渲染后的完整提示词" + "p" * 6000
+        session_lines = [
+            json.dumps({"type": "user", "message": {"role": "user",
+                        "content": [{"type": "text", "text": prompt}],
+                        "timestamp": "2026-08-12T10:00:00Z"}}),
+            json.dumps({"type": "assistant", "message": {"role": "assistant",
+                        "content": [{"type": "text", "text": "开始执行"}],
+                        "timestamp": "2026-08-12T10:00:01Z"}}),
+        ]
+        self._mk_session(tmp_path, "sid-prompt", session_lines)
+        task_id = self._mk_running_task(db, tmp_path, session_id="sid-prompt")
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["prompt"] == prompt                    # 提示词全文
+        assert body["transcript"][0]["text"] == prompt     # 聊天记录同样完整
+
+    def test_execution_prompt_none_when_file_missing(self, api_app, monkeypatch):
+        """会话文件丢失 → prompt 为 None（前端回退占位文案），不 500。"""
+        app, db, tmp_path = api_app
+        monkeypatch.setattr("botler.executor.Path.home", lambda: tmp_path)
+        task_id = self._mk_running_task(db, tmp_path, session_id="lost-sid")
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["prompt"] is None
+
     def test_execution_transcript_empty_when_file_missing(self, api_app, monkeypatch):
         """session_id 有值但会话文件已丢失 → transcript 空，不 500。"""
         app, db, tmp_path = api_app

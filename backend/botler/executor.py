@@ -262,6 +262,49 @@ def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
     return text, False
 
 
+def _first_user_line_index(lines: list[str]) -> int | None:
+    """找会话文件首条 user 消息所在行下标，找不到返回 None（issue #90）。"""
+    for i, line in enumerate(lines):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(record, dict) and record.get("type") == "user"
+                and isinstance(record.get("message"), dict)
+                and record["message"].get("role") == "user"):
+            return i
+    return None
+
+
+def read_session_prompt(session_file: Path) -> str | None:
+    """读取会话文件首条 user 消息全文（渲染后的完整提示词，issue #90）。
+
+    提示词不落库，仅存在于会话 jsonl 首条 user 消息（任务创建时由
+    executor 构造后传给 claude）。供「查看提示词」按钮展示，与全局模版
+    逐字节比对；文件缺失 / 无 user 消息 / 文本为空返回 None。
+    """
+    if session_file is None or not session_file.is_file():
+        return None
+    try:
+        lines = session_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("type") != "user":
+            continue
+        msg = record.get("message")
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        text = _transcript_text(msg.get("content"))
+        if text:
+            return text
+    return None
+
+
 def parse_transcript(session_file: Path, max_messages: int = _TRANSCRIPT_MAX_MESSAGES,
                      max_text_chars: int = _TRANSCRIPT_MAX_TEXT) -> tuple[list[dict], bool]:
     """解析 claude 会话 jsonl 为结构化聊天消息（issue #20 实时查看）。
@@ -272,8 +315,10 @@ def parse_transcript(session_file: Path, max_messages: int = _TRANSCRIPT_MAX_MES
       {"role": "assistant", "text", "ts", "truncated"}
       {"role": "tool", "tool", "input", "ts"}                （工具调用）
       {"role": "tool_result", "tool_use_id", "text", "tool_error", "ts", "truncated"}
-    返回 (messages, truncated)：消息过多时保留最后 max_messages 条并置
-    truncated=True；文件不存在 / 无有效行返回空列表。
+    返回 (messages, truncated)：消息过多时保留首条 user 消息（提示词）与
+    最后 max_messages-1 条并置 truncated=True；首条 user 消息（渲染后的
+    完整提示词，issue #90）跳过 max_text_chars 文本截断；文件不存在 /
+    无有效行返回空列表。
     """
     if session_file is None or not session_file.is_file():
         return [], False
@@ -282,12 +327,21 @@ def parse_transcript(session_file: Path, max_messages: int = _TRANSCRIPT_MAX_MES
     except OSError:
         return [], False
     if len(lines) > max_messages:
-        lines = lines[-max_messages:]
+        # issue #90：截断窗口置顶保留首条 user 消息（提示词），其余保留
+        # 最后 max_messages-1 条——提示词不因消息数量截断从聊天记录中消失
+        idx = _first_user_line_index(lines)
+        keep = max_messages - 1
+        tail = lines[-keep:] if keep > 0 else []
+        if idx is not None and (not tail or idx < len(lines) - keep):
+            lines = [lines[idx]] + tail
+        else:
+            lines = tail
         truncated = True
     else:
         truncated = False
 
     messages: list[dict] = []
+    first_user_done = False  # issue #90：首条可见 user 消息（提示词）完整保留不截断
     for line in lines:
         try:
             record = json.loads(line)
@@ -318,8 +372,12 @@ def parse_transcript(session_file: Path, max_messages: int = _TRANSCRIPT_MAX_MES
                 if not isinstance(part, dict):
                     continue
                 if part.get("type") == "text":
-                    text, cut = _truncate_text(part.get("text", ""), max_text_chars)
+                    if first_user_done:
+                        text, cut = _truncate_text(part.get("text", ""), max_text_chars)
+                    else:
+                        text, cut = part.get("text", ""), False
                     if text:
+                        first_user_done = True
                         messages.append({"role": "user", "text": text,
                                          "ts": ts, "truncated": cut})
                 elif part.get("type") == "tool_result":
@@ -332,8 +390,12 @@ def parse_transcript(session_file: Path, max_messages: int = _TRANSCRIPT_MAX_MES
                         "ts": ts, "truncated": cut,
                     })
         elif role == "user" and isinstance(content, str):
-            text, cut = _truncate_text(content, max_text_chars)
+            if first_user_done:
+                text, cut = _truncate_text(content, max_text_chars)
+            else:
+                text, cut = content, False
             if text:
+                first_user_done = True
                 messages.append({"role": "user", "text": text, "ts": ts, "truncated": cut})
     return messages, truncated
 

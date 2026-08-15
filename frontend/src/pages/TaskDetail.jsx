@@ -6,7 +6,8 @@ import { api, openTaskEventStream, fmtTime, fmtDuration, shortSha, STATUS_META, 
 const LIVE_STATUSES = ['queued', 'running', 'retrying']
 
 function LiveMsg({ m }) {
-  // 聊天消息渲染：用户 / 助手文本 / 工具调用 / 工具结果（issue #20）
+  // 聊天消息渲染：用户 / 助手文本 / 工具调用 / 工具结果（issue #20）。
+  // 被后端截断的长消息渲染显式标记（issue #90），不再被误认为数据丢失
   if (m.role === 'tool') {
     return (
       <div className="chat-msg chat-tool">
@@ -20,6 +21,7 @@ function LiveMsg({ m }) {
       <div className={'chat-msg chat-tool-result' + (m.tool_error ? ' chat-tool-error' : '')}>
         {m.tool_error && <span className="badge chat-err-badge">失败</span>}
         <span className="pre-wrap">{m.text || '（无输出）'}</span>
+        {m.truncated && <span className="muted small">（内容过长，已截断）</span>}
       </div>
     )
   }
@@ -27,6 +29,7 @@ function LiveMsg({ m }) {
   return (
     <div className={'chat-msg ' + cls}>
       <span className="pre-wrap">{m.text}</span>
+      {m.truncated && <span className="muted small">（内容过长，已截断）</span>}
       {m.ts && <span className="chat-ts">{fmtTime(m.ts)}</span>}
     </div>
   )
@@ -112,7 +115,8 @@ export default function TaskDetail() {
   // 实时执行面板（issue #20）：live 为 null 表示尚未拉取过
   const [live, setLive] = useState(null)
   const [liveDone, setLiveDone] = useState(false)
-  const liveRef = useRef({ offset: 0, lines: [], transcript: [], sessionId: null })
+  const liveRef = useRef({ offset: 0, lines: [], transcript: [], sessionId: null,
+                           prompt: null, transcriptTruncated: false })
   // 事件流（SSE 实时输出）：逐事件展示引擎执行过程；终态任务连接后
   // 后端回放全部历史事件再发 done，前端按 seq 去重（断线重连回放
   // 重叠不重复渲染）
@@ -141,6 +145,8 @@ export default function TaskDetail() {
       cur.offset = d.log_offset
       cur.lines = cur.lines.concat(d.log_delta)
       if (d.transcript?.length) cur.transcript = d.transcript
+      if (d.prompt) cur.prompt = d.prompt // issue #90：提示词全文懒加载
+      cur.transcriptTruncated = d.transcript_truncated
       if (d.session_id) cur.sessionId = d.session_id
       setLive({ ...cur })
       if (!LIVE_STATUSES.includes(d.status)) setLiveDone(true)
@@ -238,7 +244,9 @@ export default function TaskDetail() {
           {showPrompt ? '收起' : '查看'}提示词
         </button>
         {showPrompt && (
-          <pre className="log-view log-view-flat">{task.prompt || '（提示词未持久化，见执行日志）'}</pre>
+          // issue #90：提示词全文来自 execution 懒加载（会话文件首条 user
+          // 消息），会话文件不可读时回退占位文案
+          <pre className="log-view log-view-flat">{live?.prompt || '（提示词未持久化，见执行日志）'}</pre>
         )}
       </div>
 
@@ -267,6 +275,10 @@ export default function TaskDetail() {
                 <p className="muted">
                   {live.sessionId ? '暂无聊天消息' : '暂无聊天记录（会话尚未开始或会话文件不可读）'}
                 </p>
+              )}
+              {live.transcriptTruncated && (
+                // issue #90：消息数量超上限时后端只保留首条提示词与最近消息
+                <p className="muted small">⚠️ 聊天记录过多，仅显示首条提示词与最近消息</p>
               )}
               {live.transcript.map((m, i) => <LiveMsg key={i} m={m} />)}
             </div>

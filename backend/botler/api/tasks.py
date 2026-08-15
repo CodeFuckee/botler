@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from botler.events import parse_claude_stream_line, parse_hermes_event_line
 from botler.executor import (
     find_session_file, format_display_line, parse_transcript, read_log_delta,
+    read_session_prompt,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -224,11 +225,13 @@ def task_execution(request: Request, task_id: int,
 
     transcript: list[dict] = []
     truncated = False
+    prompt = None  # issue #90：渲染后的完整提示词（「查看提示词」按钮数据源）
     session_id = row["claude_session_id"]
     if session_id:
         session_file = find_session_file(session_id)
         if session_file:
             transcript, truncated = parse_transcript(session_file)
+            prompt = read_session_prompt(session_file)
 
     return {
         "status": row["status"],
@@ -237,6 +240,7 @@ def task_execution(request: Request, task_id: int,
         "log_delta": log_delta,
         "transcript": transcript,
         "transcript_truncated": truncated,
+        "prompt": prompt,
     }
 
 
