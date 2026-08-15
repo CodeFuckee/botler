@@ -6,6 +6,31 @@
 
 ### Added
 
+- **概览页 issue 右边栏新增标记编辑功能（issue #108）**：
+  需求「概览页面，点击issue弹出的右边栏，增加issue的标记编辑功能，
+  可以删除和添加标记」——抽屉「标签」行由只读展示升级为可编辑：
+  新增「编辑标记」按钮，点击进入编辑态加载项目标记池（checkbox
+  多选、当前标记预勾选、池外标记（组标签/已从标记库删除）仍可取消
+  勾选移除），保存时 diff 出 add/remove 一次提交，成功后抽屉标记
+  即时更新并刷新概览列表；失败保留编辑态可重试、取消不调接口。
+  - 后端：`api/issues.py` 新增 `GET /api/issues/{project_id}/labels`
+    （项目标记池，复用 `_form_meta_labels` 颜色归一化）与
+    `PUT /api/issues/{project_id}/{iid}/labels`（add/remove 一次提交，
+    复用 `GitLabClient.add_labels`，标记名归一化去重、全空 400、
+    成功后清概览缓存并返回更新后标记）；remove 只含当前实际存在的
+    标记，规避 GitLab remove_labels 对不存在标记返回 404 的行为。
+  - 前端：`IssueDrawer.jsx` 标签行新增编辑态（复用 label-picker/
+    label-choice 多选样式与抽屉错误横幅/重试模式），新增
+    `onLabelsUpdated` 回调；`Overview.jsx` 传入列表刷新回调；
+    `styles.css` 新增 `.labels-edit`/`.labels-edit-btn` 样式。
+  - 测试：后端 `test_api_issues.py` 新增 TestIssueLabels 18 用例
+    （标记池获取/空池/仓库不存在/未启用/GitLab 错误/网络错误、
+    更新成功/仅添加/仅移除/全空 400/归一化去重/缓存清空/issue 404/
+    5xx/网络错误）；前端新增 `overview-issue-drawer-labels-edit.test.mjs`
+    11 用例（编辑按钮显示条件、池加载与预勾选、add/remove 参数、
+    成功更新与回调、无变更不调接口、失败重试、加载失败重试、空池、
+    取消还原、防重复提交），先复现失败再修复通过。
+
 - **弹窗全面改用自定义对话框，不再使用浏览器原生 alert/confirm（issue #105）**：
   用户反馈「不要使用 alert 来弹出通知，自定义一个对话框」——前端新增
   页面内自定义对话框体系，替换全部 10 处浏览器原生 `window.confirm` /

@@ -1235,6 +1235,21 @@ code {
 .label-choice input[type='checkbox'] {
   accent-color: var(--primary, #428bca);
 }
+/* issue #108：右边栏标记编辑区——编辑按钮贴近标记胶囊；编辑态为
+   纵向排布的标记多选 + 操作按钮（保存/取消右对齐） */
+.labels-edit-btn {
+  margin-left: 8px;
+}
+.labels-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.labels-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
 /* issue #80：仓库卡片内按 bot 终态标签分组——组标题行 + 计数，
    空组不渲染；组标题提供分组视觉分隔 */
 .issue-group {

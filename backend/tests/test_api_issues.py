@@ -56,6 +56,13 @@ class StubGitLab:
         # close_errors[project_id] 注入关闭异常（None 表示成功）
         self.close_calls: list[tuple[int, int]] = []
         self.close_errors: dict[int, Exception] = {}
+        # issue #108：add_labels 桩——记录 (project_id, iid, labels,
+        # remove) 调用参数；labels_update_errors[(project_id, iid)]
+        # 注入更新异常（None 表示成功）；labels_update_result 配置
+        # 返回对象（None 时用默认 issue 对象，labels 为空）
+        self.labels_update_calls: list[tuple[int, int, list, list | None]] = []
+        self.labels_update_errors: dict[tuple[int, int], Exception] = {}
+        self.labels_update_result: dict | None = None
         # issue #92：项目成员查询（members_by_project 按 project_id 配置，
         # 可故障注入 fail_member_projects）；create_issue 记录调用参数、
         # 可故障注入 fail_create_projects、可配置返回对象
@@ -132,6 +139,21 @@ class StubGitLab:
         if err is not None:
             raise err
         return {"iid": iid, "state": "closed"}
+
+    def add_labels(self, project_id, iid, labels, remove=None):
+        """加/删标签桩（issue #108）：记录参数，可注入异常、可配置返回。"""
+        self.labels_update_calls.append((project_id, iid, labels, remove))
+        err = self.labels_update_errors.get((project_id, iid))
+        if err is not None:
+            raise err
+        if self.labels_update_result is not None:
+            return self.labels_update_result
+        return {"iid": iid, "title": "x", "state": "opened",
+                "web_url": f"https://gitlab.example.com/x/-/issues/{iid}",
+                "labels": labels or [], "updated_at": None,
+                "created_at": None, "description": None, "author": None,
+                "milestone": None, "assignees": [],
+                "user_notes_count": 0}
 
     def list_issue_notes(self, project_id, iid, limit=None):
         """评论/活动查询桩（issue #97）：记录参数，可注入异常。"""
@@ -1400,3 +1422,249 @@ class TestIssueDetail:
         assert resp.status_code == 200
         assert len(per.notes_calls) == 1
         assert stub.notes_calls == []
+
+
+class TestIssueLabels:
+    """GET /api/issues/{project_id}/labels 与 PUT /api/issues/
+    {project_id}/{iid}/labels：概览页右边栏标记编辑（issue #108）。
+
+    GET 返回项目标记池（归一化颜色，复用 form-meta 的 _form_meta_labels
+    精简逻辑），供右边栏「编辑标记」多选数据源；PUT 以 add/remove
+    一次提交加删标签（复用 GitLabClient.add_labels 的 add_labels/
+    remove_labels 同请求语义），成功后清空概览缓存并返回更新后的
+    标签列表。
+
+    定位仓库与关闭接口一致（project_id 匹配「已启用」仓库，不存在/
+    未启用 → 404）；错误映射：GitLab 404（issue 不存在）→ 404，
+    GitLab 其他错误与网络错误 → 502。
+    """
+
+    def test_get_labels_success(self, client):
+        """正常获取：返回归一化标签池（# 前缀颜色 → 无 # 6 位 hex，
+        非法颜色 → None 中性降级，与 issue #100 约定一致）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.labels_by_project = {42: [
+            {"id": 1, "name": "feature", "color": "#6699cc",
+             "text_color": "#FFFFFF", "description": None},
+            {"id": 2, "name": "bug", "color": "#ff0000",
+             "text_color": "#FFFFFF", "description": "缺陷"},
+            {"id": 3, "name": "plain", "color": "not-a-color",
+             "text_color": "#FFFFFF", "description": None},
+        ]}
+
+        resp = tc.get("/api/issues/42/labels")
+
+        assert resp.status_code == 200
+        labels = resp.json()["labels"]
+        assert [l["name"] for l in labels] == ["feature", "bug", "plain"]
+        assert labels[0]["color"] == "6699cc"
+        assert labels[0]["text_color"] == "FFFFFF"
+        assert labels[2]["color"] is None
+        assert labels[2]["text_color"] is None
+        assert stub.label_calls == [42]
+
+    def test_get_labels_empty(self, client):
+        """边界：项目无任何标签 → 200 空列表（前端提示暂无标记）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.get("/api/issues/42/labels")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"labels": []}
+
+    def test_get_labels_repo_not_found(self, client):
+        """GitLab project_id 无对应启用仓库 → 404，不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.get("/api/issues/999/labels")
+
+        assert resp.status_code == 404
+        assert stub.label_calls == []
+
+    def test_get_labels_repo_disabled(self, client):
+        """仓库未启用 → 404（与概览聚合只聚合启用仓库一致）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo", enabled=False)
+
+        resp = tc.get("/api/issues/42/labels")
+
+        assert resp.status_code == 404
+        assert stub.label_calls == []
+
+    def test_get_labels_gitlab_error(self, client):
+        """GitLab 标签 API 失败 → 502（标记池是编辑数据源，不可降级为空）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.fail_label_projects = {42}
+
+        resp = tc.get("/api/issues/42/labels")
+
+        assert resp.status_code == 502
+
+    def test_get_labels_network_error(self, client):
+        """网络错误（per-repo host 不可达）→ 502。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.fail_label_projects = {42}
+        # 网络错误与 GitLabError 走同一 502 分支，桩改为抛网络异常验证
+        from unittest.mock import patch
+        with patch.object(stub, "list_project_labels",
+                          side_effect=httpx.HTTPError("connect timeout")):
+
+            resp = tc.get("/api/issues/42/labels")
+
+        assert resp.status_code == 502
+
+    def test_put_labels_success(self, client):
+        """正常更新：stub 收到 add/remove 参数，返回更新后标签（带颜色）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.labels_by_project = {42: [
+            {"id": 1, "name": "feature", "color": "#6699cc",
+             "text_color": "#FFFFFF"},
+            {"id": 2, "name": "bug", "color": "#ff0000",
+             "text_color": "#FFFFFF"},
+        ]}
+        stub.labels_update_result = {
+            "iid": 64, "title": "x", "state": "opened",
+            "web_url": "https://gitlab.example.com/x/-/issues/64",
+            "labels": ["feature"], "updated_at": None, "created_at": None,
+            "description": None, "author": None, "milestone": None,
+            "assignees": [], "user_notes_count": 0,
+        }
+
+        resp = tc.put("/api/issues/42/64/labels",
+                      json={"add": ["feature"], "remove": ["bug"]})
+
+        assert resp.status_code == 200
+        assert stub.labels_update_calls == [(42, 64, ["feature"], ["bug"])]
+        labels = resp.json()["labels"]
+        assert [l["name"] for l in labels] == ["feature"]
+        assert labels[0]["color"] == "6699cc"
+        assert labels[0]["text_color"] == "FFFFFF"
+
+    def test_put_labels_add_only(self, client):
+        """仅添加（remove 缺失）→ remove 传 None，不触发移除语义。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
+
+        assert resp.status_code == 200
+        assert stub.labels_update_calls == [(42, 64, ["feature"], None)]
+
+    def test_put_labels_remove_only(self, client):
+        """仅移除（add 缺失）→ add 传空列表。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.put("/api/issues/42/64/labels", json={"remove": ["bug"]})
+
+        assert resp.status_code == 200
+        assert stub.labels_update_calls == [(42, 64, [], ["bug"])]
+
+    def test_put_labels_no_change(self, client):
+        """add/remove 均为空 → 400，不触碰 GitLab（空提交无意义，
+        也规避 GitLab 对空 add_labels/remove_labels 的 400）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.put("/api/issues/42/64/labels", json={"add": [], "remove": []})
+
+        assert resp.status_code == 400
+        assert stub.labels_update_calls == []
+
+    def test_put_labels_normalize(self, client):
+        """标签名归一化：去空白、去重（"feature"、"feature "、"" →
+        ["feature"]）后传给 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.put("/api/issues/42/64/labels",
+                      json={"add": ["feature", " feature ", "", "feature"],
+                            "remove": ["bug ", ""]})
+
+        assert resp.status_code == 200
+        assert stub.labels_update_calls == [(42, 64, ["feature"], ["bug"])]
+
+    def test_put_labels_normalize_all_blank(self, client):
+        """边界：add/remove 归一化后全空（全是空白串）→ 400。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.put("/api/issues/42/64/labels",
+                      json={"add": ["  "], "remove": [""]})
+
+        assert resp.status_code == 400
+        assert stub.labels_update_calls == []
+
+    def test_put_labels_clears_overview_cache(self, client):
+        """更新成功后清空概览缓存：下次 overview 重新聚合、新标签生效。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.issues_by_project = {42: [make_issue(1, "x")]}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+        # 10 秒 TTL 内命中缓存：改数据后仍返回旧结果（证明缓存生效）
+        stub.issues_by_project = {42: []}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+
+        tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
+
+        # 缓存被清 → 重新聚合，读到新的（空）数据
+        assert tc.get("/api/issues/overview").json()["total"] == 0
+
+    def test_put_labels_repo_not_found(self, client):
+        """GitLab project_id 无对应启用仓库 → 404，不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.put("/api/issues/999/64/labels", json={"add": ["feature"]})
+
+        assert resp.status_code == 404
+        assert stub.labels_update_calls == []
+
+    def test_put_labels_repo_disabled(self, client):
+        """仓库未启用 → 404。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo", enabled=False)
+
+        resp = tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
+
+        assert resp.status_code == 404
+        assert stub.labels_update_calls == []
+
+    def test_put_labels_issue_missing(self, client):
+        """GitLab 返回 404（issue 不存在/已被删除）→ 404。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.labels_update_errors[(42, 64)] = GitLabError(
+            "404 Not Found", status_code=404)
+
+        resp = tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
+
+        assert resp.status_code == 404
+        assert "不存在" in resp.json()["detail"]
+
+    def test_put_labels_gitlab_server_error(self, client):
+        """GitLab 上游 5xx → 502，不假装成功。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.labels_update_errors[(42, 64)] = GitLabError(
+            "500 Internal Server Error", status_code=500)
+
+        resp = tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
+
+        assert resp.status_code == 502
+
+    def test_put_labels_network_error(self, client):
+        """网络错误（httpx.HTTPError，per-repo host 不可达）→ 502。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.labels_update_errors[(42, 64)] = httpx.HTTPError("connect timeout")
+
+        resp = tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
+
+        assert resp.status_code == 502

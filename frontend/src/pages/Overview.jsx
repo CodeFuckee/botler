@@ -490,11 +490,14 @@ export default function Overview() {
 
       {/* issue #85：issue 详情右边栏——点击列表项打开，显示具体信息与正文。
           issue #94：关闭 issue 成功后刷新列表（后端已清缓存，该 issue
-          从开放列表消失）；抽屉保持打开，状态徽章由抽屉内部更新 */}
+          从开放列表消失）；抽屉保持打开，状态徽章由抽屉内部更新。
+          issue #108：标记编辑成功后同样刷新列表（后端已清缓存，
+          列表卡片标记即时同步） */}
       {selectedIssue && (
         <IssueDrawer issue={selectedIssue.issue} repoName={selectedIssue.repoName}
                      onClose={() => setSelectedIssue(null)}
-                     onIssueClosed={() => loadIssues()} />
+                     onIssueClosed={() => loadIssues()}
+                     onLabelsUpdated={() => loadIssues()} />
       )}
 
       {/* issue #92：添加 issue 弹窗——创建成功后关闭并立即刷新列表 */}

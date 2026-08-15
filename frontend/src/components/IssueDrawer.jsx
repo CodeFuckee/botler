@@ -12,6 +12,14 @@
 // system 标志分区展示；覆盖加载中/加载失败重试/空占位/旧数据缺
 // project_id 等边界。
 //
+// issue #108：标签行增加「编辑标记」功能——编辑态加载项目标记池
+// （GET /api/issues/{project_id}/labels，checkbox 多选、当前标记
+// 预勾选、池外当前标记仍可取消勾选移除），保存时 diff 出 add/
+// remove 一次 PUT /api/issues/{project_id}/{iid}/labels 提交（remove
+// 只含当前实际存在的标记，规避 GitLab remove_labels 对不存在标记
+// 返回 404）；成功后本地标记即时更新（displayLabels 覆盖）并通知
+// 父组件刷新列表（onLabelsUpdated）；失败保留编辑态可重试。
+//
 // 交互约定：
 // - 列表项本身不再直接跳转 GitLab，跳转统一走抽屉右上角
 //   「在 GitLab 中打开」按钮（web_url 新窗口）；
@@ -57,7 +65,8 @@ export function NoteAvatar({ note }) {
   )
 }
 
-export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed }) {
+export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
+                                      onLabelsUpdated }) {
   const [closing, setClosing] = useState(false) // 关闭请求进行中（按钮禁用）
   const [closed, setClosed] = useState(false)   // 本次会话关闭成功标记
   const [closeErr, setCloseErr] = useState('')  // 关闭失败的错误信息
@@ -65,6 +74,18 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed })
   // 非空表示加载失败，两个区块共用错误横幅 + 重试按钮）
   const [notes, setNotes] = useState(null)
   const [detailErr, setDetailErr] = useState('')
+  // issue #108：标记编辑状态——editingLabels 是否处于编辑态；
+  // labelPool null=标记池加载中；labelPoolErr 非空=加载失败；
+  // selectedLabels 编辑态勾选集合；savingLabels 保存请求进行中；
+  // labelErr 保存失败信息；displayLabels 保存成功后的本地标记覆盖
+  // （props issue 未刷新，标签行展示以此为准，null 表示用 issue.labels）
+  const [editingLabels, setEditingLabels] = useState(false)
+  const [labelPool, setLabelPool] = useState(null)
+  const [labelPoolErr, setLabelPoolErr] = useState('')
+  const [selectedLabels, setSelectedLabels] = useState([])
+  const [savingLabels, setSavingLabels] = useState(false)
+  const [labelErr, setLabelErr] = useState('')
+  const [displayLabels, setDisplayLabels] = useState(null)
 
   // Esc 关闭抽屉（SSR 测试环境无 document 时跳过）
   useEffect(() => {
@@ -137,6 +158,123 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed })
     }
   }
 
+  // ---- issue #108：标记编辑 ----
+
+  // 当前生效的标记列表：保存成功后的本地覆盖优先（后端返回的更新后
+  // 标记；props issue 是点击时的轮询快照，编辑成功前不刷新）
+  const currentLabels = displayLabels ?? (i.labels || [])
+  // 可编辑条件：带 project_id（标记接口按 project_id 定位仓库，
+  // 旧缓存数据缺失时隐藏按钮，与关闭按钮同约定）
+  const canEditLabels = typeof i.project_id === 'number'
+
+  // 进入编辑态：预勾选当前标记，加载项目标记池
+  async function startEditLabels() {
+    setEditingLabels(true)
+    setLabelErr('')
+    setSelectedLabels(currentLabels.map((l) => l.name))
+    setLabelPool(null)
+    setLabelPoolErr('')
+    try {
+      const d = await api.get(`/api/issues/${i.project_id}/labels`)
+      setLabelPool(Array.isArray(d && d.labels) ? d.labels : [])
+    } catch (e) {
+      setLabelPoolErr(e.message || '加载失败')
+    }
+  }
+
+  // 勾选/取消勾选一个标记（编辑态内）
+  function toggleLabel(name) {
+    setSelectedLabels((prev) => (prev.includes(name)
+      ? prev.filter((n) => n !== name)
+      : [...prev, name]))
+  }
+
+  // 取消编辑：不调接口，丢弃本地勾选状态，标记展示保持原状
+  function cancelEditLabels() {
+    setEditingLabels(false)
+    setLabelErr('')
+  }
+
+  // 保存：diff 出 add/remove 一次 PUT 提交。无变更直接退出编辑态
+  // （不调接口）；remove 只含当前实际存在的标记，规避 GitLab
+  // remove_labels 对不存在标记返回 404 的行为。成功后本地标记即时
+  // 更新并通知父组件刷新列表；失败保留编辑态可重试。
+  async function saveLabels() {
+    const current = currentLabels.map((l) => l.name)
+    const add = selectedLabels.filter((n) => !current.includes(n))
+    const remove = current.filter((n) => !selectedLabels.includes(n))
+    if (add.length === 0 && remove.length === 0) {
+      setEditingLabels(false)
+      return
+    }
+    setSavingLabels(true)
+    setLabelErr('')
+    try {
+      const d = await api.put(`/api/issues/${i.project_id}/${i.iid}/labels`,
+                              { add, remove })
+      setDisplayLabels(Array.isArray(d && d.labels) ? d.labels : [])
+      setEditingLabels(false)
+      onLabelsUpdated?.()
+    } catch (e) {
+      setLabelErr(e.message || '保存失败')
+    } finally {
+      setSavingLabels(false)
+    }
+  }
+
+  // 编辑态渲染：标记池加载失败（错误横幅 + 重试）/ 加载中 / 空池
+  // 提示 / checkbox 多选（当前标记预勾选）。池外当前标记（组标签
+  // 或已从标记库删除的标记）单独渲染为已勾选 checkbox——仍可取消
+  // 勾选移除，不可再添加（池外标记无法从池内重新勾选）
+  function renderLabelsEdit() {
+    if (labelPoolErr) {
+      return (
+        <div className="issue-drawer-error" role="alert">
+          {labelPoolErr}
+          <button type="button" className="btn btn-small labels-retry"
+                  onClick={startEditLabels} title="重新加载标记池">重试</button>
+        </div>
+      )
+    }
+    if (labelPool === null) return <p className="muted">加载标记中…</p>
+    const poolNames = new Set((labelPool || []).map((l) => l.name))
+    const outside = currentLabels.filter((l) => !poolNames.has(l.name))
+    // 标记胶囊内联 span（与 AddIssueModal 标签多选结构一致）
+    const choice = (l) => (
+      <label key={l.name} className="label-choice">
+        <input type="checkbox"
+               checked={selectedLabels.includes(l.name)}
+               onChange={() => toggleLabel(l.name)} />
+        <span className="label-pill"
+              style={l.color
+                ? { background: `#${l.color}`, color: `#${l.text_color}` }
+                : undefined}
+              title={`标签 ${l.name}`}>{l.name}</span>
+      </label>
+    )
+    return (
+      <div className="labels-edit">
+        {labelPool.length === 0 ? (
+          <p className="muted">该仓库暂无标记</p>
+        ) : (
+          <div className="label-picker">{labelPool.map(choice)}</div>
+        )}
+        {outside.length > 0 && (
+          <div className="label-picker">{outside.map(choice)}</div>
+        )}
+        {labelErr && <div className="issue-drawer-error" role="alert">{labelErr}</div>}
+        <div className="labels-edit-actions">
+          <button type="button" className="btn btn-small"
+                  onClick={cancelEditLabels}>取消</button>
+          <button type="button" className="btn btn-small btn-primary"
+                  disabled={savingLabels} onClick={saveLabels}>
+            {savingLabels ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   // 评论/活动区块的四态渲染：缺 project_id 旧数据 / 加载中 /
   // 加载失败（错误横幅在区块上方统一展示）/ 空列表与内容列表
   function renderNotesBody(list, emptyText, renderItem) {
@@ -179,15 +317,27 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed })
             <tr><th>更新时间</th><td>{fmtTime(i.updated_at)}</td></tr>
             <tr><th>标签</th>
               <td>
-                {(i.labels || []).length > 0 ? (
-                  i.labels.map((l) => (
-                    <span key={l.name} className="label-pill"
-                          style={l.color
-                            ? { background: `#${l.color}`, color: `#${l.text_color}` }
-                            : undefined}
-                          title={`标签 ${l.name}`}>{l.name}</span>
-                  ))
-                ) : '—'}
+                {editingLabels ? (
+                  renderLabelsEdit()
+                ) : (
+                  <>
+                    {currentLabels.length > 0 ? (
+                      currentLabels.map((l) => (
+                        <span key={l.name} className="label-pill"
+                              style={l.color
+                                ? { background: `#${l.color}`, color: `#${l.text_color}` }
+                                : undefined}
+                              title={`标签 ${l.name}`}>{l.name}</span>
+                      ))
+                    ) : '—'}
+                    {canEditLabels && (
+                      <button type="button" className="btn btn-small labels-edit-btn"
+                              onClick={startEditLabels} title="编辑标记">
+                        编辑标记
+                      </button>
+                    )}
+                  </>
+                )}
               </td></tr>
             <tr><th>里程碑</th><td>{i.milestone || '—'}</td></tr>
             <tr><th>负责人</th><td>{assigneeNames.length > 0 ? assigneeNames.join('、') : '—'}</td></tr>

@@ -33,6 +33,13 @@ API 实际返回的颜色带 # 前缀（实测 "#6699cc"），_normalize_hex 统
 归一化为无 # 的 6 位 hex 透传（overview 列表 / form-meta 弹窗 /
 右边栏共用 _label_entry，三处标签胶囊因此全部正确着色）；非法值仍
 置 None 中性降级，防样式注入校验不因兼容 # 前缀而放宽。
+
+issue #108（概览页右边栏标记编辑）：
+- GET /api/issues/{project_id}/labels：项目标记池（编辑数据源，
+  复用 _form_meta_labels 精简 + 颜色归一化）；
+- PUT /api/issues/{project_id}/{iid}/labels：add/remove 一次提交
+  加删标记（复用 GitLabClient.add_labels），成功后清空概览缓存并
+  返回更新后的标记列表。
 """
 
 from __future__ import annotations
@@ -263,6 +270,99 @@ def close_issue(request: Request, project_id: int, iid: int):
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
     clear_issue_cache()
     return {"ok": True, "state": "closed"}
+
+
+# ---- issue #108：概览页右边栏标记编辑 ----
+
+
+@router.get("/{project_id}/labels")
+def project_labels(request: Request, project_id: int):
+    """项目标记池（issue #108：概览页右边栏「编辑标记」数据源）。
+
+    仓库定位与关闭接口一致（project_id 匹配「已启用」仓库，不存在/
+    未启用 → 404）；客户端选择与聚合一致（per-repo token 优先，回退
+    全局 bot token）。标记池是编辑的数据来源，查询失败不可降级为空
+    （降级会让用户误以为仓库无标记）→ 502（与 form-meta 的标签查询
+    错误处理一致）。
+
+    返回复用 _form_meta_labels 精简：{name, color, text_color}，颜色
+    经 _normalize_hex 归一化（issue #100 的 # 前缀兼容）。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        labels = client.list_project_labels(project_id)
+    except GitLabError as e:
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    return {"labels": _form_meta_labels(labels or [])}
+
+
+def _normalize_label_names(names: list[str] | None) -> list[str]:
+    """标记名归一化（issue #108）：去空白、去空串、保序去重，与创建
+    issue 的标签校验风格一致。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in names or []:
+        name = str(raw).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+class IssueLabelsUpdate(BaseModel):
+    add: list[str] | None = None
+    remove: list[str] | None = None
+
+
+@router.put("/{project_id}/{iid}/labels")
+def update_issue_labels(request: Request, project_id: int, iid: int,
+                        body: IssueLabelsUpdate):
+    """更新 issue 标记（issue #108：概览页右边栏标记编辑）。
+
+    语义：add 添加标记、remove 移除标记，同一次请求同时生效（复用
+    GitLabClient.add_labels 的 add_labels/remove_labels 同请求语义）。
+    标记名归一化（去空白、去重）；add/remove 归一化后全空 → 400
+    （空提交无意义）。注意 GitLab 的 remove_labels 对不存在的标记
+    返回 404——前端按「当前标记集合 diff」提交 remove，保证移除的
+    都是实际存在的标记。
+
+    仓库定位与客户端选择与关闭接口一致；成功后清空概览缓存（下一
+    轮轮询立即反映新标记）并返回更新后的标记列表（从 GitLab 返回的
+    更新后 issue 提取 labels + 项目标记色映射，前端 label-pill 直接
+    使用；色映射查询失败降级无色，与 overview 行为一致）。
+
+    错误映射：GitLab 404（issue 不存在）→ 404；GitLab 其他错误与
+    网络错误 → 502。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    add = _normalize_label_names(body.add)
+    remove = _normalize_label_names(body.remove)
+    if not add and not remove:
+        raise HTTPException(400, "没有需要变更的标记")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        issue = client.add_labels(project_id, iid, add, remove=remove or None)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "issue 不存在") from e
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    clear_issue_cache()
+    label_colors = _fetch_label_colors(client, project_id)
+    return {"labels": _trim_issue(issue, label_colors)["labels"]}
 
 
 # ---- issue #97：概览页右边栏评论与活动 ----
