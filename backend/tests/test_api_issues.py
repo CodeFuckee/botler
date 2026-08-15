@@ -1165,7 +1165,9 @@ class TestCreateIssue:
         assert stub.create_calls == []
 
     def test_description_optional(self, client):
-        """边界：描述选填——缺失/空白时透传 None，不阻塞创建。"""
+        """边界：描述选填——缺失/空白时 API 层透传 None，不阻塞创建；
+        请求发送前的标题填充由 GitLabClient 层兜底（issue #103，见
+        test_gitlab_client.py::TestCreateIssue）。"""
         tc, stub, db, tmp_path = client
         _add_repo(db, project_id=42, name="a")
 

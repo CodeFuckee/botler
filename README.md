@@ -223,7 +223,7 @@ POST   /api/auth/logout               退出登录
 GET    /api/auth/me                   当前登录用户
 GET    /api/issues/overview           概览页开放 issue 聚合（已启用仓库，10 秒 TTL 缓存，issue #64）
 GET    /api/issues/form-meta/{id}     添加 issue 表单元数据：项目成员（含继承，members/all）+ 项目标签（issue #92）
-POST   /api/issues                    在指定仓库创建 issue（标题/分配人/标签必填、描述选填；成功后清缓存，issue #92）
+POST   /api/issues                    在指定仓库创建 issue（标题/分配人/标签必填、描述选填，描述为空时发送 GitLab API 自动填充标题；成功后清缓存，issue #92/#103）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97）
 POST   /webhook/gitlab                GitLab webhook 入口
 ```

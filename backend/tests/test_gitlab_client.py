@@ -342,3 +342,81 @@ class TestListOpenIssues:
         captured = self._stub(client)
         client.list_open_issues(42, order_by=None, sort=None, limit=None)
         assert captured[0][1] == {"state": "opened", "scope": "all"}
+
+
+class TestCreateIssue:
+    """GitLabClient.create_issue：描述为空时用标题填充 description
+    （issue #103 用户反馈：未输入描述时，发送 GitLab API 请求应把
+    标题内容填充到 description 字段）。用桩替换 _request 记录请求体
+    断言发送内容。"""
+
+    def _stub(self, client: GitLabClient) -> list[tuple[str, str, dict]]:
+        """用桩替换 _request，记录 (method, path, json) 调用参数。"""
+        captured: list[tuple[str, str, dict]] = []
+
+        def fake_request(method, path, **kwargs):
+            captured.append((method, path, kwargs.get("json")))
+            return {"iid": 99, "title": kwargs["json"]["title"],
+                    "state": "opened"}
+
+        client._request = fake_request
+        return captured
+
+    def _create(self, client, description=None, title="新 issue",
+                assignee_id=None, labels=None):
+        return client.create_issue(42, title, description=description,
+                                   assignee_id=assignee_id, labels=labels)
+
+    def test_description_none_falls_back_to_title(self):
+        """描述缺失（None）→ 发送 API 请求时 description 填充为标题。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        issue = self._create(client, description=None)
+
+        assert issue["iid"] == 99
+        method, path, body = captured[0]
+        assert (method, path) == ("POST", "/projects/42/issues")
+        assert body == {"title": "新 issue", "description": "新 issue"}
+
+    def test_description_empty_string_falls_back_to_title(self):
+        """描述为空字符串 → 同样填充为标题。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        self._create(client, description="")
+
+        assert captured[0][2] == {"title": "新 issue",
+                                  "description": "新 issue"}
+
+    def test_description_preserved_when_provided(self):
+        """描述非空（用户手写）→ 保持原样，不被标题覆盖。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        self._create(client, description="用户手写的描述")
+
+        assert captured[0][2] == {"title": "新 issue",
+                                  "description": "用户手写的描述"}
+
+    def test_description_equals_title_unchanged(self):
+        """描述与标题相同 → 兜底逻辑不产生变化。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        self._create(client, description="新 issue")
+
+        assert captured[0][2] == {"title": "新 issue",
+                                  "description": "新 issue"}
+
+    def test_assignee_and_labels_still_forwarded(self):
+        """回归：兜底改动不影响 assignee_ids/labels 的转发。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        self._create(client, assignee_id=20, labels=["bug", "ui"])
+
+        assert captured[0][2] == {"title": "新 issue",
+                                  "description": "新 issue",
+                                  "assignee_ids": [20],
+                                  "labels": "bug,ui"}

@@ -416,8 +416,10 @@ def create_issue(request: Request, body: IssueCreate):
     """在指定仓库创建 issue（issue #92）。
 
     校验：标题必填（GitLab 硬性要求）、分配人必填（用户确认方案）、
-    标签必填（用户确认方案，至少一个非空白项）；描述选填。创建成功后
-    清空 overview 缓存——前端创建成功后立即刷新列表，不能拿到 10 秒
+    标签必填（用户确认方案，至少一个非空白项）；描述选填。描述为空
+    （None/空白）时透传 None，由 GitLabClient.create_issue 在发送
+    GitLab API 请求前兜底填充标题（issue #103）。创建成功后清空
+    overview 缓存——前端创建成功后立即刷新列表，不能拿到 10 秒
     TTL 旧缓存（test_create_invalidates_overview_cache 覆盖）。
     """
     c = request.app.state.ctx

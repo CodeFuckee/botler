@@ -328,10 +328,13 @@ class GitLabClient:
         assignee_id 为 GitLab 用户 id（members/all 的 user_id）；labels
         为标签名数组（GitLab API 接受逗号分隔字符串，不存在的标签会自动
         创建——前端限定仓库已有标签多选，此处兜底拼逗号）。
+
+        issue #103：用户未输入描述（description 为 None/空串）时，发送
+        API 请求前将标题填充到 description 字段，保证「只输标题」创建
+        的 issue 描述恒等于标题；描述非空（用户手写）时保持原样。
+        （纯空白字符串的 strip 由 API 层负责，客户端只兜底 falsy 值。）
         """
-        body: dict = {"title": title}
-        if description:
-            body["description"] = description
+        body: dict = {"title": title, "description": description or title}
         if assignee_id is not None:
             body["assignee_ids"] = [assignee_id]
         if labels:

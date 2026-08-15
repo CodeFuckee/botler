@@ -6,6 +6,20 @@
 
 ### Fixed
 
+- **「添加 issue」只输入标题时后端未在发送 GitLab API 时填充描述（issue #103，用户反馈修正）**：
+  前一轮实现只在**前端**做标题→描述联动与提交兜底，后端创建
+  issue 的 GitLab API 请求在描述为空时不发送 description 字段，
+  用户反馈「没有实现」——要求后端在发送 API 请求时将标题内容填充
+  到描述字段。修复：`GitLabClient.create_issue` 请求体 description
+  兜底为 `description or title`（描述 None/空串时填充标题、非空
+  （用户手写）保持原样、纯空白字符串的 strip 仍由 API 层负责），
+  无论从哪个入口调用客户端创建的 issue 描述恒不为空。
+  - 后端：`gitlab_client.py` create_issue 请求体 description 兜底
+    填充标题（`{"title": title, "description": description or title}`）。
+  - 测试：`test_gitlab_client.py` 新增 TestCreateIssue 5 用例
+    （None 兜底/空串兜底/非空不覆盖/与标题相同不变/assignee 与
+    labels 转发回归），先复现失败再修复通过。
+
 - **数据备份卡片加载失败永久卡「加载中…」+ 上传恢复首次选文件不触发（issue #104）**：
   前端补测 BackupManager 时发现两个缺陷：① 首次加载 `/api/backups`
   失败时 `!data` 分支只渲染「加载中…」，catch 里写入的 error 永远
