@@ -3,7 +3,7 @@
 //
 // 断言：
 // 1. Tasks.jsx 渲染「停止所有任务」按钮（btn-danger），无活跃任务或请求中禁用；
-// 2. 点击需 window.confirm 确认，确认后才调 POST /api/tasks/stop-all；
+// 2. 点击需自定义确认对话框（confirmDialog）确认，确认后才调 POST /api/tasks/stop-all；
 // 3. 成功后显示「已停止 N 个任务」提示（alert-ok）并刷新列表；失败显示错误；
 // 4. 活跃数 = stats.queued + running + retrying，展示在按钮文案上。
 import { after, mock, test } from 'node:test'
@@ -35,6 +35,8 @@ const vite = await createServer({
 const { default: Tasks } = await vite.ssrLoadModule('/src/pages/Tasks.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 const { MemoryRouter } = await vite.ssrLoadModule('react-router-dom')
+// 与组件内 import 的同一 dialog.js 模块实例，测试注入直接作用于确认调用（issue #105）
+const dialog = await vite.ssrLoadModule('/src/dialog.js')
 
 after(() => vite.close())
 
@@ -47,7 +49,7 @@ test('任务页源码含「停止所有任务」危险按钮与确认交互', ()
     /className="btn btn-danger"/,
     '停止按钮应使用危险样式 btn-danger',
   )
-  assert.match(tasksSrc, /window\.confirm/, '点击应先弹确认框')
+  assert.match(tasksSrc, /confirmDialog/, '点击应先弹自定义确认对话框')
   assert.match(
     tasksSrc,
     /api\.post\('\/api\/tasks\/stop-all'\)/,
@@ -108,9 +110,14 @@ function findStopButton(renderer) {
     .find((b) => JSON.stringify(b.props.children).includes('停止所有任务'))
 }
 
-// window.confirm 在 node 环境不存在，组件仅在点击时访问——测试里按需注入
+// 注入对话框自动应答（无 DialogHost 挂载时 confirmDialog 由 autoAnswer
+// 直接结算）；应答后需推进微任务链，组件才继续调接口
 function withConfirm(value) {
-  globalThis.window = { confirm: () => value }
+  dialog.installAutoAnswer(() => value)
+}
+
+async function flushMicrotasks() {
+  await new Promise((resolve) => setTimeout(resolve, 10))
 }
 
 test('有活跃任务时按钮可用并显示数量', async () => {
@@ -152,12 +159,14 @@ test('确认框取消时不调用停止接口', async () => {
   const { renderer, renderError } = await renderAndSettle({ running: 1 })
   try {
     assert.equal(renderError, null)
-    await TestRenderer.act(() => findStopButton(renderer).props.onClick())
+    await TestRenderer.act(async () => {
+      findStopButton(renderer).props.onClick()
+      await flushMicrotasks()
+    })
     assert.equal(postCalls.length, 0, '取消确认后不应调用停止接口')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
-    delete globalThis.window
   }
 })
 
@@ -171,14 +180,16 @@ test('确认后调用停止接口并显示成功提示', async () => {
   const { renderer, renderError } = await renderAndSettle({ running: 1 })
   try {
     assert.equal(renderError, null)
-    await TestRenderer.act(() => findStopButton(renderer).props.onClick())
+    await TestRenderer.act(async () => {
+      findStopButton(renderer).props.onClick()
+      await flushMicrotasks()
+    })
     assert.deepEqual(postCalls, ['/api/tasks/stop-all'], '确认后应调停止接口')
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('已停止 2 个任务'), '应显示成功提示（含停止数量）')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
-    delete globalThis.window
   }
 })
 
@@ -190,12 +201,14 @@ test('停止接口失败时显示错误提示而不崩溃', async () => {
   const { renderer, renderError } = await renderAndSettle({ running: 1 })
   try {
     assert.equal(renderError, null, '渲染不应崩溃')
-    await TestRenderer.act(() => findStopButton(renderer).props.onClick())
+    await TestRenderer.act(async () => {
+      findStopButton(renderer).props.onClick()
+      await flushMicrotasks()
+    })
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('停止失败：内部错误'), '应显示 API 错误信息')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
-    delete globalThis.window
   }
 })

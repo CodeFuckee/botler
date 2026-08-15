@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api.js'
+import { confirmDialog } from '../dialog.js'
 
 export default function Templates() {
   const [params, setParams] = useSearchParams()
@@ -68,7 +69,7 @@ export default function Templates() {
   }
 
   const clearOverride = async () => {
-    if (!confirm('清空仓库级模版覆盖，回退为全局默认模版？')) return
+    if (!(await confirmDialog({ message: '清空仓库级模版覆盖，回退为全局默认模版？' }))) return
     try {
       await api.put(`/api/repos/${selected.repoId}/template`, { template: '' })
       await selectRepo(selected.repoId)

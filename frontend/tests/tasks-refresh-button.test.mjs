@@ -46,11 +46,13 @@ test('任务页源码含「刷新」按钮与防重复点击禁用逻辑', () =>
   assert.match(tasksSrc, /disabled=\{refreshing\}/, '请求中应禁用按钮防重复点击')
 })
 
-test('刷新为低危操作：无需 window.confirm 确认', () => {
+test('刷新为低危操作：无需确认对话框', () => {
   assert.ok(tasksSrc.includes('↻ 刷新'), '源码应先含刷新按钮（前置条件）')
   const tail = tasksSrc.slice(tasksSrc.indexOf('↻ 刷新'))
   assert.ok(
-    !tail.split('\n').slice(0, 25).some((l) => l.includes('window.confirm')),
+    !tail.split('\n').slice(0, 25).some(
+      (l) => l.includes('window.confirm') || l.includes('confirmDialog'),
+    ),
     '刷新按钮不应要求确认（与对账按钮一致）',
   )
 })

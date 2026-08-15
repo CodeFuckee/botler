@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, fmtSize } from '../api.js'
+import { confirmDialog } from '../dialog.js'
 
 const RESTORE_WARNING = '恢复将覆盖现有数据（config.yaml 与 botler.db）并自动重启服务，重启后正在执行的任务会被重新入队。确定继续？'
 
@@ -52,7 +53,7 @@ export default function BackupManager() {
   }
 
   const del = async (name) => {
-    if (!window.confirm(`确定删除备份 ${name}？`)) return
+    if (!(await confirmDialog({ message: `确定删除备份 ${name}？`, danger: true }))) return
     try {
       setError('')
       await api.del(`/api/backups/${encodeURIComponent(name)}`)
@@ -61,7 +62,7 @@ export default function BackupManager() {
   }
 
   const restoreLocal = async (name) => {
-    if (!window.confirm(`${RESTORE_WARNING}\n\n备份：${name}`)) return
+    if (!(await confirmDialog({ message: `${RESTORE_WARNING}\n\n备份：${name}`, danger: true }))) return
     setBusy(true); setError(''); setNote('')
     try {
       await api.post('/api/backups/restore', { name })
@@ -74,7 +75,7 @@ export default function BackupManager() {
   // 二次选择误用上一次的文件（issue #104 补测发现）
   const restoreUpload = async (picked) => {
     if (!picked) return
-    if (!window.confirm(`${RESTORE_WARNING}\n\n文件：${picked.name}`)) return
+    if (!(await confirmDialog({ message: `${RESTORE_WARNING}\n\n文件：${picked.name}`, danger: true }))) return
     setBusy(true); setError(''); setNote('')
     try {
       await api.upload('/api/backups/restore/upload', picked)

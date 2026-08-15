@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+### Added
+
+- **弹窗全面改用自定义对话框，不再使用浏览器原生 alert/confirm（issue #105）**：
+  用户反馈「不要使用 alert 来弹出通知，自定义一个对话框」——前端新增
+  页面内自定义对话框体系，替换全部 10 处浏览器原生 `window.confirm` /
+  `confirm` 弹窗调用（删除备份/恢复备份/上传恢复/删除标签/删除仓库/
+  删除供应商/清空模版覆盖/关闭 issue/停止所有任务/重试任务），原生
+  弹窗零残留。对话框为统一风格的自定义组件：遮罩 + 居中面板，沿用
+  现有 Modal 的样式体系与交互约定（× 按钮/点击遮罩/Esc 键关闭），
+  支持确认形态（取消+确定，danger 参数控制确定按钮 btn-danger 危险
+  样式）与提示形态（单确定按钮），消息多行换行保留（pre-line），
+  同一时刻只显示一个对话框、连续调用自动排队依次弹出。
+  - 前端：新增 `dialog.js`（confirmDialog/alertDialog Promise 化
+    接口 + 模块级队列 + DialogHost 订阅 + 测试注入 installAutoAnswer）
+    与 `components/DialogHost.jsx`（挂在 App 根部）；`App.jsx` 挂载
+    宿主；`styles.css` 新增 `.modal.dialog` 窄宽与 `.dialog-message`
+    换行样式；7 个调用文件改为 `await confirmDialog({...})`。
+  - 测试：新增 `tests/dialog.test.mjs` 18 用例（confirm/alert 形态
+    各关闭路径、danger 样式、空消息/空标题边界、多行消息、排队、
+    重复点击、无宿主兜底、注入应答、队列清理、调用点零残留源码
+    断言）；适配 7 个既有测试文件（window.confirm mock → dialog.js
+    autoAnswer 注入，点击后推进微任务链）；「刷新」「对账」低危操作
+    断言升级为同时校验不存在 window.confirm 与 confirmDialog 防回归。
+
 ### Fixed
 
 - **「添加 issue」只输入标题时后端未在发送 GitLab API 时填充描述（issue #103，用户反馈修正）**：

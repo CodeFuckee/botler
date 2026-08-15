@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
+import { confirmDialog } from '../dialog.js'
 
 // 每页条数（与后端 limit 一致，issue #50 翻页）
 const PAGE_SIZE = 50
@@ -187,7 +188,7 @@ export default function Tasks() {
   }, [])
 
   // 窄视口列隐藏（issue #70）：挂载时按视口宽度计算需隐藏的列，窗口缩放时重算。
-  // SSR 测试环境无 window、部分测试只 mock window.confirm 时保持默认全显示。
+  // SSR 测试环境无 window 时保持默认全显示。
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
     const update = () => setHiddenCols(hiddenColumnsForWidth(window.innerWidth))
@@ -210,8 +211,10 @@ export default function Tasks() {
 
   // 一键停止所有任务（issue #35）：确认后调后端批量停止，刷新列表
   const stopAll = async () => {
-    if (!window.confirm(
-      `确定停止所有正在执行的任务吗？当前 ${activeCount} 个活跃任务（排队/执行/重试）将被标记为已中断，执行中的 claude 进程会被强制终止。`)) {
+    if (!(await confirmDialog({
+      message: `确定停止所有正在执行的任务吗？当前 ${activeCount} 个活跃任务（排队/执行/重试）将被标记为已中断，执行中的 claude 进程会被强制终止。`,
+      danger: true,
+    }))) {
       return
     }
     setStopping(true)
@@ -229,8 +232,9 @@ export default function Tasks() {
 
   // 手动重试任务（issue #36）：确认后重新入队执行（接续上次 claude 会话），刷新列表
   const retryTask = async (t) => {
-    if (!window.confirm(
-      `确定重试任务 #${t.id}（issue #${t.issue_iid} ${t.issue_title || ''}）吗？任务将重新入队执行，并接续上次 claude 会话继续处理。`)) {
+    if (!(await confirmDialog({
+      message: `确定重试任务 #${t.id}（issue #${t.issue_iid} ${t.issue_title || ''}）吗？任务将重新入队执行，并接续上次 claude 会话继续处理。`,
+    }))) {
       return
     }
     setRetryId(t.id)

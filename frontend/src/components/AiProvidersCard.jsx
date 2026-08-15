@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
+import { confirmDialog } from '../dialog.js'
 import { AI_PROVIDER_PRESETS, presetOf, providerName, ProviderLogo } from '../providers.jsx'
 
 // AI API 供应商配置卡片（issue #46）：设置页内可增删改供应商列表，
@@ -70,9 +71,9 @@ export default function AiProvidersCard() {
     setApiKeyInput('')
   }
 
-  const remove = (i) => {
+  const remove = async (i) => {
     setError(''); setSaved(false)
-    if (!window.confirm(`删除供应商「${providers[i].name}」？`)) return
+    if (!(await confirmDialog({ message: `删除供应商「${providers[i].name}」？`, danger: true }))) return
     setProviders(providers.filter((_, idx) => idx !== i))
   }
 

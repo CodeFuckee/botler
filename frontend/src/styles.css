@@ -717,6 +717,17 @@ code {
   justify-content: flex-end;
   gap: 10px;
 }
+/* 自定义对话框（issue #105）：替代浏览器原生 alert/confirm 弹窗，
+   样式沿用 .modal 体系，仅收窄宽度并保留消息换行 */
+.modal.dialog {
+  width: 440px;
+}
+.dialog-message {
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-line; /* 保留调用方文案的换行（如恢复备份警告的 \n\n 分段） */
+  overflow-wrap: break-word;
+}
 /* 仓库设置编辑弹窗（issue #51）：字段标签竖排，checkbox 横排 */
 .repo-edit .edit-field {
   display: flex;

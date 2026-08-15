@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api.js'
+import { confirmDialog } from '../dialog.js'
 import FolderPicker from '../components/FolderPicker.jsx'
 import RepoEditModal from '../components/RepoEditModal.jsx'
 
@@ -94,7 +95,7 @@ export default function Repos() {
   }
 
   const remove = async (repo) => {
-    if (!confirm(`确认删除仓库「${repo.name}」？将注销 webhook 并从配置中移除（任务历史保留）。`)) return
+    if (!(await confirmDialog({ message: `确认删除仓库「${repo.name}」？将注销 webhook 并从配置中移除（任务历史保留）。`, danger: true }))) return
     try {
       await api.del(`/api/repos/${repo.id}`)
       await load()

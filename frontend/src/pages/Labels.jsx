@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
+import { confirmDialog } from '../dialog.js'
 
 // 标记库页面（issue #29）：默认清单（内置，不可删除）+ 用户自定义标签（可增删）。
 // 数据来自 /api/labels：{default: [...], custom: [...]}，增删走 POST/DELETE。
@@ -31,7 +32,7 @@ export default function Labels() {
   }
 
   const remove = async (label) => {
-    if (!window.confirm(`确认删除自定义标签「${label.name}」？`)) return
+    if (!(await confirmDialog({ message: `确认删除自定义标签「${label.name}」？`, danger: true }))) return
     setNote(null)
     try {
       const res = await api.del(`/api/labels/${encodeURIComponent(label.name)}`)

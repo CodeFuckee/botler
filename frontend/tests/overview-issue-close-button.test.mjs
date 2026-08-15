@@ -6,7 +6,7 @@
 // 断言：
 // 1. opened 且带 project_id 的 issue 显示「关闭 issue」按钮；
 //    closed / 缺 project_id（旧数据）不显示；
-// 2. 点击 → window.confirm 二次确认；取消则不调用接口；
+// 2. 点击 → 自定义对话框（confirmDialog）二次确认；取消则不调用接口；
 // 3. 确认 → api.post /api/issues/{project_id}/{iid}/close；
 // 4. 成功：按钮消失、徽章变「已关闭」、onIssueClosed 回调触发；
 // 5. 失败：错误信息展示、按钮保留（可重试）、回调不触发；
@@ -31,6 +31,9 @@ const vite = await createServer({
 })
 const { default: IssueDrawer } = await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
+// 与组件内 import 的同一 dialog.js 模块实例（同一 vite 实例），
+// 测试注入 installAutoAnswer 直接作用于组件的确认调用（issue #105）
+const dialog = await vite.ssrLoadModule('/src/dialog.js')
 
 const drawerSrc = readFileSync(path.join(ROOT, 'src/components/IssueDrawer.jsx'), 'utf8')
 
@@ -54,6 +57,9 @@ test('IssueDrawer 渲染「关闭 issue」按钮并调用关闭接口', () => {
 // 列表（本文件只关注关闭按钮行为）
 async function renderDrawer(issue, opts = {}) {
   mock.method(api, 'get', async () => ({ notes: [] }))
+  // 默认注入「用户点确定」：单测环境未挂载 DialogHost，confirmDialog 由
+  // autoAnswer 直接应答 true；取消路径用例单独覆盖为 false
+  dialog.installAutoAnswer(() => true)
   const onIssueClosed = opts.onIssueClosed || (() => {})
   let renderer = null
   let renderError = null
@@ -147,8 +153,10 @@ test('点击按钮：confirm 确认后调用关闭接口（参数正确）', asy
   const { renderer, root } = await renderDrawer(OPEN_ISSUE, { onIssueClosed })
   try {
     await TestRenderer.act(async () => {
-      // SSR 环境无 window → 组件默认确认通过（等价于用户点「确定」）
+      // 注入的 autoAnswer 应答 true（等价于用户在对话框中点「确定」）；
+      // setTimeout 推进微任务链：确认 resolve 后组件才继续调关闭接口
       findCloseButton(root)[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
     })
     assert.equal(postMock.mock.callCount(), 1, '确认后应调用一次关闭接口')
   } finally {
@@ -158,20 +166,21 @@ test('点击按钮：confirm 确认后调用关闭接口（参数正确）', asy
 })
 
 test('点击按钮：confirm 取消则不调用接口', async () => {
-  // 模拟浏览器 window.confirm 返回 false（用户点「取消」）
-  global.window = { confirm: () => false }
   const postMock = mock.method(api, 'post', async () => {
     throw new Error('不应调用')
   })
   const { renderer, root } = await renderDrawer(OPEN_ISSUE)
+  // 注入 autoAnswer 应答 false（用户在对话框中点「取消」）——
+  // 须在 renderDrawer 之后：渲染 helper 会先注入默认的「确定」应答
+  dialog.installAutoAnswer(() => false)
   try {
     await TestRenderer.act(async () => {
       findCloseButton(root)[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
     })
     assert.equal(postMock.mock.callCount(), 0, '取消确认不应调用接口')
     assert.equal(findCloseButton(root).length, 1, '按钮应保留')
   } finally {
-    delete global.window
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
   }
@@ -184,6 +193,7 @@ test('关闭成功：按钮消失、徽章变「已关闭」、回调通知父�
   try {
     await TestRenderer.act(async () => {
       findCloseButton(root)[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
     })
     assert.equal(findCloseButton(root).length, 0, '成功后按钮应消失')
     const text = drawerText(root)
@@ -205,6 +215,7 @@ test('关闭失败：显示错误信息、按钮保留可重试、回调不触�
   try {
     await TestRenderer.act(async () => {
       findCloseButton(root)[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
     })
     assert.ok(drawerText(root).includes('GitLab API 错误: 500'),
               '应显示错误信息')
@@ -224,6 +235,7 @@ test('请求进行中按钮 disabled，防重复点击', async () => {
   try {
     await TestRenderer.act(async () => {
       findCloseButton(root)[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
     })
     const btn = findCloseButton(root)[0]
     assert.equal(btn.props.disabled, true, '请求中按钮应禁用')

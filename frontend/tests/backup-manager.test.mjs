@@ -7,7 +7,7 @@
 // 3. 保存配置：PUT /api/settings 的 backup 段（enabled 布尔、retention_days
 //    Number 转换），成功提示 + 重新加载列表；
 // 4. 立即备份：POST /api/backups 并展示备份名；
-// 5. 下载走 api.download；删除/恢复均需 window.confirm 二次确认（取消不调用
+// 5. 下载走 api.download；删除/恢复均需自定义确认对话框二次确认（取消不调用
 //    接口），删除后重新加载列表；恢复提示自动重启；
 // 6. 上传恢复：未选文件不调用；选文件需确认，确认后 api.upload + 成功提示；
 // 7. 保存失败展示错误；请求进行中按钮禁用防重复（busy）；
@@ -31,6 +31,8 @@ const vite = await createServer({
 })
 const { default: BackupManager } = await vite.ssrLoadModule('/src/components/BackupManager.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
+// 与组件内 import 的同一 dialog.js 模块实例，测试注入直接作用于确认调用（issue #105）
+const dialog = await vite.ssrLoadModule('/src/dialog.js')
 
 const bmSrc = readFileSync(path.join(ROOT, 'src/components/BackupManager.jsx'), 'utf8')
 
@@ -72,13 +74,15 @@ function mockAll(opts = {}) {
   mock.method(api, 'upload', async (p, f) => { calls.upload.push([p, f]) })
 }
 
-// window.confirm mock（node 环境无 window）：记录提示文案，按需返回 true/false
+// 自定义对话框自动应答注入（issue #105，node 环境无 DialogHost 挂载）：
+// 记录确认消息文案，按需返回 true/false
 let confirmMessages = []
 function installConfirm(ret) {
   confirmMessages = []
-  globalThis.window = {
-    confirm: (msg) => { confirmMessages.push(msg); return ret },
-  }
+  dialog.installAutoAnswer((opts) => {
+    confirmMessages.push(opts.message)
+    return ret
+  })
 }
 
 // ---- 渲染与查找 helper ----

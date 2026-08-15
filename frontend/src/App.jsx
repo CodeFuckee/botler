@@ -8,6 +8,7 @@ import Tasks from './pages/Tasks.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
 import Login from './pages/Login.jsx'
+import DialogHost from './components/DialogHost.jsx'
 import { api, setDisplayTz, setSsoEnabled } from './api.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 
@@ -106,6 +107,9 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
+      {/* 自定义对话框宿主（issue #105）：替代浏览器原生 alert/confirm，
+          挂在根部全局唯一，供 confirmDialog / alertDialog 渲染 */}
+      <DialogHost />
     </div>
   )
 }

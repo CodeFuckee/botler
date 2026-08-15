@@ -4,7 +4,7 @@
 // 断言：
 // 1. Tasks.jsx 源码含「重试」按钮与 POST /api/tasks/{id}/retry 调用；
 // 2. 仅失败/中断任务行渲染重试按钮，成功/执行中任务不渲染；
-// 3. 点击需 window.confirm 确认，确认后才调接口；取消不调用；
+// 3. 点击需自定义确认对话框（confirmDialog）确认，确认后才调接口；取消不调用；
 // 4. 成功后显示提示（alert-ok）并刷新列表；失败显示错误；请求中按钮禁用。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -33,6 +33,8 @@ const vite = await createServer({
 const { default: Tasks } = await vite.ssrLoadModule('/src/pages/Tasks.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 const { MemoryRouter } = await vite.ssrLoadModule('react-router-dom')
+// 与组件内 import 的同一 dialog.js 模块实例，测试注入直接作用于确认调用（issue #105）
+const dialog = await vite.ssrLoadModule('/src/dialog.js')
 
 after(() => vite.close())
 
@@ -40,7 +42,7 @@ after(() => vite.close())
 
 test('任务页源码含重试按钮与确认交互', () => {
   assert.match(tasksSrc, /重试/, '应有重试按钮文案')
-  assert.match(tasksSrc, /window\.confirm/, '点击应先弹确认框')
+  assert.match(tasksSrc, /confirmDialog/, '点击应先弹自定义确认对话框')
   assert.match(
     tasksSrc,
     /api\.post\(`\/api\/tasks\/\$\{[^}]+\}\/retry`\)/,
@@ -105,8 +107,14 @@ function findRetryButtons(renderer) {
     .filter((b) => JSON.stringify(b.props.children).includes('重试'))
 }
 
+// 注入对话框自动应答（无 DialogHost 挂载时 confirmDialog 由 autoAnswer
+// 直接结算）；应答后推进微任务链，组件才继续调接口
 function withConfirm(value) {
-  globalThis.window = { confirm: () => value }
+  dialog.installAutoAnswer(() => value)
+}
+
+async function flushMicrotasks() {
+  await new Promise((resolve) => setTimeout(resolve, 10))
 }
 
 test('失败任务行渲染重试按钮，成功/执行中任务不渲染', async () => {
@@ -134,12 +142,14 @@ test('确认框取消时不调用重试接口', async () => {
   const { renderer, renderError } = await renderAndSettle([mkTask()])
   try {
     assert.equal(renderError, null)
-    await TestRenderer.act(() => findRetryButtons(renderer)[0].props.onClick())
+    await TestRenderer.act(async () => {
+      findRetryButtons(renderer)[0].props.onClick()
+      await flushMicrotasks()
+    })
     assert.equal(postCalls.length, 0, '取消确认后不应调用重试接口')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
-    delete globalThis.window
   }
 })
 
@@ -153,14 +163,16 @@ test('确认后调用重试接口并显示成功提示', async () => {
   const { renderer, renderError } = await renderAndSettle([mkTask()])
   try {
     assert.equal(renderError, null)
-    await TestRenderer.act(() => findRetryButtons(renderer)[0].props.onClick())
+    await TestRenderer.act(async () => {
+      findRetryButtons(renderer)[0].props.onClick()
+      await flushMicrotasks()
+    })
     assert.deepEqual(postCalls, ['/api/tasks/3/retry'], '确认后应调用重试接口')
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('已重新入队'), '应显示成功提示（含重试结果）')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
-    delete globalThis.window
   }
 })
 
@@ -172,13 +184,15 @@ test('重试接口失败时显示错误提示而不崩溃', async () => {
   const { renderer, renderError } = await renderAndSettle([mkTask()])
   try {
     assert.equal(renderError, null, '渲染不应崩溃')
-    await TestRenderer.act(() => findRetryButtons(renderer)[0].props.onClick())
+    await TestRenderer.act(async () => {
+      findRetryButtons(renderer)[0].props.onClick()
+      await flushMicrotasks()
+    })
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('该 issue 已有活跃任务'), '应显示 API 错误信息')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
-    delete globalThis.window
   }
 })
 
@@ -193,10 +207,12 @@ test('重试请求进行中按钮禁用', async () => {
   try {
     assert.equal(renderError, null)
     let clickPromise = null
-    await TestRenderer.act(() => {
+    await TestRenderer.act(async () => {
       // 不把 onClick 的 promise 交给 act——接口挂起时 act 会一直等待；
-      // onClick 同步段（确认/置 retryId）在 act 内执行完即可断言按钮禁用
+      // onClick 在确认应答后进入请求段（置 retryId + post 挂起），
+      // flush 微任务推进到挂起点即可断言按钮禁用
       clickPromise = findRetryButtons(renderer)[0].props.onClick()
+      await flushMicrotasks()
     })
     assert.equal(findRetryButtons(renderer)[0].props.disabled, true)
     resolvePost()
@@ -204,6 +220,5 @@ test('重试请求进行中按钮禁用', async () => {
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
-    delete globalThis.window
   }
 })

@@ -36,7 +36,7 @@ test('卡片提供供应商列表表格与增删改操作', () => {
   assert.match(card, /<h2>AI API 供应商<\/h2>/, '应有卡片标题')
   assert.match(card, /添加供应商/, '应有「添加供应商」按钮')
   assert.match(card, />编辑<\/button>/, '列表行应有「编辑」按钮')
-  assert.match(card, /window\.confirm\(`删除供应商/, '删除应有确认提示')
+  assert.match(card, /confirmDialog\(\{ message: `删除供应商/, '删除应有自定义确认对话框提示')
   assert.match(card, /ProviderLogo provider=/, '列表应渲染供应商 logo')
 })
 

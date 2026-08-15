@@ -51,13 +51,10 @@ test('任务页源码含「对账所有仓库」按钮与对账接口调用', ()
   assert.match(tasksSrc, /disabled=\{reconciling\}/, '请求中应禁用按钮防重复点击')
 })
 
-test('对账为低危操作：无需 window.confirm 确认', () => {
-  const handlerLines = tasksSrc.split('\n').filter(
-    (l) => l.includes('对账所有仓库') || l.includes('reconcile-all') || l.includes('confirm'),
-  )
+test('对账为低危操作：无需确认对话框', () => {
   assert.ok(
     !tasksSrc.slice(tasksSrc.indexOf('对账所有仓库')).split('\n').slice(0, 20).some(
-      (l) => l.includes('window.confirm'),
+      (l) => l.includes('window.confirm') || l.includes('confirmDialog'),
     ),
     '对账按钮不应要求确认（与仓库页对账按钮一致）',
   )

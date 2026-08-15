@@ -18,6 +18,7 @@
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键。
 import { useCallback, useEffect, useState } from 'react'
 import { api, fmtTime } from '../api.js'
+import { confirmDialog } from '../dialog.js'
 import Markdown from './Markdown.jsx'
 
 // issue 状态 → 徽章映射（聚合只返回开放 issue，closed 为兜底映射）
@@ -119,12 +120,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed })
 
   // 点击「关闭 issue」：二次确认 → 调用后端关闭 → 成功标记关闭状态
   // 并通知父组件刷新；失败展示错误信息（按钮保留可重试）。
-  // SSR 测试环境无 window 时默认确认通过（测试用 mock 控制取消路径）
+  // 确认走自定义对话框（issue #105，替代原生 confirm）
   async function handleCloseIssue() {
     const confirmText = '确定要关闭该 issue 吗？关闭后可在 GitLab 中重新打开。'
-    const confirmed = typeof window !== 'undefined'
-      ? window.confirm(confirmText) : true
-    if (!confirmed) return
+    if (!(await confirmDialog({ message: confirmText, danger: true }))) return
     setClosing(true)
     setCloseErr('')
     try {
