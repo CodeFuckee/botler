@@ -90,7 +90,7 @@ class TestVerifyDockerSmokeChecksSdk:
 
 
 class TestDeploymentDocsSynced:
-    """部署文档与 README 同步：Docker 已内置、pm2/systemd 仍手动。"""
+    """部署文档与 README 同步：Docker 已内置、pm2 自动、手动部署一键脚本。"""
 
     def test_dsh_deployment_doc_marks_docker_builtin(self):
         doc = _read(DSH_DOC)
@@ -98,10 +98,11 @@ class TestDeploymentDocsSynced:
         # Docker 部署无需手动安装
         assert ("已内置" in doc) or ("无需" in doc)
 
-    def test_dsh_deployment_doc_keeps_manual_install_for_pm2(self):
-        """pm2/systemd（非容器）部署路径保留手动安装指引。"""
+    def test_dsh_deployment_doc_keeps_manual_install_script_for_pm2(self):
+        """手动 pm2/systemd 部署保留安装指引（issue #112 起改为一键脚本）。"""
         doc = _read(DSH_DOC)
-        assert "pip install" in doc
+        # 一键脚本（issue #112 跟进：CI pm2 部署自动安装，手动部署用脚本）
+        assert "install-dsh-sdk.sh" in doc
         assert SDK_PIN in doc
 
     def test_readme_docker_section_mentions_sdk_builtin(self):

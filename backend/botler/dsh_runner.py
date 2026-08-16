@@ -25,11 +25,11 @@ from importlib.util import find_spec
 from typing import Callable
 
 # SDK 安装指引（部署机清华 pip 源未同步 rc 版，需用阿里镜像；
-# Docker 部署镜像已内置，无需手动安装）
+# Docker 镜像与 CI pm2 部署已自动安装，手动部署用一键脚本）
 INSTALL_HINT = (
-    "pip install deepseek-harness-sdk==0.1.0rc6 "
-    "-i https://mirrors.aliyun.com/pypi/simple/ "
-    "（Docker 部署已内置，无需安装；详见 docs/dsh-engine-deployment.md）")
+    "deploy/install-dsh-sdk.sh "
+    "（Docker 镜像与 CI pm2 部署已自动安装；手动部署在项目根目录"
+    "执行该脚本，详见 docs/dsh-engine-deployment.md）")
 
 
 class DshSdkNotInstalledError(Exception):

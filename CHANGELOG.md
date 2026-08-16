@@ -6,6 +6,23 @@
 
 ### Added
 
+- **pm2 部署自动安装 deepseek-harness SDK（issue #112 跟进）**：
+  issue #112 首轮仅覆盖 Docker 镜像内置 SDK，用户反馈 pm2 部署实例
+  仍缺该依赖，本次补齐 pm2 部署形态：
+  - **deploy/install-dsh-sdk.sh**：新增一键安装脚本（单一事实来源）
+    ——阿里镜像 + 显式全版本号（`DSH_INDEX_URL` 环境变量可覆盖）、
+    幂等（已装目标版本跳过）、安装后 import 校验 fail fast、优先
+    uv pip（CI venv 无 pip seed）回退 venv 内 pip；
+  - **.gitlab-ci.yml**：`deploy_to_code01`（pm2 部署）主依赖安装后
+    自动调用脚本装入 `backend/.venv`，失败即部署失败；全局变量新增
+    `DSH_INDEX_URL`（默认阿里镜像，UI 可覆盖）；
+  - **文档同步**：`docs/dsh-engine-deployment.md` 第 2.2 节改为
+    pm2 CI 部署自动安装 + 手动部署一键脚本，故障排查表、
+    `dsh_runner.py` 安装指引与 README 部署步骤同步（README 的
+    「CI/CD 自动部署」过时描述一并修正为 pm2）；
+  - **测试**：新增 `test_deploy_dsh_sdk.py` 14 用例静态校验部署产物
+    防回退，适配 `test_dockerfile_dsh.py` 中「pm2 保留手动安装」用例。
+
 - **Docker 部署内置 deepseek-harness SDK（issue #112）**：
   需求「后端部署增加安装deepseke harness依赖」——dsh 引擎 SDK
   （`deepseek-harness-sdk==0.1.0rc6`）原为可选依赖（issue #84：镜像

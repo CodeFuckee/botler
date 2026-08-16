@@ -98,6 +98,7 @@ git clone <platform-repo> && cd botler
 cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp config.example.yaml config.yaml && cp .env.example .env   # 填入凭据
 cd ../frontend && npm install && npm run build               # 构建 Web UI
+deploy/install-dsh-sdk.sh                # 安装 dsh 引擎 SDK（可选依赖，issue #112）
 
 # 启动（三选一）
 pm2 start deploy/botler.config.cjs && pm2 save && pm2 startup
@@ -106,8 +107,9 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 # 或 Docker（见下方「Docker 部署」）
 ```
 
-> 💡 **CI/CD 自动部署**：推送 main 分支后，GitLab CI 自动执行 Docker 部署
-> （`deploy_to_code01`：构建镜像 → compose 启动 → 健康检查），无需手动操作。
+> 💡 **CI/CD 自动部署**：推送 main 分支后，GitLab CI 自动执行 pm2 部署
+> （`deploy_to_code01`：安装依赖 → 停止旧服务 → pm2 启动 → 健康检查），
+> 无需手动操作。dsh 引擎 SDK 在部署 job 内自动安装（issue #112）。
 > 部署前会自动停止旧 pm2 服务，凭据优先用服务器上 `backend/.env`（缺失时用
 > CI 变量生成）。
 

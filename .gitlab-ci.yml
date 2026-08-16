@@ -71,6 +71,9 @@ variables:
   # 镜像 / 注册表地址（国内源，可在 GitLab UI 中覆盖）
   # ----------------------------------------------------------
   PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+  # dsh 引擎 SDK 安装镜像源（deploy/install-dsh-sdk.sh 读取；清华源未
+  # 同步 rc 预发布版，必须阿里镜像，可在 GitLab UI 覆盖为内网代理）
+  DSH_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple"
   NPM_REGISTRY_URL: "https://registry.npmmirror.com"
 
   # ----------------------------------------------------------
@@ -896,6 +899,19 @@ deploy_to_code01:
       uv pip install -r requirements.txt -i ${PIP_INDEX_URL} || { dbg STEP2 "FAIL: uv pip install"; exit 1; }
       cd ..
       dbg STEP2 "OK"
+
+      # ================================================================
+      # 第 2b 步：dsh 引擎 SDK（issue #112 跟进：pm2 部署自动安装）
+      # deepseek-harness-sdk 不在 requirements.txt（rc 预发布版，主依赖
+      # 继续走清华源避免解析失败阻塞），由 deploy/install-dsh-sdk.sh
+      # 装进同一 backend/.venv——阿里镜像 + 全版本号（DSH_INDEX_URL
+      # 可覆盖）+ 幂等 + 安装后 import 校验（装不上即部署失败）。
+      # 用户曾反馈 pm2 部署实例缺 SDK，此步保证 pm2 形态开箱即用。
+      # ================================================================
+      dbg STEP2b "安装 deepseek-harness SDK"
+      echo "=== 2b. 安装 deepseek-harness SDK（dsh 引擎依赖）==="
+      bash deploy/install-dsh-sdk.sh backend/.venv || { dbg STEP2b "FAIL: dsh SDK 安装失败"; echo "错误：deepseek-harness SDK 安装失败"; exit 1; }
+      dbg STEP2b "OK"
 
       # ================================================================
       # 第 3 步：数据目录固定 data/ + 迁移 + 凭据 + symlink 桥接

@@ -39,24 +39,34 @@ issue #112 起 `Dockerfile` 构建镜像时自动安装 SDK（阿里镜像 +
 与手动 `docker compose up -d --build` 均自带 SDK，容器内无需任何
 额外步骤；`deploy/verify-docker.sh --full` 冒烟含 SDK 可导入校验。
 
-### 2.2 pm2 / systemd 部署（手动安装，botler 后端 venv 内）
+### 2.2 pm2 / systemd 部署（pm2 CI 部署自动安装；手动部署一键脚本）
 
-部署机用 pm2/systemd 直跑（非容器）时，SDK 为可选依赖，需在
-botler venv 内单独安装：
+pm2 部署分两种形态：
+
+- **CI 自动部署（`deploy_to_code01`）**：issue #112 起部署 job 在
+  主依赖安装后自动调用 `deploy/install-dsh-sdk.sh` 装进后端 venv，
+  无需任何手动操作（用户曾反馈 pm2 实例缺 SDK，此步保证开箱即用）；
+- **手动部署（pm2 / systemd 直跑）**：在项目根目录执行一键脚本：
 
 ```bash
-cd <botler>/backend
-.venv/bin/pip install "deepseek-harness-sdk==0.1.0rc6" \
-  -i https://mirrors.aliyun.com/pypi/simple/
+deploy/install-dsh-sdk.sh                 # 默认装进 backend/.venv
+# 指定其他 venv：deploy/install-dsh-sdk.sh /path/to/venv
+# 镜像源覆盖（内网代理）：DSH_INDEX_URL=... deploy/install-dsh-sdk.sh
 ```
 
-> 注意：清华 pip 镜像暂未同步 rc 版（仅有 `0.0.0.dev0` 占位），必须用
-> 阿里镜像或官方 PyPI 安装；rc 为预发布版本，安装命令须显式写全版本号。
+脚本幂等（已装目标版本直接跳过），安装后自动做 import 校验
+（装不上立即失败）；优先用 uv pip（CI venv 由 uv 创建、无 pip
+seed），无 uv 时回退 venv 内 pip。
+
+> 注意：清华 pip 镜像暂未同步 rc 版（仅有 `0.0.0.dev0` 占位），脚本
+> 默认走阿里镜像（`DSH_INDEX_URL` 可覆盖）；rc 为预发布版本，安装
+> 命令须显式写全版本号（脚本已内置 `deepseek-harness-sdk==0.1.0rc6`，
+> 勿手写缩写版本号）。
 
 验证安装：
 
 ```bash
-.venv/bin/python -c "from deepseek_harness import DeepSeekHarness; print('ok')"
+backend/.venv/bin/python -c "from deepseek_harness import DeepSeekHarness; print('ok')"
 ```
 
 未安装时 dsh 任务会失败并提示安装命令（任务日志可见），不影响
@@ -113,9 +123,9 @@ dsh 引擎与 claude / hermes 引擎等价支持断点续跑：SDK 以 JSONL + c
 
 | 现象 | 排查 |
 |------|------|
-| 任务日志报「dsh 引擎需要 deepseek-harness-sdk，未安装」 | Docker 部署：重新构建镜像（issue #112 起镜像已内置 SDK）；pm2/systemd 部署：按第 2.2 节安装（注意必须阿里镜像 + 全版本号） |
+| 任务日志报「dsh 引擎需要 deepseek-harness-sdk，未安装」 | Docker 部署：重新构建镜像（issue #112 起镜像已内置 SDK）；pm2 CI 部署：重跑流水线（issue #112 起 deploy job 自动安装）；手动 pm2/systemd 部署：执行 `deploy/install-dsh-sdk.sh`（阿里镜像 + 全版本号已内置） |
 | 结果行 `finish_reason: error` | DeepSeek API 调用失败：检查 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` 与网络连通性 |
 | 结果行 `finish_reason: max-tokens` | 输出超上限被截断：调大 `dsh.max_tokens` 或简化任务 |
 | 任务反复重试、日志尾部结果行含 error 字段 | 查看结果行 error 文本（含异常类型与消息）与事件行定位 |
-| 设置页「本地环境检测」dsh 未安装 | SDK 未装或不在 botler 的 venv：Docker 部署重建镜像；pm2/systemd 部署按第 2.2 节安装（检测项为 pip 包检测，不走 PATH） |
+| 设置页「本地环境检测」dsh 未安装 | SDK 未装或不在 botler 的 venv：Docker 部署重建镜像；pm2 CI 部署重跑流水线；手动 pm2/systemd 部署执行 `deploy/install-dsh-sdk.sh`（检测项为 pip 包检测，不走 PATH） |
 | dsh 不操作工作区文件 | 检查 `dsh.session_root` 目录可写性与工作区路径（executor 自动以仓库工作区为 cwd） |
