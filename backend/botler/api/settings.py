@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..config import KNOWN_FIELDS
+from ..plugins import PluginKind, list_plugins
 from ..gitlab_client import GitLabClient, GitLabError
 from ..labels import validate_label
 from ..templates import PLACEHOLDERS
@@ -73,9 +74,12 @@ def get_settings(request: Request):
             # issue 标签处理优先级（issue #76）：同仓库队列内按此顺序
             # 选任务派发，越靠前越先处理；未列出的标签排最后
             "issue_priority": s.issue_priority_labels,
-            # 任务执行引擎（issue #113）：claude / hermes / dsh，
-            # 设置页「任务调度」卡片切换，保存后对后续任务生效
+            # 任务执行引擎（issue #113，插件化 issue #140）：claude /
+            # hermes / dsh（内置执行引擎插件，可外部加载新引擎），设置页
+            # 「任务调度」卡片切换，保存后对后续任务生效
             "engine": s.engine,
+            # 外部插件加载（issue #140）：Python 模块路径列表，启动时加载
+            "plugin_paths": s.plugin_paths,
         },
         "claude": {
             "command": s.claude_command,
@@ -390,9 +394,11 @@ def reconcile_now(request: Request):
     return {"ok": True, "note": "对账已在后台触发，稍后查看任务列表"}
 
 
-# 任务执行引擎白名单（issue #113）：与 executor._engine 合法集合一致，
-# API 层拦截非法值（executor 层回退仅防御手工改坏 config.yaml）
-ENGINE_CHOICES = ("claude", "hermes", "dsh")
+# 任务执行引擎白名单（issue #113，插件化 issue #140）：与 executor._engine
+# 合法集合一致（由插件注册表 executor 分类派生，内置 claude/hermes/dsh，
+# 外部加载的引擎插件自动纳入）。API 层拦截非法值（executor 层回退仅防御
+# 手工改坏 config.yaml）。
+ENGINE_CHOICES = tuple(p.name for p in list_plugins(PluginKind.EXECUTOR))
 
 
 def _validate_worker(patch: dict) -> None:
@@ -405,14 +411,24 @@ def _validate_worker(patch: dict) -> None:
                 continue
             if key == "engine":
                 # issue #113：引擎名 strip + 小写归一后校验白名单
+                # （插件注册表驱动，issue #140：外部引擎插件自动纳入）
+                choices = " / ".join(ENGINE_CHOICES)
                 if not isinstance(val, str) or not val.strip():
                     raise HTTPException(
-                        400, "worker.engine 必须是字符串（claude / hermes / dsh）")
+                        400, f"worker.engine 必须是字符串（{choices}）")
                 val = val.strip().lower()
                 if val not in ENGINE_CHOICES:
                     raise HTTPException(
-                        400, f"worker.engine 取值非法: {val}（可选 claude / hermes / dsh）")
+                        400, f"worker.engine 取值非法: {val}（可选 {choices}）")
                 patch[key] = val
+                continue
+            if key == "plugin_paths":
+                # issue #140：外部插件模块路径列表（字符串数组，空白项剔除）
+                if not isinstance(val, list) or not all(
+                        isinstance(p, str) for p in val):
+                    raise HTTPException(
+                        400, "worker.plugin_paths 必须是字符串数组")
+                patch[key] = [p.strip() for p in val if str(p).strip()]
                 continue
             if not isinstance(val, int) or val <= 0:
                 raise HTTPException(400, f"{key} 必须是正整数")

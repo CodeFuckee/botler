@@ -6,6 +6,52 @@
 
 ### Added
 
+- **插件体系：执行引擎 / 大模型 API 供应商 / webhook 发送任务消息插件化（issue #140）**：
+  需求「平台想要实现一个插件体系，把执行引擎、大模型 api 供应商、webhook 发送
+  任务消息都做成插件的形式，设计一个实现方案」。
+  实现：
+  - 设计文档 `docs/插件体系设计方案.md`（新）：插件分类 / 插件基类与注册表 /
+    三类插件接口定义 / 内置插件迁移清单 / 调用方改造点 / 配置设计 / 测试计划 /
+    演进方向；
+  - 后端 `botler/plugins/base.py`（新）：插件体系核心——`PluginKind` 枚举
+    （executor / model_provider / notifier 三分类）、`Plugin` 基类（分类 + 标识 +
+    描述 + 版本）、`ExecutorPlugin` / `ImageProviderPlugin` / `NotifierPlugin`
+    三类插件接口、`PluginRegistry` 注册表（注册 / 查询 / 列表 / 外部加载，
+    重复注册抛冲突异常，未注册抛缺失异常）、全局注册表单例与便捷函数
+    （`get_plugin` / `list_plugins` / `has_plugin` 等）；
+  - 后端 `botler/plugins/executors.py`（新）：执行引擎插件——`claude`
+    （Claude Code CLI，默认）/ `hermes`（hermes runner，issue #47）/ `dsh`
+    （deepseek-harness SDK，issue #84）三个内置引擎插件（适配器委托现有实现，
+    断点续跑语义不变）；`executor._engine` 校验改为注册表驱动（未注册引擎名
+    回退 claude），`_run_once` 按引擎名查插件委托执行（原 claude 分支抽为
+    `_run_claude_once`）；
+  - 后端 `botler/plugins/models.py`（新）：大模型（生图）供应商插件——
+    `ImageResult` / `ImageModelError` / 默认超时与尺寸常量迁移至此，
+    `gemini_nano_banana`（Gemini generateContent）与 `openai_gpt_image`
+    （OpenAI images API）两个内置供应商插件（实现自 `image_models._generate_*`
+    迁移）；`image_models.ImageModelClient` 改为按 provider 查插件注册表委托
+    调用，`IMAGE_MODEL_PRESETS` 由注册表派生，对外导出与行为完全兼容；
+  - 后端 `botler/plugins/notifiers.py`（新）：任务消息发送通道插件——
+    `webhook`（外部 Webhook HTTP 推送，issue #136）与 `in_app`（网页通知事件，
+    issue #21）两个内置通道插件；executor 收尾统一向全部 notifier 插件分发
+    （成功 / 失败事件，webhook 推送前拉取 issue 完整信息，任一通道失败仅记
+    日志不阻塞任务收尾）；
+  - 后端 `config.py` / `config.example.yaml`：新增可选 `worker.plugin_paths`
+    （外部插件 Python 模块路径列表，启动时 `importlib` 加载注册，失败仅记
+    日志不阻塞启动）；`api/settings.py` 引擎白名单改为插件注册表派生（新增
+    引擎自动可配置）、`plugin_paths` 读写与校验（字符串数组、空白项剔除）；
+    `main.py` 应用启动时加载外部插件；
+  - 文档：`README.md` 新增「插件体系」章节与配置说明（`worker.plugin_paths`）、
+    目录结构更新；
+  - 测试：`test_plugins.py`（新）22 用例（注册表注册/查询/重复冲突/缺失/列表
+    顺序/独立注册表隔离/外部加载·缺失文件·异常容错/插件能力方法默认行为/
+    全局注册表内置插件完整性）；`test_executor_plugins.py`（新）19 用例
+    （引擎名校验走注册表·未注册回退 / _run_once 三引擎委托路径·断点续跑参数
+    透传 / 引擎插件元信息 / notifier 插件分发·单通道失败不阻塞其他通道）；
+    `test_api_settings.py` 追加 `TestPluginPathsSettings` 5 用例（plugin_paths
+    读写 / 空白剔除 / 非法值拒绝 / 部分更新）+ 全量回归（引擎白名单行为不变）。
+
+
 - **设置页整理分组并新增左侧导航栏：可搜索设置项、折叠/展开分组子项（issue #139）**：
   需求「设置页设置项太多，整理一下设置页面的分支，并在设置左侧添加一个导航栏，
   导航栏可以搜索设置项，同时也可以折叠和展开分组中的子项」。

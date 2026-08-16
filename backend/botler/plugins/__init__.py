@@ -1,0 +1,63 @@
+"""Botler 插件体系（issue #140）。
+
+把执行引擎、大模型 API 供应商、webhook 发送任务消息做成插件形式：
+- ``base``：插件模型（PluginKind / Plugin / PluginRegistry）+ 全局注册表
+- ``executors``：任务执行引擎插件（claude / hermes / dsh）
+- ``models``：大模型 API 供应商插件（gemini_nano_banana / openai_gpt_image）
+- ``notifiers``：任务消息发送通道插件（webhook / in_app）
+
+导入本包即注册全部内置插件；外部插件通过 ``worker.plugin_paths`` 配置的
+Python 模块路径在应用启动时加载。调用方统一使用
+:func:`get_plugin` / :func:`list_plugins` 等便捷函数访问注册表。
+"""
+
+from .base import (
+    ImageProviderPlugin,
+    Plugin,
+    PluginConflictError,
+    PluginKind,
+    PluginNotFoundError,
+    PluginRegistry,
+    ExecutorPlugin,
+    NotifierPlugin,
+    get_plugin,
+    get_registry,
+    has_plugin,
+    list_plugins,
+    plugin_names,
+    register_plugin,
+)
+
+# 生图供应商插件公共类型 / 常量（image_models.py 依赖，从 models 模块再导出）
+from .models import (
+    DEFAULT_SIZE,
+    DEFAULT_TIMEOUT,
+    ImageModelError,
+    ImageResult,
+)
+
+# 导入内置插件子模块触发注册（导入顺序即注册顺序，也即列表展示顺序）
+from . import executors as _executors  # noqa: F401
+from . import models as _models  # noqa: F401
+from . import notifiers as _notifiers  # noqa: F401
+
+__all__ = [
+    "DEFAULT_SIZE",
+    "DEFAULT_TIMEOUT",
+    "ImageModelError",
+    "ImageProviderPlugin",
+    "ImageResult",
+    "Plugin",
+    "PluginConflictError",
+    "PluginKind",
+    "PluginNotFoundError",
+    "PluginRegistry",
+    "ExecutorPlugin",
+    "NotifierPlugin",
+    "get_plugin",
+    "get_registry",
+    "has_plugin",
+    "list_plugins",
+    "plugin_names",
+    "register_plugin",
+]

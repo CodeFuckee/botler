@@ -64,6 +64,12 @@ class AppContext:
 def build_context(config_path: str | None = None) -> AppContext:
     config = ConfigManager(config_path or os.environ.get("BOTLER_CONFIG", str(BACKEND_DIR / "config.yaml")))
     settings = config.load()
+    # 外部插件加载（issue #140）：worker.plugin_paths 配置的模块路径逐个
+    # 加载注册（失败仅记日志不阻塞启动，见 PluginRegistry.load_external）
+    from .plugins import get_registry
+    loaded = get_registry().load_external(settings.plugin_paths)
+    if loaded:
+        logger.info("外部插件加载完成（%s 个模块）", len(loaded))
     db = Database()
     gitlab = GitLabClient(
         settings.gitlab_url, settings.gitlab_token,

@@ -112,11 +112,17 @@ class Settings:
     # claude 2.1.x 要求 stream-json 配 --verbose，executor 会自动补齐
     claude_args: list[str] = field(
         default_factory=lambda: ["-p", "--output-format", "stream-json", "--verbose"])
-    # 任务执行引擎（issue #47/#84）：claude = Claude Code CLI（默认，现网行为
-    # 不变）；hermes = 部署机已装好的 hermes-agent（经 hermes_runner.py 进程
-    # 内调用）；dsh = deepseek-harness SDK（经 dsh_runner.py 进程内调用）。
-    # 非法值回退 claude（executor._engine 校验）。
+    # 任务执行引擎（issue #47/#84，插件化 issue #140）：claude = Claude
+    # Code CLI（默认，现网行为不变）；hermes = 部署机已装好的 hermes-agent
+    # （经 hermes_runner.py 进程内调用）；dsh = deepseek-harness SDK（经
+    # dsh_runner.py 进程内调用）。引擎名对应执行引擎插件（botler.plugins
+    # .executors），未注册的引擎名回退 claude（executor._engine 校验）。
     engine: str = "claude"
+    # 外部插件加载（issue #140）：Python 模块路径列表，应用启动时逐个加载
+    # 并注册进插件体系（新增执行引擎 / 大模型供应商 / 消息发送通道）。
+    # 模块内调用 botler.plugins.register_plugin 完成登记；加载失败仅记
+    # 日志告警，不阻塞应用启动。
+    plugin_paths: list[str] = field(default_factory=list)
     hermes_command: str = ""
     hermes_args: list[str] = field(default_factory=list)
     # dsh 引擎（issue #84，worker.engine: dsh 时生效）：deepseek-harness
@@ -196,7 +202,7 @@ KNOWN_FIELDS = {
     "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries",
                "reconcile_interval_seconds", "ci_wait_detect_seconds",
                "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
-               "engine", "issue_priority"},
+               "engine", "plugin_paths", "issue_priority"},
     "claude": {"command", "args"},
     "hermes": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
@@ -370,6 +376,8 @@ class ConfigManager:
             claude_command=claude.get("command", "claude"),
             claude_args=claude.get("args", ["-p", "--output-format", "json"]),
             engine=str(worker.get("engine", "claude")).strip() or "claude",
+            plugin_paths=[str(p).strip() for p in (worker.get("plugin_paths") or [])
+                          if str(p).strip()],
             hermes_command=str(hermes.get("command", "")).strip(),
             hermes_args=hermes.get("args", []),
             dsh_provider=str(dsh.get("provider", "deepseek-official")).strip() or "deepseek-official",

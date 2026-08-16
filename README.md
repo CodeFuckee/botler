@@ -48,7 +48,11 @@ backend/
     gitlab_client.py GitLab REST API 封装（webhook 注册、issue 评论等）
     webhook.py       webhook 接收器（secret 校验 + assignee 判定 + 去重）
     scheduler.py     任务调度器（每仓库串行、跨仓库并行、按仓库优先级派发；同仓库队列内按 issue 标签优先级排序，默认 bug 最优先）
-    executor.py      执行器（claude / hermes / dsh 三引擎，干净工作区 / 超时 / 重试 / 失败评论）
+    executor.py      执行器（引擎分发走插件体系，干净工作区 / 超时 / 重试 / 失败评论）
+    plugins/         插件体系（issue #140）：base（PluginKind / PluginRegistry 注册表）/
+                     executors（执行引擎插件 claude / hermes / dsh）/ models（大模型供应商
+                     插件 gemini / openai）/ notifiers（任务消息通道插件 webhook / in_app）；
+                     支持 worker.plugin_paths 外部加载新插件
     hermes_runner.py hermes 引擎 runner 脚本（hermes venv 进程内调用 AIAgent，stdin/stdout JSON 协议）
     dsh_runner.py    dsh 引擎 runner（deepseek-harness SDK 进程内调用，线程运行 + 停止/超时关闭运行时）
     reconciler.py    对账兜底（APScheduler 定时扫描补漏）
@@ -167,6 +171,24 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 自定义镜像：`docker build -t botler:latest .`（见 Dockerfile 头部注释）。
 停止：`docker compose down`（数据保留）；删除数据：`docker compose down -v`。
 
+## 插件体系（issue #140）
+
+平台把三类能力统一为**插件**，注册进全局插件注册表（`botler.plugins.PluginRegistry`），
+调用方只面向注册表编程；新增能力无需改动核心模块：
+
+| 插件分类 | 能力 | 内置插件 |
+|---|---|---|
+| `executor` | 任务执行引擎（`worker.engine` 选择） | `claude`（Claude Code CLI）/ `hermes`（hermes-agent）/ `dsh`（deepseek-harness SDK） |
+| `model_provider` | 大模型 API 供应商（生图模型 provider 选择） | `gemini_nano_banana`（Gemini generateContent）/ `openai_gpt_image`（OpenAI images API） |
+| `notifier` | 任务消息发送通道（任务收尾自动分发） | `webhook`（外部 HTTP 推送，issue #136）/ `in_app`（网页通知，issue #21） |
+
+- **向后兼容**：现有 `config.yaml` 全部配置字段与默认行为不变，存量部署零迁移；
+- **外部扩展**：`worker.plugin_paths` 声明 Python 模块路径（模块内调用
+  `botler.plugins.register_plugin` 注册），启动时加载，可新增引擎 / 供应商 / 发送通道；
+- **统一容错**：任一通道失败仅记日志，绝不阻塞任务收尾。
+
+完整设计见 [`docs/插件体系设计方案.md`](docs/插件体系设计方案.md)（接口定义 / 迁移清单 / 测试计划 / 演进方向）。
+
 ## 配置说明
 
 `backend/config.yaml` 是唯一事实来源，Web UI 是编辑它的外壳。直接编辑 config.yaml 的修改会被运行中的进程自动感知（检测文件变化后重载，无需重启；issue #25），且后续 Web UI 保存设置不会覆盖手动编辑的内容。凭据一律用 `${ENV_VAR}` 引用环境变量（`backend/.env`），不入库、不进日志、不进提示词。
@@ -185,7 +207,8 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟） |
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
-| `worker.engine` | `claude` | 任务执行引擎：`claude`（Claude Code CLI）/ `hermes`（部署机已装好的 hermes-agent）/ `dsh`（deepseek-harness SDK）；非法值回退 `claude`（issue #47/#84）；设置页「任务调度」卡片可切换（issue #113） |
+| `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（部署机已装好的 hermes-agent）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84）；设置页「任务调度」卡片可切换（issue #113） |
+| `worker.plugin_paths` | `[]` | 外部插件加载（issue #140）：Python 模块路径列表，应用启动时逐个加载注册进插件体系（新增执行引擎 / 大模型供应商 / 消息发送通道）；模块内调用 `botler.plugins.register_plugin` 完成登记，加载失败仅记日志不阻塞启动 |
 | `claude.command` / `args` | `claude -p --output-format stream-json --verbose` | claude 引擎执行命令（stream-json 逐行实时输出，任务页面逐事件查看执行过程） |
 | `hermes.command` / `args` | — | hermes 引擎执行命令（部署机 hermes venv 的 python + `backend/hermes_runner.py`），部署见 `docs/hermes-engine-deployment.md` |
 | `dsh.provider` / `model` | `deepseek-official` / `deepseek-v4-flash` | dsh 引擎运行参数（provider 路由 / 模型 id），Key 走环境变量 `DEEPSEEK_API_KEY` |

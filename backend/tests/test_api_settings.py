@@ -884,6 +884,62 @@ class TestEngineSettings:
         assert worker["max_concurrent_repos"] == 5
 
 
+class TestPluginPathsSettings:
+    """worker.plugin_paths（issue #140）：外部插件模块路径列表配置。
+
+    插件体系扩展点：新增执行引擎 / 大模型供应商 / 消息发送通道可经
+    config.yaml 的 worker.plugin_paths 声明模块路径，启动时加载注册。
+    """
+
+    def test_get_settings_includes_plugin_paths(self, client):
+        """GET 返回 plugin_paths（默认空列表）。"""
+        tc, _ = client
+        data = tc.get("/api/settings").json()
+        assert data["worker"]["plugin_paths"] == []
+
+    def test_update_plugin_paths_persists(self, client):
+        """PUT plugin_paths 写回 config.yaml 并重读生效。"""
+        tc, tmp_path = client
+        paths = ["/opt/botler-plugins/my_engine.py",
+                 "/opt/botler-plugins/feishu_channel.py"]
+        resp = tc.put("/api/settings", json={"worker": {"plugin_paths": paths}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["plugin_paths"] == paths
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "plugin_paths" in config_text
+        assert "/opt/botler-plugins/my_engine.py" in config_text
+        s = ConfigManager(str(tmp_path / "config.yaml")).load()
+        assert s.plugin_paths == paths
+
+    def test_update_plugin_paths_strips_blank(self, client):
+        """空白项剔除、保留非空路径（配置容错）。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "plugin_paths": ["  /a.py  ", "   ", ""]}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["plugin_paths"] == ["/a.py"]
+
+    def test_update_plugin_paths_rejects_non_list(self, client):
+        """非字符串数组（字符串/数字）400 拒绝，不落盘。"""
+        tc, tmp_path = client
+        for bad in ("/a.py", 123, None, ["/a.py", 5]):
+            resp = tc.put("/api/settings", json={"worker": {"plugin_paths": bad}})
+            assert resp.status_code == 400, f"plugin_paths 值 {bad!r} 应拒绝"
+        assert "plugin_paths" not in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+    def test_update_plugin_paths_keeps_other_worker_fields(self, client):
+        """只提交 plugin_paths 时 worker 其他字段不受影响（部分更新）。"""
+        tc, _ = client
+        assert tc.put("/api/settings", json={"worker": {
+            "max_concurrent_repos": 7}}).status_code == 200
+        resp = tc.put("/api/settings", json={"worker": {
+            "plugin_paths": ["/x.py"]}})
+        assert resp.status_code == 200
+        worker = resp.json()["worker"]
+        assert worker["plugin_paths"] == ["/x.py"]
+        assert worker["max_concurrent_repos"] == 7
+
+
 class TestResumeTemplateSettings:
     """templates.resume 段（issue #116）：中断恢复提示词可编辑，与全局模版同机制。
 

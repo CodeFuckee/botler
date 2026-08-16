@@ -43,6 +43,12 @@ from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
 from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
                          list_local_remotes, parse_remote_url)
 from .templates import TemplateRenderer
+from .plugins import (
+    PluginKind,
+    get_plugin,
+    has_plugin,
+    list_plugins,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -856,9 +862,10 @@ class ClaudeExecutor:
             self._stop_requests.discard(task_id)
 
     def _engine(self, cfg) -> str:
-        """任务执行引擎（issue #47/#84）：claude（默认）/ hermes / dsh；非法值回退 claude。"""
+        """任务执行引擎（issue #47/#84，插件化 issue #140）：claude（默认）/
+        hermes / dsh；未注册的引擎名回退 claude。引擎插件见 botler.plugins.executors。"""
         engine = str(getattr(cfg, "engine", "") or "claude").strip().lower()
-        return engine if engine in ("claude", "hermes", "dsh") else "claude"
+        return engine if has_plugin(PluginKind.EXECUTOR, engine) else "claude"
 
     def _drain_process_output(self, proc, task_id: int, log_path: Path,
                               deadline: float, on_chunk=None) -> tuple[bool, bool, list[str]]:
@@ -905,27 +912,30 @@ class ClaudeExecutor:
     def _run_once(self, task_id: int, repo: dict, issue: dict,
                   resume_session: str | None = None,
                   resume_history: list | None = None) -> tuple[int, str]:
-        """执行一次任务引擎（claude -p / hermes runner / dsh SDK）。返回 (exit_code, output)。
+        """执行一次任务引擎（插件体系分发，issue #140）。返回 (exit_code, output)。
 
-        claude 引擎：resume_session 非空时为断点续跑（claude --resume 接续
-        上次会话，工作区保留）；执行后解析 JSON 输出中的 session_id 落库。
-        hermes 引擎（issue #47）：resume_history 为断点续跑的历史消息
-        （工作区保留），显式传入优先；未传入时从任务落库的 hermes_history
-        解析（含会话 id），等价 Q3-B conversation_history 落库断点续跑。
-        dsh 引擎（issue #84）：resume_session 为断点续跑的上次会话 id
-        （SDK 在 session_root 持久化会话，同一 id 接续对话；工作区保留）。
+        按 ``worker.engine`` 配置的引擎名查执行引擎插件（内置 claude /
+        hermes / dsh 见 botler.plugins.executors）并委托执行；未知引擎回退
+        claude。断点续跑语义由各引擎插件承担：
+        - claude（issue #8）：resume_session 非空时 --resume 接续上次会话；
+        - hermes（issue #47）：resume_history 为历史消息（显式传入优先，
+          未传入时从任务落库 hermes_history 解析）；
+        - dsh（issue #84）：resume_session 为上次会话 id（SDK 持久化会话）。
         """
         cfg = self.config.get()
-        if self._engine(cfg) == "hermes":
-            task_row = self.db.get_task(task_id)
-            messages, sid = self._hermes_resume_data(
-                _row_get(task_row, "hermes_history") if task_row is not None else None)
-            if resume_history is not None:
-                messages = resume_history
-            return self._run_hermes_once(task_id, repo, issue, messages, sid)
-        if self._engine(cfg) == "dsh":
-            return self._run_dsh_once(task_id, repo, issue, resume_session)
+        plugin = get_plugin(PluginKind.EXECUTOR, self._engine(cfg))
+        return plugin.run(self, task_id, repo, issue,
+                          resume_session, resume_history)
 
+    def _run_claude_once(self, task_id: int, repo: dict, issue: dict,
+                         resume_session: str | None = None) -> tuple[int, str]:
+        """执行一次 claude 引擎（Claude Code CLI 无头模式）。
+
+        resume_session 非空时为断点续跑（claude --resume 接续上次会话，
+        工作区保留）；执行后解析 JSON 输出中的 session_id 落库。本方法由
+        ClaudeEnginePlugin（botler.plugins.executors）委托调用。
+        """
+        cfg = self.config.get()
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         if resume_session:
             prompt = self._resume_prompt(repo, issue)
@@ -1815,54 +1825,56 @@ class ClaudeExecutor:
         self.clear_stop_request(task_id)
 
     def _emit_task_event(self, task_id: int, event: str, reason: str = "") -> None:
-        """任务收尾产生网页通知事件（issue #21）。查库失败不阻塞收尾。"""
+        """任务收尾向全部已注册的 notifier 插件分发事件（issue #21/#136，
+        插件化 issue #140）。查库失败不阻塞收尾。
+
+        统一分发网页通知（in_app）与外部 webhook 推送（webhook）两类
+        通道：webhook 插件需要 issue 完整信息（正文/链接供模板占位符
+        渲染），分发前统一拉取一次，失败降级用任务记录数据；各通道自行
+        检查启用条件（webhook.enabled / 地址配置，未启用返回 None 跳过），
+        任一通道失败仅记日志，绝不阻塞任务收尾。
+        """
+        from .webhook_push import WebhookPushError
         try:
             task = self.db.get_task(task_id)
             if task is None:
                 return
             repo = self.db.get_repo(task["repo_id"])
-            repo_name = repo["name"] if repo else None
-            if event == "task_succeeded":
-                self.notifier.task_succeeded(dict(task), repo_name)
-            elif event == "task_failed":
-                self.notifier.task_failed(dict(task), reason, repo_name)
-        except Exception:  # noqa: BLE001 通知失败不影响任务收尾
-            logger.exception("任务 %s 通知事件记录失败", task_id)
-
-    def _push_webhook_succeeded(self, task, repo) -> None:
-        """任务成功时推送 webhook 消息（issue #136）。
-
-        推送前尝试拉取 issue 完整信息（正文/链接供模板占位符渲染），
-        失败降级用任务记录数据；推送失败仅记日志，不阻塞任务收尾。
-        """
-        from .webhook_push import WebhookPushError
-        try:
-            issue = None
-            try:
-                issue, _ = self._call_with_fallback(
-                    repo, lambda c: c.get_issue(
-                        task["project_id"], task["issue_iid"]))
-            except GitLabError as e:
-                logger.warning("webhook 推送查询 issue %s#%s 失败: %s",
-                               task["project_id"], task["issue_iid"], e)
             repo_name = repo["name"] if repo else ""
             repo_url = repo["url"] if repo else ""
-            result = self.webhook_pusher.send_task_succeeded(
-                dict(task), repo_name=repo_name,
-                repo_url=repo_url, issue=issue)
-            if result is None:
-                return  # 未启用或未配置地址，跳过
-            self.db.add_log(
-                task["id"], "info",
-                f"webhook 推送成功（HTTP {result['status_code']}）")
-        except WebhookPushError as e:
-            try:
-                self.db.add_log(task["id"], "warn", f"webhook 推送失败: {e}")
-            except Exception:  # noqa: BLE001 日志落库失败忽略
-                pass
-            logger.warning("任务 %s webhook 推送失败: %s", task["id"], e)
-        except Exception:  # noqa: BLE001 推送异常不阻塞任务收尾
-            logger.exception("任务 %s webhook 推送异常", task["id"])
+            issue = None
+            if repo is not None and event == "task_succeeded":
+                try:
+                    issue, _ = self._call_with_fallback(
+                        repo, lambda c: c.get_issue(
+                            task["project_id"], task["issue_iid"]))
+                except Exception as e:  # noqa: BLE001 拉取失败降级用任务记录数据
+                    logger.warning("通知分发查询 issue %s#%s 失败: %s",
+                                   task["project_id"], task["issue_iid"], e)
+            for plugin in list_plugins(PluginKind.NOTIFIER):
+                try:
+                    if event == "task_succeeded":
+                        result = plugin.send_task_succeeded(
+                            self, dict(task), repo_name=repo_name,
+                            repo_url=repo_url, issue=issue)
+                        if plugin.name == "webhook" and result is not None:
+                            self.db.add_log(
+                                task_id, "info",
+                                f"webhook 推送成功（HTTP {result['status_code']}）")
+                    elif event == "task_failed":
+                        plugin.send_task_failed(
+                            self, dict(task), reason, repo_name=repo_name)
+                except WebhookPushError as e:
+                    try:
+                        self.db.add_log(task_id, "warn", f"webhook 推送失败: {e}")
+                    except Exception:  # noqa: BLE001 日志落库失败忽略
+                        pass
+                    logger.warning("任务 %s webhook 推送失败: %s", task_id, e)
+                except Exception:  # noqa: BLE001 任一通道失败不阻塞任务收尾
+                    logger.exception("任务 %s 通知插件 %s 分发失败",
+                                     task_id, plugin.name)
+        except Exception:  # noqa: BLE001 通知失败不影响任务收尾
+            logger.exception("任务 %s 通知事件记录失败", task_id)
 
     def _dump_error_detail(self, attempts: list[dict], last_exit: int) -> str:
         """把每次尝试的失败详情序列化为 error_detail（JSON 字符串，界面「详情」按钮展示）。"""
@@ -1922,11 +1934,9 @@ class ClaudeExecutor:
         # 不阻塞任务成功（与打标签一致的容错策略）。
         if task is not None:
             self._leave_success_comment(task, output, repo)
-        # Webhook 消息推送（issue #136）：任务成功完成时按设置页配置推送，
-        # 尽力而为，失败仅记日志不阻塞任务成功收尾
-        if task is not None:
-            self._push_webhook_succeeded(task, repo)
-        # 网页通知：issue 完成（issue #21）
+        # 任务消息分发（issue #21/#136，插件化 issue #140）：网页通知 +
+        # webhook 推送统一由 notifier 插件分发（各通道自检启用条件，
+        # 失败仅记日志不阻塞任务成功收尾）
         self._emit_task_event(task_id, "task_succeeded")
         logger.info("任务 %s 成功", task_id)
 
