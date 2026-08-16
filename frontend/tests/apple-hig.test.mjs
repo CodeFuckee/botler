@@ -196,6 +196,8 @@ async function renderOverviewEmpty() {
     if (pathname.startsWith('/api/tasks?')) return { tasks: [], total: 0, stats: {} }
     if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
     if (pathname === '/api/issues/overview') return { repos: [], errors: [], total: 0 }
+    // issue #131：灵感板块（本地数据库数据，测试注入空列表）
+    if (pathname === '/api/inspirations/overview') return { repos: [] }
     throw new Error('unexpected ' + pathname)
   })
   let renderer = null
@@ -216,16 +218,17 @@ test('Overview 空状态：图标 + 文案渲染（非裸文本，HIG 匠心/愉
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
     const root = renderer.root
-    // 两板块空态均应渲染 .empty-state 容器（图标 + 文案结构）。
-    // issue #114：独立任务板块删除后任务信息整合进开放 Issue 板块，
-    // 空态仅剩开放 Issue 与 CI/CD 流水线两处
+    // 三板块空态均应渲染 .empty-state 容器（图标 + 文案结构）。
+    // issue #114：独立任务板块删除后任务信息整合进开放 Issue 板块；
+    // issue #131：新增灵感板块——空态为开放 Issue / 灵感 / 流水线三处
     const emptyStates = root.findAll((n) => String(n.props.className || '').includes('empty-state'))
-    assert.equal(emptyStates.length, 2, '开放 Issue/流水线两板块空态均应有 empty-state 容器')
+    assert.equal(emptyStates.length, 3, '开放 Issue/灵感/流水线三板块空态均应有 empty-state 容器')
     // 每个空态含图标（aria-hidden 装饰性）与文案
     const icons = root.findAll((n) => String(n.props.className || '').includes('empty-icon'))
-    assert.equal(icons.length, 2, '每个空态应有图标')
+    assert.equal(icons.length, 3, '每个空态应有图标')
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('暂无开放 issue'), '保留空态文案「暂无开放 issue」')
+    assert.ok(text.includes('暂无灵感（未配置仓库）'), '保留空态文案「暂无灵感（未配置仓库）」')
     assert.ok(text.includes('暂无流水线'), '保留空态文案「暂无流水线」')
   } finally {
     await TestRenderer.act(() => renderer.unmount())

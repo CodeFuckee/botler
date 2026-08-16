@@ -139,12 +139,14 @@ class FakeEventSource {
   }
 }
 
-// 渲染 Overview：mock 任务 / 流水线 / issue 三端点，任务与 issue 可注入
+// 渲染 Overview：mock 任务 / 流水线 / issue / 灵感四端点，任务与 issue 可注入
 async function renderOverview({ tasks = [], repos = [] } = {}) {
   mock.method(api, 'get', async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) return { tasks, total: tasks.length, stats: {} }
     if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
     if (pathname === '/api/issues/overview') return { repos, errors: [], total: repos.length }
+    // issue #131：灵感板块（本地数据库数据，测试注入空列表）
+    if (pathname === '/api/inspirations/overview') return { repos: [] }
     throw new Error('unexpected ' + pathname)
   })
   let renderer = null
@@ -305,7 +307,7 @@ test('渲染：跨仓库同 iid 任务不误渲染到其他仓库的 issue 项',
   }
 })
 
-test('渲染：无活跃任务时概览页仅剩两板块且不渲染任何任务块', async () => {
+test('渲染：无活跃任务时概览页仅剩三板块且不渲染任何任务块', async () => {
   const { renderer, renderError } = await renderOverview({
     tasks: [],
     repos: [{
@@ -321,7 +323,9 @@ test('渲染：无活跃任务时概览页仅剩两板块且不渲染任何任�
     const root = renderer.root
     const h2s = root.findAll((n) => n.type === 'h2')
       .map((n) => String(n.children && n.children.join ? n.children.join('') : n.children))
-    assert.deepEqual(h2s, ['开放 Issue', 'CI/CD 流水线'], '概览页应只剩两个板块')
+    // issue #131：新增灵感板块（位于开放 Issue 与流水线之间）
+    assert.deepEqual(h2s, ['开放 Issue', '💡 灵感', 'CI/CD 流水线'],
+                     '概览页应只剩三个板块：开放 Issue → 灵感 → CI/CD 流水线')
     assert.equal(root.findAll((n) => n.props.className === 'issue-task').length, 0,
                  '无任务时不得渲染任务块')
   } finally {

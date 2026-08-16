@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS notification_events (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_task
   ON notification_events(task_id) WHERE task_id IS NOT NULL;
+
+-- 灵感（issue #131）：概览页「灵感」板块——按仓库随手记录新功能灵感，
+-- 仅保存在 Botler 本地数据库，不提交到 GitLab issue。repo_id 引用
+-- repos 表（软删除仍保留行，灵感记录不随仓库删除而丢失）。
+CREATE TABLE IF NOT EXISTS inspirations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_id INTEGER NOT NULL REFERENCES repos(id),
+  content TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -236,6 +247,19 @@ class Database:
                      ELSE engine END
                    WHERE engine IS NULL OR engine = ''""")
             conn.execute("PRAGMA user_version = 7")
+        if ver < 8:
+            # issue #131：新增灵感表（概览页「灵感」板块）。CREATE TABLE
+            # IF NOT EXISTS 已在 _SCHEMA 覆盖新库；旧库（PRAGMA user_version
+            # 为 7）首次启动时同样建表，并显式推进版本号保持迁移链完整。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS inspirations (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     repo_id INTEGER NOT NULL REFERENCES repos(id),
+                     content TEXT NOT NULL,
+                     created_at TEXT DEFAULT (datetime('now')),
+                     updated_at TEXT DEFAULT (datetime('now'))
+                   )""")
+            conn.execute("PRAGMA user_version = 8")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -295,6 +319,56 @@ class Database:
             raise
         finally:
             conn.close()
+
+    # ---- inspirations（issue #131）----
+    # 概览页「灵感」板块数据：按仓库随手记录新功能灵感，仅存本地数据库。
+
+    def list_inspirations(self, repo_id: int | None = None) -> list[sqlite3.Row]:
+        """列出灵感；可选按 repo_id 过滤。
+
+        JOIN repos 带出仓库名（软删除仓库行仍保留，名称可正常展示）；
+        按 updated_at 降序（最新改动在前），同时间按 id 降序保证稳定。
+        """
+        with self._conn() as conn:
+            if repo_id is not None:
+                return conn.execute(
+                    """SELECT i.*, r.name AS repo_name FROM inspirations i
+                       JOIN repos r ON r.id = i.repo_id
+                       WHERE i.repo_id = ?
+                       ORDER BY i.updated_at DESC, i.id DESC""", (repo_id,)).fetchall()
+            return conn.execute(
+                """SELECT i.*, r.name AS repo_name FROM inspirations i
+                   JOIN repos r ON r.id = i.repo_id
+                   ORDER BY i.updated_at DESC, i.id DESC""").fetchall()
+
+    def get_inspiration(self, inspiration_id: int) -> sqlite3.Row | None:
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT i.*, r.name AS repo_name FROM inspirations i
+                   JOIN repos r ON r.id = i.repo_id
+                   WHERE i.id = ?""", (inspiration_id,)).fetchone()
+
+    def create_inspiration(self, repo_id: int, content: str) -> int:
+        """创建灵感，返回新记录 id。"""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT INTO inspirations (repo_id, content)
+                   VALUES (?, ?)""", (repo_id, content))
+            return cur.lastrowid
+
+    def update_inspiration(self, inspiration_id: int, content: str) -> bool:
+        """更新灵感内容并刷新 updated_at；记录不存在返回 False。"""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE inspirations SET content=?, updated_at=datetime('now')
+                   WHERE id=?""", (content, inspiration_id))
+            return cur.rowcount > 0
+
+    def delete_inspiration(self, inspiration_id: int) -> bool:
+        """删除灵感；记录不存在返回 False。"""
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM inspirations WHERE id=?", (inspiration_id,))
+            return cur.rowcount > 0
 
     # ---- repos ----
 

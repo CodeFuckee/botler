@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+### Added
+
+- **概览页新增「灵感」板块：开放 Issue 下方、CI/CD 流水线上方按仓库随手记录新功能灵感（issue #131）**：
+  需求「概览页面，在开放issue下方，ci\cd流水线上方增加灵感页面，可以在这里按仓库随手记录下来
+  关于对应仓库的一些新功能的灵感，这些灵感只保存在项目的数据库，不要提交到issue上」。灵感是
+  用户对对应仓库新功能的随手笔记，与 GitLab issue 完全隔离——只保存在 Botler 本地 SQLite
+  数据库，不调用任何 GitLab API、不创建/修改 issue。
+  实现：
+  - 后端 `database.py`：新增 `inspirations` 表（repo_id / content / created_at / updated_at），
+    v8 迁移（`PRAGMA user_version` 7 → 8，旧库启动自动建表）；新增
+    `list_inspirations` / `get_inspiration` / `create_inspiration` /
+    `update_inspiration`（刷新 updated_at）/ `delete_inspiration` 方法；
+  - 后端 `api/inspirations.py`（新模块，注册进 /api 路由）：
+    `GET /api/inspirations/overview`（聚合所有未软删除仓库 + 各自灵感，仓库按优先级排序、
+    灵感按 updated_at 降序，无灵感的仓库也返回供前端展示空状态与添加表单）、
+    `POST /api/inspirations`（创建，repo_id 须指向存在且未软删除的仓库，内容去首尾空白
+    后非空且 ≤ 5000 字）、`PUT /api/inspirations/{id}`（更新内容）、
+    `DELETE /api/inspirations/{id}`（删除）；
+  - 前端 `Overview.jsx`：新增 `inspirations-section`（源码位置在 issues-section 与
+    pipelines-section 之间），每仓库一张卡：灵感列表（内容 / 更新时间 / 编辑 / 删除）+
+    底部「随手记录」表单；本地增删改成功后立即刷新列表，15 秒轮询兜底多标签页并发；
+    新增 `INSPIRATION_POLL_MS = 15000` 常量与 `loadInspirations` /
+    `submitNewInspiration` / `saveInspiration` / `deleteInspiration`；
+  - 前端 `styles.css`：新增 `.inspirations-section` 系列样式（网格/卡片/列表/表单，
+    与开放 Issue 板块视觉语言一致，含 hover 轻抬升动效）；
+  - 文档：`README.md` API 一览补充 4 个灵感接口；
+  - **测试**：后端 `test_api_inspirations.py` 20 用例（overview 聚合与排序、软删除仓库
+    过滤、创建/更新/删除、空内容/纯空白/超长/仓库不存在/记录不存在等边界）；
+    `test_database_migrate.py` 新增 v8 迁移与灵感 CRUD 4 用例；
+    前端 `overview-inspirations.test.mjs` 12 用例（板块顺序、渲染、增删改交互、空状态、
+    失败兜底）；`apple-hig` / `overview-issue-task` 既有用例适配三板块结构；
+    后端 1108 + 前端 577 全量测试通过。
+
 ### Fixed
 
 - **显示 gitlab token 隔离：设置页 owner gitlab token 所有 Agent 均不可使用（issue #130）**：

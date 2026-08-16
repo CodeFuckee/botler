@@ -1808,6 +1808,134 @@ code {
   color: var(--muted);
 }
 
+/* ---- 概览页灵感板块（issue #131）：位于开放 Issue 与 CI/CD 流水线
+   之间。每仓库一张卡，沿用开放 issue 板块的卡片/网格/空状态视觉语言 ---- */
+.inspirations-section {
+  margin-top: var(--space-5);
+}
+.inspirations-section h2 {
+  font-size: 16px;
+  margin: 0 0 var(--space-1);
+}
+.inspirations-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+.inspiration-repo-card {
+  min-width: 0;
+  /* apple-design 匠心：卡片 hover 轻抬升 + 阴影加深（与 issue/流水线卡片一致） */
+  transition: box-shadow var(--dur) var(--ease-out), transform var(--dur) var(--ease-out);
+}
+.inspiration-repo-card:hover {
+  box-shadow: var(--shadow-pop);
+  transform: translateY(-1px);
+}
+.inspiration-repo-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.inspiration-repo-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspiration-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.inspiration-item {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  /* apple-design 响应：行 hover 微反馈（浅背景渐变出现） */
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.inspiration-item:hover { background: var(--bg-hover); }
+.inspiration-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.inspiration-content {
+  margin: 0 0 var(--space-1);
+  font-size: 13.5px;
+  line-height: 1.6;
+  /* 长灵感换行保留（notepad 风格随手记录），超长时垂直截断 */
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.inspiration-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+.inspiration-time {
+  font-size: 12px;
+  color: var(--muted);
+}
+.inspiration-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.inspiration-action-btn {
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.inspiration-action-btn:hover {
+  color: var(--primary);
+  background: var(--bg-soft);
+}
+.inspiration-delete-btn:hover {
+  color: var(--danger, #c0392b);
+}
+.inspiration-edit .inspiration-textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.inspiration-edit .inspiration-actions {
+  margin-top: var(--space-1);
+  justify-content: flex-end;
+  width: 100%;
+}
+.inspiration-add-form {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.inspiration-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.inspiration-add-form .inspiration-add-btn {
+  align-self: flex-end;
+}
+.inspiration-add-btn:disabled,
+.inspiration-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ---- SSO 配置指南折叠区（issue #27 第六轮） ---- */
 /* 使用者看不到仓库本地文档，设置页直接展示 docs/Synology-SSO-配置指南.md
    的渲染结果；guide-content 内是轻量 Markdown 渲染器（components/Markdown.jsx）

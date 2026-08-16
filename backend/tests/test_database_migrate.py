@@ -395,3 +395,114 @@ class TestMigrateTaskEngine:
         db.set_task_status(task_id, "running")
         assert db.finish_task(task_id, "succeeded", engine="hermes")
         assert db.get_task(task_id)["engine"] == "hermes"
+
+
+# ---- issue #131：inspirations 灵感表（v8 迁移）----
+
+V7_SCHEMA = """
+CREATE TABLE repos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  gitlab_project_id INTEGER NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  local_path TEXT,
+  remote_name TEXT,
+  prompt_template TEXT,
+  enabled INTEGER DEFAULT 1,
+  priority INTEGER DEFAULT 100,
+  deleted_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_id INTEGER NOT NULL,
+  project_id INTEGER NOT NULL,
+  issue_iid INTEGER NOT NULL,
+  issue_title TEXT,
+  status TEXT NOT NULL,
+  attempt_count INTEGER DEFAULT 0,
+  triggered_by TEXT,
+  exit_code INTEGER,
+  error_message TEXT,
+  error_detail TEXT,
+  log_path TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  claude_session_id TEXT,
+  hermes_history TEXT,
+  commit_sha TEXT,
+  dsh_session_id TEXT,
+  issue_labels TEXT DEFAULT '[]',
+  issue_updated_at TEXT DEFAULT '',
+  engine TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+
+def _build_v7_db(path) -> None:
+    """手工构造 v7 旧库（无 inspirations 表，模拟 issue #131 前的线上库）。"""
+    conn = sqlite3.connect(str(path))
+    conn.executescript(V7_SCHEMA)
+    conn.execute(
+        """INSERT INTO repos (gitlab_project_id, name, url)
+           VALUES (42, 'botler', 'https://x/botler.git')""")
+    conn.execute("PRAGMA user_version = 7")
+    conn.commit()
+    conn.close()
+
+
+class TestMigrateInspirations:
+    """v8 迁移（issue #131）：inspirations 灵感表。"""
+
+    def test_old_db_gets_inspirations_table(self, tmp_path):
+        """旧库初始化后应补出 inspirations 表并推进版本号。"""
+        path = tmp_path / "old.db"
+        _build_v7_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            tables = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "inspirations" in tables, "旧库应补出 inspirations 表"
+        assert ver == 8, f"user_version 应推进到 8，实际 {ver}"
+
+    def test_new_db_has_inspirations_table(self, tmp_path):
+        """新库建表语句应直接含 inspirations 表（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            tables = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "inspirations" in tables
+
+    def test_inspiration_crud(self, tmp_path):
+        """灵感 CRUD：创建 / 列表（带仓库名）/ 更新刷新 updated_at / 删除。"""
+        db = Database(str(tmp_path / "c.db"))
+        repo_id = db.upsert_repo(42, "botler", "https://x/botler.git")
+        insp_id = db.create_inspiration(repo_id, "支持批量处理 issue")
+        rows = db.list_inspirations()
+        assert len(rows) == 1
+        assert rows[0]["repo_name"] == "botler"
+        assert rows[0]["content"] == "支持批量处理 issue"
+        got = db.get_inspiration(insp_id)
+        assert got["id"] == insp_id
+        assert db.update_inspiration(insp_id, "更新后的内容") is True
+        assert db.get_inspiration(insp_id)["content"] == "更新后的内容"
+        assert db.list_inspirations()[0]["updated_at"] >= got["created_at"]
+        # 过滤 repo_id
+        assert len(db.list_inspirations(repo_id=repo_id)) == 1
+        assert len(db.list_inspirations(repo_id=999)) == 0
+        assert db.delete_inspiration(insp_id) is True
+        assert db.get_inspiration(insp_id) is None
+        assert db.delete_inspiration(insp_id) is False
+
+    def test_inspiration_list_sorted_by_updated_at_desc(self, tmp_path):
+        """list_inspirations 按 updated_at 降序（最新改动在前）。"""
+        import time
+        db = Database(str(tmp_path / "s.db"))
+        repo_id = db.upsert_repo(42, "botler", "https://x/botler.git")
+        id1 = db.create_inspiration(repo_id, "第一条")
+        id2 = db.create_inspiration(repo_id, "第二条")
+        time.sleep(1.1)
+        db.update_inspiration(id1, "第一条（更新）")
+        assert [r["id"] for r in db.list_inspirations()] == [id1, id2]

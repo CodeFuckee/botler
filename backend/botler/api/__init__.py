@@ -20,6 +20,7 @@ from .auth import router as auth_router  # noqa: E402
 from .labels import router as labels_router  # noqa: E402
 from .pipelines import router as pipelines_router  # noqa: E402
 from .issues import router as issues_router  # noqa: E402
+from .inspirations import router as inspirations_router  # noqa: E402
 
 router.include_router(repos_router)
 router.include_router(tasks_router)
@@ -31,3 +32,4 @@ router.include_router(auth_router)
 router.include_router(labels_router)
 router.include_router(pipelines_router)
 router.include_router(issues_router)
+router.include_router(inspirations_router)

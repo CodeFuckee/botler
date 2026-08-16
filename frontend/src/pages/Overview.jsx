@@ -21,6 +21,10 @@ export const PIPELINE_POLL_MS = 15000
 // 有 10 秒 TTL 缓存兜底，避免高频轮询打爆 GitLab API
 export const ISSUE_POLL_MS = 15000
 
+// 灵感板块轮询间隔（issue #131）：数据存 Botler 本地数据库，无 GitLab
+// 请求压力，与开放 issue 板块同频（本地改动提交后手动刷新即时生效）
+export const INSPIRATION_POLL_MS = 15000
+
 // 流水线整体状态 → 徽章映射（issue #39）。样式类复用任务状态徽章
 // status-*（视觉语义一致：成功绿 / 失败红 / 运行蓝 / 其余灰）
 export const PIPELINE_STATUS_META = {
@@ -180,6 +184,16 @@ export default function Overview() {
   const [selectedIssue, setSelectedIssue] = useState(null)
   // 添加 issue 弹窗（issue #92）：打开的仓库卡片数据，null 表示关闭
   const [addIssueRepo, setAddIssueRepo] = useState(null)
+  // 灵感（issue #131）：概览页「灵感」板块——按仓库随手记录新功能灵感，
+  // 仅保存在 Botler 本地数据库，不提交到 GitLab issue
+  const [inspirationRepos, setInspirationRepos] = useState([])
+  const [inspirationError, setInspirationError] = useState('')
+  // 各仓库卡片「新灵感」输入草稿（repo_id -> 内容）
+  const [newInspirationDrafts, setNewInspirationDrafts] = useState({})
+  // 正在编辑的灵感：{id, repo_id, content}，null 表示未在编辑
+  const [editingInspiration, setEditingInspiration] = useState(null)
+  // 编辑框草稿内容
+  const [editInspirationDraft, setEditInspirationDraft] = useState('')
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
@@ -266,6 +280,63 @@ export default function Overview() {
     const t = setInterval(loadIssues, ISSUE_POLL_MS)
     return () => clearInterval(t)
   }, [loadIssues])
+
+  // 灵感聚合（issue #131）：本地数据库数据，独立慢轮询；本地增删改
+  // 提交成功后手动刷新，轮询兜底多标签页并发场景
+  const loadInspirations = useCallback(async () => {
+    try {
+      const d = await api.get('/api/inspirations/overview')
+      setInspirationRepos(d.repos || [])
+      setInspirationError('')
+    } catch (e) {
+      setInspirationError(e.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadInspirations()
+    const t = setInterval(loadInspirations, INSPIRATION_POLL_MS)
+    return () => clearInterval(t)
+  }, [loadInspirations])
+
+  // ---- 灵感增删改（issue #131）：仅写 Botler 本地数据库 ----
+
+  // 记录新灵感：内容去首尾空白，空内容不发请求；成功后清草稿并刷新列表
+  const submitNewInspiration = useCallback(async (repoId) => {
+    const content = (newInspirationDrafts[repoId] || '').trim()
+    if (!content) return
+    try {
+      await api.post('/api/inspirations', { repo_id: repoId, content })
+      setNewInspirationDrafts((prev) => ({ ...prev, [repoId]: '' }))
+      await loadInspirations()
+    } catch (e) {
+      setInspirationError(e.message)
+    }
+  }, [newInspirationDrafts, loadInspirations])
+
+  // 保存编辑：PUT 更新内容，成功后退出编辑态并刷新列表
+  const saveInspiration = useCallback(async (insp) => {
+    const content = editInspirationDraft.trim()
+    if (!content) return
+    try {
+      await api.put('/api/inspirations/' + insp.id, { content })
+      setEditingInspiration(null)
+      setEditInspirationDraft('')
+      await loadInspirations()
+    } catch (e) {
+      setInspirationError(e.message)
+    }
+  }, [editInspirationDraft, loadInspirations])
+
+  // 删除灵感：DELETE 后刷新列表
+  const deleteInspiration = useCallback(async (insp) => {
+    try {
+      await api.del('/api/inspirations/' + insp.id)
+      await loadInspirations()
+    } catch (e) {
+      setInspirationError(e.message)
+    }
+  }, [loadInspirations])
 
   // 各任务信息块实时输出自动滚动到底部（issue #114：任务板块删除后
   // 任务块迁入开放 issue 列表项内；SSR 测试环境无 document 时跳过）
@@ -459,6 +530,100 @@ export default function Overview() {
                     )
                   })
                 )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* issue #131：灵感板块——位于开放 Issue 下方、CI/CD 流水线上方。
+          按仓库随手记录关于对应仓库的新功能灵感，仅保存在 Botler
+          本地数据库，不提交到 GitLab issue。每个仓库一张卡：灵感列表
+          （编辑/删除）+ 底部随手记录表单 */}
+      <section className="inspirations-section">
+        <h2>💡 灵感</h2>
+        <p className="muted">按仓库随手记录新功能灵感，仅保存在本地数据库，不会提交到 issue（每 {INSPIRATION_POLL_MS / 1000} 秒自动刷新）</p>
+        {inspirationError && (
+          <div className="alert alert-error" onClick={() => setInspirationError('')}>{inspirationError}</div>
+        )}
+        {inspirationRepos.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-icon" aria-hidden="true">💡</span>
+            <p className="muted">暂无灵感（未配置仓库）</p>
+          </div>
+        ) : (
+          <div className="inspirations-list">
+            {inspirationRepos.map((r) => (
+              <div key={r.repo_id} className="card inspiration-repo-card">
+                <div className="inspiration-repo-head">
+                  <span className="inspiration-repo-name" title="仓库">📁 {r.repo_name || '（已删除）'}</span>
+                  {r.enabled === false && (
+                    <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
+                  )}
+                  <span className="muted">{(r.inspirations || []).length} 条灵感</span>
+                </div>
+                {(r.inspirations || []).length === 0 ? (
+                  <div className="empty-state small">
+                    <span className="empty-icon" aria-hidden="true">💡</span>
+                    <p className="muted">暂无灵感，记一条吧</p>
+                  </div>
+                ) : (
+                  <ul className="inspiration-list">
+                    {r.inspirations.map((ins) => (
+                      <li key={ins.id} className="inspiration-item">
+                        {editingInspiration && editingInspiration.id === ins.id ? (
+                          <div className="inspiration-edit">
+                            <textarea className="input inspiration-textarea"
+                                      value={editInspirationDraft}
+                                      onChange={(e) => setEditInspirationDraft(e.target.value)}
+                                      rows={3} />
+                            <div className="inspiration-actions">
+                              <button type="button" className="btn btn-small inspiration-save-btn"
+                                      onClick={() => saveInspiration(ins)}
+                                      disabled={!editInspirationDraft.trim()}>保存</button>
+                              <button type="button" className="btn btn-small"
+                                      onClick={() => {
+                                        setEditingInspiration(null)
+                                        setEditInspirationDraft('')
+                                      }}>取消</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="inspiration-content">{ins.content}</p>
+                            <div className="inspiration-meta">
+                              <span className="inspiration-time" title="最后更新时间">
+                                {fmtAgo(ins.updated_at) || '—'}
+                              </span>
+                              <span className="inspiration-actions">
+                                <button type="button" className="inspiration-action-btn"
+                                        title="编辑该灵感"
+                                        onClick={() => {
+                                          setEditingInspiration(ins)
+                                          setEditInspirationDraft(ins.content)
+                                        }}>✏️ 编辑</button>
+                                <button type="button" className="inspiration-action-btn inspiration-delete-btn"
+                                        title="删除该灵感"
+                                        onClick={() => deleteInspiration(ins)}>🗑️ 删除</button>
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {/* 随手记录表单：内容去首尾空白非空才允许提交 */}
+                <form className="inspiration-add-form"
+                      onSubmit={(e) => { e.preventDefault(); submitNewInspiration(r.repo_id) }}>
+                  <textarea className="input inspiration-textarea"
+                            placeholder="记一条关于该仓库的新功能灵感…"
+                            value={newInspirationDrafts[r.repo_id] || ''}
+                            onChange={(e) => setNewInspirationDrafts((prev) => ({ ...prev, [r.repo_id]: e.target.value }))}
+                            rows={2} />
+                  <button type="submit" className="btn btn-small inspiration-add-btn"
+                          disabled={!(newInspirationDrafts[r.repo_id] || '').trim()}>＋ 记录</button>
+                </form>
               </div>
             ))}
           </div>
