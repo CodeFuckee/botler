@@ -5,7 +5,7 @@
 // 供应商显示各自 logo，而不是所有供应商共用一个图标。
 //
 // 后端 config.yaml 只存 provider key，logo 由前端按 key 映射渲染。
-// 识图模型预设清单（issue #135）：设置页「识图模型」卡片使用。
+// 生图模型预设清单（issue #135）：设置页「生图模型」卡片使用。
 // 预设决定默认 base_url / model（选择后自动填充表单，均可修改）；
 // custom = 用户自定义类型（通用云朵图标）。logo 复用上面 AI 供应商
 // 的 gemini / openai 品牌图标。
@@ -15,12 +15,12 @@ export const IMAGE_MODEL_PRESETS = [
   { key: 'custom', name: '自定义', baseUrl: '', model: '' },
 ]
 
-// 按 key 取识图模型预设；未知 key（历史数据）回退 custom。
+// 按 key 取生图模型预设；未知 key（历史数据）回退 custom。
 export function imageModelPresetOf(key) {
   return IMAGE_MODEL_PRESETS.find((p) => p.key === key) || IMAGE_MODEL_PRESETS.at(-1)
 }
 
-// 识图模型类型名称（列表展示用；未知 key 直接显示原 key）。
+// 生图模型类型名称（列表展示用；未知 key 直接显示原 key）。
 export function imageModelName(key) {
   const p = IMAGE_MODEL_PRESETS.find((x) => x.key === key)
   return p ? p.name : key || '自定义'

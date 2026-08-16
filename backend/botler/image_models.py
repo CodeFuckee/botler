@@ -1,6 +1,6 @@
-"""识图模型调用接口（issue #135）。
+"""生图模型调用接口（issue #135）。
 
-设置页「识图模型」卡片配置的图像模型统一调用封装。本期实现两个 provider：
+设置页「生图模型」卡片配置的图像模型统一调用封装。本期实现两个 provider：
 
 - ``gemini_nano_banana``：Google Gemini Nano Banana Pro（默认模型
   ``gemini-3-pro-image``），走 ``generateContent`` 接口，支持文本
@@ -51,7 +51,7 @@ IMAGE_MODEL_PRESETS: dict[str, dict[str, str]] = {
 
 
 class ImageModelError(RuntimeError):
-    """识图模型调用失败（缺 key / 网络异常 / 非 2xx 响应等）。"""
+    """生图模型调用失败（缺 key / 网络异常 / 非 2xx 响应等）。"""
 
 
 @dataclass
@@ -63,7 +63,7 @@ class ImageResult:
 
 
 class ImageModelClient:
-    """识图模型统一调用客户端。
+    """生图模型统一调用客户端。
 
     入参对应 Settings.image_models 列表项（``{name, provider, base_url,
     api_key, model, enabled}``）。``generate()`` 按 provider 分发到
@@ -83,7 +83,7 @@ class ImageModelClient:
     ) -> None:
         if provider not in IMAGE_MODEL_PRESETS:
             raise ImageModelError(
-                f"不支持的识图模型类型: {provider}（可选: "
+                f"不支持的生成模型类型: {provider}（可选: "
                 + ", ".join(IMAGE_MODEL_PRESETS) + "）")
         preset = IMAGE_MODEL_PRESETS[provider]
         self.name = name or preset["name"]
@@ -118,9 +118,9 @@ class ImageModelClient:
         """
         prompt = (prompt or "").strip()
         if not prompt:
-            raise ImageModelError("识图模型调用缺少 prompt（生成指令不能为空）")
+            raise ImageModelError("生图模型调用缺少 prompt（生成指令不能为空）")
         if not self.api_key:
-            raise ImageModelError(f"识图模型「{self.name}」未配置 API Key")
+            raise ImageModelError(f"生图模型「{self.name}」未配置 API Key")
         try:
             if self.provider == "gemini_nano_banana":
                 return self._generate_gemini(prompt, image, mime_type)
@@ -129,10 +129,10 @@ class ImageModelClient:
             raise
         except httpx.TimeoutException as exc:
             raise ImageModelError(
-                f"识图模型「{self.name}」请求超时（>{self.timeout}s）") from exc
+                f"生图模型「{self.name}」请求超时（>{self.timeout}s）") from exc
         except httpx.HTTPError as exc:
             raise ImageModelError(
-                f"识图模型「{self.name}」网络请求失败: {exc}") from exc
+                f"生图模型「{self.name}」网络请求失败: {exc}") from exc
 
     # ---- Gemini generateContent ----
 

@@ -379,7 +379,7 @@ export default function Settings() {
       {/* AI API 供应商（issue #46）：SSO 卡片后第二位，外部服务接入类配置聚合 */}
       <AiProvidersCard />
 
-      {/* 识图模型（issue #135）：AI 供应商卡片之后，同为外部服务接入类配置 */}
+      {/* 生图模型（issue #135）：AI 供应商卡片之后，同为外部服务接入类配置 */}
       <ImageModelsCard />
 
       <h1>系统设置</h1>

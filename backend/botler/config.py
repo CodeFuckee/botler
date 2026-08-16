@@ -168,7 +168,7 @@ class Settings:
     # 消费做准备。每项 {name, provider, base_url, api_key, model, enabled}；
     # api_key 落盘 config.yaml（与 sso.client_secret 同模式），API 只返回掩码。
     ai_providers: list[dict] = field(default_factory=list)
-    # 识图模型（issue #135）：设置页「识图模型」卡片增删改查的图像模型列表，
+    # 生图模型（issue #135）：设置页「生图模型」卡片增删改查的图像模型列表，
     # 为后续 AI 功能消费做准备。每项 {name, provider, base_url, api_key,
     # model, enabled}；api_key 落盘 config.yaml（与 ai_providers 同模式），
     # API 只返回掩码。内置预设见前端 providers.jsx 的 IMAGE_MODEL_PRESETS。
@@ -656,7 +656,7 @@ class ConfigManager:
         return self.settings
 
     def update_image_models(self, models: list[dict[str, Any]]) -> Settings:
-        """整体替换识图模型列表（设置页增删改后落盘，issue #135）。"""
+        """整体替换生图模型列表（设置页增删改后落盘，issue #135）。"""
         self._reload_from_disk()
         self._data["image_models"] = models
         self.save()

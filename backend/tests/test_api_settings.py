@@ -10,6 +10,7 @@ from botler.api import router as api_router
 from botler.config import ConfigManager
 from botler.database import Database
 from botler.gitlab_client import GitLabError
+from botler.image_models import ImageModelError
 
 CONFIG_TEXT = """\
 gitlab:
@@ -310,7 +311,7 @@ class TestAiProvidersSettings:
 
 
 class TestImageModelsSettings:
-    """image_models 段：识图模型配置（issue #135，设置页「识图模型」卡片）。
+    """image_models 段：生图模型配置（issue #135，设置页「生图模型」卡片）。
 
     与 ai_providers（issue #46）同模式：api_key 落盘 config.yaml、API 只
     返回掩码、编辑时留空或回传掩码值 = 保持现有；列表整体替换。
@@ -470,6 +471,166 @@ class TestImageModelsSettings:
             assert data[0]["api_key_masked"].endswith("-env")
         finally:
             os.environ.pop("BOTLER_TEST_GPT_IMAGE_KEY", None)
+
+
+class TestImageModelTestEndpoint:
+    """POST /api/settings/image-model-test：生图模型测试按钮（issue #137）。
+
+    用提交的表单值（生图模式 provider / base_url / api_key / model）真实
+    调用一次生图接口验证配置可用；api_key 掩码/留空、url/model 留空按
+    name 回退已保存配置。生图成功 ok=true，失败 ok=false + 原因（不抛
+    500，与 webhook-test 同容错策略）。
+    """
+
+    MODEL = TestImageModelsSettings.MODEL
+
+    def _save(self, tc):
+        tc.put("/api/settings", json={"image_models": [self.MODEL]})
+
+    def _patch_client(self, monkeypatch, fake):
+        """monkeypatch botler.image_models.ImageModelClient（端点函数内
+        from ..image_models import 会在调用时取模块属性，patch 生效）。"""
+        from botler import image_models as im_mod
+        monkeypatch.setattr(im_mod, "ImageModelClient", fake)
+
+    def test_test_missing_provider(self, client):
+        """未选择生图模式（provider）直接 ok=false，不发请求。"""
+        tc, _ = client
+        resp = tc.post("/api/settings/image-model-test", json={"name": "x"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "生图模式" in data["error"]
+
+    def test_test_ok_with_full_config(self, client, monkeypatch):
+        """提交完整配置：ok=true + 生成张数/mime，客户端收到正确入参。"""
+        tc, _ = client
+        captured = {}
+
+        def fake_client(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                generate=lambda prompt: [SimpleNamespace(
+                    mime_type="image/png", data=b"\x89PNG-test")])
+
+        self._patch_client(monkeypatch, fake_client)
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "Gemini 生产", "provider": "gemini_nano_banana",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta",
+            "api_key": "AIza-test", "model": "gemini-3-pro-image",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["images"] == 1
+        assert data["mime_type"] == "image/png"
+        assert captured["provider"] == "gemini_nano_banana"
+        assert captured["api_key"] == "AIza-test"
+        assert captured["base_url"] == "https://generativelanguage.googleapis.com/v1beta"
+        assert captured["model"] == "gemini-3-pro-image"
+
+    def test_test_masked_key_falls_back_to_saved(self, client, monkeypatch):
+        """掩码/留空的 api_key、url、model 按 name 回退已保存配置。"""
+        tc, _ = client
+        self._save(tc)
+        captured = {}
+
+        def fake_client(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                generate=lambda prompt: [SimpleNamespace(
+                    mime_type="image/png", data=b"x")])
+
+        self._patch_client(monkeypatch, fake_client)
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "Gemini Nano Banana Pro",
+            "provider": "gemini_nano_banana",
+            "api_key": "AIza-****", "base_url": "", "model": "",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        # 回退到已保存的明文 key / url / model
+        assert captured["api_key"] == "AIza-test-123456"
+        assert captured["base_url"] == self.MODEL["base_url"]
+        assert captured["model"] == "gemini-3-pro-image"
+
+    def test_test_row_button_uses_saved_only(self, client, monkeypatch):
+        """列表行「测试」只提交 name+provider：完全按已保存配置测试。"""
+        tc, _ = client
+        self._save(tc)
+        captured = {}
+
+        def fake_client(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                generate=lambda prompt: [SimpleNamespace(
+                    mime_type="image/png", data=b"x")])
+
+        self._patch_client(monkeypatch, fake_client)
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "Gemini Nano Banana Pro",
+            "provider": "gemini_nano_banana",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert captured["api_key"] == "AIza-test-123456"
+        assert captured["base_url"] == self.MODEL["base_url"]
+        assert captured["model"] == "gemini-3-pro-image"
+
+    def test_test_generate_error_ok_false(self, client, monkeypatch):
+        """生图接口报错（如 401）：ok=false + 错误信息，不抛 500。"""
+        tc, _ = client
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                pass
+
+            def generate(self, prompt):
+                raise ImageModelError("Gemini 请求失败: HTTP 401 invalid key")
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "x", "provider": "gemini_nano_banana",
+            "api_key": "k", "base_url": "https://example.com/v1", "model": "m",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "401" in data["error"]
+
+    def test_test_unknown_provider_ok_false(self, client, monkeypatch):
+        """未知 provider 构造客户端失败：ok=false + 原因。"""
+        tc, _ = client
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                raise ImageModelError("不支持的生成模型类型: nope")
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "x", "provider": "nope", "api_key": "k",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "nope" in data["error"]
+
+    def test_test_verify_ssl_follows_settings(self, client, monkeypatch):
+        """verify_ssl 跟随全局设置（测试配置 verify_ssl: false）。"""
+        tc, _ = client
+        captured = {}
+
+        def fake_client(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(generate=lambda prompt: [])
+
+        self._patch_client(monkeypatch, fake_client)
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "x", "provider": "gemini_nano_banana", "api_key": "k",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is False  # 空结果 → 未返回图片数据
+        assert captured["verify_ssl"] is False
 
 
 class TestDshSettings:

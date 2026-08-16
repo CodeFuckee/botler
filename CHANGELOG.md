@@ -6,6 +6,30 @@
 
 ### Added
 
+- **设置页「识图模型」改为「生图模型」，并新增测试按钮验证配置可用（issue #137）**：
+  需求「把设置里的识图模型改成生图模型，同时增加一个测试按钮，在用户配置好url、
+  apikey以及生图模式后，可以调用测试按钮，测试生图模型是否能用」。上一轮（issue
+  #135）设置的图像模型本身即为图像生成接口（Gemini generateContent 图像输出 /
+  OpenAI images 接口），本期将设置页命名纠正为「生图模型」，并补上配置可用性验证：
+  - 后端 `api/settings.py`：新增 `POST /api/settings/image-model-test` 测试端点——
+    接收表单提交的 provider（生图模式）/ base_url / api_key / model，用
+    `ImageModelClient.generate` 真实调用一次生图接口（轻量测试 prompt，60s
+    超时，verify_ssl 跟随全局设置）；api_key 掩码/留空、url/model 留空按 name
+    回退已保存配置（与 image_models 保存同模式）；生图成功返回 ok=true + 生成
+    张数/mime，缺配置/接口报错/网络异常均返回 ok=false + 原因，不抛 500（与
+    webhook-test 同容错策略）；
+  - 后端 `image_models.py` / `config.py` / `config.example.yaml`：文案统一
+    「识图模型」→「生图模型」（错误提示、注释、示例配置）；
+  - 前端 `components/ImageModelsCard.jsx`：卡片标题与全部文案改为「生图模型」，
+    「模型类型」字段改名「生图模式」；新增测试按钮——列表行「测试」（只提交
+    name + provider，按已保存配置测试）与编辑表单内「测试配置」（用当前表单
+    值，未保存也可测），测试中/成功/失败均有状态提示；
+  - 前端 `providers.jsx` / `pages/Settings.jsx`：注释文案同步改为「生图模型」；
+  - 测试：`backend/tests/test_api_settings.py` 新增 `TestImageModelTestEndpoint`
+    （成功/缺生图模式/掩码回退已保存配置/接口报错/未知 provider/verify_ssl 跟随
+    全局），`backend/tests/test_image_models.py` 文案同步；
+    `frontend/tests/settings-image-models-card.test.mjs` 新增测试按钮与结果提示
+    断言、文案改为「生图模型」。
 - **任务完成时调用 webhook 进行消息推送，可在设置页配置（issue #136）**：
   需求「任务完成时，添加调用webhook来进行消息推送，可以在设置页面配置webhook地址」，
   配置选项：webhook 地址、Content-Type、Authorization、POST 结构体（可使用全局

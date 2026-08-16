@@ -146,7 +146,7 @@ def get_settings(request: Request):
             for p in s.ai_providers
         ],
         "image_models": [
-            # 识图模型（issue #135）：api_key 只返回掩码，明文不流转到界面
+            # 生图模型（issue #135）：api_key 只返回掩码，明文不流转到界面
             {
                 "name": p["name"],
                 "provider": p["provider"],
@@ -310,6 +310,67 @@ def test_webhook(request: Request):
         return {"ok": False,
                 "error": f"webhook 目标返回 HTTP {status}：{result.get('text', '')[:200]}"}
     return {"ok": True, "status_code": status}
+
+
+# 生图模型测试（issue #137）：测试按钮用的小 prompt 与超时（秒）。
+# 生图接口通常比文本接口慢，超时放宽到 60s；prompt 保持轻量（一次
+# 简单图形生成即可验证 url / api key / 生图模式是否可用）。
+IMAGE_TEST_PROMPT = "生成一张简单的测试图片：白色背景上一个红色圆形"
+IMAGE_TEST_TIMEOUT = 60.0
+
+
+@router.post("/image-model-test")
+def test_image_model(request: Request, body: dict):
+    """测试生图模型配置（issue #137）：真实调用一次生图接口验证可用性。
+
+    设置页「生图模型」卡片「测试」按钮调用：提交当前表单的
+    provider（生图模式）/ base_url / api_key / model，后端用提交值构造
+    ImageModelClient 发一次真实生图请求（不落盘）。
+
+    - api_key 留空/掩码值（含 *）= 按 name 回退已保存配置（与
+      _validate_image_models 同模式）；base_url / model 留空同理；
+    - 只提交 name + provider（列表行「测试」按钮）= 完全按已保存配置测试；
+    - 生图成功返回 ok=true + 生成张数/mime；缺配置/接口报错/网络异常
+      均返回 ok=false + 原因，不抛 500（与 webhook-test 同容错策略）。
+    """
+    from ..image_models import ImageModelClient, ImageModelError
+    c = ctx_of(request)
+    settings = c.config.get()
+    name = str(body.get("name") or "").strip()
+    provider = str(body.get("provider") or "").strip()
+    base_url = str(body.get("base_url") or "").strip()
+    model = str(body.get("model") or "").strip()
+    api_key = body.get("api_key")
+    api_key = api_key.strip() if isinstance(api_key, str) else ""
+    if not provider:
+        return {"ok": False, "error": "请先选择生图模式（模型类型）"}
+    # api_key 掩码/留空、url/model 留空 → 按 name 回退已保存配置
+    saved = next(
+        (m for m in settings.image_models if str(m.get("name") or "").strip() == name),
+        None) or {}
+    if not api_key or "*" in api_key:
+        api_key = str(saved.get("api_key") or "").strip()
+    if not base_url:
+        base_url = str(saved.get("base_url") or "").strip()
+    if not model:
+        model = str(saved.get("model") or "").strip()
+    try:
+        client = ImageModelClient(
+            name=name, provider=provider, base_url=base_url,
+            api_key=api_key, model=model, timeout=IMAGE_TEST_TIMEOUT,
+            verify_ssl=settings.verify_ssl)
+    except ImageModelError as e:
+        return {"ok": False, "error": str(e)}
+    try:
+        results = client.generate(IMAGE_TEST_PROMPT)
+    except ImageModelError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:  # noqa: BLE001 生图测试异常统一降级提示
+        return {"ok": False, "error": f"生图测试失败: {e}"}
+    if not results:
+        return {"ok": False, "error": "生图接口未返回图片数据"}
+    return {"ok": True, "images": len(results),
+            "mime_type": results[0].mime_type}
 
 
 @router.post("/reconcile-now")

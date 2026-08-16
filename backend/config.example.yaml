@@ -103,7 +103,7 @@ browse:
   # 配置的路径不存在时自动回退主目录，不会导致对话框打不开。
   default_path: ""
 
-# 识图模型（issue #135）：设置页「识图模型」卡片增删改查的图像模型列表
+# 生图模型（issue #135）：设置页「生图模型」卡片增删改查的图像模型列表
 # （为后续 AI 功能消费做准备）。每项 {name, provider, base_url, api_key,
 # model, enabled}；api_key 落盘 config.yaml（支持 ${ENV} 引用，与
 # ai_providers 同模式）。内置预设：gemini_nano_banana（Gemini Nano

@@ -1,4 +1,4 @@
-"""识图模型调用接口测试（issue #135）。
+"""生图模型调用接口测试（issue #135）。
 
 覆盖 Gemini Nano Banana Pro（generateContent）与 OpenAI GPT Image 2
 （images/generations + images/edits）两个 provider 的请求构造、响应
@@ -37,7 +37,7 @@ class TestPresets:
 
     def test_unknown_provider_rejected(self):
         """不支持的 provider 构造时报错。"""
-        with pytest.raises(ImageModelError, match="不支持的识图模型类型"):
+        with pytest.raises(ImageModelError, match="不支持的生成模型类型"):
             ImageModelClient(name="x", provider="unknown_provider",
                              api_key="k", model="m")
 
