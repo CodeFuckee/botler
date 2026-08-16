@@ -70,6 +70,12 @@ export default function Settings() {
   // 在页面下方，需在卡片内可独立保存（与 SSO 卡片 issue #27 同模式）
   const [webhookSaveBusy, setWebhookSaveBusy] = useState(false)
   const [webhookSaved, setWebhookSaved] = useState(false)
+  // 「界面显示」卡片内独立保存（issue #142 反馈轮）：用户反馈「取消勾选后
+  // 没有保存按钮，无法保存设置」——全局「保存」按钮在上方「任务调度」卡片，
+  // 「界面显示」卡片在其下方，需在卡片内可独立保存（与 SSO 卡片 issue #27 /
+  // Webhook 卡片 issue #141 同模式）
+  const [uiSaveBusy, setUiSaveBusy] = useState(false)
+  const [uiSaved, setUiSaved] = useState(false)
 
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
@@ -174,6 +180,15 @@ export default function Settings() {
     return wh
   }
 
+  // ui 段构建（issue #142）：全局 save 与卡片内 saveUi 共用，保证两处保存
+  // 行为一致；show_disabled_repos 未配置时按 true（显示）处理
+  const buildUiPatch = () => {
+    return {
+      timezone: settings.ui?.timezone || '',
+      show_disabled_repos: settings.ui?.show_disabled_repos !== false,
+    }
+  }
+
   // 设置页「发送测试推送」按钮（issue #136）：发送一条测试消息验证
   // webhook 配置可用（与任务完成推送共用同一发送链路）
   const testWebhook = async () => {
@@ -197,6 +212,19 @@ export default function Settings() {
       setWebhookSaved(true)
       setTimeout(() => setWebhookSaved(false), 2000)
     } catch (e) { setError(e.message) } finally { setWebhookSaveBusy(false) }
+  }
+
+  // 「界面显示」卡片内独立保存（issue #142 反馈轮）：只提交 ui 段（部分
+  // 更新），后端 PUT /api/settings 支持部分更新，不影响 worker/claude 等
+  // 其他设置；保存后清空流水线概览缓存（后端处理），开关立即生效
+  const saveUi = async () => {
+    setUiSaveBusy(true); setError(''); setUiSaved(false)
+    try {
+      await api.put('/api/settings', { ui: buildUiPatch() })
+      setDisplayTz(settings.ui?.timezone) // 立即生效，无需刷新页面
+      setUiSaved(true)
+      setTimeout(() => setUiSaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setUiSaveBusy(false) }
   }
 
   // SSO 卡片内独立保存（issue #27 第四轮）：只提交 sso 段，
@@ -238,12 +266,8 @@ export default function Settings() {
         claude: { command: settings.claude.command, args: settings.claude.args },
         // dsh 引擎推理等级（issue #123）：跟随全局「保存」提交
         dsh: { reasoning_effort: settings.dsh?.reasoning_effort || '' },
-        ui: {
-          timezone: settings.ui?.timezone || '',
-          // 灵感 / CI/CD 页面是否显示未启用项目（issue #142）：
-          // 关闭 = 两个板块只展示已启用仓库
-          show_disabled_repos: settings.ui?.show_disabled_repos !== false,
-        },
+        // 灵感 / CI/CD 页面是否显示未启用项目（issue #142）：关闭 = 只展示已启用仓库
+        ui: buildUiPatch(),
         notifications: { ...settings.notifications },
         ...(settings.webhook ? { webhook: buildWebhookPatch() } : {}),
         sso: buildSsoPatch(),
@@ -522,11 +546,17 @@ export default function Settings() {
             </tr>
           </tbody>
         </table>
+        <div className="form-row">
+          <button className="btn btn-primary" disabled={uiSaveBusy} onClick={saveUi}>
+            {uiSaveBusy ? '保存中…' : '保存界面显示配置'}
+          </button>
+          {uiSaved && <span className="saved-hint">✓ 界面显示配置已保存（已写回 config.yaml）</span>}
+        </div>
         <p className="muted small">
           灵感板块与 CI/CD 流水线板块是否显示未启用项目：勾选 = 显示（未启用仓库带
           「未启用」徽章，默认）；取消 = 两个板块只展示已启用仓库。
           任务创建/开始/完成时间与执行日志时间戳按显示时区展示；留空则跟随本机浏览器时区
-          （默认与访问者本机一致），修改后点击上方「保存」立即生效，无需刷新。
+          （默认与访问者本机一致），修改后点击下方「保存界面显示配置」立即生效，无需刷新。
         </p>
       </div>
 

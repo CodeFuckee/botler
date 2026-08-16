@@ -314,6 +314,27 @@
 
 ### Fixed
 
+- **「界面显示」卡片取消勾选「显示未启用项目」后没有保存按钮，无法保存设置（issue #142 反馈轮）**：
+  用户反馈「取消勾选后没有保存按钮，无法保存设置」。现状与差距：issue #142 新增的
+  `ui.show_disabled_repos` 开关位于「界面显示」卡片，而设置页全局「保存」按钮在上方
+  「任务调度」卡片内——用户滚动到「界面显示」卡片修改开关后找不到保存入口，误以为
+  无法保存（与 issue #27 SSO 卡片 / issue #141 Webhook 卡片同型问题）。
+  实现：
+  - 前端 `pages/Settings.jsx`：「界面显示」卡片内新增独立「保存界面显示配置」按钮与
+    成功提示（uiSaved 2 秒自动消失），绑定新增 `saveUi`——只提交 ui 段
+    （`PUT /api/settings {ui: ...}`，后端支持部分更新，与 `saveSso` / `saveWebhook`
+    同模式），不影响 worker/claude/notifications 等其他设置；ui 段统一由新增
+    `buildUiPatch` 构建（timezone + show_disabled_repos，全局 save 与卡片内 saveUi
+    共用，行为一致）；保存成功后同步更新页面显示时区（与全局保存一致，无需刷新）；
+    卡片说明文字由「点击上方『保存』」改为「点击下方『保存界面显示配置』」，不再
+    误导用户去其他卡片找保存按钮；全局「保存」按钮与既有 ui 保存链路保持不变；
+  - **测试**：新增 `frontend/tests/settings-ui-save-button.test.mjs` 5 用例
+    （卡片内含独立保存按钮且绑定 saveUi / saveUi 只提交 ui 段不携带 worker 等
+    其他字段 / buildUiPatch 同时携带 timezone 与 show_disabled_repos / 说明文字
+    不再指向「上方保存」/ 全局保存按钮仍存在）；既有
+    `settings-show-disabled-repos.test.mjs` 适配 buildUiPatch 结构；
+    前端 645 + 后端 1263 全量测试通过。
+
 - **消息推送 Webhook 设置没有保存按钮，无法保存设置（issue #141）**：
   需求「消息推送 Webhook设置没有保存按钮，无法保存设置」。现状与差距：设置页
   全局「保存」按钮位于上方「任务调度」卡片，而「消息推送 Webhook」卡片在页面

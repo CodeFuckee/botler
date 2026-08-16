@@ -28,7 +28,11 @@ test('开关说明覆盖灵感板块与 CI/CD 流水线板块', () => {
   assert.match(settings, /CI\/CD/, '说明应提及 CI/CD 流水线板块')
 })
 
-test('全局保存提交 ui.show_disabled_repos', () => {
+test('buildUiPatch 提交 ui.show_disabled_repos 且全局保存复用 buildUiPatch', () => {
+  // issue #142 反馈轮：新增卡片内独立保存后，ui 段统一由 buildUiPatch
+  // 构建（全局「保存」与卡片内「保存界面显示配置」共用，行为一致）
   assert.match(settings, /show_disabled_repos: settings\.ui\?\.show_disabled_repos !== false/,
-               '保存应提交 show_disabled_repos（关闭 = false，默认 true）')
+               'buildUiPatch 应提交 show_disabled_repos（关闭 = false，默认 true）')
+  assert.match(settings, /ui: buildUiPatch\(\)/,
+               '全局保存应复用 buildUiPatch 提交 ui 段')
 })
