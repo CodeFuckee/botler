@@ -174,6 +174,21 @@ class Settings:
     # API 只返回掩码。内置预设见前端 providers.jsx 的 IMAGE_MODEL_PRESETS。
     image_models: list[dict] = field(default_factory=list)
 
+    # Webhook 消息推送（issue #136）：任务完成（成功收尾）时调用 webhook
+    # 进行消息推送。设置页可配置：
+    #   url             webhook 地址（POST 目标）
+    #   content_type    Content-Type 请求头（默认 application/json）
+    #   authorization   Authorization 请求头（可选，如 Bearer 令牌）
+    #   body_template   POST 结构体模板，支持全局模板占位符（与提示词模版
+    #                   同机制，见 templates.PLACEHOLDERS），请求时自动填充；
+    #                   留空 = 使用内置默认模板 DEFAULT_WEBHOOK_TEMPLATE
+    webhook_enabled: bool = False
+    webhook_url: str = ""
+    webhook_content_type: str = "application/json"
+    webhook_authorization: str = ""
+    webhook_body_template: str = ""
+
+
 
 # settings API 可写字段（写回 config.yaml 用）
 KNOWN_FIELDS = {
@@ -192,6 +207,8 @@ KNOWN_FIELDS = {
     "ui": {"timezone"},
     "notifications": {"enabled", "task_needs_interaction", "issue_completed",
                       "queue_empty", "queue_no_work"},
+    "webhook": {"enabled", "url", "content_type", "authorization",
+               "body_template"},
     "sso": {"enabled", "well_known_url", "client_id", "client_secret", "scope",
             "session_days", "redirect_uri", "verify_ssl"},
 }
@@ -239,6 +256,29 @@ DEFAULT_RESUME_PROMPT = """【继续处理（中断恢复）】你正在处理 {
 完成剩余的修复/实现 → 自测 → 推送 → 在 issue 上留结果评论。
 不要从零重新分析 issue（除非确认上次未开始实质工作），不要重复已经完成的工作。
 不要关闭该 issue——关闭动作留给用户确认后手动执行（模版库规范）。"""
+
+# Webhook POST 结构体默认模板（issue #136）：与全局提示词模版同占位符机制
+# （{repo_name}/{issue_title}/{issue_body}/{issue_url}/{gitlab_url}/
+# {project_id}/{issue_iid}/{project_path}/{project_path_encoded}/
+# {gitlab_host}），任务完成时自动渲染填充；设置页留空 = 使用此默认值。
+DEFAULT_WEBHOOK_TEMPLATE = """{
+  "event": "task_succeeded",
+  "repo": "{repo_name}",
+  "issue": {
+    "iid": "{issue_iid}",
+    "title": "{issue_title}",
+    "url": "{issue_url}",
+    "body": "{issue_body}"
+  },
+  "gitlab": {
+    "url": "{gitlab_url}",
+    "host": "{gitlab_host}",
+    "project_id": "{project_id}",
+    "project_path": "{project_path}",
+    "project_path_encoded": "{project_path_encoded}"
+  }
+}"""
+
 
 
 class ConfigManager:
@@ -290,6 +330,7 @@ class ConfigManager:
         backup = data.get("backup", {})
         ui = data.get("ui", {})
         notify = data.get("notifications", {})
+        webhook = data.get("webhook", {}) or {}
         sso = data.get("sso", {})
         repos_raw = data.get("repos", []) or []
         labels_raw = (data.get("labels", {}) or {}).get("custom", []) or []
@@ -394,6 +435,15 @@ class ConfigManager:
                 for m in image_models_raw
                 if isinstance(m, dict) and m.get("name")
             ],
+            webhook_enabled=bool(webhook.get("enabled", False)),
+            webhook_url=str(webhook.get("url", "")).strip(),
+            webhook_content_type=str(webhook.get("content_type", "")).strip()
+            or "application/json",
+            # authorization 支持 ${ENV} 引用（load 时已展开为明文）
+            webhook_authorization=str(webhook.get("authorization") or ""),
+            # body_template 留空 = 内置默认模板（推送内容保证关键信息）
+            webhook_body_template=webhook.get("body_template", "")
+            or DEFAULT_WEBHOOK_TEMPLATE,
         )
 
     def save(self) -> None:
@@ -609,6 +659,26 @@ class ConfigManager:
         """整体替换识图模型列表（设置页增删改后落盘，issue #135）。"""
         self._reload_from_disk()
         self._data["image_models"] = models
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_webhook(self, patch: dict[str, Any]) -> Settings:
+        """更新 webhook 推送配置并写回（issue #136）。
+
+        前端回传的 authorization 掩码值（含 *）或空串视为「未修改」，
+        不覆盖真实凭据（与 sso.client_secret 同模式）。
+        """
+        self._reload_from_disk()
+        webhook = self._data.setdefault("webhook", {})
+        for key in KNOWN_FIELDS["webhook"]:
+            if key not in patch:
+                continue
+            val = patch[key]
+            if key == "authorization" and (val is None or "*" in str(val)
+                                             or not str(val).strip()):
+                continue  # 掩码占位符/空串：保持现有凭据
+            webhook[key] = val
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

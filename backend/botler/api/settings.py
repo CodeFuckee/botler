@@ -157,6 +157,15 @@ def get_settings(request: Request):
             }
             for p in s.image_models
         ],
+        "webhook": {
+            # Webhook 消息推送（issue #136）：任务完成时推送；authorization
+            # 只返回掩码，明文不流转到界面（与 sso.client_secret 同模式）
+            "enabled": s.webhook_enabled,
+            "url": s.webhook_url,
+            "content_type": s.webhook_content_type,
+            "authorization_masked": _mask(s.webhook_authorization),
+            "body_template": s.webhook_body_template,
+        },
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -260,6 +269,11 @@ def update_settings(request: Request, body: dict):
             image_models, current=c.config.get().image_models)
         c.config.update_image_models(cleaned)
 
+    webhook = body.get("webhook")
+    if webhook is not None:
+        _validate_webhook(webhook)
+        c.config.update_webhook(webhook)
+
     gitlab_patch = body.get("gitlab")
     if gitlab_patch is not None:
         _validate_gitlab(gitlab_patch)
@@ -272,6 +286,30 @@ def update_settings(request: Request, body: dict):
         c.config.update_gitlab(gitlab_patch)
 
     return get_settings(request)
+
+
+@router.post("/webhook-test")
+def test_webhook(request: Request):
+    """测试 webhook 推送（issue #136）：用测试数据发送一次，验证配置可用。
+
+    设置页「测试推送」按钮调用；走与任务完成推送完全相同的渲染与发送
+    链路（地址 / Content-Type / Authorization / POST 结构体模板），
+    未配置地址或请求失败返回 ok=false + 错误信息。
+    """
+    from ..webhook_push import WebhookPusher, WebhookPushError
+    c = ctx_of(request)
+    pusher = WebhookPusher(c.config)
+    try:
+        result = pusher.send_test()
+    except WebhookPushError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:  # noqa: BLE001 发送异常统一降级提示
+        return {"ok": False, "error": f"发送失败: {e}"}
+    status = result.get("status_code")
+    if status is not None and not 200 <= status < 300:
+        return {"ok": False,
+                "error": f"webhook 目标返回 HTTP {status}：{result.get('text', '')[:200]}"}
+    return {"ok": True, "status_code": status}
 
 
 @router.post("/reconcile-now")
@@ -482,6 +520,32 @@ def _validate_gitlab(patch: dict) -> None:
     if "owner_token" in patch and patch["owner_token"] is not None \
             and not isinstance(patch["owner_token"], str):
         raise HTTPException(400, "gitlab.owner_token 必须是字符串")
+
+
+def _validate_webhook(patch: dict) -> None:
+    """校验 webhook 段（issue #136）：类型与 URL 格式。
+
+    - enabled 必须是布尔值；
+    - url / content_type / authorization / body_template 必须是字符串
+      （None 允许 = 后端归一默认）；
+    - url 非空时须以 http(s):// 开头；
+    - content_type 空白归一为 application/json；
+    - authorization 掩码值/空串 = 保持现有凭据（update_webhook 处理），
+      此处只查类型。
+    """
+    if "enabled" in patch and not isinstance(patch["enabled"], bool):
+        raise HTTPException(400, "webhook.enabled 必须是布尔值")
+    for key in ("url", "content_type", "authorization", "body_template"):
+        if key in patch and patch[key] is not None                 and not isinstance(patch[key], str):
+            raise HTTPException(400, f"webhook.{key} 必须是字符串")
+    if "url" in patch:
+        val = (patch["url"] or "").strip()
+        if val and not val.startswith(("http://", "https://")):
+            raise HTTPException(400, "webhook.url 必须以 http(s):// 开头")
+        patch["url"] = val
+    if "content_type" in patch:
+        val = (patch["content_type"] or "").strip()
+        patch["content_type"] = val or "application/json"
 
 
 def _validate_sso(patch: dict, current) -> None:

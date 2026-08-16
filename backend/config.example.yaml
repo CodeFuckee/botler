@@ -133,6 +133,21 @@ notifications:
   queue_empty: true                 # issue 列表为空（无待处理 issue）
   queue_no_work: true               # 无 issue 可处理（有 issue 但均在处理中）
 
+webhook:
+  # Webhook 消息推送（issue #136）：任务完成（成功收尾）时调用 webhook
+  # 进行消息推送，配置可在设置页修改（「消息推送 Webhook」卡片）。
+  enabled: false                    # 总开关
+  url: ""                           # webhook 地址（POST 目标，须 http(s):// 开头）
+  content_type: application/json    # Content-Type 请求头
+  authorization: ""                 # Authorization 请求头（可选，如 Bearer xxxxx；
+                                    #   支持 ${ENV} 引用，如 ${WEBHOOK_AUTH}）
+  body_template: ""                 # POST 结构体模板，可使用全局模板占位符
+                                    #   （{repo_name}/{issue_title}/{issue_body}/
+                                    #   {issue_url}/{gitlab_url}/{project_id}/
+                                    #   {issue_iid}/{project_path}/
+                                    #   {project_path_encoded}/{gitlab_host}），
+                                    #   请求时自动填充；留空 = 内置默认 JSON 模板
+
 sso:
   # Synology SSO 登录（issue #27）：OIDC 授权码模式接入群晖 SSO Server。
   # 启用后访问 Web UI 需用群晖账号登录（未启用时保持开放访问）；

@@ -898,3 +898,135 @@ class TestOwnerTokenSaveValidation:
         assert resp.status_code == 200, resp.text
         config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
         assert "owner_token: no-self-endpoint" in config_text
+
+
+class TestWebhookSettings:
+    """webhook 段（issue #136）：任务完成时 webhook 推送配置。"""
+
+    def test_get_settings_includes_webhook_defaults(self, client):
+        """未配置时返回默认值：关闭、空地址、默认 content_type、默认模板。"""
+        tc, tmp_path = client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        wh = resp.json()["webhook"]
+        assert wh["enabled"] is False
+        assert wh["url"] == ""
+        assert wh["content_type"] == "application/json"
+        assert wh["authorization_masked"] == ""
+        assert wh["body_template"]  # 默认模板非空
+
+    def test_update_webhook_persists(self, client):
+        """PUT webhook 段写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"webhook": {
+            "enabled": True,
+            "url": "https://hooks.example.com/botler",
+            "content_type": "application/json",
+            "authorization": "Bearer tok123",
+            "body_template": '{"repo":"{repo_name}"}',
+        }})
+        assert resp.status_code == 200
+        wh = resp.json()["webhook"]
+        assert wh["enabled"] is True
+        assert wh["url"] == "https://hooks.example.com/botler"
+        assert wh["content_type"] == "application/json"
+        assert wh["body_template"] == '{"repo":"{repo_name}"}'
+        assert "*" in wh["authorization_masked"]  # 掩码返回
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "webhook:" in config_text and "https://hooks.example.com/botler" in config_text
+
+    def test_update_webhook_authorization_masked_keeps_existing(self, client):
+        """authorization 回传掩码值/空串 = 保持现有凭据。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"webhook": {
+            "enabled": True, "url": "https://h.example.com/x",
+            "authorization": "Bearer real-secret",
+        }})
+        # 掩码值（含 *）不覆盖：文件仍保留真实凭据
+        resp = tc.put("/api/settings", json={"webhook": {
+            "authorization": "Bearer ********", "enabled": True,
+            "url": "https://h.example.com/x",
+        }})
+        assert resp.status_code == 200
+        assert "Bearer real-secret" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        # 空串同样不覆盖
+        tc.put("/api/settings", json={"webhook": {"authorization": "  "}})
+        assert "Bearer real-secret" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+    def test_update_webhook_rejects_bad_url(self, client):
+        """url 必须以 http(s):// 开头。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"webhook": {"url": "not-a-url"}})
+        assert resp.status_code == 400
+        assert "http(s)://" in resp.json()["detail"]
+
+    def test_update_webhook_rejects_bad_types(self, client):
+        """enabled 必须布尔、字符串字段必须是字符串。"""
+        tc, tmp_path = client
+        assert tc.put("/api/settings", json={"webhook": {"enabled": "yes"}}).status_code == 400
+        assert tc.put("/api/settings", json={"webhook": {"url": 123}}).status_code == 400
+        assert tc.put("/api/settings", json={"webhook": {"content_type": []}}).status_code == 400
+
+    def test_update_webhook_blank_content_type_normalized(self, client):
+        """content_type 空白归一为 application/json。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"webhook": {"content_type": "   "}})
+        assert resp.status_code == 200
+        assert resp.json()["webhook"]["content_type"] == "application/json"
+
+    def test_webhook_test_without_url(self, client):
+        """未配置地址时测试推送返回 ok=false + 错误信息。"""
+        tc, tmp_path = client
+        resp = tc.post("/api/settings/webhook-test")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert data["error"]
+
+    def test_webhook_test_ok(self, client, monkeypatch):
+        """配置地址后测试推送返回 ok=true（monkeypatch 发送链路）。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"webhook": {
+            "enabled": True, "url": "https://h.example.com/x",
+        }})
+        from botler.webhook_push import WebhookPusher
+        monkeypatch.setattr(WebhookPusher, "send_test",
+                            lambda self: {"status_code": 200, "text": "ok"})
+        resp = tc.post("/api/settings/webhook-test")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["status_code"] == 200
+
+    def test_webhook_test_http_error(self, client, monkeypatch):
+        """目标返回非 2xx 时测试推送返回 ok=false + 状态码。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"webhook": {
+            "enabled": True, "url": "https://h.example.com/x",
+        }})
+        from botler.webhook_push import WebhookPusher
+        monkeypatch.setattr(WebhookPusher, "send_test",
+                            lambda self: {"status_code": 500, "text": "boom"})
+        resp = tc.post("/api/settings/webhook-test")
+        data = resp.json()
+        assert data["ok"] is False
+        assert "500" in data["error"]
+
+    def test_webhook_test_exception_ok_false(self, client, monkeypatch):
+        """发送异常时测试推送返回 ok=false，不抛 500。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"webhook": {
+            "enabled": True, "url": "https://h.example.com/x",
+        }})
+        from botler.webhook_push import WebhookPushError
+        from botler.webhook_push import WebhookPusher
+
+        def boom(self):
+            raise WebhookPushError("webhook 请求失败: connect error")
+
+        monkeypatch.setattr(WebhookPusher, "send_test", boom)
+        resp = tc.post("/api/settings/webhook-test")
+        data = resp.json()
+        assert data["ok"] is False
+        assert "connect error" in data["error"]
+

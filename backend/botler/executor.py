@@ -468,6 +468,9 @@ class ClaudeExecutor:
         # 网页通知事件（issue #21）：任务收尾时记录，前端轮询弹系统通知
         from .notifier import Notifier
         self.notifier = Notifier(db)
+        # Webhook 消息推送（issue #136）：任务成功收尾时按设置页配置推送
+        from .webhook_push import WebhookPusher
+        self.webhook_pusher = WebhookPusher(config)
         # 一键停止（issue #35）：运行中进程注册表 + 停止请求集合。
         # task_id 自增唯一，集合只增不减（进程退出注销的是注册表不是集合）。
         self._procs: dict[int, subprocess.Popen] = {}
@@ -1826,6 +1829,41 @@ class ClaudeExecutor:
         except Exception:  # noqa: BLE001 通知失败不影响任务收尾
             logger.exception("任务 %s 通知事件记录失败", task_id)
 
+    def _push_webhook_succeeded(self, task, repo) -> None:
+        """任务成功时推送 webhook 消息（issue #136）。
+
+        推送前尝试拉取 issue 完整信息（正文/链接供模板占位符渲染），
+        失败降级用任务记录数据；推送失败仅记日志，不阻塞任务收尾。
+        """
+        from .webhook_push import WebhookPushError
+        try:
+            issue = None
+            try:
+                issue, _ = self._call_with_fallback(
+                    repo, lambda c: c.get_issue(
+                        task["project_id"], task["issue_iid"]))
+            except GitLabError as e:
+                logger.warning("webhook 推送查询 issue %s#%s 失败: %s",
+                               task["project_id"], task["issue_iid"], e)
+            repo_name = repo["name"] if repo else ""
+            repo_url = repo["url"] if repo else ""
+            result = self.webhook_pusher.send_task_succeeded(
+                dict(task), repo_name=repo_name,
+                repo_url=repo_url, issue=issue)
+            if result is None:
+                return  # 未启用或未配置地址，跳过
+            self.db.add_log(
+                task["id"], "info",
+                f"webhook 推送成功（HTTP {result['status_code']}）")
+        except WebhookPushError as e:
+            try:
+                self.db.add_log(task["id"], "warn", f"webhook 推送失败: {e}")
+            except Exception:  # noqa: BLE001 日志落库失败忽略
+                pass
+            logger.warning("任务 %s webhook 推送失败: %s", task["id"], e)
+        except Exception:  # noqa: BLE001 推送异常不阻塞任务收尾
+            logger.exception("任务 %s webhook 推送异常", task["id"])
+
     def _dump_error_detail(self, attempts: list[dict], last_exit: int) -> str:
         """把每次尝试的失败详情序列化为 error_detail（JSON 字符串，界面「详情」按钮展示）。"""
         return json.dumps(
@@ -1884,6 +1922,10 @@ class ClaudeExecutor:
         # 不阻塞任务成功（与打标签一致的容错策略）。
         if task is not None:
             self._leave_success_comment(task, output, repo)
+        # Webhook 消息推送（issue #136）：任务成功完成时按设置页配置推送，
+        # 尽力而为，失败仅记日志不阻塞任务成功收尾
+        if task is not None:
+            self._push_webhook_succeeded(task, repo)
         # 网页通知：issue 完成（issue #21）
         self._emit_task_event(task_id, "task_succeeded")
         logger.info("任务 %s 成功", task_id)

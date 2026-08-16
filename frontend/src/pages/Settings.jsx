@@ -59,6 +59,12 @@ export default function Settings() {
   const [ownerGuideError, setOwnerGuideError] = useState('')
   const [ownerGuideOpen, setOwnerGuideOpen] = useState(false)
 
+  // Webhook 消息推送（issue #136）：Authorization 输入框留空 = 保持现有
+  // 凭据（后端掩码不覆盖，与 SSO client_secret 同模式）；测试推送结果提示
+  const [webhookAuthInput, setWebhookAuthInput] = useState('')
+  const [webhookBusy, setWebhookBusy] = useState(false)
+  const [webhookTestNote, setWebhookTestNote] = useState(null) // {ok, text}
+
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
   const handleTestNotify = async () => {
@@ -145,6 +151,36 @@ export default function Settings() {
     return sso
   }
 
+  const setWebhookField = (key, val) =>
+    setSettings((s) => ({ ...s, webhook: { ...s.webhook, [key]: val } }))
+
+  // webhook 段构建（issue #136）：authorization 输入框留空 = 保持现有
+  // 凭据（后端掩码不覆盖，与 sso.client_secret 同模式）；全局 save 与
+  // 卡片内测试推送共用
+  const buildWebhookPatch = () => {
+    const wh = {
+      enabled: settings.webhook?.enabled === true,
+      url: settings.webhook?.url || '',
+      content_type: settings.webhook?.content_type || 'application/json',
+      body_template: settings.webhook?.body_template || '',
+    }
+    if (webhookAuthInput.trim()) wh.authorization = webhookAuthInput.trim()
+    return wh
+  }
+
+  // 设置页「发送测试推送」按钮（issue #136）：发送一条测试消息验证
+  // webhook 配置可用（与任务完成推送共用同一发送链路）
+  const testWebhook = async () => {
+    setWebhookBusy(true); setWebhookTestNote(null)
+    try {
+      const res = await api.post('/api/settings/webhook-test')
+      setWebhookTestNote(res.ok
+        ? { ok: true, text: `✓ 测试推送成功（HTTP ${res.status_code}），请检查目标服务是否收到` }
+        : { ok: false, text: '✗ ' + (res.error || '发送失败') })
+    } catch (e) { setWebhookTestNote({ ok: false, text: '✗ ' + e.message }) }
+    finally { setWebhookBusy(false) }
+  }
+
   // SSO 卡片内独立保存（issue #27 第四轮）：只提交 sso 段，
   // 后端 PUT /api/settings 支持部分更新，不影响其他设置
   const saveSso = async () => {
@@ -186,6 +222,7 @@ export default function Settings() {
         dsh: { reasoning_effort: settings.dsh?.reasoning_effort || '' },
         ui: { timezone: settings.ui?.timezone || '' },
         notifications: { ...settings.notifications },
+        ...(settings.webhook ? { webhook: buildWebhookPatch() } : {}),
         sso: buildSsoPatch(),
       })
       setDisplayTz(settings.ui?.timezone) // 立即生效，无需刷新页面
@@ -501,6 +538,97 @@ export default function Settings() {
         <p className="muted small">
           通过浏览器在电脑上弹出系统通知：任务需要交互（失败）、issue 完成、队列清空、无新任务可处理。
           修改后点击上方「保存」立即生效；需保持本页面打开（浏览器限制），首次启用时请授权系统通知。
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>消息推送 Webhook</h2>
+        <table className="table kv">
+          <tbody>
+            <tr>
+              <th>启用推送 <code>webhook.enabled</code></th>
+              <td>
+                <input
+                  type="checkbox"
+                  className="check-input"
+                  checked={settings.webhook?.enabled === true}
+                  onChange={(e) => setWebhookField('enabled', e.target.checked)}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>Webhook 地址 <code>url</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  placeholder="https://example.com/webhook/botler"
+                  value={settings.webhook?.url || ''}
+                  onChange={(e) => setWebhookField('url', e.target.value)}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>Content-Type <code>content_type</code></th>
+              <td>
+                <input
+                  className="input grow"
+                  placeholder="application/json"
+                  value={settings.webhook?.content_type || 'application/json'}
+                  onChange={(e) => setWebhookField('content_type', e.target.value)}
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>Authorization <code>authorization</code></th>
+              <td>
+                <input
+                  type="password"
+                  className="input grow"
+                  placeholder={settings.webhook?.authorization_masked
+                    ? settings.webhook.authorization_masked
+                    : '可选，如 Bearer xxxxx'}
+                  value={webhookAuthInput}
+                  onChange={(e) => setWebhookAuthInput(e.target.value)}
+                />
+                <div className="muted small">
+                  可选，如 <code>Bearer xxxxx</code>；留空 = 保持现有凭据
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <th>POST 结构体 <code>body_template</code></th>
+              <td>
+                <textarea
+                  className="input textarea"
+                  rows="8"
+                  value={settings.webhook?.body_template || ''}
+                  onChange={(e) => setWebhookField('body_template', e.target.value)}
+                />
+                <div className="muted small">
+                  可使用全局模板占位符：
+                  {Object.keys(settings.templates?.placeholders || {}).map((k) => (
+                    <span key={k}> <code>{'{' + k + '}'}</code></span>
+                  ))}
+                  ，请求时自动填充；留空 = 内置默认 JSON 模板。
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <th>测试推送</th>
+              <td>
+                <button className="btn" onClick={testWebhook} disabled={webhookBusy}>
+                  {webhookBusy ? '发送中…' : '发送测试推送'}
+                </button>
+                {webhookTestNote && (
+                  <span className={webhookTestNote.ok ? 'saved-hint' : 'err-hint'}>{webhookTestNote.text}</span>
+                )}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="muted small">
+          任务完成（成功收尾）时调用 webhook 进行消息推送。修改后点击上方「保存」立即生效；
+          可先点「发送测试推送」验证配置是否可用（推送失败不会影响任务收尾）。
         </p>
       </div>
 

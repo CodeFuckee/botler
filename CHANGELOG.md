@@ -6,6 +6,50 @@
 
 ### Added
 
+- **任务完成时调用 webhook 进行消息推送，可在设置页配置（issue #136）**：
+  需求「任务完成时，添加调用webhook来进行消息推送，可以在设置页面配置webhook地址」，
+  配置选项：webhook 地址、Content-Type、Authorization、POST 结构体（可使用全局
+  模板中的占位符，请求的时候自动填充）。任务成功收尾（打 bot-done 标签）后按配置
+  POST 推送，推送为尽力而为——失败仅记日志，不阻塞任务收尾（与网页通知同容错策略）。
+  实现：
+  - 后端 `config.py`：`Settings` 新增 `webhook_enabled / webhook_url /
+    webhook_content_type（默认 application/json）/ webhook_authorization /
+    webhook_body_template` 五个字段 + `update_webhook` 落盘（authorization
+    掩码值/空串 = 保持现有凭据，与 sso.client_secret 同模式）；新增内置默认
+    POST 结构体模板 `DEFAULT_WEBHOOK_TEMPLATE`（body_template 留空时归一使用）；
+    `KNOWN_FIELDS` 增加 `webhook` 段；
+  - 后端 `webhook_push.py`（新模块）：`WebhookPusher`——复用提示词模版占位符
+    机制（`templates.PLACEHOLDERS`：repo_name / issue_title / issue_body /
+    issue_url / gitlab_url / project_id / issue_iid / project_path /
+    project_path_encoded / gitlab_host）渲染 POST 结构体；`send_task_succeeded`
+    任务成功推送（未启用/未配置地址不发送）、`send_test` 测试推送；请求带
+    Content-Type / Authorization 头，verify 跟随全局 verify_ssl，15s 超时，
+    非 2xx 与网络异常抛 `WebhookPushError`；
+  - 后端 `executor.py`：`ClaudeExecutor` 注入 `WebhookPusher`，`_finish_succeeded`
+    成功收尾时调用 `_push_webhook_succeeded`——推送前拉取 issue 完整信息
+    （正文/链接供占位符渲染，失败降级用任务记录数据 + 链接拼接兜底），
+    推送成功/失败均记任务日志，异常不阻塞收尾；
+  - 后端 `api/settings.py`：`GET /api/settings` 返回 `webhook` 段
+    （authorization 只返回掩码）；`PUT` 支持 webhook 段更新（`_validate_webhook`：
+    enabled 布尔 / url 须 http(s) 开头 / content_type 空白归一）；新增
+    `POST /api/settings/webhook-test` 测试推送端点（未配置地址 / 非 2xx /
+    网络异常均返回 ok=false + 原因，不抛 500）；
+  - 前端 `pages/Settings.jsx`：新增「消息推送 Webhook」卡片（网页通知卡片之后）——
+    启用开关、地址、Content-Type、Authorization（密码输入框，留空 = 保持现有
+    凭据）、POST 结构体（textarea + 全局模板占位符说明，从
+    templates.placeholders 动态展示）、「发送测试推送」按钮（调用
+    webhook-test 端点展示结果）；跟随全局「保存」提交 webhook 段；
+  - 文档：`README.md` 关键配置表、`backend/config.example.yaml` 新增
+    webhook 段注释示例；
+  - **测试**：后端 `test_webhook_push.py`（新）19 用例（配置默认值 / 占位符
+    变量构建与链接兜底 / 模板渲染 / httpx mock 发送链路：成功、非 2xx、网络
+    异常、未配置地址 / 未启用与无地址不发送 / 测试推送）+ `test_api_settings.py`
+    新增 `TestWebhookSettings` 10 用例（GET 默认值 / PUT 持久化与掩码保持 /
+    URL 与类型校验 / content_type 归一 / webhook-test 未配置、成功、非 2xx、
+    异常容错）+ 前端 `settings-webhook-card.test.mjs`（新）7 用例（卡片挂载与
+    位置 / 字段齐全 / 保存走 webhook 段与 authorization 留空保持 / 占位符说明 /
+    测试推送端点）；后端 1175 + 前端 600 全量测试通过。
+
 - **设置页新增「识图模型」配置，内置 Gemini Nano Banana Pro 与 GPT Image 2 两个接口（issue #135）**：
   需求「设置页面，增加配置识图模型的设置，目前先实现 gemini 的 nano banana pro 以及
   gpt image 2 的接口」。参照 AI API 供应商配置（issue #46）模式实现——本期交付
