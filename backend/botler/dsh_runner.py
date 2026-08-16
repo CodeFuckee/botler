@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from importlib.util import find_spec
 from typing import Callable
 
@@ -40,6 +41,79 @@ def _event_line(event: str, extra: dict) -> str:
     """序列化一条 hermes 风格事件行（ensure_ascii=False 保留中文）。"""
     data = {"event": event, **extra}
     return json.dumps(data, ensure_ascii=False)
+
+
+class _DeltaCoalescer:
+    """连续流式增量（文本/思考）合并缓冲（issue #122）。
+
+    dsh SDK 的 assistant/chunk 按 token/字粒度回调 text-delta /
+    reasoning-delta，一句话会拆成几十上百个独立通知；若逐条转事件行，
+    SSE 事件流、事件总线、日志文件都会被放大到逐字粒度，极其冗长。
+    这里把连续同类型增量先拼进缓冲，遇到异类事件、类型切换或超过
+    刷新间隔时一次性冲刷为一条事件行——事件数从「每字一条」降到
+    「每句/每几百毫秒一条」，UI 仍保持实时感。事件行协议不变
+    （下游 parse_hermes_event_line / executor / SSE 回放零改动）。
+    """
+
+    FLUSH_INTERVAL = 0.5  # 秒：连续增量超过该间隔强制冲刷（保持实时感）
+
+    def __init__(self, on_line: Callable[[str], None],
+                 flush_interval: float = FLUSH_INTERVAL):
+        self._on_line = on_line
+        self._flush_interval = flush_interval
+        self._kind: str | None = None  # "text" / "thinking"
+        self._parts: list[str] = []
+        self._last_flush = 0.0
+
+    def feed(self, line: str) -> None:
+        """喂入一条事件行：增量行合并进缓冲，非增量行先冲刷再直发。"""
+        kind, text = self._classify(line)
+        if kind is not None:
+            if text:
+                self._append(kind, text)
+            return  # 空文本增量丢弃（上游 format 已过滤，防御兜底）
+        self.flush()
+        self._on_line(line)
+
+    def flush(self) -> None:
+        """冲刷缓冲为一条合并事件行（无缓冲时为空操作）。"""
+        if self._kind is None:
+            return
+        event = "stream_delta" if self._kind == "text" else "thinking"
+        self._on_line(_event_line(event, {"text": "".join(self._parts)}))
+        self._kind = None
+        self._parts = []
+        self._last_flush = time.time()
+
+    def _append(self, kind: str, text: str) -> None:
+        now = time.time()
+        if self._kind != kind:
+            # 类型切换：先冲刷旧类型缓冲，再开新缓冲（保序）
+            if self._kind is not None:
+                self.flush()
+            self._kind = kind
+            self._parts = []
+            self._last_flush = now
+        self._parts.append(text)
+        if now - self._last_flush >= self._flush_interval:
+            self.flush()
+
+    @staticmethod
+    def _classify(line: str) -> tuple[str | None, str]:
+        """解析事件行：增量行返回 (kind, text)，其余返回 (None, "")。"""
+        try:
+            data = json.loads(line)
+        except (ValueError, TypeError):
+            return None, ""
+        if not isinstance(data, dict):
+            return None, ""
+        event = data.get("event")
+        text = data.get("text")
+        if event == "stream_delta" and isinstance(text, str):
+            return "text", text
+        if event == "thinking" and isinstance(text, str):
+            return "thinking", text
+        return None, ""
 
 
 def format_dsh_notification(method: str, payload: dict) -> list[str]:
@@ -190,7 +264,8 @@ class DshRunner:
                  base_url: str | None = None,
                  api_key: str | None = None,
                  env: dict | None = None,
-                 on_line: Callable[[str], None]):
+                 on_line: Callable[[str], None],
+                 stream_flush_interval: float = _DeltaCoalescer.FLUSH_INTERVAL):
         self.prompt = prompt
         self.session_id = session_id  # 断点续跑：上次落库的会话 id
         self.provider = provider
@@ -204,6 +279,9 @@ class DshRunner:
         self.api_key = api_key
         self.env = env or {}
         self.on_line = on_line
+        # issue #122：流式增量合并缓冲（一句话拆成逐字事件行的冗长优化）
+        self._coalescer = _DeltaCoalescer(
+            self.on_line, flush_interval=stream_flush_interval)
         self._stopping = threading.Event()
         self._harness = None
         self._thread: threading.Thread | None = None
@@ -255,6 +333,7 @@ class DshRunner:
             return
         # 停止请求先于运行时创建到达：直接产 stopped 结果行退出
         if self._stopping.is_set():
+            self._coalescer.flush()
             self.on_line(build_result_line(
                 None, None, self.session_id, error="stopped"))
             return
@@ -283,16 +362,19 @@ class DshRunner:
             if self._stopping.is_set():
                 # stop() 关闭运行时触发（语义等价 SIGKILL）：executor 按
                 # 停止/超时收尾（退出码 125/124），这里仅落 stopped 行
+                self._coalescer.flush()
                 self.on_line(build_result_line(
                     None, None, self.session_id, error="stopped"))
             else:
                 self._error = f"{type(exc).__name__}: {exc}"
+                self._coalescer.flush()
                 self.on_line(build_result_line(
                     None, None, self.session_id, error=self._error))
             return
         finally:
             self._close_harness()
         self._exit_code = 0
+        self._coalescer.flush()
         self.on_line(build_result_line(
             result.final_response, result.finish_reason,
             result.session_id or self.session_id))
@@ -314,4 +396,4 @@ class DshRunner:
         except Exception:  # noqa: BLE001 通知序列化失败不影响任务执行
             lines = []
         for line in lines:
-            self.on_line(line)
+            self._coalescer.feed(line)

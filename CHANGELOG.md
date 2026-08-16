@@ -6,6 +6,30 @@
 
 ### Fixed
 
+- **dsh 引擎事件流极其冗长：一句话拆成好多个单独字（issue #122）**：
+  需求「使用 deepseek harness sdk 执行引擎时，事件流会变得极其冗长，
+  因为一句话会拆成好多个单独字」。诊断：dsh 引擎（deepseek-harness
+  SDK）的 `assistant/chunk` 按 token/字粒度回调 `text-delta` /
+  `reasoning-delta`，每个增量（中文场景往往是一个字）都被
+  `DshRunner._on_notification` 转成一条独立 `stream_delta` / `thinking`
+  事件行——一句话被拆成几十上百行，SSE 事件流、事件总线（队列上限
+  1000，满丢最旧）与任务日志文件同步爆炸式增长，任务执行页逐字刷屏。
+  修复（`dsh_runner.py`，仅 dsh 引擎路径）：
+  - 新增 `_DeltaCoalescer` 增量合并缓冲：连续同类型增量（文本/思考）
+    先拼进缓冲，遇异类事件（工具调用/状态/回合结束等）、类型切换或
+    超过刷新间隔（0.5s，保持 UI 实时感）时一次性冲刷为一条事件行；
+    worker 结束产结果行前冲刷尾部缓冲，增量文本不丢失；
+  - 事件行协议不变（`stream_delta` / `thinking` 语义与字段一致），
+    executor 结果判定（`_dsh_result`）、SSE 解析（
+    `parse_hermes_event_line`）与日志回放零改动；结果行仍是输出最后
+    一行（issue #119 的多行解析不受影响）。
+  - **测试**：`test_dsh_runner.py` 新增 6 个用例——逐字 text-delta
+    合并为一条完整句、reasoning-delta 合并、类型切换保序冲刷、非增量
+    行先冲刷再直发（顺序保持）、结果行前尾部冲刷（文本不丢）、20 字
+    增量事件行总量降至 2 行（修复前 20 行逐字碎行）；后端 1040 +
+    前端 529 全量测试通过。
+
+
 - **概览页 issue 右边栏「执行引擎」全部误显当前全局引擎（issue #120）**：
   需求「issue 现在显示的执行引擎全都是 deepseek harness sdk，但是一开始
   的 issue 都是 claude code 为执行引擎」。诊断：`IssueDrawer` 的「执行引擎」

@@ -3,7 +3,8 @@
 覆盖：SDK 未安装探测、正常执行结果行、停止（close 强制终止运行时）、
 SDK 异常容错、通知→事件行映射（assistant 文本/思考/工具调用、回合结束、
 会话状态、未知事件）、SDK 配置透传（provider/model/cwd/session_root/env）、
-断点续跑 session_id 透传。
+断点续跑 session_id 透传、流式增量合并（issue #122：逐字 text-delta /
+reasoning-delta 通知合并为一条事件行，避免事件流极其冗长）。
 
 SDK 不在 requirements.txt（Docker 部署镜像已内置，issue #112；
 开发机为可选依赖），测试用 monkeypatch 注入假 deepseek_harness 模块
@@ -39,13 +40,16 @@ class FakeHarness:
 
     类级 preset（worker 线程启动前预设，避免与 run 的执行时序竞态）：
     preset_block = run 阻塞直到 close 触发（模拟长时间执行）；
-    preset_exc = run 直接抛出该异常。
+    preset_exc = run 直接抛出该异常；
+    preset_notifications = run 执行前按序回调 on_notification 的通知列表
+    （issue #122：模拟 SDK 逐字 text-delta / reasoning-delta 流式回调）。
     """
 
     created: list["FakeHarness"] = []
     closed: list["FakeHarness"] = []
     preset_block: bool = False
     preset_exc: Exception | None = None
+    preset_notifications: list = []
 
     def __init__(self, config=None):
         self.config = config
@@ -63,6 +67,9 @@ class FakeHarness:
             raise RuntimeError("transport closed: DeepSeek Harness runtime closed")
         if self._exc is not None:
             raise self._exc
+        for notification in FakeHarness.preset_notifications:
+            if on_notification is not None:
+                on_notification(notification)
         return self._result
 
     def close(self):
@@ -96,6 +103,7 @@ def fake_sdk(monkeypatch):
     FakeHarness.closed.clear()
     FakeHarness.preset_block = False
     FakeHarness.preset_exc = None
+    FakeHarness.preset_notifications = []
     module = types.ModuleType("deepseek_harness")
     module.DeepSeekHarness = FakeHarness
     module.DeepSeekHarnessConfig = FakeSdkConfig
@@ -482,3 +490,126 @@ class TestResultLine:
         data = json.loads(line)
         assert data["error"] == "boom"
         assert data["final_response"] == ""
+
+
+# ---- issue #122：流式增量合并（事件流冗长优化）----
+
+class TestDeltaCoalescing:
+    """issue #122：dsh 引擎一句话拆成好多个单独字。
+
+    真实 SDK 的 assistant/chunk 按 token/字粒度回调 text-delta /
+    reasoning-delta，一句话（如「你好世界」）会拆成 4 条独立通知；
+    若每条通知单独产一条 stream_delta / thinking 事件行，SSE 事件流、
+    事件总线、日志文件都会被放大到逐字粒度，极其冗长。修复：连续
+    同类型增量在 DshRunner 内合并为一条事件行输出（按事件边界或
+    刷新间隔冲刷），事件数从「每字一条」降到「每句/每几百毫秒一条」。
+    """
+
+    def _chunk_note(self, chunk_type: str, text: str):
+        """构造一条 assistant/chunk 增量通知（真实 SDK 通知形态）。"""
+        return _note("session.event", {
+            "event": {"type": "assistant/chunk",
+                      "data": {"turn": 1, "step": 1,
+                               "chunk": {"type": chunk_type, "text": text}}}})
+
+    def _event_lines(self, lines: list[str], event: str) -> list[dict]:
+        """筛选指定 event 类型的事件行并解析。"""
+        return [json.loads(l) for l in lines
+                if json.loads(l).get("event") == event]
+
+    def test_repro_one_sentence_split_into_many_events(self, fake_sdk):
+        """复现：一句话 4 个字拆成 4 条 text-delta 通知。
+
+        修复前每条通知单独产一条 stream_delta 事件行（4 行）；
+        修复后应合并为 1 条，且文本拼接完整（你好世界）。
+        """
+        FakeHarness.preset_notifications = [
+            self._chunk_note("text-delta", c) for c in ["你", "好", "世", "界"]]
+        runner, lines = _mk_runner()
+        runner.start()
+        _wait_done(runner)
+        deltas = self._event_lines(lines, "stream_delta")
+        assert len(deltas) == 1, (
+            f"一句话拆成 {len(deltas)} 条 stream_delta 事件行，事件流冗长")
+        assert deltas[0]["text"] == "你好世界"
+
+    def test_thinking_delta_coalesced(self, fake_sdk):
+        """reasoning-delta 逐字回调同样合并为一条 thinking 事件行。"""
+        FakeHarness.preset_notifications = [
+            self._chunk_note("reasoning-delta", c)
+            for c in ["分", "析", "中", "…"]]
+        runner, lines = _mk_runner()
+        runner.start()
+        _wait_done(runner)
+        thinking = self._event_lines(lines, "thinking")
+        assert len(thinking) == 1
+        assert thinking[0]["text"] == "分析中…"
+
+    def test_kind_switch_flushes_in_order(self, fake_sdk):
+        """思考增量与文本增量交替：各自合并成一条行，顺序保持不变。"""
+        FakeHarness.preset_notifications = [
+            self._chunk_note("reasoning-delta", "先"),
+            self._chunk_note("reasoning-delta", "看看"),
+            self._chunk_note("text-delta", "开"),
+            self._chunk_note("text-delta", "始"),
+            self._chunk_note("text-delta", "修复"),
+        ]
+        runner, lines = _mk_runner()
+        runner.start()
+        _wait_done(runner)
+        thinking = self._event_lines(lines, "thinking")
+        deltas = self._event_lines(lines, "stream_delta")
+        assert [d["text"] for d in thinking] == ["先看看"]
+        assert [d["text"] for d in deltas] == ["开始修复"]
+
+    def test_non_delta_line_flushes_pending_delta(self, fake_sdk):
+        """文本增量后紧跟工具调用（非增量行）：先冲刷已合并文本再发工具行。"""
+        FakeHarness.preset_notifications = [
+            self._chunk_note("text-delta", "正在"),
+            self._chunk_note("text-delta", "执行"),
+            _note("session.event", {
+                "event": {"type": "assistant/message",
+                          "data": {"message": {"content": [
+                              {"type": "tool_use", "name": "bash",
+                               "input": {"command": "pytest"}}]}}}}),
+        ]
+        runner, lines = _mk_runner()
+        runner.start()
+        _wait_done(runner)
+        deltas = self._event_lines(lines, "stream_delta")
+        tools = self._event_lines(lines, "tool_start")
+        assert [d["text"] for d in deltas] == ["正在执行"]
+        assert [t["tool"] for t in tools] == ["bash"]
+        # 顺序：合并后的文本行先于工具行（不破坏保序语义）
+        idx_delta = next(i for i, l in enumerate(lines)
+                         if '"stream_delta"' in l)
+        idx_tool = next(i for i, l in enumerate(lines)
+                        if '"tool_start"' in l)
+        assert idx_delta < idx_tool
+
+    def test_pending_delta_flushed_before_result_line(self, fake_sdk):
+        """回合结束时缓冲中的增量不得丢失：结果行前先冲刷合并文本。"""
+        FakeHarness.preset_notifications = [
+            self._chunk_note("text-delta", "最后"),
+            self._chunk_note("text-delta", "一句"),
+        ]
+        runner, lines = _mk_runner()
+        runner.start()
+        _wait_done(runner)
+        assert runner.finish() == 0
+        deltas = self._event_lines(lines, "stream_delta")
+        assert [d["text"] for d in deltas] == ["最后一句"]
+        # 结果行仍是最后一行（executor 结果判定依赖结果行可解析，issue #119）
+        assert json.loads(lines[-1]).get("final_response") == "已完成任务"
+
+    def test_event_line_count_reduced(self, fake_sdk):
+        """事件行总量随合并显著下降：20 个字符只产生 1 条增量行 + 1 结果行。"""
+        chars = [f"字{i}" for i in range(20)]
+        FakeHarness.preset_notifications = [
+            self._chunk_note("text-delta", c) for c in chars]
+        runner, lines = _mk_runner()
+        runner.start()
+        _wait_done(runner)
+        assert len(self._event_lines(lines, "stream_delta")) == 1
+        # 除结果行外不应有逐字碎行（事件行总量 = 1 条合并文本 + 1 条结果）
+        assert len(lines) == 2
