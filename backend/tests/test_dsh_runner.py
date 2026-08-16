@@ -389,13 +389,48 @@ class TestFormatNotification:
         assert data["message"] == "模型调用失败: model overloaded"
 
     def test_assistant_chunk_non_error_stays_raw(self):
-        """assistant/chunk 的普通内容块仍落 raw（行为不变）。"""
+        """assistant/chunk 的未识别块类型仍落 raw（行为不变）。"""
         lines = dsh_runner.format_dsh_notification("session.event", {
             "event": {"type": "assistant/chunk",
                       "data": {"chunk": {"type": "delta",
                                          "text": "流式增量"}}}})
         assert json.loads(lines[0]) == {"event": "raw",
                                         "type": "assistant/chunk"}
+
+    def test_reasoning_block_becomes_thinking(self):
+        """真实 SDK 的思考块类型是 reasoning（非 thinking）：必须透传为
+        thinking 事件行（任务 #194 #195 诊断发现：思考内容从未出现在
+        SSE/任务日志中，诊断链路缺失过程可见性）。"""
+        lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "assistant/message",
+                      "data": {"message": {"content": [
+                          {"type": "reasoning",
+                           "text": "先检查 401 根因"}]}}}})
+        assert lines == [json.dumps({"event": "thinking",
+                                     "text": "先检查 401 根因"},
+                                    ensure_ascii=False)]
+
+    def test_assistant_chunk_text_delta_becomes_stream_delta(self):
+        """真实 SDK 流式增量块 text-delta：透传为 stream_delta（实时流）。"""
+        lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "assistant/chunk",
+                      "data": {"turn": 1, "step": 1,
+                               "chunk": {"type": "text-delta",
+                                         "index": 1, "text": "正在修复"}}}})
+        assert lines == [json.dumps({"event": "stream_delta",
+                                     "text": "正在修复"},
+                                    ensure_ascii=False)]
+
+    def test_assistant_chunk_reasoning_delta_becomes_thinking(self):
+        """真实 SDK 思考增量块 reasoning-delta：透传为 thinking 事件行。"""
+        lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "assistant/chunk",
+                      "data": {"turn": 1, "step": 1,
+                               "chunk": {"type": "reasoning-delta",
+                                         "index": 0, "text": "分析配置链路"}}}})
+        assert lines == [json.dumps({"event": "thinking",
+                                     "text": "分析配置链路"},
+                                    ensure_ascii=False)]
 
     def test_session_status_notification(self):
         lines = dsh_runner.format_dsh_notification(

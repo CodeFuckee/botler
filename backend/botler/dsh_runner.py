@@ -79,20 +79,32 @@ def _format_session_event(event) -> list[str]:
     if etype == "turn/end":
         return [_turn_end_status_line(data.get("reason"))]
     if etype == "assistant/chunk":
-        # issue #115：LLM 调用失败细节在 finish/error 块（turn/end 只带
-        # 摘要 kind），此前整块落 raw 丢 message，任务日志/失败详情无法
-        # 诊断（任务 #194 #195 只显示「回合结束: error」）。失败时透传
-        # 为 status 行（SSE 可见 + error_detail 可提取），其余仍落 raw。
+        # issue #115：SDK 真实事件结构（本机实测 deepseek-harness 0.1.0rc6）：
+        # assistant/chunk 承载流式增量——block-start / reasoning-delta /
+        # text-delta / block-end / usage / finish。此前的实现只透传
+        # finish/error 块（LLM 调用失败细节），reasoning-delta 与
+        # text-delta 全部落 raw：SSE 无实时流式输出、思考过程不可见，
+        # 任务执行页在回合结束前一片空白，失败诊断只能靠「回合结束:
+        # error」贫瘠摘要。这里补齐增量透传（与 assistant/message
+        # 的完整块语义一致），其余簿记块（block-start/block-end/
+        # usage/finish 正常结束）仍落 raw 供日志诊断。
         chunk = data.get("chunk")
-        if isinstance(chunk, dict) and chunk.get("type") == "finish":
-            reason = chunk.get("reason")
-            if isinstance(reason, dict) and reason.get("kind") == "error":
-                failure = reason.get("failure") or reason.get("error")
-                message = (failure.get("message")
-                           if isinstance(failure, dict) else None)
-                if isinstance(message, str) and message:
-                    return [_event_line("status",
-                                        {"message": f"模型调用失败: {message}"})]
+        if isinstance(chunk, dict):
+            ctype = chunk.get("type")
+            text = chunk.get("text")
+            if ctype == "text-delta" and isinstance(text, str) and text:
+                return [_event_line("stream_delta", {"text": text})]
+            if ctype == "reasoning-delta" and isinstance(text, str) and text:
+                return [_event_line("thinking", {"text": text})]
+            if ctype == "finish":
+                reason = chunk.get("reason")
+                if isinstance(reason, dict) and reason.get("kind") == "error":
+                    failure = reason.get("failure") or reason.get("error")
+                    message = (failure.get("message")
+                               if isinstance(failure, dict) else None)
+                    if isinstance(message, str) and message:
+                        return [_event_line("status",
+                                            {"message": f"模型调用失败: {message}"})]
         return [_event_line("raw", {"type": etype})]
     if etype == "agent/inbox/spliced":
         return []  # SDK 内部簿记，不产行
@@ -132,6 +144,12 @@ def _format_assistant_content(data: dict) -> list[str]:
                 lines.append(_event_line("stream_delta", {"text": text}))
         elif btype == "thinking":
             text = block.get("thinking")
+            if isinstance(text, str) and text:
+                lines.append(_event_line("thinking", {"text": text}))
+        elif btype == "reasoning":
+            # issue #115：真实 SDK 的思考块类型是 reasoning（字段 text，
+            # 与 thinking 块同语义），此前不识别导致思考内容从未透传
+            text = block.get("text")
             if isinstance(text, str) and text:
                 lines.append(_event_line("thinking", {"text": text}))
         elif btype == "tool_use":

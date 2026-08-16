@@ -33,6 +33,29 @@
     chunk finish error 转状态行 / 非 error 仍 raw）；前端 493 +
     后端 989 全量测试通过。
 
+- **dsh 引擎事件透传对真实 SDK 事件结构覆盖不全（issue #115 第二轮）**：
+  上轮修复按猜测的事件结构透传失败诊断，本轮在部署机以真实
+  deepseek-harness SDK（0.1.0rc6）实测发现：`assistant/message` 的
+  思考块类型是 `reasoning`（字段 `text`）而非 `thinking`——思考内容
+  从未出现在任务日志 / SSE；`assistant/chunk` 承载流式增量
+  （`block-start` / `reasoning-delta` / `text-delta` / `block-end` /
+  `usage` / `finish`），此前仅透传 finish/error 块，`reasoning-delta`
+  与 `text-delta` 全部落 raw——任务执行页在回合结束前无任何实时
+  流式输出，失败诊断只能依赖回合末的贫瘠摘要。修复（dsh_runner）：
+  - `assistant/message` 的 `reasoning` 块 → `thinking` 事件行
+    （与既有 `thinking` 块同语义，前端折叠展示）；
+  - `assistant/chunk` 的 `text-delta` → `stream_delta` 事件行、
+    `reasoning-delta` → `thinking` 事件行（实时流式可见）；
+  - 其余簿记块（block-start/block-end/usage/finish 正常结束）与
+    未识别类型仍落 raw 供日志诊断，行为不变。
+  - **验证**：部署机真实 SDK 端到端跑会话（生产 key 回退解析 +
+    修复后代码）：输出含 19 个 thinking 增量与流式 stream_delta，
+    `finish_reason=completed`；假 key 场景「模型调用失败: 401 AUTH」
+    透传依然生效。
+  - **测试**：`test_dsh_runner.py` 新增 3 用例（reasoning 块 →
+    thinking / text-delta → stream_delta / reasoning-delta →
+    thinking），前端 493 + 后端 992 全量测试通过。
+
 ### Added
 
 - **设置页新增「任务执行引擎」设置项（issue #113）**：
