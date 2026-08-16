@@ -6,6 +6,26 @@
 
 ### Added
 
+- **Docker 部署内置 deepseek-harness SDK（issue #112）**：
+  需求「后端部署增加安装deepseke harness依赖」——dsh 引擎 SDK
+  （`deepseek-harness-sdk==0.1.0rc6`）原为可选依赖（issue #84：镜像
+  不含、部署机手动安装），本次起 Docker 镜像构建期自动安装，容器
+  内 `worker.engine: dsh` 开箱即用：
+  - **Dockerfile**：runtime 阶段新增 SDK 安装 RUN——阿里镜像（清华
+    源未同步 rc 预发布版）+ 显式全版本号；镜像源可用 `DSH_INDEX_URL`
+    build arg 覆盖（内网代理场景）；构建期 import 校验，装不上直接
+    构建失败（fail fast）；
+  - **requirements.txt** 保持不声明 SDK：主依赖继续走清华源，避免
+    rc 版解析失败阻塞全部依赖安装；
+  - **deploy/verify-docker.sh**：--full 冒烟新增第 12 项校验——容器
+    内 `/opt/venv` 可 `from deepseek_harness import DeepSeekHarness`；
+  - **文档同步**：`docs/dsh-engine-deployment.md` 第 2 节按部署形态
+    拆分（Docker 已内置无需手动 / pm2·systemd 手动安装），故障排查
+    表与 README Docker 部署章节、`dsh_runner.py` 安装指引注释同步；
+  - **测试**：新增 `test_dockerfile_dsh.py` 10 用例，静态校验部署
+    产物防回退（版本号锁定 / 阿里镜像 / build arg 可覆盖 / venv
+    路径 / 构建期 import 校验 / 冒烟脚本 / 文档同步）。
+
 - **按 Apple HIG 布局原则优化全部页面（issue #111）**：
   需求「优化页面，根据下面的设计原则，帮我优化项目中的每一个页面」
   （Apple HIG — 布局：安全区 / 布局指南 / 分组 / 视觉层次 / 适配性），

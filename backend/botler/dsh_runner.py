@@ -10,9 +10,11 @@
 （_dsh_result）、SSE 解析（parse_hermes_event_line）与日志落盘设施
 直接复用，无需新协议解析。
 
-SDK 为可选依赖（同 hermes 部署模式）：requirements.txt 不声明，
-未安装时 start() 抛 DshSdkNotInstalledError（含安装指引）。导入全部
-惰性（仅 worker 线程 import），平台其余功能不受 SDK 缺失影响。
+SDK 为可选依赖（同 hermes 部署模式）：requirements.txt 不声明；
+Docker 部署镜像已内置（issue #112：Dockerfile 构建期自动安装 + import
+校验）。开发机 / pm2 部署未安装时 start() 抛 DshSdkNotInstalledError
+（含安装指引）。导入全部惰性（仅 worker 线程 import），平台其余
+功能不受 SDK 缺失影响。
 """
 
 from __future__ import annotations
@@ -22,11 +24,12 @@ import threading
 from importlib.util import find_spec
 from typing import Callable
 
-# SDK 安装指引（部署机清华 pip 源未同步 rc 版，需用阿里镜像）
+# SDK 安装指引（部署机清华 pip 源未同步 rc 版，需用阿里镜像；
+# Docker 部署镜像已内置，无需手动安装）
 INSTALL_HINT = (
     "pip install deepseek-harness-sdk==0.1.0rc6 "
     "-i https://mirrors.aliyun.com/pypi/simple/ "
-    "（详见 docs/dsh-engine-deployment.md）")
+    "（Docker 部署已内置，无需安装；详见 docs/dsh-engine-deployment.md）")
 
 
 class DshSdkNotInstalledError(Exception):

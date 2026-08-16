@@ -61,6 +61,16 @@ RUN python3 -m venv /opt/venv \
     # claude CLI：Claude Code 执行器核心依赖
     && npm install -g @anthropic-ai/claude-code --registry=${NPM_REGISTRY_URL}
 
+# dsh 引擎 SDK（issue #112：deepseek-harness 依赖纳入 Docker 部署，
+# 原为可选依赖需手动安装）。清华 pip 镜像未同步 rc 预发布版（仅有
+# 0.0.0.dev0 占位），必须用阿里镜像；rc 为预发布版本，安装须显式
+# 写全版本号。镜像源可用 DSH_INDEX_URL build arg 覆盖（内网代理场景）。
+# 构建期 import 校验：SDK 装不上时镜像构建直接失败（fail fast）。
+ARG DSH_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+RUN /opt/venv/bin/pip install --no-cache-dir "deepseek-harness-sdk==0.1.0rc6" \
+        -i ${DSH_INDEX_URL} \
+    && /opt/venv/bin/python -c "from deepseek_harness import DeepSeekHarness"
+
 COPY backend/ ./backend/
 # 前端构建产物由 FastAPI 静态托管（main.py 检测 frontend/dist）
 COPY --from=frontend-builder /build/dist/ ./frontend/dist/

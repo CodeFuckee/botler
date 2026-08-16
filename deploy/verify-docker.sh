@@ -93,6 +93,12 @@ if [[ "${1:-}" == "--full" ]]; then
   [ "$TZ_OUT" = "CST" ] || die "容器时区异常: $TZ_OUT（应为 CST = Asia/Shanghai）"
   ok "容器时区为 Asia/Shanghai（date +%Z = CST）"
 
+  echo "----- 校验 dsh 引擎 SDK 已内置（deepseek-harness，issue #112）-----"
+  docker compose -p botler-verify exec -T botler \
+    /opt/venv/bin/python -c "from deepseek_harness import DeepSeekHarness" \
+    || die "deepseek-harness SDK 未内置（dsh 引擎不可用）"
+  ok "deepseek-harness SDK 已内置（可导入 DeepSeekHarness）"
+
   echo "----- 幂等性：重复 up 无报错 -----"
   BOTLER_DATA_DIR="$TMP" BOTLER_HTTP_PORT=18000 \
     docker compose -p botler-verify up -d >/dev/null 2>&1 || die "重复 up 失败"

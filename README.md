@@ -116,7 +116,9 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 
 ## Docker 部署
 
-镜像已包含全部运行时（前端构建产物、Python 依赖、`git`、`claude` CLI），只需挂载配置与数据。
+镜像已包含全部运行时（前端构建产物、Python 依赖、`git`、`claude` CLI、dsh 引擎
+deepseek-harness SDK（issue #112，构建期自动安装，`worker.engine: dsh` 开箱即用），
+只需挂载配置与数据。
 
 前置条件：Docker 20.10+ / docker compose v2。
 
@@ -137,7 +139,7 @@ docker compose up -d --build
 # 3. 验证
 docker compose ps                          # 状态 healthy
 curl http://localhost:8000/api/health      # {"ok":true,...}
-./deploy/verify-docker.sh --full           # 11 项冒烟检查（临时数据目录，不碰真实数据）
+./deploy/verify-docker.sh --full           # 12 项冒烟检查（临时数据目录，不碰真实数据）
 ```
 
 数据持久化（全部卷挂载，容器重建不丢失）：`data/backend/config.yaml`（Web UI 设置页会写回）、

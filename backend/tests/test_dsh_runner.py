@@ -5,8 +5,9 @@ SDK 异常容错、通知→事件行映射（assistant 文本/思考/工具调�
 会话状态、未知事件）、SDK 配置透传（provider/model/cwd/session_root/env）、
 断点续跑 session_id 透传。
 
-SDK 未作为依赖安装（同 hermes 部署模式），测试用 monkeypatch 注入
-假 deepseek_harness 模块（与 test_hermes_runner.py 注入假 run_agent 同手法）。
+SDK 不在 requirements.txt（Docker 部署镜像已内置，issue #112；
+开发机为可选依赖），测试用 monkeypatch 注入假 deepseek_harness 模块
+（与 test_hermes_runner.py 注入假 run_agent 同手法）。
 """
 
 import json
