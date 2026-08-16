@@ -8,7 +8,8 @@
 或 **deepseek-harness**（Python SDK 进程内调用，见 [docs/dsh-engine-deployment.md](docs/dsh-engine-deployment.md)）；
 切换入口在 Web 设置页「任务调度」卡片的 `worker.engine` 设置项（issue #113）。
 
-完整设计见 [`docs/设计方案.md`](docs/设计方案.md)。
+完整设计见 [`docs/设计方案.md`](docs/设计方案.md)；
+UI 优化参考与同类开源项目调研见 [`docs/ui-design-reference.md`](docs/ui-design-reference.md)（issue #121 调研产出）。
 
 ## 工作原理
 
@@ -56,7 +57,7 @@ backend/
   config.example.yaml
   requirements.txt
 frontend/            React (Vite) Web UI，构建产物由 FastAPI 托管
-docs/                文档（设计方案 / Synology SSO 配置指南）
+docs/                文档（设计方案 / UI 优化参考 / Synology SSO 配置指南）
 deploy/              pm2 与 systemd 配置
 workspace/           仓库工作区（运行时生成）
 logs/                任务执行日志（运行时生成）
