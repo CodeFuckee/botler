@@ -451,3 +451,84 @@ class TestIssuePrioritySettings:
         resp = tc.put("/api/settings", json={"worker": {
             "issue_priority": ["bug", "test", "bug"]}})
         assert resp.status_code == 400
+
+
+class TestEngineSettings:
+    """worker.engine（issue #113）：设置页切换后端编写代码的 agent。
+
+    引擎白名单 claude / hermes / dsh 与 executor._engine 对齐；
+    非法值在 API 层直接 400 拒绝（executor 层回退仅防御手工改坏 config.yaml）。
+    """
+
+    def test_get_settings_includes_engine_default(self, client):
+        """未配置时 GET 返回默认引擎 claude。"""
+        tc, _ = client
+        data = tc.get("/api/settings").json()
+        assert data["worker"]["engine"] == "claude"
+
+    def test_update_engine_dsh_persists(self, client):
+        """PUT worker.engine=dsh 写回 config.yaml 并重读生效。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {"engine": "dsh"}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["engine"] == "dsh"
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "engine: dsh" in config_text
+        s = ConfigManager(str(tmp_path / "config.yaml")).load()
+        assert s.engine == "dsh"
+
+    def test_update_engine_hermes_persists(self, client):
+        """PUT worker.engine=hermes 成功。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {"engine": "hermes"}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["engine"] == "hermes"
+
+    def test_update_engine_back_to_claude(self, client):
+        """从其他引擎切回 claude 成功（重复切换场景）。"""
+        tc, _ = client
+        assert tc.put("/api/settings", json={"worker": {"engine": "dsh"}}).status_code == 200
+        resp = tc.put("/api/settings", json={"worker": {"engine": "claude"}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["engine"] == "claude"
+
+    def test_update_engine_normalizes_case_and_whitespace(self, client):
+        """引擎名 strip + 小写归一（与 executor._engine 读取行为一致）。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {"engine": "  DSH "}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["engine"] == "dsh"
+
+    def test_update_engine_rejects_unknown_value(self, client):
+        """白名单外的引擎名 400 拒绝，不落盘。"""
+        tc, tmp_path = client
+        for bad in ("gpt", "openai", "cursor", "deepseek"):
+            resp = tc.put("/api/settings", json={"worker": {"engine": bad}})
+            assert resp.status_code == 400, f"引擎名 {bad!r} 应拒绝"
+        assert "engine:" not in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+    def test_update_engine_rejects_non_string(self, client):
+        """非字符串（数字/空值）400 拒绝。"""
+        tc, _ = client
+        for bad in (123, None, True, ["dsh"]):
+            resp = tc.put("/api/settings", json={"worker": {"engine": bad}})
+            assert resp.status_code == 400, f"引擎值 {bad!r} 应拒绝"
+
+    def test_update_engine_rejects_empty_string(self, client):
+        """空串/纯空白 400 拒绝（不允许清空引擎配置）。"""
+        tc, _ = client
+        for bad in ("", "   "):
+            resp = tc.put("/api/settings", json={"worker": {"engine": bad}})
+            assert resp.status_code == 400, f"引擎值 {bad!r} 应拒绝"
+
+    def test_update_engine_partial_update_keeps_other_worker_fields(self, client):
+        """只提交 engine 时 worker 其他字段不受影响（部分更新）。"""
+        tc, tmp_path = client
+        assert tc.put("/api/settings", json={"worker": {
+            "max_concurrent_repos": 5, "engine": "dsh"}}).status_code == 200
+        # 后续只提交 engine，不携带其他字段
+        resp = tc.put("/api/settings", json={"worker": {"engine": "hermes"}})
+        assert resp.status_code == 200
+        worker = resp.json()["worker"]
+        assert worker["engine"] == "hermes"
+        assert worker["max_concurrent_repos"] == 5

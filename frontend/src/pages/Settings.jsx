@@ -176,6 +176,8 @@ export default function Settings() {
       }
       // issue 标签优先级（issue #76）：跟随全局「保存」提交 worker 段
       worker.issue_priority = settings.worker.issue_priority || ['bug', 'test', 'feature']
+      // 任务执行引擎（issue #113）：切换后端编写代码的 agent
+      worker.engine = settings.worker?.engine || 'claude'
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
@@ -370,12 +372,32 @@ export default function Settings() {
                 />
               </td>
             </tr>
+            <tr>
+              <th>任务执行引擎 <code>worker.engine</code></th>
+              <td>
+                <select
+                  className="input"
+                  value={settings.worker?.engine || 'claude'}
+                  onChange={(e) => setWorkerField('engine', e.target.value)}
+                >
+                  <option value="claude">claude — Claude Code CLI（默认）</option>
+                  <option value="hermes">hermes — 部署机 hermes-agent</option>
+                  <option value="dsh">dsh — deepseek-harness SDK</option>
+                </select>
+              </td>
+            </tr>
           </tbody>
         </table>
         <p className="muted small">
           issue 标签优先级：同仓库有多个排队任务时，按此顺序优先派发标签命中靠前的
           issue（默认 bug 最优先）；未列出的标签排在最后，同优先级按 issue 更新时间
           升序处理。逗号分隔、可增删调整顺序，修改后点击「保存」对已排队任务立即生效。
+        </p>
+        <p className="muted small">
+          任务执行引擎：切换后端编写代码的 agent，默认 claude（Claude Code CLI）；
+          hermes 为部署机 hermes-agent，dsh 为 deepseek-harness SDK（DeepSeek API Key
+          走部署机环境变量或「dsh 引擎」配置段）。切换后点击「保存」立即生效，
+          对新领取的任务使用新引擎，运行中任务不受影响。
         </p>
         <div className="form-row">
           <button className="btn btn-primary" disabled={busy} onClick={save}>

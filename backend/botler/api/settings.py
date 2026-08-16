@@ -34,6 +34,8 @@ class WorkerPatch(BaseModel):
     task_timeout_seconds: int | None = None
     max_retries: int | None = None
     reconcile_interval_seconds: int | None = None
+    # 任务执行引擎（issue #113）：设置页切换后端编写代码的 agent
+    engine: str | None = None
 
 
 class ClaudePatch(BaseModel):
@@ -70,6 +72,9 @@ def get_settings(request: Request):
             # issue 标签处理优先级（issue #76）：同仓库队列内按此顺序
             # 选任务派发，越靠前越先处理；未列出的标签排最后
             "issue_priority": s.issue_priority_labels,
+            # 任务执行引擎（issue #113）：claude / hermes / dsh，
+            # 设置页「任务调度」卡片切换，保存后对后续任务生效
+            "engine": s.engine,
         },
         "claude": {
             "command": s.claude_command,
@@ -249,6 +254,11 @@ def reconcile_now(request: Request):
     return {"ok": True, "note": "对账已在后台触发，稍后查看任务列表"}
 
 
+# 任务执行引擎白名单（issue #113）：与 executor._engine 合法集合一致，
+# API 层拦截非法值（executor 层回退仅防御手工改坏 config.yaml）
+ENGINE_CHOICES = ("claude", "hermes", "dsh")
+
+
 def _validate_worker(patch: dict) -> None:
     for key in KNOWN_FIELDS["worker"]:
         if key in patch:
@@ -256,6 +266,17 @@ def _validate_worker(patch: dict) -> None:
             if key == "issue_priority":
                 # issue #76：标签优先级顺序单独校验（字符串数组）
                 patch[key] = _validate_issue_priority(val)
+                continue
+            if key == "engine":
+                # issue #113：引擎名 strip + 小写归一后校验白名单
+                if not isinstance(val, str) or not val.strip():
+                    raise HTTPException(
+                        400, "worker.engine 必须是字符串（claude / hermes / dsh）")
+                val = val.strip().lower()
+                if val not in ENGINE_CHOICES:
+                    raise HTTPException(
+                        400, f"worker.engine 取值非法: {val}（可选 claude / hermes / dsh）")
+                patch[key] = val
                 continue
             if not isinstance(val, int) or val <= 0:
                 raise HTTPException(400, f"{key} 必须是正整数")

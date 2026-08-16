@@ -6,6 +6,20 @@
 
 ### Added
 
+- **设置页新增「任务执行引擎」设置项（issue #113）**：
+  需求「设置页面增加一个设置项，用来切换后端用来编写代码的agent」——
+  `worker.engine` 引擎切换逻辑（issue #47/#84）此前只能在 config.yaml
+  手工修改，本次起设置页可直接切换，保存后对新领取的任务生效：
+  - **后端**：`GET /api/settings` 的 worker 段返回 `engine`；`PUT`
+    校验引擎名白名单（claude / hermes / dsh，strip + 小写归一，
+    与 executor._engine 合法集合一致），非法值 400 拒绝不落盘；
+  - **前端**：「任务调度」卡片新增引擎下拉设置项（三引擎 + 默认
+    claude 回退），跟随全局「保存」写回 config.yaml；
+  - **测试**：后端新增 9 用例（默认值 / 三引擎持久化 / 大小写归一 /
+    非法值·非字符串·空串拒绝 / 部分更新不影响其他字段），前端新增
+    `settings-engine.test.mjs` 5 用例（下拉渲染 / 回显与回退 / 保存
+    提交）；前端 493 + 后端 976 全量测试通过。
+
 - **pm2 部署自动安装 deepseek-harness SDK（issue #112 跟进）**：
   issue #112 首轮仅覆盖 Docker 镜像内置 SDK，用户反馈 pm2 部署实例
   仍缺该依赖，本次补齐 pm2 部署形态：
