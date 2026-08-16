@@ -5,6 +5,27 @@
 // 供应商显示各自 logo，而不是所有供应商共用一个图标。
 //
 // 后端 config.yaml 只存 provider key，logo 由前端按 key 映射渲染。
+// 识图模型预设清单（issue #135）：设置页「识图模型」卡片使用。
+// 预设决定默认 base_url / model（选择后自动填充表单，均可修改）；
+// custom = 用户自定义类型（通用云朵图标）。logo 复用上面 AI 供应商
+// 的 gemini / openai 品牌图标。
+export const IMAGE_MODEL_PRESETS = [
+  { key: 'gemini_nano_banana', name: 'Gemini Nano Banana Pro', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3-pro-image' },
+  { key: 'openai_gpt_image', name: 'OpenAI GPT Image 2', baseUrl: 'https://api.openai.com/v1', model: 'gpt-image-2' },
+  { key: 'custom', name: '自定义', baseUrl: '', model: '' },
+]
+
+// 按 key 取识图模型预设；未知 key（历史数据）回退 custom。
+export function imageModelPresetOf(key) {
+  return IMAGE_MODEL_PRESETS.find((p) => p.key === key) || IMAGE_MODEL_PRESETS.at(-1)
+}
+
+// 识图模型类型名称（列表展示用；未知 key 直接显示原 key）。
+export function imageModelName(key) {
+  const p = IMAGE_MODEL_PRESETS.find((x) => x.key === key)
+  return p ? p.name : key || '自定义'
+}
+
 
 export const AI_PROVIDER_PRESETS = [
   { key: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },

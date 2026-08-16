@@ -145,6 +145,18 @@ def get_settings(request: Request):
             }
             for p in s.ai_providers
         ],
+        "image_models": [
+            # 识图模型（issue #135）：api_key 只返回掩码，明文不流转到界面
+            {
+                "name": p["name"],
+                "provider": p["provider"],
+                "base_url": p["base_url"],
+                "api_key_masked": _mask(p["api_key"]),
+                "model": p["model"],
+                "enabled": p["enabled"],
+            }
+            for p in s.image_models
+        ],
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -241,6 +253,12 @@ def update_settings(request: Request, body: dict):
         cleaned = _validate_ai_providers(
             providers, current=c.config.get().ai_providers)
         c.config.update_ai_providers(cleaned)
+
+    image_models = body.get("image_models")
+    if image_models is not None:
+        cleaned = _validate_image_models(
+            image_models, current=c.config.get().image_models)
+        c.config.update_image_models(cleaned)
 
     gitlab_patch = body.get("gitlab")
     if gitlab_patch is not None:
@@ -531,6 +549,54 @@ def _validate_ai_providers(patch, current: list[dict]) -> list[dict]:
             raise HTTPException(400, "ai_providers.name 必填非空")
         if name in seen:
             raise HTTPException(400, f"供应商名称重复: {name}")
+        seen.add(name)
+        provider = str(item.get("provider") or "").strip() or "custom"
+        base_url = str(item.get("base_url") or "").strip()
+        if base_url and not base_url.startswith(("http://", "https://")):
+            raise HTTPException(400, f"{name}.base_url 必须以 http(s):// 开头")
+        api_key = item.get("api_key")
+        if api_key is None:
+            api_key = ""
+        if not isinstance(api_key, str):
+            raise HTTPException(400, f"{name}.api_key 必须是字符串")
+        model = str(item.get("model") or "").strip()
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise HTTPException(400, f"{name}.enabled 必须是布尔值")
+        if not api_key.strip() or "*" in api_key:
+            api_key = by_name[name]["api_key"] if name in by_name else ""
+        cleaned.append({
+            "name": name,
+            "provider": provider,
+            "base_url": base_url,
+            "api_key": api_key,
+            "model": model,
+            "enabled": enabled,
+        })
+    return cleaned
+
+
+def _validate_image_models(patch, current: list[dict]) -> list[dict]:
+    """校验 image_models 段（issue #135）：整体替换列表。
+
+    与 _validate_ai_providers（issue #46）同模式：
+    - name 必填非空且不重复；base_url 非空时须以 http(s):// 开头
+    - api_key 回传掩码值（含 *）或留空 = 保持现有（按 name 匹配旧配置）
+    - provider 缺省归一为 custom；enabled 必须是布尔值
+    """
+    if not isinstance(patch, list):
+        raise HTTPException(400, "image_models 必须是数组")
+    by_name = {m["name"]: m for m in current if m.get("name")}
+    cleaned: list[dict] = []
+    seen: set[str] = set()
+    for item in patch:
+        if not isinstance(item, dict):
+            raise HTTPException(400, "image_models 每项必须是对象")
+        name = str(item.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "image_models.name 必填非空")
+        if name in seen:
+            raise HTTPException(400, f"模型名称重复: {name}")
         seen.add(name)
         provider = str(item.get("provider") or "").strip() or "custom"
         base_url = str(item.get("base_url") or "").strip()

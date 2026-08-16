@@ -6,6 +6,44 @@
 
 ### Added
 
+- **设置页新增「识图模型」配置，内置 Gemini Nano Banana Pro 与 GPT Image 2 两个接口（issue #135）**：
+  需求「设置页面，增加配置识图模型的设置，目前先实现 gemini 的 nano banana pro 以及
+  gpt image 2 的接口」。参照 AI API 供应商配置（issue #46）模式实现——本期交付
+  「配置存储 + 调用接口封装」，为后续 AI 功能消费做准备，不接入具体业务。
+  实现：
+  - 后端 `config.py`：`Settings` 新增 `image_models` 列表（每项
+    `{name, provider, base_url, api_key, model, enabled}`，与 ai_providers
+    同构，api_key 支持 `${ENV}` 引用落盘 config.yaml）+ `update_image_models`
+    整体替换落盘；
+  - 后端 `api/settings.py`：`GET /api/settings` 返回 `image_models`
+    （api_key 只返回掩码）、`PUT` 校验（name 必填且不重复 / base_url 须
+    http(s) 开头 / provider 缺省归一 custom / enabled 布尔 / 掩码或留空 =
+    保持现有），新增 `_validate_image_models`；
+  - 后端 `image_models.py`（新模块）：统一 `ImageModelClient.generate()`
+    调用封装——`gemini_nano_banana`（默认模型 `gemini-3-pro-image`，走
+    `generateContent`，支持文本 prompt + base64 inline_data 图片输入、
+    输出 inlineData 解码）与 `openai_gpt_image`（默认模型 `gpt-image-2`，
+    走 images/generations JSON 与 images/edits multipart）；含超时/网络/
+    非 2xx/缺 key/缺图像结果等错误诊断；`find_enabled` / `client_from_config`
+    工具函数；
+  - 前端 `providers.jsx`：新增 `IMAGE_MODEL_PRESETS`（gemini_nano_banana /
+    openai_gpt_image / custom，默认 base_url 与 model 自动填充，logo 复用
+    gemini / openai 品牌图标）；
+  - 前端 `components/ImageModelsCard.jsx`（新组件）：设置页「识图模型」
+    卡片，增删改查 + 独立保存按钮（只提交 image_models 段）+ API Key
+    掩码回填；`pages/Settings.jsx` 在 AI 供应商卡片之后挂载；
+  - 文档：`README.md` 目录结构与关键配置表、`backend/config.example.yaml`
+    新增 image_models 段注释示例；
+  - **测试**：后端 `test_api_settings.py` 新增 `TestImageModelsSettings`
+    13 用例（GET 空列表 / PUT 持久化与掩码 / 掩码与留空不覆盖 / 整体替换 /
+    清空 / name 必填与唯一 / base_url 校验 / provider 归一 / enabled 布尔 /
+    `${ENV}` 引用）+ `test_image_models.py` 16 用例（两 provider 请求构造
+    URL/认证头/请求体、参考图片输入、非 2xx 与缺图像响应报错、缺 key/空
+    prompt 拦截、预设与工具函数）；前端新增
+    `settings-image-models-card.test.mjs` 7 用例（卡片挂载与位置、增删改
+    表单、保存走 image_models 段、预设与 logo）；后端 1146 + 前端 594 全量
+    测试通过。
+
 - **概览页开放 Issue 板块：每个仓库卡片右上角新增「对账」按钮（issue #134）**：
   需求「概览页面中的开放issue组件，每个仓库的右上角添加一个对账按钮，点击后对账该仓库issue」。
   复用仓库页对账接口 `POST /api/repos/{repo_id}/reconcile`（issue #17）：点击后同步扫描该

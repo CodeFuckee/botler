@@ -103,6 +103,22 @@ browse:
   # 配置的路径不存在时自动回退主目录，不会导致对话框打不开。
   default_path: ""
 
+# 识图模型（issue #135）：设置页「识图模型」卡片增删改查的图像模型列表
+# （为后续 AI 功能消费做准备）。每项 {name, provider, base_url, api_key,
+# model, enabled}；api_key 落盘 config.yaml（支持 ${ENV} 引用，与
+# ai_providers 同模式）。内置预设：gemini_nano_banana（Gemini Nano
+# Banana Pro，默认模型 gemini-3-pro-image）/ openai_gpt_image（GPT
+# Image 2，默认模型 gpt-image-2），设置页选择预设自动填充默认
+# base_url 与 model（均可修改）。后端 image_models.py 提供统一调用
+# 接口（ImageModelClient.generate）。
+# image_models:
+#   - name: Gemini 生产环境
+#     provider: gemini_nano_banana
+#     base_url: https://generativelanguage.googleapis.com/v1beta
+#     api_key: ${GEMINI_IMAGE_API_KEY}
+#     model: gemini-3-pro-image
+#     enabled: true
+
 backup:
   # 备份与恢复（config.yaml + botler.db → <数据目录>/backups/botler-backup-*.tar.gz）
   enabled: true            # 定时备份开关（每天 03:00 Asia/Shanghai 自动备份）

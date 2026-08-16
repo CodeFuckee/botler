@@ -309,6 +309,169 @@ class TestAiProvidersSettings:
             os.environ.pop("BOTLER_TEST_DEEPSEEK_KEY", None)
 
 
+class TestImageModelsSettings:
+    """image_models 段：识图模型配置（issue #135，设置页「识图模型」卡片）。
+
+    与 ai_providers（issue #46）同模式：api_key 落盘 config.yaml、API 只
+    返回掩码、编辑时留空或回传掩码值 = 保持现有；列表整体替换。
+    """
+
+    MODEL = {
+        "name": "Gemini Nano Banana Pro",
+        "provider": "gemini_nano_banana",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "api_key": "AIza-test-123456",
+        "model": "gemini-3-pro-image",
+        "enabled": True,
+    }
+
+    def test_get_settings_includes_image_models_empty(self, client):
+        """未配置时 image_models 返回空列表。"""
+        tc, tmp_path = client
+        data = tc.get("/api/settings").json()["image_models"]
+        assert data == []
+
+    def test_put_image_models_persists(self, client):
+        """PUT image_models 写回 config.yaml 并可读回（api_key 只返回掩码）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"image_models": [self.MODEL]})
+        assert resp.status_code == 200
+        models = resp.json()["image_models"]
+        assert len(models) == 1
+        assert models[0]["name"] == "Gemini Nano Banana Pro"
+        assert models[0]["provider"] == "gemini_nano_banana"
+        assert models[0]["base_url"] == "https://generativelanguage.googleapis.com/v1beta"
+        assert models[0]["model"] == "gemini-3-pro-image"
+        assert models[0]["enabled"] is True
+        masked = models[0]["api_key_masked"]
+        assert "AIza-test-123456" not in masked  # 明文不回传
+        assert "*" in masked  # 有掩码占位
+        # config.yaml 是唯一事实来源，明文落盘
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: AIza-test-123456" in config_text
+
+    def test_put_masked_api_key_not_overwritten(self, client):
+        """前端回传掩码值（含 *）不覆盖真实 key。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"image_models": [self.MODEL]})
+        masked = tc.get("/api/settings").json()["image_models"][0]["api_key_masked"]
+        resp = tc.put("/api/settings", json={"image_models": [
+            {**self.MODEL, "api_key": masked},
+        ]})
+        assert resp.status_code == 200
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: AIza-test-123456" in config_text
+
+    def test_put_blank_api_key_keeps_existing(self, client):
+        """api_key 留空 = 保持现有（新增条目则存空串）。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"image_models": [self.MODEL]})
+        resp = tc.put("/api/settings", json={"image_models": [
+            {**self.MODEL, "api_key": ""},
+        ]})
+        assert resp.status_code == 200
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: AIza-test-123456" in config_text
+
+    def test_put_replaces_whole_list(self, client):
+        """整体替换语义：新列表覆盖旧列表。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"image_models": [self.MODEL]})
+        resp = tc.put("/api/settings", json={"image_models": [
+            {"name": "GPT Image 2", "provider": "openai_gpt_image",
+             "base_url": "https://api.openai.com/v1",
+             "api_key": "sk-gpt-image-789", "model": "gpt-image-2",
+             "enabled": False},
+        ]})
+        assert resp.status_code == 200
+        models = resp.json()["image_models"]
+        assert len(models) == 1
+        assert models[0]["name"] == "GPT Image 2"
+        assert models[0]["enabled"] is False
+
+    def test_put_empty_list_clears(self, client):
+        """空列表清空配置。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"image_models": [self.MODEL]})
+        resp = tc.put("/api/settings", json={"image_models": []})
+        assert resp.status_code == 200
+        assert resp.json()["image_models"] == []
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "image_models" in config_text
+
+    def test_put_rejects_blank_name(self, client):
+        """name 必填非空。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"image_models": [
+            {**self.MODEL, "name": "   "},
+        ]})
+        assert resp.status_code == 400
+        assert "name" in resp.json()["detail"]
+
+    def test_put_rejects_duplicate_name(self, client):
+        """name 唯一（掩码回传按 name 匹配旧值，重复会歧义）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"image_models": [
+            self.MODEL,
+            {**self.MODEL, "model": "gemini-2.5-flash-image"},
+        ]})
+        assert resp.status_code == 400
+        assert "重复" in resp.json()["detail"]
+
+    def test_put_rejects_invalid_base_url(self, client):
+        """base_url 必须以 http(s):// 开头。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"image_models": [
+            {**self.MODEL, "base_url": "not-a-url"},
+        ]})
+        assert resp.status_code == 400
+
+    def test_put_rejects_non_list(self, client):
+        """image_models 必须是数组。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"image_models": {"name": "x"}})
+        assert resp.status_code == 400
+
+    def test_put_provider_defaults_to_custom(self, client):
+        """provider 缺省归一为 custom。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"image_models": [
+            {**self.MODEL, "provider": "  "},
+        ]})
+        assert resp.status_code == 200
+        assert resp.json()["image_models"][0]["provider"] == "custom"
+
+    def test_put_rejects_non_bool_enabled(self, client):
+        """enabled 必须是布尔值。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"image_models": [
+            {**self.MODEL, "enabled": "yes"},
+        ]})
+        assert resp.status_code == 400
+
+    def test_env_ref_api_key_expanded_on_read(self, client):
+        """config.yaml 中 api_key 支持 ${ENV} 引用（凭据不落明文）。"""
+        tc, tmp_path = client
+        config_path = tmp_path / "config.yaml"
+        config_text = config_path.read_text(encoding="utf-8")
+        config_path.write_text(
+            config_text + "image_models:\n"
+            "  - name: GPT Image 2\n"
+            "    provider: openai_gpt_image\n"
+            "    base_url: https://api.openai.com/v1\n"
+            "    api_key: ${BOTLER_TEST_GPT_IMAGE_KEY}\n"
+            "    model: gpt-image-2\n"
+            "    enabled: true\n",
+            encoding="utf-8")
+        import os
+        os.environ["BOTLER_TEST_GPT_IMAGE_KEY"] = "sk-from-env"
+        try:
+            data = tc.get("/api/settings").json()["image_models"]
+            assert data[0]["api_key_masked"].endswith("-env")
+        finally:
+            os.environ.pop("BOTLER_TEST_GPT_IMAGE_KEY", None)
+
+
 class TestDshSettings:
     """dsh 段（issue #84）：GET 掩码返回 + PUT 更新与校验。"""
 

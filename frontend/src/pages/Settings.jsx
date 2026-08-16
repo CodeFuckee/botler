@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, setDisplayTz, fmtTime } from '../api.js'
 import { sendTestNotification } from '../notify.js'
 import AiProvidersCard from '../components/AiProvidersCard.jsx'
+import ImageModelsCard from '../components/ImageModelsCard.jsx'
 import BackupManager from '../components/BackupManager.jsx'
 import Markdown from '../components/Markdown.jsx'
 import VersionBadge from '../components/VersionBadge.jsx'
@@ -340,6 +341,9 @@ export default function Settings() {
 
       {/* AI API 供应商（issue #46）：SSO 卡片后第二位，外部服务接入类配置聚合 */}
       <AiProvidersCard />
+
+      {/* 识图模型（issue #135）：AI 供应商卡片之后，同为外部服务接入类配置 */}
+      <ImageModelsCard />
 
       <h1>系统设置</h1>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
