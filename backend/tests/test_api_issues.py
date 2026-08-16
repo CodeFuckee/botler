@@ -1548,14 +1548,71 @@ class TestIssueDetail:
         assert stub.notes_calls == [(42, 64, 100)]
 
     def test_empty_notes(self, client):
-        """边界：无评论无活动 → notes 为空列表（前端显示占位文案）。"""
+        """边界：无评论无活动 → notes 为空列表；无任务记录 → engine 回退
+        全局 worker.engine（默认 claude，前端显示 Claude Code CLI）。"""
         tc, stub, db, _ = client
         _add_repo(db, project_id=42, name="demo")
 
         resp = tc.get("/api/issues/42/64/detail")
 
         assert resp.status_code == 200
-        assert resp.json() == {"notes": []}
+        assert resp.json() == {"notes": [], "engine": "claude"}
+
+    # ---- issue #120：执行引擎按 issue 展示（回退链：任务落库 engine
+    # > 断点续跑会话字段推断 > 全局 worker.engine）----
+
+    def test_returns_engine_from_latest_task(self, client):
+        """有任务记录：返回该 issue 最近任务实际落库的执行引擎。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        task_id = db.create_task(repo_id, 42, 64, "历史任务")
+        db.set_task_status(task_id, "succeeded", engine="claude")
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["engine"] == "claude"
+
+    def test_engine_falls_back_to_global_when_no_task(self, client):
+        """无任务记录（issue 从未处理）→ 回退全局 worker.engine。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        tc.app.state.ctx.config.get().engine = "dsh"
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["engine"] == "dsh"
+
+    def test_engine_inferred_from_session_fields_for_legacy_task(self, client):
+        """旧任务无 engine 落库 → 按断点续跑会话字段推断（claude_session_id
+        → claude），全局引擎已切 dsh 也不受影响。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        tc.app.state.ctx.config.get().engine = "dsh"
+        task_id = db.create_task(repo_id, 42, 64, "旧任务")
+        db.set_task_status(task_id, "succeeded", claude_session_id="sess-legacy")
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["engine"] == "claude", "旧 claude 任务不应随全局引擎误显 dsh"
+
+    def test_engine_prefers_recorded_value_over_session_field(self, client):
+        """engine 已落库时优先使用落库值，不做会话字段推断。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        task_id = db.create_task(repo_id, 42, 64, "任务")
+        db.set_task_status(task_id, "succeeded", engine="hermes",
+                           dsh_session_id="dsh-sess-x")
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.json()["engine"] == "hermes"
 
     def test_repo_not_found(self, client):
         """GitLab project_id 无对应启用仓库 → 404，且不触碰 GitLab。"""

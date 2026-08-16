@@ -1661,6 +1661,11 @@ class ClaudeExecutor:
             self._finish_stopped(task_id)
             return
 
+        # issue #120：执行引擎按任务落库——记录本次实际执行的引擎
+        # （claude / hermes / dsh），概览页 issue 右边栏按任务展示历史
+        # 引擎，全局 worker.engine 切换后旧 issue 不再误显新引擎
+        self.db.set_task_status(task_id, None, engine=engine)
+
         project_id, issue_iid = task["project_id"], task["issue_iid"]
         self.db.set_task_status(task_id, None, log_path=str(self._log_file(task_id)))
         try:

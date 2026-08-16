@@ -461,6 +461,32 @@ def _trim_note(note: dict) -> dict:
     }
 
 
+def _issue_engine(c, project_id: int, iid: int) -> str:
+    """该 issue 实际使用的执行引擎（issue #120）。
+
+    回退链（按优先级）：
+    1. 最近一次任务落库的 engine（executor.run_task 按任务写入）；
+    2. 旧任务未落库 engine 时按断点续跑会话字段推断（dsh_session_id
+       → dsh，hermes_history → hermes，claude_session_id → claude）；
+    3. 无任务记录（issue 从未处理/尚未派发）→ 全局 worker.engine
+       （新任务将使用的引擎）。
+    返回统一小写引擎名（claude / hermes / dsh），供前端 engineDisplay
+    归一展示。
+    """
+    latest = c.db.find_latest_task(project_id, iid)
+    if latest is not None:
+        engine = latest["engine"]
+        if engine:
+            return engine
+        if latest["dsh_session_id"]:
+            return "dsh"
+        if latest["hermes_history"]:
+            return "hermes"
+        if latest["claude_session_id"]:
+            return "claude"
+    return str(getattr(c.config.get(), "engine", "") or "claude").strip().lower()
+
+
 @router.get("/{project_id}/{iid}/detail")
 def issue_detail(request: Request, project_id: int, iid: int):
     """issue 评论与活动详情（issue #97：概览页右边栏展示）。
@@ -488,8 +514,11 @@ def issue_detail(request: Request, project_id: int, iid: int):
     except httpx.HTTPError as e:
         # per-repo client 可能指向不可达 host（remote url 解析出的地址）
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
-    # 异常元素（非 dict）防御性过滤，不因单条坏数据拖垮整个抽屉
-    return {"notes": [_trim_note(n) for n in notes or [] if isinstance(n, dict)]}
+    # 异常元素（非 dict）防御性过滤，不因单条坏数据拖垮整个抽屉；
+    # engine（issue #120）：该 issue 最近任务实际执行的引擎（无任务
+    # 记录回退全局 worker.engine），前端右边栏「执行引擎」行据此展示
+    return {"notes": [_trim_note(n) for n in notes or [] if isinstance(n, dict)],
+            "engine": _issue_engine(c, project_id, iid)}
 
 
 # ---- issue #92：概览页添加 issue 表单与创建 ----

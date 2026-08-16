@@ -210,7 +210,7 @@ PUT    /api/repos/{id}                更新仓库（名称/启用/优先级/模
 DELETE /api/repos/{id}                删除仓库
 POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook）
 GET/PUT /api/repos/{id}/template      仓库模版
-GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 亦为概览页 issue 右边栏「执行引擎」行数据源，issue #118）
+GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）
 POST   /api/settings/reconcile-now    手动触发对账
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url）
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url）
@@ -220,7 +220,7 @@ GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/�
 GET    /api/issues/overview           已启用仓库开放 issue 聚合（10s 缓存，issue #64）
 POST   /api/issues/{project_id}/{iid}/close   关闭指定 issue（概览页右边栏「关闭 issue」按钮，issue #94）
 POST   /api/issues/{project_id}/{iid}/retry   重新执行 issue 对应的任务（概览页右边栏「重试」按钮：复用最近失败/中断任务或新建任务入队，issue #117）
-GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97）
+GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
 GET    /api/auth/status               登录状态探测（SSO 是否启用 + 当前用户，issue #27）
@@ -233,7 +233,7 @@ GET    /api/issues/form-meta/{id}     添加 issue 表单元数据：项目成�
 POST   /api/issues                    在指定仓库创建 issue（标题/分配人/标签必填、描述选填，描述为空时发送 GitLab API 自动填充标题；成功后清缓存，issue #92/#103）
 GET    /api/issues/{project_id}/labels      项目标记池（概览页右边栏「编辑标记」多选数据源，颜色归一化，issue #108）
 PUT    /api/issues/{project_id}/{iid}/labels  更新 issue 标记（add/remove 一次提交加删标记；成功后清缓存并返回更新后标记列表，issue #108）
-GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97）
+GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120）
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 

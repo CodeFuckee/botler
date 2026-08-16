@@ -621,3 +621,32 @@ class TestTaskIssueUrl:
         task = TestClient(app).get(f"/api/tasks/{task_id}").json()
         assert task["repo_name"] is None
         assert task["issue_url"] is None
+
+
+class TestTaskEngineField:
+    """任务列表/详情透出 engine（issue #120）：执行引擎按任务落库后，
+    任务页与概览页右边栏都可拿到该 issue 实际执行的引擎。"""
+
+    def test_list_returns_engine_field(self, client):
+        """列表项携带 engine；未落库（新任务未执行）为空串。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=1, title="dsh 任务")
+        db.set_task_status(task_id, "succeeded", engine="dsh")
+        _mk_task(db, repo_id, issue_iid=2, title="未执行任务")
+
+        body = app_client.get("/api/tasks").json()
+        by_iid = {t["issue_iid"]: t for t in body["tasks"]}
+        assert by_iid[1]["engine"] == "dsh"
+        assert by_iid[2]["engine"] == ""
+
+    def test_detail_returns_engine_field(self, client):
+        """详情接口同样透出 engine（任务页数据契约一致）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=3, title="hermes 任务")
+        db.set_task_status(task_id, "succeeded", engine="hermes")
+
+        task = app_client.get(f"/api/tasks/{task_id}").json()
+
+        assert task["engine"] == "hermes"

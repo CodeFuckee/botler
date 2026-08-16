@@ -1,16 +1,18 @@
-// 概览页 issue 右边栏「任务执行引擎」测试（issue #118）：
-// 概览页面弹出的 issue 右边栏展示任务执行引擎的类型——抽屉打开时从
-// GET /api/settings 读取 worker.engine（issue #113 引入的全局配置：
-// claude / hermes / dsh，默认 claude），KV 表格新增「执行引擎」行。
+// 概览页 issue 右边栏「任务执行引擎」测试（issue #118 + #120 修复）：
+// 概览页面弹出的 issue 右边栏展示任务执行引擎的类型——抽屉打开时拉取
+// GET /api/issues/{project_id}/{iid}/detail，读取该 issue 最近任务
+// 实际落库的 engine（issue #120 修复前读取全局 worker.engine，全局
+// 引擎切换后历史 issue 全部误显新引擎；后端 detail 接口已做回退链：
+// 任务落库 engine > 断点续跑会话字段推断 > 全局 worker.engine）。
 //
 // 断言：
-// 1. 源码：IssueDrawer 含「执行引擎」行、拉取 /api/settings、
-//    ENGINE_META 三引擎映射（claude / hermes / dsh）；
+// 1. 源码：IssueDrawer 含「执行引擎」行、拉取 issue detail 接口、
+//    从响应 d.engine 取值（不再拉取 /api/settings 全局配置）；
 // 2. 纯函数 engineDisplay：null → 加载中；空值 → 回退 claude；
 //    未知值 → 原样展示兜底；
-// 3. 渲染：settings 返回 dsh → 抽屉显示 deepseek-harness SDK 文案；
-// 4. 渲染：settings 未返回 engine → 回退 Claude Code CLI；
-// 5. 渲染：settings 请求失败 → 显示「—」不崩溃；
+// 3. 渲染：detail 返回 engine=dsh → 抽屉显示 deepseek-harness SDK；
+// 4. 渲染：detail 未返回 engine → 回退 Claude Code CLI；
+// 5. 渲染：detail 请求失败 → 显示「—」不崩溃；
 // 6. 渲染：未知引擎值 → 原样展示兜底。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -39,10 +41,11 @@ after(() => vite.close())
 
 // ---- 数据流源码断言 ----
 
-test('IssueDrawer 源码：新增「执行引擎」行并拉取 /api/settings', () => {
+test('IssueDrawer 源码：含「执行引擎」行并从 detail 响应读取 d.engine', () => {
   assert.match(drawerSrc, /执行引擎/, '抽屉应含「执行引擎」行标题')
-  assert.match(drawerSrc, /\/api\/settings/, '应拉取 /api/settings 获取引擎配置')
-  assert.match(drawerSrc, /worker\s*\.\s*engine/, '应从 settings.worker.engine 取值')
+  assert.match(drawerSrc, /\/api\/issues\//, '应拉取 issue detail 接口获取引擎')
+  assert.match(drawerSrc, /d\s*\.\s*engine/, '应从 detail 响应 d.engine 取值')
+  assert.doesNotMatch(drawerSrc, /api\.get\s*\(\s*['\"]\/api\/settings/, '不应再拉取全局 /api/settings 引擎配置')
 })
 
 test('ENGINE_META 映射覆盖 claude / hermes / dsh 三引擎', () => {
@@ -80,7 +83,7 @@ const FULL_ISSUE = {
   user_notes_count: 3,
 }
 
-async function renderOverview(settingsBody, settingsError) {
+async function renderOverview(detailBody, detailError) {
   mock.method(api, 'get', async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) return { tasks: [], total: 0, stats: {} }
     if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
@@ -88,10 +91,9 @@ async function renderOverview(settingsBody, settingsError) {
       return { repos: [{ repo_id: 1, repo_name: 'botler', priority: 10,
                          issues: [FULL_ISSUE] }], errors: [] }
     }
-    if (pathname === '/api/issues/1/64/detail') return { notes: [] }
-    if (pathname === '/api/settings') {
-      if (settingsError) throw new Error(settingsError)
-      return settingsBody
+    if (pathname === '/api/issues/1/64/detail') {
+      if (detailError) throw new Error(detailError)
+      return { notes: [], ...detailBody }
     }
     throw new Error('unexpected ' + pathname)
   })
@@ -153,9 +155,8 @@ function engineRowText(root) {
   return null
 }
 
-test('渲染：settings 返回 dsh → 抽屉执行引擎行显示 deepseek-harness SDK', async () => {
-  const { renderer, root, renderError } = await renderOverview(
-    { worker: { engine: 'dsh' } })
+test('渲染：detail 返回 dsh → 抽屉执行引擎行显示 deepseek-harness SDK', async () => {
+  const { renderer, root, renderError } = await renderOverview({ engine: 'dsh' })
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
     assert.equal(engineRowText(root), ENGINE_META.dsh.label,
@@ -167,8 +168,8 @@ test('渲染：settings 返回 dsh → 抽屉执行引擎行显示 deepseek-harn
   }
 })
 
-test('渲染：settings 未返回 engine → 回退 claude 文案', async () => {
-  const { renderer, root } = await renderOverview({ worker: {} })
+test('渲染：detail 未返回 engine → 回退 claude 文案', async () => {
+  const { renderer, root } = await renderOverview({})
   try {
     assert.equal(engineRowText(root), ENGINE_META.claude.label,
                  '后端未返回 engine 时应回退默认 claude')
@@ -178,7 +179,7 @@ test('渲染：settings 未返回 engine → 回退 claude 文案', async () => 
   }
 })
 
-test('渲染：settings 请求失败 → 执行引擎行显示「—」不崩溃', async () => {
+test('渲染：detail 请求失败 → 执行引擎行显示「—」不崩溃', async () => {
   const { renderer, root, renderError } = await renderOverview(null, '网络错误')
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
@@ -191,7 +192,7 @@ test('渲染：settings 请求失败 → 执行引擎行显示「—」不崩溃
 })
 
 test('渲染：未知引擎值 → 原样展示兜底', async () => {
-  const { renderer, root } = await renderOverview({ worker: { engine: 'foo' } })
+  const { renderer, root } = await renderOverview({ engine: 'foo' })
   try {
     assert.equal(engineRowText(root), 'foo', '未知引擎值应原样展示不崩溃')
   } finally {

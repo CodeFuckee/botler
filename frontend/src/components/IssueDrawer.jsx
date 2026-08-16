@@ -56,11 +56,13 @@ export function isFailedTask(issue) {
   return hasFailed
 }
 
-// ---- issue #118：任务执行引擎类型 ----
-// 概览页弹出的 issue 右边栏展示任务执行引擎的类型：抽屉打开时从
-// GET /api/settings 读取 worker.engine（issue #113 引入的全局配置，
-// claude / hermes / dsh，默认 claude，对新领取任务生效）。文案与
-// 设置页「任务调度」卡片下拉选项一致。
+// ---- issue #118 + #120：任务执行引擎类型 ----
+// 概览页弹出的 issue 右边栏展示任务执行引擎的类型：抽屉打开时随
+// GET /api/issues/{project_id}/{iid}/detail 一起返回该 issue 最近
+// 任务实际使用的引擎（issue #120 修复：不再读全局 worker.engine——
+// 全局引擎切换后历史 issue 会全部误显新引擎；后端回退链：任务落库
+// engine > 断点续跑会话字段推断 > 全局 worker.engine）。文案与设置页
+// 「任务调度」卡片下拉选项一致。
 export const ENGINE_META = {
   claude: { label: 'Claude Code CLI' },
   hermes: { label: 'hermes-agent' },
@@ -134,10 +136,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   const [savingLabels, setSavingLabels] = useState(false)
   const [labelErr, setLabelErr] = useState('')
   const [displayLabels, setDisplayLabels] = useState(null)
-  // issue #118：任务执行引擎类型——engine null=加载中；engineErr 非空=
-  // 加载失败（执行引擎行显示「—」）；成功值经 engineDisplay 归一展示。
-  // 引擎为全局配置（worker.engine），随抽屉打开拉取保证最新，拉取失败
-  // 不阻塞其余信息展示
+  // issue #118/#120：任务执行引擎类型——engine null=加载中；engineErr
+  // 非空=加载失败（执行引擎行显示「—」）；成功值经 engineDisplay 归一
+  // 展示。引擎来自该 issue 最近任务的 detail 响应（后端按任务落库），
+  // 随抽屉打开一起拉取，不单独请求 /api/settings
   const [engine, setEngine] = useState(null)
   const [engineErr, setEngineErr] = useState('')
 
@@ -150,24 +152,6 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
-
-  // 拉取任务执行引擎类型（issue #118）：GET /api/settings 的
-  // worker.engine，未返回/空值回退默认 claude；失败记录错误展示「—」
-  const loadEngine = useCallback(async () => {
-    setEngine(null)
-    setEngineErr('')
-    try {
-      const s = await api.get('/api/settings')
-      const v = s && s.worker ? s.worker.engine : ''
-      setEngine((typeof v === 'string' && v.trim()) ? v : 'claude')
-    } catch (e) {
-      setEngineErr(e.message || '加载失败')
-    }
-  }, [])
-
-  useEffect(() => {
-    loadEngine()
-  }, [loadEngine])
 
   const i = issue || {}
   // 有效状态：本次点击关闭成功后本地立即标记 closed（后端已确认），
@@ -191,14 +175,25 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 拉取 detail；旧缓存数据缺 project_id 时不发请求（无法定位仓库）
   const hasDetail = typeof i.project_id === 'number' && typeof i.iid === 'number'
   const loadNotes = useCallback(async () => {
-    if (typeof i.project_id !== 'number' || typeof i.iid !== 'number') return
+    if (typeof i.project_id !== 'number' || typeof i.iid !== 'number') {
+      // 旧缓存数据缺 project_id 无法定位仓库 → 执行引擎也无法获取
+      setNotes([])
+      setEngineErr('缺少项目信息，无法获取执行引擎')
+      return
+    }
     setNotes(null)
     setDetailErr('')
+    setEngine(null)
+    setEngineErr('')
     try {
       const d = await api.get(`/api/issues/${i.project_id}/${i.iid}/detail`)
       setNotes(Array.isArray(d && d.notes) ? d.notes : [])
+      // issue #120：执行引擎来自该 issue 最近任务的实际记录（后端已
+      // 做无任务回退），不再读取全局 worker.engine
+      setEngine((typeof d.engine === 'string' && d.engine.trim()) ? d.engine : '')
     } catch (e) {
       setDetailErr(e.message || '加载失败')
+      setEngineErr(e.message || '加载失败')
     }
   }, [i.project_id, i.iid])
 
@@ -422,9 +417,9 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             <tr><th>仓库</th><td>{repoName || '—'}</td></tr>
             <tr><th>状态</th>
               <td><span className={'badge ' + stateMeta.cls}>{stateMeta.label}</span></td></tr>
-            {/* issue #118：任务执行引擎类型——展示当前 worker.engine
-                （claude / hermes / dsh）；加载失败显示「—」，其余信息
-                不受影响 */}
+            {/* issue #118/#120：任务执行引擎类型——展示该 issue 最近
+                任务实际使用的引擎（claude / hermes / dsh，无任务回退
+                全局配置）；detail 加载失败显示「—」，其余信息不受影响 */}
             <tr><th>执行引擎</th>
               <td>
                 {engineErr ? (

@@ -6,6 +6,29 @@
 
 ### Fixed
 
+- **概览页 issue 右边栏「执行引擎」全部误显当前全局引擎（issue #120）**：
+  需求「issue 现在显示的执行引擎全都是 deepseek harness sdk，但是一开始
+  的 issue 都是 claude code 为执行引擎」。诊断：`IssueDrawer` 的「执行引擎」
+  行（issue #118 引入）读取的是全局配置 `worker.engine`（issue #113），只
+  表示「新领取任务用什么引擎」，不代表该 issue 实际由哪个引擎处理——全局
+  引擎从 claude 切到 dsh 后，所有 issue（含历史由 Claude Code CLI 处理的）
+  都显示 deepseek-harness SDK。修复：
+  - **执行引擎按任务落库**（database v7 迁移）：`tasks` 表新增 `engine`
+    列，`executor.run_task` 执行时把本次实际引擎写入任务；迁移自动回填
+    存量任务——按断点续跑会话字段推断历史引擎（`dsh_session_id` →
+    dsh，`hermes_history` → hermes，`claude_session_id` → claude）；
+  - **detail 接口返回该 issue 实际引擎**：`GET /api/issues/{project_id}/
+    {iid}/detail` 新增 `engine` 字段（回退链：任务落库 engine > 会话字段
+    推断 > 全局 `worker.engine`）；`GET /api/tasks` 列表/详情同步透出
+    `engine`；
+  - **前端改为按 issue 展示**：`IssueDrawer` 不再单独拉取 `/api/settings`
+    全局配置，改为从 detail 响应读取 `d.engine` 归一展示（拉取失败仍显示
+    「—」兜底）。
+  - **测试**：后端新增数据库迁移回填、detail 引擎回退链、tasks 透出、
+    executor 落库共 13 个新用例；前端重写抽屉引擎用例 7 个（detail
+    返回 dsh / 空值回退 claude / 失败「—」/ 未知原样 + 源码不再依赖
+    /api/settings）；后端 1034 + 前端 516 全量测试通过。
+
 - **dsh 引擎任务重复开发直至失败（任务 #198 #199 根因，issue #119）**：
   需求「使用 deepseek harness SDK 作为执行引擎开发的时候，为什么会重复
   开发任务，直至显示失败，但是 claude code 作为执行引擎就不会」。诊断

@@ -292,3 +292,106 @@ class TestNormalizeIssueUpdatedAt:
         assert normalize_issue_updated_at("") == ""
         assert normalize_issue_updated_at("not-a-time") == ""
         assert normalize_issue_updated_at("2026-13-45T99:99:99Z") == ""
+
+
+# ---- issue #120：tasks.engine（执行引擎按任务落库）----
+
+V6_SCHEMA = """
+CREATE TABLE tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_id INTEGER NOT NULL,
+  project_id INTEGER NOT NULL,
+  issue_iid INTEGER NOT NULL,
+  issue_title TEXT,
+  status TEXT NOT NULL,
+  attempt_count INTEGER DEFAULT 0,
+  triggered_by TEXT,
+  exit_code INTEGER,
+  error_message TEXT,
+  error_detail TEXT,
+  log_path TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  claude_session_id TEXT,
+  hermes_history TEXT,
+  commit_sha TEXT,
+  dsh_session_id TEXT,
+  issue_labels TEXT DEFAULT '[]',
+  issue_updated_at TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+
+def _build_v6_db(path) -> None:
+    """手工构造 v6 旧库（含断点续跑会话字段、无 engine 列）。"""
+    conn = sqlite3.connect(str(path))
+    conn.executescript(V6_SCHEMA)
+    conn.execute(
+        """INSERT INTO tasks (repo_id, project_id, issue_iid, issue_title, status,
+                              claude_session_id, hermes_history, dsh_session_id)
+           VALUES (1, 42, 1, 'claude任务', 'succeeded', 'claude-sess-1', NULL, NULL),
+                  (1, 42, 2, 'hermes任务', 'succeeded', NULL, '{"session_id":"h1"}', NULL),
+                  (1, 42, 3, 'dsh任务', 'succeeded', NULL, NULL, 'dsh-sess-1'),
+                  (1, 42, 4, '混合任务', 'succeeded', 'claude-old', NULL, 'dsh-sess-2'),
+                  (1, 42, 5, '无会话任务', 'failed', NULL, NULL, NULL)""")
+    conn.commit()
+    conn.close()
+
+
+class TestMigrateTaskEngine:
+    """v7 迁移（issue #120）：tasks 新增 engine 列并回填历史执行引擎。
+
+    概览页 issue 右边栏「执行引擎」行此前读取全局 worker.engine（issue
+    #118），全局引擎切换后所有 issue 都显示新引擎；修复后按任务落库的
+    engine 展示。本测试覆盖旧库补列、新库建列与存量回填。
+    """
+
+    def test_old_db_gets_engine_column(self, tmp_path):
+        """旧库初始化后补出 engine 列。"""
+        path = tmp_path / "old.db"
+        _build_v6_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "engine" in cols, "旧库应补出 engine 列"
+
+    def test_new_db_has_engine_column(self, tmp_path):
+        """新库建表语句应直接含 engine 列（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "engine" in cols
+
+    def test_legacy_rows_backfilled_by_session_fields(self, tmp_path):
+        """迁移回填：按断点续跑会话字段推断历史执行引擎。"""
+        path = tmp_path / "old.db"
+        _build_v6_db(path)
+        db = Database(str(path))
+        by_iid = {r["issue_iid"]: r for r in db.list_tasks(limit=100)}
+        assert by_iid[1]["engine"] == "claude", "claude_session_id → claude"
+        assert by_iid[2]["engine"] == "hermes", "hermes_history → hermes"
+        assert by_iid[3]["engine"] == "dsh", "dsh_session_id → dsh"
+        # 多会话字段并存 → dsh 优先（同一任务实际只可能跑过一种引擎）
+        assert by_iid[4]["engine"] == "dsh"
+        # 无任何会话字段 → 保持空串（前端回退全局引擎展示）
+        assert by_iid[5]["engine"] == ""
+
+    def test_set_task_status_accepts_engine(self, tmp_path):
+        """set_task_status 支持写入 engine（执行器按任务落库）。"""
+        db = Database(str(tmp_path / "e.db"))
+        db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo_id = db.get_repo_by_project_id(42)["id"]
+        task_id = db.create_task(repo_id, 42, 7, "标题")
+        db.set_task_status(task_id, None, engine="dsh")
+        assert db.get_task(task_id)["engine"] == "dsh"
+
+    def test_finish_task_accepts_engine(self, tmp_path):
+        """finish_task 条件更新也支持 engine 字段（白名单一致）。"""
+        db = Database(str(tmp_path / "f.db"))
+        db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo_id = db.get_repo_by_project_id(42)["id"]
+        task_id = db.create_task(repo_id, 42, 7, "标题")
+        db.set_task_status(task_id, "running")
+        assert db.finish_task(task_id, "succeeded", engine="hermes")
+        assert db.get_task(task_id)["engine"] == "hermes"

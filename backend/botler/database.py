@@ -39,7 +39,7 @@ DEFAULT_PRIORITY = 100
 # set_task_status / finish_task 可写的附加字段白名单
 _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
-                "hermes_history", "commit_sha", "dsh_session_id"}
+                "hermes_history", "commit_sha", "dsh_session_id", "engine"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   hermes_history TEXT,
   issue_labels TEXT DEFAULT '[]',
   issue_updated_at TEXT DEFAULT '',
+  engine TEXT DEFAULT '',
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -218,6 +219,23 @@ class Database:
             if "issue_updated_at" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN issue_updated_at TEXT DEFAULT ''")
             conn.execute("PRAGMA user_version = 6")
+        if ver < 7:
+            # issue #120：执行引擎按任务落库——概览页 issue 右边栏「执行
+            # 引擎」行按该 issue 最近任务实际使用的引擎展示，而非全局
+            # worker.engine（全局引擎切换后历史 issue 不再误显新引擎）。
+            # 存量任务回填：按断点续跑会话字段推断历史引擎（同一任务
+            # 只可能跑过一种引擎，dsh > hermes > claude 优先级兜底）。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "engine" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN engine TEXT DEFAULT ''")
+            conn.execute(
+                """UPDATE tasks SET engine = CASE
+                     WHEN dsh_session_id IS NOT NULL AND dsh_session_id != '' THEN 'dsh'
+                     WHEN hermes_history IS NOT NULL AND hermes_history != '' THEN 'hermes'
+                     WHEN claude_session_id IS NOT NULL AND claude_session_id != '' THEN 'claude'
+                     ELSE engine END
+                   WHERE engine IS NULL OR engine = ''""")
+            conn.execute("PRAGMA user_version = 7")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。

@@ -328,6 +328,39 @@ class TestRunTaskSuccessCriteria:
         assert task["error_message"] == "Claude Code 报告无法解决该 issue"
         assert task["attempt_count"] == 1
 
+    # ---- issue #120：执行引擎按任务落库（概览页右边栏按 issue 展示
+    # 实际执行引擎，而非全局 worker.engine）----
+
+    def test_run_task_persists_engine(self, executor, monkeypatch, tmp_path):
+        """claude 引擎任务执行时把 engine 落库（默认配置）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "开发完成，已推送代码"},
+                            ensure_ascii=False)
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=lambda *a: (0, output), issue_state="opened")
+
+        executor.run_task(task_id)
+
+        assert db.get_task(task_id)["engine"] == "claude"
+
+    def test_run_task_persists_engine_dsh(self, executor, monkeypatch, tmp_path):
+        """dsh 引擎任务执行时同样把 engine 落库（非默认引擎路径）。"""
+        executor.config.get().engine = "dsh"
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"final_response": "已修复并推送",
+                             "finish_reason": "completed",
+                             "session_id": "dsh-sess-1"}, ensure_ascii=False)
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=lambda *a: (0, output), issue_state="opened")
+
+        executor.run_task(task_id)
+
+        assert db.get_task(task_id)["engine"] == "dsh"
+
 
 # ---- issue #8 会话断点续跑 ----
 

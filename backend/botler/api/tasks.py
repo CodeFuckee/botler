@@ -76,6 +76,9 @@ def _task_to_dict(row, repo: dict | None = None) -> dict:
         "error_message": row["error_message"],
         "error_detail": detail,
         "resumed": bool(row["claude_session_id"]),  # 会话断点续跑标记（issue #8）
+        # issue #120：执行引擎按任务落库——任务页/概览页展示该任务实际
+        # 使用的引擎（claude / hermes / dsh；未执行或旧任务可能为空串）
+        "engine": row["engine"] or "",
         "commit_sha": row["commit_sha"],
         "commit_url": _commit_url(repo_url, row["commit_sha"]),  # issue #19
         "log_path": row["log_path"],
