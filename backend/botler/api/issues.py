@@ -53,6 +53,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from ..database import normalize_issue_updated_at
 from ..gitlab_client import GitLabError
 from .pipelines import _commit_time_utc, _repo_client
 
@@ -270,6 +271,72 @@ def close_issue(request: Request, project_id: int, iid: int):
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
     clear_issue_cache()
     return {"ok": True, "state": "closed"}
+
+
+@router.post("/{project_id}/{iid}/retry")
+def retry_issue(request: Request, project_id: int, iid: int):
+    """重新执行 issue 对应的任务（issue #117：概览页右边栏「重试」按钮）。
+
+    定位仓库：按 GitLab project_id 匹配「已启用」仓库（不存在/未启用
+    → 404，与关闭/详情接口一致）；客户端选择与聚合一致（per-repo
+    token 优先，回退全局 bot token）。动作语义：
+    - 该 issue 已有活跃任务（queued/running/retrying）→ 409（防重复
+      执行，与任务页手动重试的冲突判定一致）；
+    - 最近任务为 failed/interrupted → 复用该任务记录重试（重置
+      queued 重新入队，保留 claude 会话断点续跑）；
+    - 无任务记录或最近任务已终态成功（如 bot-failed 标签残留但任务
+      实际已完成）→ 新建任务入队（triggered_by=manual，记录 issue
+      标签/更新时间供调度器按优先级排序）。
+    成功后清空概览缓存，前端刷新列表即可看到 issue 进入「运行中」组。
+    错误映射：GitLab 404（issue 不存在）→ 404；GitLab 其他错误与
+    网络错误 → 502。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    # 并发防重：已有活跃任务（排队/执行/重试中）不允许再次重试
+    active = c.db.find_active_task(project_id, iid)
+    if active is not None:
+        raise HTTPException(409, "该 issue 已有任务在执行中，无法重试")
+    latest = c.db.find_latest_task(project_id, iid)
+    # 最近任务为 failed/interrupted → 复用任务记录重试（与任务页手动
+    # 重试一致：清空失败字段、保留断点续跑会话）
+    if latest is not None and latest["status"] in ("failed", "interrupted"):
+        result = c.db.retry_task(latest["id"])
+        if result == "conflict":
+            raise HTTPException(409, "该 issue 已有任务在执行中，无法重试")
+        if result != "ok":
+            raise HTTPException(400, f"任务重试失败（{result}）")
+        # issue #69：清除历史停止请求残留，避免 worker 领取时被打回 interrupted
+        c.executor.clear_stop_request(latest["id"])
+        c.scheduler.enqueue(latest["id"])
+        clear_issue_cache()
+        return {"task_id": latest["id"], "status": "queued", "mode": "retried"}
+    # 无失败任务可重试（无记录 / 最近任务已终态成功）→ 新建任务入队，
+    # 拉取 issue 标题与标签（与对账补入队的入队字段一致）
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        issue = client.get_issue(project_id, iid)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "issue 不存在") from e
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    task_id = c.db.create_task(
+        row["id"], project_id, iid,
+        issue.get("title") or f"issue #{iid}",
+        triggered_by="manual",
+        issue_labels=issue.get("labels") or [],
+        issue_updated_at=normalize_issue_updated_at(issue.get("updated_at")))
+    if task_id is None:
+        # 竞态：创建期间出现活跃任务（极端并发），按冲突处理
+        raise HTTPException(409, "该 issue 已有任务在执行中，无法重试")
+    c.scheduler.enqueue(task_id)
+    clear_issue_cache()
+    return {"task_id": task_id, "status": "queued", "mode": "created"}
 
 
 # ---- issue #108：概览页右边栏标记编辑 ----

@@ -12,6 +12,11 @@
 // system 标志分区展示；覆盖加载中/加载失败重试/空占位/旧数据缺
 // project_id 等边界。
 //
+// issue #117：失败任务（带 bot-failed 标签且无 bot-done）右上角增加
+// 「重试」按钮——二次确认后调用后端重新执行该 issue 的任务（复用最近
+// 失败任务或新建任务入队），成功后通知父组件刷新开放 issue 列表（该
+// issue 即将进入「运行中」组）。
+//
 // issue #108：标签行增加「编辑标记」功能——编辑态加载项目标记池
 // （GET /api/issues/{project_id}/labels，checkbox 多选、当前标记
 // 预勾选、池外当前标记仍可取消勾选移除），保存时 diff 出 add/
@@ -33,6 +38,22 @@ import Markdown from './Markdown.jsx'
 export const ISSUE_STATE_META = {
   opened: { label: '开放', cls: 'status-running' },
   closed: { label: '已关闭', cls: 'status-interrupted' },
+}
+
+// 失败任务判定（issue #117）：issue 带 bot-failed 标签且无 bot-done。
+// 与概览列表分组判定一致（botStatusKey：bot-done 优先级高于 bot-failed
+// ——失败后重试成功两标签并存时视为成功，不再显示重试按钮）。labels
+// 元素可能缺 name 或非对象（旧缓存/异常数据），逐一防御
+export function isFailedTask(issue) {
+  const labels = issue && issue.labels
+  if (!Array.isArray(labels)) return false
+  let hasFailed = false
+  for (const l of labels) {
+    const name = l && typeof l === 'object' ? l.name : null
+    if (name === 'bot-done') return false
+    if (name === 'bot-failed') hasFailed = true
+  }
+  return hasFailed
 }
 
 // Esc 键判定（纯函数导出，便于测试）
@@ -66,10 +87,16 @@ export function NoteAvatar({ note }) {
 }
 
 export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
-                                      onLabelsUpdated }) {
+                                      onLabelsUpdated, running = false, onRetried }) {
   const [closing, setClosing] = useState(false) // 关闭请求进行中（按钮禁用）
   const [closed, setClosed] = useState(false)   // 本次会话关闭成功标记
   const [closeErr, setCloseErr] = useState('')  // 关闭失败的错误信息
+  // issue #117：重试状态——retrying 请求中（按钮禁用）、retried 本次会话
+  // 重试成功标记（按钮消失防重复点击）、retryErr 失败错误、retryMsg 成功提示
+  const [retrying, setRetrying] = useState(false)
+  const [retried, setRetried] = useState(false)
+  const [retryErr, setRetryErr] = useState('')
+  const [retryMsg, setRetryMsg] = useState('')
   // issue #97：评论与活动（notes 为 null 表示加载中；detailErr
   // 非空表示加载失败，两个区块共用错误横幅 + 重试按钮）
   const [notes, setNotes] = useState(null)
@@ -155,6 +182,28 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
       setCloseErr(e.message || '关闭失败')
     } finally {
       setClosing(false)
+    }
+  }
+
+  // 重试失败任务（issue #117）：二次确认后调用后端重新执行该 issue 的
+  // 任务（复用最近失败任务或新建任务入队）。成功后本地标记 retried
+  // （按钮消失防重复点击）、显示成功提示并通知父组件刷新开放列表
+  // （该 issue 即将进入「运行中」组）；失败保留按钮可重试。
+  async function handleRetry() {
+    const confirmText = '确定要重新执行该 issue 的任务吗？任务将重新入队执行。'
+    if (!(await confirmDialog({ message: confirmText }))) return
+    setRetrying(true)
+    setRetryErr('')
+    setRetryMsg('')
+    try {
+      const d = await api.post(`/api/issues/${i.project_id}/${i.iid}/retry`)
+      setRetried(true)
+      setRetryMsg(`任务 #${d.task_id} 已重新入队，开始重试`)
+      onRetried?.()
+    } catch (e) {
+      setRetryErr(e.message || '重试失败')
+    } finally {
+      setRetrying(false)
     }
   }
 
@@ -301,6 +350,16 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                 {closing ? '关闭中…' : '关闭 issue'}
               </button>
             )}
+            {/* issue #117：失败任务（bot-failed 且无 bot-done）显示重试按钮；
+                重试成功后本地标记 retried 隐藏；任务正在运行（running）时
+                不显示（重试中该 issue 已进入「运行中」组） */}
+            {isFailedTask(i) && !running && !retried && (
+              <button className="btn btn-primary" onClick={handleRetry}
+                      disabled={retrying}
+                      title="重新执行该 issue 的任务">
+                {retrying ? '重试中…' : '重试'}
+              </button>
+            )}
             <a className="btn" href={i.web_url} target="_blank" rel="noreferrer"
                title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
             <button className="btn modal-close" onClick={onClose} title="关闭"
@@ -308,6 +367,11 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
           </span>
         </div>
         {closeErr && <div className="issue-drawer-error" role="alert">{closeErr}</div>}
+        {retryErr && <div className="issue-drawer-error" role="alert">{retryErr}</div>}
+        {retryMsg && (
+          <div className="alert alert-ok" role="status"
+               onClick={() => setRetryMsg('')}>{retryMsg}</div>
+        )}
         <table className="table kv">
           <tbody>
             <tr><th>仓库</th><td>{repoName || '—'}</td></tr>

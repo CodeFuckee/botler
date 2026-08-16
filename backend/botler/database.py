@@ -440,6 +440,18 @@ class Database:
                    AND status IN ('queued','running','retrying')""",
                 (project_id, issue_iid)).fetchone()
 
+    def find_latest_task(self, project_id: int, issue_iid: int) -> sqlite3.Row | None:
+        """该 issue 最近一次的任务记录（issue #117：概览页重试按钮用）。
+
+        按任务 id 倒序取最新一条（id 递增即创建先后，同 issue 可能因
+        重新指派/对账补入队存在多条任务记录）；无记录返回 None。
+        """
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT * FROM tasks WHERE project_id=? AND issue_iid=?
+                   ORDER BY id DESC LIMIT 1""",
+                (project_id, issue_iid)).fetchone()
+
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:
         """更新任务状态及附加字段（attempt_count / exit_code / error_message /
         error_detail / log_path / started_at / finished_at / claude_session_id /

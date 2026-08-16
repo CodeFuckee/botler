@@ -324,6 +324,7 @@ export default function Overview() {
                                   <button type="button" className="issue-link"
                                           onClick={() => setSelectedIssue({
                                             issue: i, repoName: r.repo_name,
+                                            running,
                                           })}
                                           title="查看 issue 详情">
                                     <span className="issue-iid">#{i.iid}</span>
@@ -512,9 +513,11 @@ export default function Overview() {
           列表卡片标记即时同步） */}
       {selectedIssue && (
         <IssueDrawer issue={selectedIssue.issue} repoName={selectedIssue.repoName}
+                     running={selectedIssue.running}
                      onClose={() => setSelectedIssue(null)}
                      onIssueClosed={() => loadIssues()}
-                     onLabelsUpdated={() => loadIssues()} />
+                     onLabelsUpdated={() => loadIssues()}
+                     onRetried={() => loadIssues()} />
       )}
 
       {/* issue #92：添加 issue 弹窗——创建成功后关闭并立即刷新列表 */}

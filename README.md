@@ -219,6 +219,7 @@ GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录
 GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/文本/工具调用/结果逐事件实时可见；终态任务连接后回放历史事件，见实时输出功能）
 GET    /api/issues/overview           已启用仓库开放 issue 聚合（10s 缓存，issue #64）
 POST   /api/issues/{project_id}/{iid}/close   关闭指定 issue（概览页右边栏「关闭 issue」按钮，issue #94）
+POST   /api/issues/{project_id}/{iid}/retry   重新执行 issue 对应的任务（概览页右边栏「重试」按钮：复用最近失败/中断任务或新建任务入队，issue #117）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）

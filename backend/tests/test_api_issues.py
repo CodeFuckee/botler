@@ -11,6 +11,7 @@
 - 每仓库最多取 100 条（limit），防止大仓库翻页打爆 GitLab API。
 """
 
+import json
 import time
 from types import SimpleNamespace
 
@@ -36,6 +37,28 @@ claude: {}
 templates: {}
 repos: []
 """
+
+
+class StubScheduler:
+    """调度器桩（issue #117）：记录 enqueue 调用，供重试端点断言入队。"""
+
+    def __init__(self):
+        self.enqueued: list[int] = []
+
+    def enqueue(self, task_id: int) -> bool:
+        self.enqueued.append(task_id)
+        return True
+
+
+class StubExecutor:
+    """执行器桩（issue #117）：记录 clear_stop_request 调用（issue #69
+    停止请求残留清理由任务页手动重试沿用，issue 级重试一并清理）。"""
+
+    def __init__(self):
+        self.cleared_stop: list[int] = []
+
+    def clear_stop_request(self, task_id: int) -> None:
+        self.cleared_stop.append(task_id)
 
 
 class StubGitLab:
@@ -81,6 +104,12 @@ class StubGitLab:
         self.notes_by_issue: dict[tuple[int, int], list[dict]] = {}
         self.fail_notes_errors: dict[tuple[int, int], Exception] = {}
         self.notes_calls: list[tuple[int, int, int | None]] = []
+        # issue #117：get_issue 桩——issue_by_key 按 (project_id, iid)
+        # 配置返回对象；fail_get_issue_errors 注入异常（None 表示成功）；
+        # get_issue_calls 记录 (project_id, iid) 调用参数
+        self.issue_by_key: dict[tuple[int, int], dict] = {}
+        self.fail_get_issue_errors: dict[tuple[int, int], Exception] = {}
+        self.get_issue_calls: list[tuple[int, int]] = []
 
     def list_project_members(self, project_id):
         """项目成员查询（issue #92）：按 project_id 配置，可故障注入。"""
@@ -165,6 +194,20 @@ class StubGitLab:
         # 模拟真实 GitLabClient._paged 的 limit 截断契约
         return items[:limit] if limit is not None else items
 
+    def get_issue(self, project_id, iid):
+        """单 issue 查询桩（issue #117：重试新建任务时拉取标题/标签）：
+        按 (project_id, iid) 配置，可故障注入、记录调用参数。"""
+        self.get_issue_calls.append((project_id, iid))
+        err = self.fail_get_issue_errors.get((project_id, iid))
+        if err is not None:
+            raise err
+        return dict(self.issue_by_key.get((project_id, iid), {
+            "iid": iid, "title": f"issue #{iid}", "state": "opened",
+            "labels": [], "updated_at": None, "web_url": None,
+            "description": None, "author": None, "milestone": None,
+            "assignees": [], "user_notes_count": 0,
+        }))
+
 
 def make_issue(iid: int, title: str,
                updated_at: str = "2026-08-14T10:00:00.000+08:00",
@@ -203,7 +246,8 @@ def api_app(tmp_path):
     db = Database(str(tmp_path / "test.db"))
     stub = StubGitLab()
     ctx = SimpleNamespace(config=config, db=db, gitlab=stub,
-                          config_path=str(config_path))
+                          config_path=str(config_path),
+                          scheduler=StubScheduler(), executor=StubExecutor())
     app = FastAPI()
     app.state.ctx = ctx
     app.include_router(api_router)
@@ -891,6 +935,186 @@ class TestCloseIssue:
         pairs = [(r["repo_name"], it.get("project_id"))
                  for r in resp.json()["repos"] for it in r["issues"]]
         assert pairs == [("demo", 42), ("other", 7)]
+
+
+# ---- issue #117：概览页右边栏重试按钮 ----
+
+class TestRetryIssue:
+    """POST /api/issues/{project_id}/{iid}/retry：概览页右边栏「重试」按钮。
+
+    语义：按 project_id+iid 定位该 issue 的任务——
+    - 已有活跃任务（queued/running/retrying）→ 409（防重复执行）；
+    - 最近任务为 failed/interrupted → 复用任务记录重试（重置 queued
+      入队，与任务页手动重试一致，保留断点续跑）；
+    - 无任务记录或最近任务已终态成功 → 新建任务入队（triggered_by=
+      manual，记录 issue 标签/更新时间供调度器排序）。
+    仓库定位/客户端选择/缓存清理与关闭接口一致；GitLab 404 → 404、
+    其他错误与网络错误 → 502。
+    """
+
+    @staticmethod
+    def _mk_repo(db, project_id=42, name="demo", enabled=True) -> int:
+        return _add_repo(db, project_id=project_id, name=name, enabled=enabled)
+
+    @staticmethod
+    def _mk_task(db, repo_id, iid=64, status="failed", **fields) -> int:
+        task_id = db.create_task(repo_id, 42, iid, f"任务 {iid}",
+                                 triggered_by="webhook")
+        db.set_task_status(task_id, status, **fields)
+        return task_id
+
+    def test_retry_failed_task_requeues(self, client):
+        """最近任务为 failed → 复用任务记录重试：重置 queued、triggered_by
+        标记 manual（与任务页手动重试一致），不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        repo_id = self._mk_repo(db)
+        tid = self._mk_task(db, repo_id, status="failed", error_message="原因")
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"task_id": tid, "status": "queued", "mode": "retried"}
+        row = db.get_task(tid)
+        assert row["status"] == "queued"
+        assert row["triggered_by"] == "manual"
+        assert row["error_message"] is None, "失败原因应清空"
+        assert stub.get_issue_calls == [], "重试既有任务不应拉取 issue"
+
+    def test_retry_enqueues_and_clears_stop_request(self, client):
+        """重试成功后任务重新入队；历史停止请求残留一并清除（issue #69，
+        与任务页手动重试链路一致）。"""
+        tc, stub, db, _ = client
+        repo_id = self._mk_repo(db)
+        tid = self._mk_task(db, repo_id, status="interrupted",
+                            error_message="用户手动停止")
+        ctx = tc.app.state.ctx
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 200
+        assert ctx.scheduler.enqueued == [tid], "重试任务应重新入队"
+        assert ctx.executor.cleared_stop == [tid], "应清除历史停止请求残留"
+
+    def test_retry_no_task_creates_new(self, client):
+        """无任务记录（如 bot-failed 标签手动补打）→ 新建任务入队，
+        标题/标签/更新时间取自 GitLab issue。"""
+        tc, stub, db, _ = client
+        repo_id = self._mk_repo(db)
+        stub.issue_by_key = {(42, 64): make_issue(
+            64, "重试我", updated_at="2026-08-14T18:30:00.000+08:00",
+            labels=["feature", "bot-failed"])}
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["mode"] == "created"
+        assert body["status"] == "queued"
+        assert stub.get_issue_calls == [(42, 64)]
+        row = db.get_task(body["task_id"])
+        assert row is not None
+        assert row["issue_title"] == "重试我"
+        assert row["triggered_by"] == "manual"
+        assert row["issue_updated_at"] == "2026-08-14 10:30:00",             "issue 更新时间应归一化为 UTC 无后缀（+08:00 → UTC）"
+        assert set(json.loads(row["issue_labels"])) == {"feature", "bot-failed"}
+        assert tc.app.state.ctx.scheduler.enqueued == [body["task_id"]],             "新建任务应重新入队"
+        assert db.count_tasks(repo_id=repo_id) == 1
+
+    def test_retry_latest_succeeded_creates_new(self, client):
+        """最近任务已终态成功（bot-failed 标签残留但任务实际成功）→
+        新建任务重新执行（用户显式点击重试）。"""
+        tc, stub, db, _ = client
+        repo_id = self._mk_repo(db)
+        self._mk_task(db, repo_id, status="succeeded")
+        stub.issue_by_key = {(42, 64): make_issue(64, "重试我")}
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 200
+        assert resp.json()["mode"] == "created"
+        assert db.count_tasks(repo_id=repo_id) == 2, "应新建任务而非复用成功任务"
+
+    def test_retry_active_task_conflict(self, client):
+        """已有活跃任务（排队/执行/重试中）→ 409，不改动任何任务。"""
+        tc, stub, db, _ = client
+        repo_id = self._mk_repo(db)
+        active_id = self._mk_task(db, repo_id, status="running")
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 409
+        assert "执行中" in resp.json()["detail"]
+        assert db.get_task(active_id)["status"] == "running", "冲突时任务保持原状"
+        assert tc.app.state.ctx.scheduler.enqueued == []
+        assert stub.get_issue_calls == []
+
+    def test_retry_repo_not_found(self, client):
+        """GitLab project_id 无对应启用仓库 → 404，不触碰 GitLab/任务表。"""
+        tc, stub, db, _ = client
+        self._mk_repo(db, project_id=42)
+
+        resp = tc.post("/api/issues/999/64/retry")
+
+        assert resp.status_code == 404
+        assert "仓库" in resp.json()["detail"]
+        assert stub.get_issue_calls == []
+
+    def test_retry_repo_disabled(self, client):
+        """仓库未启用 → 404（与概览聚合只聚合启用仓库一致）。"""
+        tc, stub, db, _ = client
+        self._mk_repo(db, enabled=False)
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 404
+        assert stub.get_issue_calls == []
+
+    def test_retry_issue_missing(self, client):
+        """新建任务路径下 GitLab 返回 404（issue 不存在）→ 404。"""
+        tc, stub, db, _ = client
+        self._mk_repo(db)
+        stub.fail_get_issue_errors[(42, 64)] = GitLabError(
+            "404 Not Found", status_code=404)
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 404
+        assert "不存在" in resp.json()["detail"]
+
+    def test_retry_gitlab_server_error(self, client):
+        """GitLab 上游 5xx → 502，不假装成功。"""
+        tc, stub, db, _ = client
+        self._mk_repo(db)
+        stub.fail_get_issue_errors[(42, 64)] = GitLabError(
+            "500 Internal Server Error", status_code=500)
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 502
+
+    def test_retry_network_error(self, client):
+        """网络错误（httpx.HTTPError，per-repo host 不可达）→ 502。"""
+        tc, stub, db, _ = client
+        self._mk_repo(db)
+        stub.fail_get_issue_errors[(42, 64)] = httpx.HTTPError("connect timeout")
+
+        resp = tc.post("/api/issues/42/64/retry")
+
+        assert resp.status_code == 502
+
+    def test_retry_clears_overview_cache(self, client):
+        """重试成功后清空概览缓存：下次 overview 重新聚合、新数据生效。"""
+        tc, stub, db, _ = client
+        self._mk_repo(db)
+        stub.issues_by_project = {42: [make_issue(64, "x", labels=["bot-failed"])]}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+        # 10 秒 TTL 内命中缓存：改数据后仍返回旧结果（证明缓存生效）
+        stub.issues_by_project = {42: []}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+
+        tc.post("/api/issues/42/64/retry")
+
+        assert tc.get("/api/issues/overview").json()["total"] == 0,             "重试成功后缓存应被清空"
 
 
 # ---- issue #92：概览页添加 Issue ----

@@ -154,6 +154,41 @@ class TestRetryTaskDb:
         assert db.retry_task(tid) == "bad_state"
 
 
+# ---- database.find_latest_task（issue #117：概览页重试按钮定位任务）----
+
+class TestFindLatestTask:
+    """db 层：按 project_id+iid 取最近一条任务记录。"""
+
+    def test_returns_latest_task(self, db):
+        """同 issue 多条任务记录时返回 id 最大（最新创建）的一条。"""
+        repo_id = _mk_repo(db)
+        # create_task 对同 issue 活跃任务去重，首条先落终态再建第二条
+        first = db.create_task(repo_id, 42, 1, "任务 1", triggered_by="webhook")
+        db.set_task_status(first, "succeeded")
+        second = db.create_task(repo_id, 42, 1, "任务 1", triggered_by="reconcile")
+        assert second is not None, "前置条件：首条任务终态后允许新建"
+
+        row = db.find_latest_task(42, 1)
+
+        assert row is not None and row["id"] == second, "应返回最新创建的任务"
+        assert row["triggered_by"] == "reconcile"
+        assert first != second
+
+    def test_no_task_returns_none(self, db):
+        """该 issue 无任何任务记录 → None。"""
+        repo_id = _mk_repo(db)
+        db.create_task(repo_id, 42, 1, "任务 1")
+        assert db.find_latest_task(42, 999) is None
+        assert db.find_latest_task(999, 1) is None
+
+    def test_returns_terminal_status_task(self, db):
+        """终态任务（failed/succeeded）同样返回，供重试端点判定。"""
+        repo_id = _mk_repo(db)
+        tid = _mk_task(db, repo_id, issue_iid=1, status="failed")
+        assert db.find_latest_task(42, 1)["id"] == tid
+        assert db.find_latest_task(42, 1)["status"] == "failed"
+
+
 # ---- API POST /api/tasks/{task_id}/retry ----
 
 @pytest.fixture
