@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, STATUS_META, shortSha, fmtTime, fmtAgo, summarizeToolInput } from '../api.js'
-import IssueDrawer from '../components/IssueDrawer.jsx'
+import IssueDrawer, { ENGINE_META } from '../components/IssueDrawer.jsx'
 import AddIssueModal from '../components/AddIssueModal.jsx'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
 export const LIVE_STATUSES = ['running', 'retrying']
 
-// 每张卡片保留的实时输出行数（超出丢弃最旧行，防止卡片无限增长）
+// 每个任务信息块保留的实时输出行数（issue #114：任务信息随 issue 项
+// 展示，超出丢弃最旧行，防止任务块无限增长）
 export const MAX_CARD_LINES = 40
 
 // 任务列表轮询间隔
@@ -83,6 +84,34 @@ export function runningIssueKeys(tasks) {
     keys.add(`${t.repo_id}:${t.issue_iid}`)
   }
   return keys
+}
+
+// ---- issue #114：正在运行任务的信息整合进开放 issue 列表 ----
+// 概览页独立任务板块删除后，任务信息（状态徽章 / 执行引擎 / 实时
+// 输出）随对应 issue 项展示。匹配规则与 runningIssueKeys 一致：
+// LIVE_STATUSES 状态 + repo_id:issue_iid 键字符串化，跨仓库同 iid
+// 不误匹配。同一 issue 可能有多条任务记录（如重试产生的新任务），
+// 按任务列表原始顺序全部返回，逐一渲染任务信息块
+export function tasksForIssue(tasks, repoId, iid) {
+  if (!Array.isArray(tasks)) return []
+  const key = `${repoId}:${iid}`
+  const out = []
+  for (const t of tasks) {
+    if (!t || !LIVE_STATUSES.includes(t.status)) continue
+    if (t.repo_id == null || t.issue_iid == null) continue
+    if (`${t.repo_id}:${t.issue_iid}` === key) out.push(t)
+  }
+  return out
+}
+
+// 任务执行引擎展示文案：空值/空白返回空串（旧任务未落库引擎时不
+// 展示引擎信息）；未知值原样兜底。与 IssueDrawer.engineDisplay 同
+// 文案源（ENGINE_META），但列表数据来自任务轮询、无加载态
+export function engineLabel(raw) {
+  const v = raw == null ? '' : String(raw).trim()
+  if (!v) return ''
+  const key = v.toLowerCase()
+  return (ENGINE_META[key] || {}).label || v
 }
 
 // 提取 issue 的 bot 终态键（done/failed），无则 null。labels 元素可能
@@ -238,10 +267,11 @@ export default function Overview() {
     return () => clearInterval(t)
   }, [loadIssues])
 
-  // 各卡片实时输出自动滚动到底部（SSR 测试环境无 document 时跳过）
+  // 各任务信息块实时输出自动滚动到底部（issue #114：任务板块删除后
+  // 任务块迁入开放 issue 列表项内；SSR 测试环境无 document 时跳过）
   useEffect(() => {
     if (typeof document === 'undefined') return
-    document.querySelectorAll('.overview-log').forEach((el) => {
+    document.querySelectorAll('.issue-task-log').forEach((el) => {
       el.scrollTop = el.scrollHeight
     })
   }, [liveLines])
@@ -251,12 +281,18 @@ export default function Overview() {
       <h1>概览</h1>
 
       {/* issue #68：板块排序调整——开放 Issue 置于页面顶部，
-          其后依次为运行中任务、CI/CD 流水线 */}
+          其后为 CI/CD 流水线。
+          issue #114：独立任务板块删除，正在运行任务的信息（状态徽章
+          / 引擎 / 实时输出）整合进本板块 running 组的 issue 项内，
+          任务轮询错误一并在此展示 */}
       <section className="issues-section">
         <h2>开放 Issue</h2>
-        <p className="muted">已启用仓库的开放 issue，按仓库优先级排序，正在运行的 issue 置顶展示（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
+        <p className="muted">已启用仓库的开放 issue，按仓库优先级排序，正在运行的 issue 置顶展示任务执行详情（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
         {issueError && (
           <div className="alert alert-error" onClick={() => setIssueError('')}>{issueError}</div>
+        )}
+        {error && (
+          <div className="alert alert-error" onClick={() => setError('')}>{error}</div>
         )}
         {issueErrors.length > 0 && (
           <div className="alert alert-error">
@@ -319,7 +355,10 @@ export default function Overview() {
                                 {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
                                     标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数
                                     issue #85：标题改为按钮——点击打开右边栏，不再直接
-                                    跳转 GitLab（跳转统一走右边栏右上角按钮） */}
+                                    跳转 GitLab（跳转统一走右边栏右上角按钮）
+                                    issue #114：issue 行（issue-row）与任务信息块
+                                    纵向排布——任务板块删除后任务详情随项展示 */}
+                                <div className="issue-row">
                                 <div className="issue-main">
                                   <button type="button" className="issue-link"
                                           onClick={() => setSelectedIssue({
@@ -383,6 +422,35 @@ export default function Overview() {
                                     </span>
                                   )}
                                 </div>
+                                </div>
+                                {/* issue #114：正在运行任务的信息块——任务板块已删除，
+                                    任务状态徽章 / 执行引擎 / 实时输出随对应 issue 项
+                                    展示（同一 issue 的多条任务记录逐一渲染） */}
+                                {running && tasksForIssue(tasks, r.repo_id, i.iid).map((t) => {
+                                  const meta = STATUS_META[t.status]
+                                    || { label: t.status || '—', cls: '' }
+                                  const lines = liveLines[t.id] || []
+                                  const eng = engineLabel(t.engine)
+                                  return (
+                                    <div key={t.id} className="issue-task">
+                                      <div className="issue-task-head">
+                                        <span className={'badge ' + meta.cls}>{meta.label}</span>
+                                        {eng && (
+                                          <span className="issue-task-engine"
+                                                title="任务执行引擎">{eng}</span>
+                                        )}
+                                        {t.issue_url ? (
+                                          <a className="issue-task-link" href={t.issue_url}
+                                             target="_blank" rel="noreferrer"
+                                             title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
+                                        ) : null}
+                                      </div>
+                                      <pre className="log-view issue-task-log">
+                                        {lines.join('\n') || '（暂无输出）'}
+                                      </pre>
+                                    </div>
+                                  )
+                                })}
                               </li>
                             )
                           })}
@@ -397,48 +465,9 @@ export default function Overview() {
         )}
       </section>
 
-      {/* HIG 布局（issue #111）：任务板块补 section 容器 + h2 标题，
-          与「开放 Issue」「CI/CD 流水线」两板块结构对齐，视觉层级一致 */}
-      <section className="tasks-section">
-        <h2>正在执行的任务</h2>
-        <p className="muted">每 {OVERVIEW_POLL_MS / 1000} 秒自动刷新</p>
-        {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
-        {tasks.length === 0 && !error ? (
-          <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true">⚙️</span>
-            <p className="muted">当前没有正在执行的任务</p>
-          </div>
-        ) : (
-          <div className="overview-grid">
-            {tasks.map((t) => {
-              const lines = liveLines[t.id] || []
-              const meta = STATUS_META[t.status] || { label: t.status, cls: '' }
-              return (
-                <div key={t.id} className="card overview-card">
-                  <div className="overview-card-head">
-                    <span className="overview-repo" title="仓库">📁 {t.repo_name || '（已删除）'}</span>
-                    <span className={'badge ' + meta.cls}>{meta.label}</span>
-                  </div>
-                  <div className="overview-issue">
-                    {t.issue_url ? (
-                      <a href={t.issue_url} target="_blank" rel="noreferrer"
-                         title="在 GitLab 中打开 issue">
-                        #{t.issue_iid} — {t.issue_title || '—'}
-                      </a>
-                    ) : (
-                      <span>#{t.issue_iid} — {t.issue_title || '—'}</span>
-                    )}
-                  </div>
-                  <pre className="log-view overview-log">
-                    {lines.join('\n') || '（暂无输出）'}
-                  </pre>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </section>
-
+      {/* issue #114：独立任务板块已删除——正在运行任务的信息（状态徽章
+          / 执行引擎 / 实时输出）整合进上方开放 Issue 板块 running 组的
+          issue 项内，任务轮询与 SSE 数据流保持不变 */}
       <section className="pipelines-section">
         <h2>CI/CD 流水线</h2>
         <p className="muted">所有配置仓库的最新流水线（每 {PIPELINE_POLL_MS / 1000} 秒自动刷新）</p>

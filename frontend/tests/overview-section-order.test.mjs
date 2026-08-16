@@ -1,16 +1,18 @@
-// 复现测试（issue #68）：概览页板块排序不符合需求。
+// 复现测试（issue #68，issue #114 适配）：概览页板块排序。
 //
-// 需求：「开放 issue 排在顶部，然后到运行中任务，然后到流水线」。
-// 当前（修复前）：运行中任务 → CI/CD 流水线 → 开放 Issue，issue 板块在最底部。
-// 期望（修复后）：开放 Issue → 运行中任务 → CI/CD 流水线。
+// 原需求（issue #68）：「开放 issue 排在顶部，然后到运行中任务，然后到流水线」。
+// issue #114 起独立任务板块删除，任务信息整合进「开放 Issue」板块
+// running 组的 issue 项内，概览页仅剩两个板块：开放 Issue → CI/CD 流水线。
+// 期望（修复后）：开放 Issue → CI/CD 流水线（任务信息随 running 组
+// 位于开放 Issue 板块内）。
 //
 // 断言分两层：
-// 1. 源码级：Overview.jsx 中三个板块的 JSX 起始位置顺序
-//    （issues-section < 任务区 < pipelines-section）；
+// 1. 源码级：Overview.jsx 中两板块的 JSX 起始位置顺序
+//    （issues-section < pipelines-section），且不再有任务板块标记；
 // 2. 渲染级：mock 三个数据接口后渲染组件，序列化渲染树文本，
-//    断言「开放 Issue」标题位于任务卡（或任务空状态文案）之前、
-//    任务区位于「CI/CD 流水线」标题之前；覆盖空板块边界
-//    （无任务 / 无流水线 / 无 issue 时顺序依然成立、页面不崩溃）。
+//    断言「开放 Issue」标题位于「CI/CD 流水线」标题之前；覆盖
+//    有/无运行中任务、无流水线、无 issue 等边界（顺序依然成立、
+//    页面不崩溃）。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -36,32 +38,28 @@ after(() => vite.close())
 
 // ---- 源码级断言 ----
 
-// 板块在源码中的起始位置：
-// 任务区 = 活跃任务卡片网格（overview-grid），流水线 = pipelines-section，
-// 开放 issue = issues-section。三个板块应是三个互不重叠的区间。
+// 板块在源码中的起始位置：流水线 = pipelines-section，
+// 开放 issue = issues-section。两板块应是互不重叠的区间。
 function sectionPositions(src) {
-  const task = src.indexOf('className="overview-grid"')
   const pipes = src.indexOf('className="pipelines-section"')
   const issues = src.indexOf('className="issues-section"')
-  return { task, pipes, issues }
+  return { pipes, issues }
 }
 
-test('源码：三个板块标记均存在', () => {
-  const { task, pipes, issues } = sectionPositions(overview)
-  assert.ok(task >= 0, '应存在任务卡片网格（overview-grid）')
+test('源码：两板块标记均存在，独立任务板块已删除（issue #114）', () => {
+  const { pipes, issues } = sectionPositions(overview)
   assert.ok(pipes >= 0, '应存在流水线板块（pipelines-section）')
   assert.ok(issues >= 0, '应存在开放 issue 板块（issues-section）')
+  assert.ok(!overview.includes('tasks-section'), '不应再有独立任务板块（tasks-section）')
+  assert.ok(!overview.includes('className="overview-grid"'),
+            '不应再有任务卡片网格（overview-grid）')
 })
 
-test('源码：开放 issue 板块位于任务区与流水线板块之前（issue #68 需求顺序）', () => {
-  const { task, pipes, issues } = sectionPositions(overview)
+test('源码：开放 issue 板块位于流水线板块之前（issue #68 需求顺序）', () => {
+  const { pipes, issues } = sectionPositions(overview)
   assert.ok(
-    issues < task,
-    `开放 issue 板块（源码偏移 ${issues}）应位于任务区（偏移 ${task}）之前`,
-  )
-  assert.ok(
-    task < pipes,
-    `任务区（源码偏移 ${task}）应位于流水线板块（偏移 ${pipes}）之前`,
+    issues < pipes,
+    `开放 issue 板块（源码偏移 ${issues}）应位于流水线板块（偏移 ${pipes}）之前`,
   )
 })
 
@@ -94,14 +92,15 @@ async function renderText(impl, waitMs = 30) {
   }
 }
 
-// 三个接口各返回一条数据（正常路径）
+// 三个接口各返回一条数据（正常路径，任务命中 issue → running 组任务块）
 async function implAllPopulated(pathname) {
   if (pathname.startsWith('/api/tasks?')) {
     return {
       tasks: [{
         id: 11, repo_id: 1, repo_name: 'shipyard', project_id: 42,
-        issue_iid: 7, issue_title: '修复登录问题', status: 'running',
-        issue_url: 'https://gitlab.example.com/group/shipyard/-/issues/7',
+        issue_iid: 9, issue_title: '数据备份失败', status: 'running',
+        issue_url: 'https://gitlab.example.com/group/shipyard/-/issues/9',
+        engine: '',
       }],
       total: 1, stats: { running: 1 },
     }
@@ -128,24 +127,24 @@ async function implAllPopulated(pathname) {
   throw new Error('unexpected ' + pathname)
 }
 
-test('渲染：三板块均有时自上而下为 开放 Issue → 运行中任务 → CI/CD 流水线', async () => {
+test('渲染：开放 Issue 板块位于 CI/CD 流水线板块之前（issue #114 起仅两板块）', async () => {
   const r = await renderText(implAllPopulated)
   try {
     assert.equal(r.renderError, null, `渲染抛错：${r.renderError?.message || r.renderError}`)
     const issueTitle = r.pos('开放 Issue')
-    const taskMark = r.pos('shipyard') // 任务卡中的仓库名
     const pipeTitle = r.pos('CI/CD 流水线')
     assert.ok(issueTitle >= 0, '应渲染「开放 Issue」板块标题')
-    assert.ok(taskMark >= 0, '应渲染任务卡（仓库名 shipyard）')
     assert.ok(pipeTitle >= 0, '应渲染「CI/CD 流水线」板块标题')
-    assert.ok(issueTitle < taskMark, '「开放 Issue」板块应位于任务卡之前')
-    assert.ok(taskMark < pipeTitle, '任务卡应位于「CI/CD 流水线」板块之前')
+    assert.ok(issueTitle < pipeTitle, '「开放 Issue」板块应位于「CI/CD 流水线」板块之前')
+    // issue #114：任务板块删除，任务信息进入开放 issue 列表项内
+    assert.ok(!r.text.includes('正在执行的任务'), '不应渲染独立任务板块标题')
+    assert.ok(r.text.includes('⚙️ 运行中'), '运行中任务应在开放 issue 板块内展示')
   } finally {
     await r.unmount()
   }
 })
 
-test('渲染：无运行中任务时，开放 Issue 仍在顶部、任务空状态居中、流水线在底部', async () => {
+test('渲染：无运行中任务时开放 Issue 仍在顶部、流水线在底部', async () => {
   const r = await renderText(async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) return { tasks: [], total: 0, stats: {} }
     if (pathname === '/api/pipelines/overview') {
@@ -162,42 +161,50 @@ test('渲染：无运行中任务时，开放 Issue 仍在顶部、任务空状�
   try {
     assert.equal(r.renderError, null)
     const issueTitle = r.pos('开放 Issue')
-    const taskEmpty = r.pos('当前没有正在执行的任务')
     const pipeTitle = r.pos('CI/CD 流水线')
-    assert.ok(issueTitle >= 0 && taskEmpty >= 0 && pipeTitle >= 0,
-              `三个板块标记都应存在（issue=${issueTitle} task=${taskEmpty} pipe=${pipeTitle}）`)
-    assert.ok(issueTitle < taskEmpty, '「开放 Issue」应位于任务空状态文案之前')
-    assert.ok(taskEmpty < pipeTitle, '任务空状态文案应位于「CI/CD 流水线」之前')
+    assert.ok(issueTitle >= 0 && pipeTitle >= 0,
+              `两板块标记都应存在（issue=${issueTitle} pipe=${pipeTitle}）`)
+    assert.ok(issueTitle < pipeTitle, '「开放 Issue」应位于「CI/CD 流水线」之前')
   } finally {
     await r.unmount()
   }
 })
 
-test('渲染：无流水线时任务区仍在流水线空状态文案之前', async () => {
+test('渲染：无流水线时开放 Issue 板块正常展示运行中任务（流水线空状态垫底）', async () => {
   const r = await renderText(async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) {
       return {
         tasks: [{ id: 11, repo_id: 1, repo_name: 'shipyard', project_id: 42,
-                  issue_iid: 7, issue_title: 't', status: 'running', issue_url: null }],
+                  issue_iid: 7, issue_title: 't', status: 'running',
+                  issue_url: null, engine: '' }],
         total: 1, stats: { running: 1 },
       }
     }
     if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
-    if (pathname === '/api/issues/overview') return { repos: [], errors: [] }
+    if (pathname === '/api/issues/overview') {
+      return {
+        repos: [{ repo_id: 1, repo_name: 'shipyard', priority: 1,
+                  issues: [{ iid: 7, title: 't', web_url: 'https://x', updated_at: null }] }],
+        errors: [],
+      }
+    }
     throw new Error('unexpected ' + pathname)
   })
   try {
     assert.equal(r.renderError, null)
-    const taskMark = r.pos('shipyard')
+    const issueTitle = r.pos('开放 Issue')
+    const runningGroup = r.pos('⚙️ 运行中')
     const pipeEmpty = r.pos('暂无流水线')
-    assert.ok(taskMark >= 0 && pipeEmpty >= 0, '任务卡与流水线空状态文案都应存在')
-    assert.ok(taskMark < pipeEmpty, '任务卡应位于「暂无流水线」之前')
+    assert.ok(issueTitle >= 0 && runningGroup >= 0 && pipeEmpty >= 0,
+              '开放 Issue 板块、运行中组与流水线空状态都应存在')
+    assert.ok(issueTitle < runningGroup, '「开放 Issue」标题应位于运行中组之前')
+    assert.ok(runningGroup < pipeEmpty, '运行中组（开放 issue 板块内）应位于流水线空状态之前')
   } finally {
     await r.unmount()
   }
 })
 
-test('渲染：无开放 issue 时板块空状态文案仍在最顶部（任务与流水线之前）', async () => {
+test('渲染：无开放 issue 时板块空状态文案仍在最顶部（流水线之前）', async () => {
   const r = await renderText(async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) {
       return {
@@ -213,12 +220,10 @@ test('渲染：无开放 issue 时板块空状态文案仍在最顶部（任务�
   try {
     assert.equal(r.renderError, null)
     const issueEmpty = r.pos('暂无开放 issue')
-    const taskMark = r.pos('shipyard')
     const pipeTitle = r.pos('CI/CD 流水线')
-    assert.ok(issueEmpty >= 0 && taskMark >= 0 && pipeTitle >= 0,
-              `三个板块标记都应存在（issue=${issueEmpty} task=${taskMark} pipe=${pipeTitle}）`)
-    assert.ok(issueEmpty < taskMark, '「暂无开放 issue」应位于任务卡之前（板块在顶部）')
-    assert.ok(taskMark < pipeTitle, '任务卡应位于「CI/CD 流水线」之前')
+    assert.ok(issueEmpty >= 0 && pipeTitle >= 0,
+              `两板块标记都应存在（issue=${issueEmpty} pipe=${pipeTitle}）`)
+    assert.ok(issueEmpty < pipeTitle, '「暂无开放 issue」应位于「CI/CD 流水线」之前')
   } finally {
     await r.unmount()
   }
@@ -233,7 +238,7 @@ test('渲染：三个数据接口全部失败时页面不崩溃、板块标题�
     const issueTitle = r.pos('开放 Issue')
     const pipeTitle = r.pos('CI/CD 流水线')
     const errMark = r.pos('网络错误')
-    assert.ok(issueTitle >= 0 && pipeTitle >= 0, '失败时三个板块骨架仍应渲染')
+    assert.ok(issueTitle >= 0 && pipeTitle >= 0, '失败时两板块骨架仍应渲染')
     assert.ok(errMark >= 0, '应显示 API 错误信息')
     assert.ok(issueTitle < pipeTitle, '「开放 Issue」板块仍应位于「CI/CD 流水线」之前')
   } finally {

@@ -1,16 +1,15 @@
-// 概览页面测试（issue #32）：导航入口位于「仓库」tab 左边，页面实时展示
-// 正在执行的任务卡片（仓库名 / 对应 issue / agent 实时输出），多任务时以
-// 自适应列数网格排布（issue #107：auto-fit + minmax(280px, 1fr)，与开放
-// Issue 板块列数统一，宽屏 4 列一行，超过自动换行、页面滚动）。
+// 概览页面测试（issue #32，issue #114 适配）：导航入口位于「仓库」tab
+// 左边，页面实时展示正在执行的任务。issue #114 起独立任务板块删除，
+// 任务信息（状态徽章 / 引擎 / 实时输出）整合进「开放 Issue」板块
+// running 组的 issue 项内展示，数据流不变。
 //
 // 断言：
 // 1. App.jsx 顶部导航「概览」位于「仓库」之前，/overview 路由已注册；
 // 2. Overview 页轮询 GET /api/tasks?status=running,retrying 拉活跃任务，
-//    每个任务轮询 /api/tasks/{id}/execution 拉实时输出增量（字节偏移续读）；
-// 3. 卡片渲染仓库名、issue 链接（task.issue_url）、实时输出尾部；
-// 4. 无任务时显示空状态；任务字段缺失兜底（已删除 / — / 暂无输出）；
-// 5. styles.css 提供 overview-grid 网格样式（issue #107：auto-fit 自适应
-//    列数，与开放 Issue 板块统一）；
+//    每个任务订阅 SSE 事件流拉实时输出（issue-task-log 展示）；
+// 3. 运行中 issue 项内渲染任务状态徽章与实时输出尾部；
+// 4. 无任务时概览页无任务信息块；任务字段缺失兜底（暂无输出）；
+// 5. styles.css 提供 issue-task 任务块样式（含日志截尾高度限制）；
 // 6. trimLogTail 纯函数边界（空数组 / 超长截尾 / 非法 max）。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -68,39 +67,31 @@ test('概览页一次拉取全部正在执行的任务（running+retrying）', (
   assert.match(overview, /setInterval/, '列表应定时轮询刷新')
 })
 
-test('每个任务卡片独立订阅事件流（SSE 实时输出）', () => {
+test('每个活跃任务独立订阅事件流（SSE 实时输出）', () => {
   assert.match(
     overview,
     /openTaskEventStream\(t\.id/,
-    '每个任务卡片应独立订阅事件流 openTaskEventStream(t.id)',
+    '每个任务应独立订阅事件流 openTaskEventStream(t.id)',
   )
-  assert.match(overview, /eventToLine/, '事件应经 eventToLine 转单行文本进卡片')
-  assert.match(overview, /trimLogTail/, '日志行应经 trimLogTail 截尾防卡片无限增长')
+  assert.match(overview, /eventToLine/, '事件应经 eventToLine 转单行文本进任务块')
+  assert.match(overview, /trimLogTail/, '日志行应经 trimLogTail 截尾防任务块无限增长')
 })
 
-test('卡片渲染仓库名、issue 链接与状态徽标', () => {
-  assert.match(overview, /repo_name/, '卡片应显示仓库名')
-  assert.match(overview, /（已删除）/, '仓库已删除时应显示占位符')
-  assert.match(overview, /issue_url/, '卡片应使用 issue_url')
-  assert.match(overview, /href=\{t\.issue_url\}/, '有链接时应渲染为可点击的 <a>')
-  assert.match(overview, /issue_title/, '卡片应显示 issue 标题')
-  assert.match(overview, /STATUS_META/, '卡片应显示任务状态徽标')
-})
-
-test('空状态与日志缺失兜底文案', () => {
-  assert.match(overview, /当前没有正在执行的任务/, '无活跃任务时应显示空状态文案')
+test('运行中 issue 项内渲染任务状态徽标与实时输出（issue #114 整合）', () => {
+  assert.match(overview, /STATUS_META/, '任务块应显示任务状态徽标')
+  assert.match(overview, /issue-task-log/, '任务块应渲染实时输出日志')
   assert.match(overview, /（暂无输出）/, '日志为空时应显示占位文案')
+  // issue #114：任务板块已删除，任务信息在开放 issue 列表项内展示
+  assert.ok(!overview.includes('当前没有正在执行的任务'),
+            '独立任务板块空状态文案应已删除')
+  assert.ok(!overview.includes('tasks-section'), '独立任务板块容器应已删除')
 })
 
-test('styles.css 提供概览网格样式（auto-fit 自适应列数，与开放 Issue 板块统一）', () => {
-  assert.match(styles, /\.overview-grid\s*\{/, '应有 .overview-grid 容器样式')
-  assert.match(
-    styles,
-    /\.overview-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(\d+px,\s*1fr\)\)/s,
-    '网格应为 auto-fit 自适应列数（issue #107：与开放 Issue 板块列数统一）',
-  )
-  assert.match(styles, /\.overview-card\s*\{/, '应有 .overview-card 卡片样式')
-  assert.match(styles, /\.overview-log\s*\{/, '应有 .overview-log 实时输出样式')
+test('styles.css 提供 issue 项内任务块样式（含日志高度限制）', () => {
+  assert.match(styles, /\.issue-task\s*\{/, '应有 .issue-task 任务块样式')
+  assert.match(styles, /\.issue-task-log\s*\{/, '应有 .issue-task-log 实时输出样式')
+  assert.match(styles, /\.issue-task-log\s*\{[^}]*max-height/s,
+               '任务块日志应有最大高度限制防无限增长')
 })
 
 // ---- trimLogTail 纯函数边界 ----
@@ -127,7 +118,7 @@ test('trimLogTail：非法输入兜底（null / 非数组 / 非法 max）', () =
 
 // ---- 组件渲染（api.get 通过 vite 模块实例 mock）----
 
-// 事件流连接 mock（SSE 实时输出）：记录实例，可手动 emit 事件驱动卡片渲染
+// 事件流连接 mock（SSE 实时输出）：记录实例，可手动 emit 事件驱动任务块渲染
 class FakeEventSource {
   static instances = []
   constructor(url) {
@@ -160,7 +151,7 @@ async function renderAndSettle(impl, waitMs = 30) {
   return { renderer, renderError }
 }
 
-test('渲染正在执行任务的卡片：仓库名、issue 链接、实时输出', async () => {
+test('渲染运行中任务信息：issue 项内展示状态徽章与实时输出', async () => {
   FakeEventSource.instances = []
   const saved = globalThis.EventSource
   globalThis.EventSource = FakeEventSource
@@ -171,8 +162,22 @@ test('渲染正在执行任务的卡片：仓库名、issue 链接、实时输�
           id: 11, repo_id: 1, repo_name: 'shipyard', project_id: 42,
           issue_iid: 7, issue_title: '修复登录问题', status: 'running',
           issue_url: 'https://gitlab.example.com/group/shipyard/-/issues/7',
+          engine: 'claude',
         }],
         total: 1, stats: { running: 1 },
+      }
+    }
+    if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
+    if (pathname === '/api/issues/overview') {
+      return {
+        repos: [{
+          repo_id: 1, repo_name: 'shipyard', priority: 1,
+          issues: [{ iid: 7, title: '修复登录问题',
+                     updated_at: '2026-08-14T12:00:00+08:00',
+                     web_url: 'https://gitlab.example.com/group/shipyard/-/issues/7',
+                     labels: [] }],
+        }],
+        errors: [], total: 1,
       }
     }
     throw new Error('unexpected ' + pathname)
@@ -181,31 +186,27 @@ test('渲染正在执行任务的卡片：仓库名、issue 链接、实时输�
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
     const root = renderer.root
     const text = JSON.stringify(renderer.toJSON())
-    assert.ok(text.includes('shipyard'), '卡片应显示仓库名 shipyard')
-    assert.ok(text.includes('修复登录问题'), '卡片应显示 issue 标题')
-    // JSX 中 `#{t.issue_iid} — {title}` 是分离的文本节点（'#', 7, ' — ', title），
-    // 拼接所有 span/a 文本后应组成完整的 issue 描述（有链接时渲染为 <a>）
-    const issueText = root
-      .findAll((n) => n.type === 'span' || n.type === 'a')
-      .flatMap((n) => n.props.children || [])
-      .join('')
-    assert.ok(issueText.includes('#7'), `卡片应显示 issue 编号（实际文本: ${issueText}）`)
+    assert.ok(text.includes('执行中'), '任务块应显示任务状态徽章')
+    assert.ok(text.includes('修复登录问题'), 'issue 项应显示 issue 标题')
+    // 任务信息块只渲染在运行中的 issue 项内
+    assert.equal(root.findAll((n) => n.props.className === 'issue-task').length, 1,
+                 '运行中 issue 项内应有一个任务块')
     // 每个活跃任务一个事件流连接（SSE 实时输出）
     assert.equal(FakeEventSource.instances.length, 1, '应为任务创建事件流连接')
     assert.equal(FakeEventSource.instances[0].url, '/api/tasks/11/events',
                  '事件流应订阅 /api/tasks/{id}/events')
-    // 推送事件 → 卡片实时输出
+    // 推送事件 → 任务块实时输出
     await TestRenderer.act(async () => {
       FakeEventSource.instances[0].emit({ seq: 1, kind: 'text', text: '正在分析 bug…' })
       FakeEventSource.instances[0].emit({ seq: 2, kind: 'tool', tool: 'Bash',
                                           input: { command: 'git status' } })
     })
     const textAfter = JSON.stringify(renderer.toJSON())
-    assert.ok(textAfter.includes('正在分析 bug…'), '卡片应显示 agent 实时输出')
-    assert.ok(textAfter.includes('Bash'), '卡片应显示工具调用事件')
+    assert.ok(textAfter.includes('正在分析 bug…'), '任务块应显示 agent 实时输出')
+    assert.ok(textAfter.includes('Bash'), '任务块应显示工具调用事件')
     assert.ok(
       root.findAllByType('a').some((a) => a.props.href?.includes('/-/issues/7')),
-      'issue 应渲染为指向 GitLab 的链接',
+      '任务块应保留指向 GitLab 的 issue 链接',
     )
   } finally {
     await TestRenderer.act(() => renderer.unmount())
@@ -214,29 +215,52 @@ test('渲染正在执行任务的卡片：仓库名、issue 链接、实时输�
   }
 })
 
-test('无正在执行任务时显示空状态', async () => {
-  const { renderer, renderError } = await renderAndSettle(async () => ({
-    tasks: [], total: 0, stats: {},
-  }))
+test('无正在执行任务时概览页无任务信息块', async () => {
+  const { renderer, renderError } = await renderAndSettle(async (pathname) => {
+    if (pathname.startsWith('/api/tasks?')) return { tasks: [], total: 0, stats: {} }
+    if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
+    if (pathname === '/api/issues/overview') {
+      return {
+        repos: [{
+          repo_id: 1, repo_name: 'shipyard', priority: 1,
+          issues: [{ iid: 7, title: 'x', updated_at: null, web_url: null, labels: [] }],
+        }],
+        errors: [], total: 1,
+      }
+    }
+    throw new Error('unexpected ' + pathname)
+  })
   try {
     assert.equal(renderError, null)
-    const text = JSON.stringify(renderer.toJSON())
-    assert.ok(text.includes('当前没有正在执行的任务'), '应显示空状态文案')
+    const root = renderer.root
+    assert.equal(root.findAll((n) => n.props.className === 'issue-task').length, 0,
+                 '无活跃任务时不得渲染任务块')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
   }
 })
 
-test('任务字段缺失兜底：仓库已删除 / 无标题 / 无输出', async () => {
+test('任务字段缺失兜底：无日志输出显示占位文案', async () => {
   const { renderer, renderError } = await renderAndSettle(async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) {
       return {
         tasks: [{
           id: 12, repo_id: 1, repo_name: null, project_id: 42,
-          issue_iid: 9, issue_title: null, status: 'retrying', issue_url: null,
+          issue_iid: 9, issue_title: null, status: 'retrying',
+          issue_url: null, engine: '',
         }],
         total: 1, stats: { retrying: 1 },
+      }
+    }
+    if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
+    if (pathname === '/api/issues/overview') {
+      return {
+        repos: [{
+          repo_id: 1, repo_name: 'shipyard', priority: 1,
+          issues: [{ iid: 9, title: null, updated_at: null, web_url: null, labels: [] }],
+        }],
+        errors: [], total: 1,
       }
     }
     return { status: 'retrying', log_offset: 0, log_delta: [], transcript: [] }
@@ -244,8 +268,8 @@ test('任务字段缺失兜底：仓库已删除 / 无标题 / 无输出', async
   try {
     assert.equal(renderError, null)
     const text = JSON.stringify(renderer.toJSON())
-    assert.ok(text.includes('（已删除）'), '仓库名缺失应显示占位')
     assert.ok(text.includes('（暂无输出）'), '日志为空应显示占位')
+    assert.ok(text.includes('重试中'), 'retrying 任务块应显示状态徽章')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

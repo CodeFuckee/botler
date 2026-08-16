@@ -216,15 +216,16 @@ test('Overview 空状态：图标 + 文案渲染（非裸文本，HIG 匠心/愉
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
     const root = renderer.root
-    // 三个板块空态均应渲染 .empty-state 容器（图标 + 文案结构）
+    // 两板块空态均应渲染 .empty-state 容器（图标 + 文案结构）。
+    // issue #114：独立任务板块删除后任务信息整合进开放 Issue 板块，
+    // 空态仅剩开放 Issue 与 CI/CD 流水线两处
     const emptyStates = root.findAll((n) => String(n.props.className || '').includes('empty-state'))
-    assert.equal(emptyStates.length, 3, '开放 Issue/运行任务/流水线三板块空态均应有 empty-state 容器')
+    assert.equal(emptyStates.length, 2, '开放 Issue/流水线两板块空态均应有 empty-state 容器')
     // 每个空态含图标（aria-hidden 装饰性）与文案
     const icons = root.findAll((n) => String(n.props.className || '').includes('empty-icon'))
-    assert.equal(icons.length, 3, '每个空态应有图标')
+    assert.equal(icons.length, 2, '每个空态应有图标')
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('暂无开放 issue'), '保留空态文案「暂无开放 issue」')
-    assert.ok(text.includes('当前没有正在执行的任务'), '保留空态文案「当前没有正在执行的任务」')
     assert.ok(text.includes('暂无流水线'), '保留空态文案「暂无流水线」')
   } finally {
     await TestRenderer.act(() => renderer.unmount())

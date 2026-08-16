@@ -105,6 +105,27 @@
 
 ### Added
 
+- **概览页开放 Issue 板块展示正在运行任务、删除独立任务板块（issue #114）**：
+  需求「概览页面删除，正在运行任务组件，现在开放issue组件页面也显示正在
+  运行的任务」。实现：
+  - **删除独立任务板块**：概览页移除「正在执行的任务」板块（任务卡片
+    网格），页面仅保留「开放 Issue」与「CI/CD 流水线」两板块；
+  - **任务信息整合进开放 issue 列表**：正在运行任务的信息（任务状态
+    徽章 / 执行引擎 / 实时输出日志）随「开放 Issue」板块 running 组
+    的对应 issue 项内展示——按 repo_id+issue_iid 匹配（与 #99/#101
+    高亮置顶同规则），新增 `tasksForIssue` / `engineLabel` 纯函数，
+    同一 issue 的多条任务记录逐一渲染任务块；任务轮询与 SSE 事件流
+    数据流保持不变，实时输出自动滚动同步迁入 issue 项内日志元素
+    （`.issue-task-log`），任务轮询错误并入开放 Issue 板块错误横幅；
+  - **样式**：styles.css 删除任务板块样式（overview-grid / overview-
+    card / tasks-section 等），新增 issue-row / issue-task 任务块样式
+    （左侧竖条与运行中高亮呼应）；
+  - **测试**：新增 overview-issue-task.test.mjs 14 用例（板块删除
+    源码断言 / tasksForIssue 边界 / 任务块渲染 / SSE 实时输出 / 多任务
+    / 跨仓库不误显 / 样式断言），适配 overview-page、overview-section-
+    order、hig-layout、overview-columns-unified、apple-hig 5 个既有
+    测试（三板块断言改为两板块）；后端 1034 + 前端 529 全量测试通过。
+
 - **概览页 issue 右边栏展示任务执行引擎类型（issue #118）**：
   需求「概览页面弹出的issue右边栏，显示任务执行引擎的类型」——概览页
   打开 issue 详情右边栏时，KV 表格新增「执行引擎」行，展示当前任务

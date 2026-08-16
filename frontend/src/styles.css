@@ -1232,58 +1232,6 @@ code {
   min-width: 160px;
 }
 
-/* ---- 概览页（issue #32）：正在执行任务卡片网格。
-   issue #107：列数与开放 Issue 板块统一（以开放 Issue 为标准）——
-   auto-fit + minmax(280px, 1fr)，宽屏下与开放 Issue 板块同为 4 列
-   一行；此前固定 3 列（repeat(3, 1fr)），与开放 Issue 板块列数不一致 */
-.overview-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: var(--space-3);
-  align-items: start;
-}
-.overview-card {
-  min-width: 0; /* 允许网格列收缩，长仓库名/日志可截断而非撑破卡片 */
-}
-.overview-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-}
-.overview-repo {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.overview-issue {
-  margin-bottom: var(--space-2);
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.overview-log {
-  max-height: 220px;
-  margin: 0;
-  font-size: 12px;
-  background: var(--bg);
-}
-
-/* ---- 概览页正在执行的任务板块（issue #32）----
-   HIG 布局（issue #111）：与开放 Issue / CI/CD 流水线板块结构对齐——
-   section 容器 + h2 标题 + muted 说明行，三板块视觉层级一致；
-   板块间距统一 var(--space-5) 节奏（8pt 网格，检查清单 #2/#4） */
-.tasks-section {
-  margin-top: var(--space-5);
-}
-.tasks-section h2 {
-  font-size: 16px;
-  margin: 0 0 var(--space-1);
-}
-
 /* ---- 概览页 CI/CD 流水线（issue #39）：每仓库一张卡，
    参考 GitLab CI/CD 阶段图：横向 stage 节点条 + 状态色 ---- */
 .pipelines-section {
@@ -1503,17 +1451,58 @@ code {
   margin: 0;
   padding: 0;
 }
+/* issue #114：列表项改为纵向排布（issue 行 + 任务信息块），原 flex
+   行布局下沉到 .issue-row（左列信息 + 右列元数据不变） */
 .issue-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--space-2);
   padding: var(--space-2) 0;
   border-top: 1px solid var(--border);
 }
 .issue-item:first-child {
   border-top: none;
   padding-top: 0;
+}
+.issue-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+/* issue #114：正在运行任务的信息块——任务板块删除后整合进
+   开放 issue 列表 running 组的 issue 项内（状态徽章/执行引擎/
+   实时输出），左侧竖条与运行中高亮呼应 */
+.issue-task {
+  margin-top: var(--space-2);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--primary);
+}
+.issue-task-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+.issue-task-engine {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.issue-task-link {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.issue-task-link:hover {
+  text-decoration: underline;
+}
+.issue-task-log {
+  max-height: 160px;
+  margin: 0;
+  font-size: 12px;
+  background: var(--bg);
 }
 /* issue #99：正在运行的 issue 高亮——浅蓝背景 + 左侧蓝色竖条，
    视觉上与任务板块的运行中徽章（status-running）同色系呼应 */

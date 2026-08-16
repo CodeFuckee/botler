@@ -4,9 +4,9 @@
 // 1. 8pt 网格：布局间距（padding/margin/gap）不出现随机像素值——
 //    内容外边距 token 化（--gutter：桌面 20pt / 窄屏 16pt 回落，对应
 //    HIG 通用数值速查「iOS 默认约 16pt、大屏 20pt」）；
-// 2. 视觉层次：概览页三大板块（开放 Issue / 正在执行的任务 / CI/CD
-//    流水线）结构对齐——都有 section 容器 + h2 标题（此前任务板块
-//    只有一个 muted 段落，与其他板块层级不一致）；
+// 2. 视觉层次：概览页两大板块（开放 Issue / CI/CD 流水线）结构对齐——
+//    都有 section 容器 + h2 标题（issue #114：独立任务板块删除，
+//    任务信息整合进开放 Issue 板块 running 组的 issue 项内）；
 // 3. 布局响应式：窗口缩放不截断不重叠——顶导航窄视口可横向滚动、
 //    设置页 kv 表格窄视口列宽降级、内容区外边距窄屏回落；
 // 4. 不在内容流里放全宽按钮：.btn 系列无 width:100% 规则；
@@ -102,17 +102,19 @@ test('styles.css：按钮/提示条/导航链接等控件间距落在 4px 网格
 
 // ---- 检查清单 #4：视觉层次（组件互相对齐，传达条理和层次）----
 
-test('源码：概览页「正在执行的任务」板块与另两板块同为 section + h2 结构', () => {
-  assert.ok(overviewSrc.includes('className="tasks-section"'),
-    '任务板块应有 tasks-section 容器（与 issues-section/pipelines-section 对齐）')
-  assert.ok(overviewSrc.includes('正在执行的任务'),
-    '任务板块应有「正在执行的任务」标题文案')
-  // h2 标题紧跟 section 开头（源码中 section 与 h2 相邻）
-  const m = overviewSrc.match(/className="tasks-section"[\s\S]{0,200}?<h2>/)
-  assert.ok(m, 'tasks-section 内应有 h2 板块标题')
+test('源码：概览页两板块同为 section + h2 结构，独立任务板块已删除（issue #114）', () => {
+  assert.ok(!overviewSrc.includes('tasks-section'),
+            '任务板块容器应已删除（任务信息整合进开放 Issue 板块）')
+  assert.ok(!overviewSrc.includes('<h2>正在执行的任务</h2>'),
+            '任务板块 h2 标题应已删除')
+  for (const section of ['issues-section', 'pipelines-section']) {
+    // h2 标题紧跟 section 开头（源码中 section 与 h2 相邻）
+    const m = overviewSrc.match(new RegExp(`className="${section}"[\\s\\S]{0,200}?<h2>`))
+    assert.ok(m, `${section} 内应有 h2 板块标题`)
+  }
 })
 
-test('渲染：概览页三板块 h2 标题齐全且自上而下为 开放 Issue → 正在执行的任务 → CI/CD 流水线', async () => {
+test('渲染：概览页两板块 h2 标题齐全且自上而下为 开放 Issue → CI/CD 流水线', async () => {
   mock.method(api, 'get', async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) return { tasks: [], total: 0, stats: {} }
     if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
@@ -132,22 +134,23 @@ test('渲染：概览页三板块 h2 标题齐全且自上而下为 开放 Issue
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
     const root = renderer.root
-    // 三个板块 h2 标题均渲染
+    // 两板块 h2 标题均渲染（issue #114：任务板块删除后仅剩两个板块）
     const h2s = root.findAll((n) => n.type === 'h2')
       .map((n) => String(n.children && n.children.join ? n.children.join('') : n.children))
-    for (const title of ['开放 Issue', '正在执行的任务', 'CI/CD 流水线']) {
+    for (const title of ['开放 Issue', 'CI/CD 流水线']) {
       assert.ok(h2s.some((t) => t === title), `应渲染板块 h2「${title}」（实际 h2：${h2s.join(' / ')}）`)
     }
+    assert.ok(!h2s.some((t) => t === '正在执行的任务'),
+              '独立任务板块标题不应再渲染')
     // 自上而下顺序（渲染树深度优先 = 视觉顺序）
     const text = JSON.stringify(renderer.toJSON())
     const issuePos = text.indexOf('开放 Issue')
-    const taskPos = text.indexOf('正在执行的任务')
     const pipePos = text.indexOf('CI/CD 流水线')
-    assert.ok(issuePos >= 0 && taskPos >= 0 && pipePos >= 0, '三个板块标题都应存在')
-    assert.ok(issuePos < taskPos, '「开放 Issue」应位于「正在执行的任务」之前')
-    assert.ok(taskPos < pipePos, '「正在执行的任务」应位于「CI/CD 流水线」之前')
-    // 任务板块 h2 样式与其他板块一致（styles.css 有同名规则）
-    assert.match(styles, /\.tasks-section h2\s*\{/, '.tasks-section h2 应有与另两板块一致的样式')
+    assert.ok(issuePos >= 0 && pipePos >= 0, '两板块标题都应存在')
+    assert.ok(issuePos < pipePos, '「开放 Issue」应位于「CI/CD 流水线」之前')
+    // 板块 h2 样式一致（styles.css 有同名规则）
+    assert.match(styles, /\.issues-section h2\s*\{/, '.issues-section h2 应有板块样式')
+    assert.match(styles, /\.pipelines-section h2\s*\{/, '.pipelines-section h2 应有板块样式')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
