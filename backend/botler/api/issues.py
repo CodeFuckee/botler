@@ -291,6 +291,16 @@ def _issue_edit_call(c, row, call):
         return call(owner)
     except GitLabError as e:
         if e.status_code in (401, 403):
+            # issue #133：403 且 GitLab 明确返回 insufficient_scope（token
+            # 缺 api scope，实测响应体 {"error":"insufficient_scope",...}）
+            # 时直接指明根因，避免用户反复重新保存同一只读 scope 的 token
+            # 仍持续 403；其余 401/403 保留原有通用提示（更新 token）
+            if e.status_code == 403 and "insufficient_scope" in str(e):
+                raise HTTPException(
+                    502,
+                    "概览页 issue 编辑 owner token 权限不足（403）：token 缺少 "
+                    "api scope（只读 scope 无法写评论/编辑 issue），请在设置页 "
+                    "重新保存勾选了 api scope 的 Owner GitLab Token") from e
             raise HTTPException(
                 502,
                 f"概览页 issue 编辑 owner token 失效（{e.status_code}）："

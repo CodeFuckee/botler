@@ -50,6 +50,9 @@ Reporter 角色）申请 token，从账号权限层面就杜绝越权使用。
 - 概览页 issue 编辑时 token 失效（401）或权限不足（403）：Botler 会拦截
   并提示更新 token，**不会**回退到 bot token（issue #132：回退会导致用户
   经概览页发布的评论/回复以 code01 身份发出）；
+- **保存时校验（issue #133）**：设置页保存 Owner Token 时会先调用 GitLab
+  校验 token 有效性并检查 scopes，**缺少 `api` scope 的 token 会被拒绝
+  保存**并提示重新生成——避免把不可用 token 存进配置后概览页编辑持续 403；
 - 任务侧（Agent 评论/打标签、对账补打终态标签）**绝不使用** Owner Token，
   始终以 bot 身份执行（issue #130：owner token 只允许概览页编辑使用）；
 - 到期后请按上述步骤重新申请并更新设置页的 token。
@@ -66,3 +69,18 @@ GitLab 的 PAT scope 最细粒度是 `read_api`（只读）与 `api`（完整 AP
 issue）会被拦截并提示先到设置页配置（issue #132：**不会**再以 code01 身份
 静默发布）；Agent 任务处理与对账不受影响（始终使用 bot 身份）。
 配置 Owner Token 后，概览页的 issue 编辑以你的身份（owner）执行。
+
+**Q：保存 Owner Token 时提示「缺少 api scope」/ 概览页编辑报「owner token
+权限不足（403）」怎么办？**
+这是 token 只勾了 `read_api` 等只读 scope、**缺 `api` scope** 导致的：
+GitLab 要求写操作（评论/回复/添加或关闭 issue/编辑标签）必须用 `api`
+scope，只读 scope 提交写操作会被拒绝（403 `insufficient_scope`）。
+请到 GitLab **用户设置 → Access Tokens** 重新生成 token，**Scopes 勾选
+`api`**（账号角色仍建议 Reporter 低权限），再回设置页保存。设置页保存时
+会立即校验 scopes，缺 `api` 的 token 无法保存成功（issue #133）。
+
+**Q：为什么不配置 Owner Token 会怎样？**
+（同上条）概览页的 issue 编辑会被拦截并提示先到设置页配置（issue #132：
+**不会**再以 code01 身份静默发布）；Agent 任务处理与对账不受影响（始终
+使用 bot 身份）。配置 Owner Token 后，概览页的 issue 编辑以你的身份
+（owner）执行。

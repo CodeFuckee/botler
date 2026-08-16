@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..config import KNOWN_FIELDS
+from ..gitlab_client import GitLabClient, GitLabError
 from ..labels import validate_label
 from ..templates import PLACEHOLDERS
 
@@ -244,6 +245,12 @@ def update_settings(request: Request, body: dict):
     gitlab_patch = body.get("gitlab")
     if gitlab_patch is not None:
         _validate_gitlab(gitlab_patch)
+        # issue #133：保存前校验真实提交的 owner token（掩码/空串 =
+        # 保持现有凭据，跳过校验不覆盖）；校验失败 400 拒绝且不落盘
+        token_val = gitlab_patch.get("owner_token")
+        if isinstance(token_val, str) and token_val.strip() \
+                and "*" not in token_val:
+            _validate_owner_token_scope(c.config.get(), token_val.strip())
         c.config.update_gitlab(gitlab_patch)
 
     return get_settings(request)
@@ -394,6 +401,59 @@ def _validate_notifications(patch: dict) -> None:
                 "queue_empty", "queue_no_work"):
         if key in patch and not isinstance(patch[key], bool):
             raise HTTPException(400, f"notifications.{key} 必须是布尔值")
+
+
+def _validate_owner_token_scope(cfg, token: str) -> None:
+    """保存前校验 Owner token（issue #133）：必须有效且含 api scope。
+
+    根因：GitLab REST 写操作（添加/回复评论、添加/关闭 issue、编辑标签）
+    要求 PAT 具备 api scope；只勾 read_api 等只读 scope 的 token 提交
+    写操作会被 GitLab 拒绝，403 响应体为
+    {"error":"insufficient_scope","error_description":"The request
+    requires higher privileges than provided by the access token."}。
+    此前设置页保存时不校验，不可用的 token 直接落盘，用户反复重新保存
+    后概览页编辑仍持续 403（issue #133 实测复现）。
+
+    这里在保存前调 /personal_access_tokens/self 校验有效性 + api scope：
+    - 401 → token 无效/已过期，400 拒绝；
+    - 403 → 连 scope 自检都被拒绝（必然缺 read_api，从而也缺 api），400 拒绝；
+    - 404 → 旧版 GitLab（< 15.7）无 self 端点，降级只校验 token 有效性；
+    - 有 self 端点但 scopes 不含 api → 400 拒绝并列出当前 scopes。
+    校验失败一律不落盘（update_gitlab 不执行），避免把不可用 token 存进
+    config.yaml。
+    """
+    client = GitLabClient(cfg.gitlab_url, token, verify_ssl=cfg.verify_ssl)
+    try:
+        info = client.get_personal_access_token_self()
+    except GitLabError as e:
+        if e.status_code == 404:
+            # 旧版 GitLab：降级为仅校验 token 有效性
+            try:
+                client.test_connection()
+            except GitLabError as e2:
+                raise HTTPException(
+                    400,
+                    f"Owner token 无效或已过期（{e2.status_code}）：请重新生成 "
+                    "GitLab Personal Access Token（glpat-xxxx）后保存") from e2
+            return
+        if e.status_code == 401:
+            raise HTTPException(
+                400, "Owner token 无效或已过期（401）：请重新生成 "
+                "GitLab Personal Access Token（glpat-xxxx）后保存") from e
+        if e.status_code == 403:
+            raise HTTPException(
+                400, "Owner token 缺少 api scope（GitLab 拒绝自检）：请在 "
+                "GitLab 用户设置 → Access Tokens 重新生成 token 并勾选 "
+                "api scope 后保存") from e
+        raise HTTPException(400, f"无法验证 Owner token：{e}") from e
+    scopes = info.get("scopes") or []
+    if "api" not in scopes:
+        raise HTTPException(
+            400,
+            "Owner token 缺少 api scope（当前 scopes：" + ("、".join(scopes) or "无")
+            + "）：只有 api scope 才能写评论/编辑 issue，read_api 等只读 "
+            "scope 不够。请在 GitLab 用户设置 → Access Tokens 重新生成 "
+            "token，Scopes 勾选 api 后保存")
 
 
 def _validate_gitlab(patch: dict) -> None:

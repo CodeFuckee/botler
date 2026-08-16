@@ -116,6 +116,18 @@ class GitLabClient:
 
     # ---- 认证与 bot 身份 ----
 
+    def get_personal_access_token_self(self) -> dict:
+        """当前 PAT 自身信息（issue #133：owner token 保存前校验用）。
+
+        GET /personal_access_tokens/self 返回当前 token 的 scopes、
+        expires_at 等（GitLab >= 15.7；只需 token 本身有效即可调用，
+        read_api 级 token 实测可返回）。旧版 GitLab 无此端点时抛 404，
+        由调用方降级为仅校验 token 有效性。
+        """
+        info = self._request("GET", "/personal_access_tokens/self")
+        assert isinstance(info, dict)
+        return info
+
     def test_connection(self) -> dict:
         """验证 token 有效性，返回当前用户信息。"""
         user = self._request("GET", "/user")

@@ -2403,3 +2403,56 @@ class TestIssueEditOwnerToken:
         assert resp.status_code == 502, resp.text
         assert "owner token" in resp.json()["detail"]
         assert stub.add_comment_calls == []
+
+    def test_comment_owner_403_insufficient_scope_hint(self, api_app, monkeypatch):
+        """issue #133：owner 403 且 GitLab 明确返回 insufficient_scope（token
+        缺 api scope，实测响应体）时，错误信息直接指明根因——而不是笼统的
+        「请在设置页更新 Owner GitLab Token」让用户反复重试（issue #133
+        用户配置只读 scope 的 token 后概览页评论/回复持续 403 的根因）。"""
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        from botler.api import issues as issues_mod
+
+        class OwnerStub:
+            def __init__(self, url, token, verify_ssl=True,
+                         webhook_base_url=None):
+                self.token = token
+
+            def add_comment(self, project_id, iid, body):
+                raise GitLabError(
+                    '权限不足（403）: {"error":"insufficient_scope",'
+                    '"error_description":"The request requires higher '
+                    'privileges than provided by the access token.",'
+                    '"scope":"ai_workflows api read_api"}', 403)
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", OwnerStub)
+        tc = TestClient(app)
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "测试评论"})
+        assert resp.status_code == 502, resp.text
+        assert "api scope" in resp.json()["detail"]
+        assert stub.add_comment_calls == []
+
+    def test_comment_owner_403_generic_keeps_hint(self, api_app, monkeypatch):
+        """issue #133：owner 403 无 insufficient_scope 特征时保留原有
+        通用提示（不影响既有文案的语义）。"""
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        from botler.api import issues as issues_mod
+
+        class OwnerStub:
+            def __init__(self, url, token, verify_ssl=True,
+                         webhook_base_url=None):
+                self.token = token
+
+            def add_comment(self, project_id, iid, body):
+                raise GitLabError("权限不足（403）: 403 Forbidden", 403)
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", OwnerStub)
+        tc = TestClient(app)
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "测试评论"})
+        assert resp.status_code == 502, resp.text
+        assert "owner token" in resp.json()["detail"]
+        assert "api scope" not in resp.json()["detail"], \
+            "通用 403 不应臆测为缺 api scope"

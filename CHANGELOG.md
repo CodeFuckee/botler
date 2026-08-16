@@ -103,6 +103,34 @@
 
 ### Fixed
 
+- **配置 Owner GitLab Token 后概览页评论/回复仍报「owner token 失效（403）」（issue #133）**：
+  需求「我配置了gitlab owner token，但是回复评论、添加评论的时候报错，概览页 issue 编辑
+  owner token 失效（403）：请在设置页更新 Owner GitLab Token 后重试」。诊断（部署日志
+  实测复现）：设置页保存 owner token 时**不做任何校验**，用户误将只勾了 `read_api` 等
+  只读 scope 的 PAT 保存进 config.yaml；GitLab REST 写操作（添加/回复评论、添加/关闭
+  issue、编辑标签）要求 token 具备 `api` scope，只读 token 提交写操作返回 403，响应体
+  `{"error":"insufficient_scope","error_description":"The request requires higher
+  privileges than provided by the access token."}`——用户反复重新保存同一只读 token，
+  概览页编辑持续 403 且错误提示笼统，无法定位根因。修复：
+  - 后端 `api/settings.py`：PUT /api/settings 保存**真实** owner token（掩码/空串 =
+    保持现有，跳过）前调用 GitLab `/personal_access_tokens/self` 校验有效性 + scopes：
+    401 → 「token 无效或已过期」400 拒绝；403 → 「缺少 api scope」400 拒绝；404（旧版
+    GitLab < 15.7 无 self 端点）→ 降级只校验 token 有效性；scopes 不含 `api` → 400
+    拒绝并列出当前 scopes、明确指引重新生成勾选 api；校验失败一律**不落盘**；
+  - 后端 `gitlab_client.py`：新增 `get_personal_access_token_self()`（self 端点封装）；
+  - 后端 `api/issues.py`：`_issue_edit_call` 对 owner 403 且 GitLab 返回
+    `insufficient_scope` 的响应直接提示「token 缺少 api scope（只读 scope 无法写评论/
+    编辑 issue），请在设置页重新保存勾选了 api scope 的 Owner GitLab Token」，其余
+    401/403 保留原通用提示；
+  - 文档：`docs/GitLab-Owner-Token-申请教程.md` 安全提示补充「保存时校验」，FAQ 新增
+    「缺少 api scope / 403 权限不足」诊断条目；
+  - **测试**：后端 `test_api_settings.py` 新增 `TestOwnerTokenSaveValidation` 5 用例
+    （缺 api scope 拒绝且不落盘、有效 token 正常保存、401 无效拒绝、掩码/空串保持
+    现有跳过校验、旧版 GitLab 降级放行）；`test_api_issues.py` 新增 2 用例
+    （insufficient_scope 403 提示 api scope、通用 403 保留原提示）；`test_owner_token.py`
+    既有保存用例补校验桩；后端 1117 全量测试通过。
+
+
 - **dsh 引擎事件流极其冗长：一句话拆成好多个单独字（issue #122）**：
   需求「使用 deepseek harness sdk 执行引擎时，事件流会变得极其冗长，
   因为一句话会拆成好多个单独字」。诊断：dsh 引擎（deepseek-harness

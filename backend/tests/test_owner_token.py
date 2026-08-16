@@ -61,6 +61,24 @@ repos: []
 """
 
 
+class _StubOwnerOkClient:
+    """owner token 保存校验桩（issue #133）：token 有效且含 api scope。
+
+    新增的保存前校验（PUT /api/settings 保存真实 owner token 时调
+    /personal_access_tokens/self 查 scopes）在单测中不能发真实网络
+    请求，此桩固定返回有效 + api scope。
+    """
+
+    def __init__(self, url, token, verify_ssl=True, webhook_base_url=None):
+        self.token = token
+
+    def get_personal_access_token_self(self):
+        return {"id": 1, "scopes": ["api", "read_api", "read_user"]}
+
+    def test_connection(self):
+        return {"id": 1, "username": "owner"}
+
+
 # ---- 配置与设置 API ----
 
 @pytest.fixture
@@ -83,8 +101,10 @@ class TestOwnerTokenSettingsAPI:
         data = tc.get("/api/settings").json()["gitlab"]
         assert data["owner_token_masked"] == ""
 
-    def test_put_owner_token_persists_and_masks(self, client):
+    def test_put_owner_token_persists_and_masks(self, client, monkeypatch):
         """PUT gitlab.owner_token 明文保存落盘，GET 只返回掩码。"""
+        from botler.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "GitLabClient", _StubOwnerOkClient)
         tc, tmp_path = client
         resp = tc.put("/api/settings",
                       json={"gitlab": {"owner_token": "glpat-owner-1234567890"}})
@@ -97,8 +117,10 @@ class TestOwnerTokenSettingsAPI:
         assert "glpat-owner-1234567890" in (tmp_path / "config.yaml").read_text(
             encoding="utf-8")
 
-    def test_put_masked_owner_token_not_overwritten(self, client):
+    def test_put_masked_owner_token_not_overwritten(self, client, monkeypatch):
         """回传掩码值（含 *）视为未修改，不覆盖真实凭据（与 sso.client_secret 同模式）。"""
+        from botler.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "GitLabClient", _StubOwnerOkClient)
         tc, tmp_path = client
         tc.put("/api/settings", json={"gitlab": {"owner_token": "glpat-real-1"}})
         masked = tc.get("/api/settings").json()["gitlab"]["owner_token_masked"]
@@ -106,8 +128,10 @@ class TestOwnerTokenSettingsAPI:
         assert resp.status_code == 200
         assert "glpat-real-1" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
 
-    def test_put_blank_owner_token_keeps_existing(self, client):
+    def test_put_blank_owner_token_keeps_existing(self, client, monkeypatch):
         """空串 = 保持现有凭据（与 SSO secret 一致）。"""
+        from botler.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "GitLabClient", _StubOwnerOkClient)
         tc, tmp_path = client
         tc.put("/api/settings", json={"gitlab": {"owner_token": "glpat-real-2"}})
         tc.put("/api/settings", json={"gitlab": {"owner_token": ""}})

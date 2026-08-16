@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from botler.api import router as api_router
 from botler.config import ConfigManager
 from botler.database import Database
+from botler.gitlab_client import GitLabError
 
 CONFIG_TEXT = """\
 gitlab:
@@ -613,3 +614,124 @@ class TestResumeTemplateSettings:
             "templates": {"resume": "新恢复提示"}}).status_code == 200
         after = tc.get("/api/settings").json()["templates"]["default"]
         assert after == before
+
+
+# ---- issue #133：Owner token 保存前校验（api scope） ----
+
+class StubOwnerValidateClient:
+    """Owner token 保存校验桩（issue #133）：按 token 值模拟
+    /personal_access_tokens/self 响应，可注入无效/缺 scope/旧版 GitLab 等。"""
+
+    def __init__(self, url, token, verify_ssl=True, webhook_base_url=None):
+        self.url = url
+        self.token = token
+
+    def get_personal_access_token_self(self):
+        if self.token == "invalid-token":
+            raise GitLabError("token 无效或已过期（401）", 401)
+        if self.token == "forbidden-self":
+            raise GitLabError("权限不足（403）: 403 Forbidden", 403)
+        if self.token == "no-self-endpoint":
+            # 旧版 GitLab（< 15.7）无 self 端点 → 404，调用方降级校验
+            raise GitLabError(
+                "资源不存在（404）: /personal_access_tokens/self", 404)
+        scopes = {
+            "readonly-token": ["read_api", "read_user"],
+            "no-scope-token": [],
+        }.get(self.token, ["api", "read_api", "read_user"])
+        return {"id": 1, "scopes": scopes}
+
+    def test_connection(self):
+        if self.token == "invalid-token":
+            raise GitLabError("token 无效或已过期（401）", 401)
+        return {"id": 1, "username": "owner"}
+
+
+class TestOwnerTokenSaveValidation:
+    """Owner token 保存前校验（issue #133）：token 必须有效且含 api scope。
+
+    复现背景：用户配置 owner token 后概览页全部编辑报「owner token 失效
+    （403）」。实测根因：token 只勾了 read_api 等只读 scope，缺 api
+    scope——GitLab 对这类 token 提交写操作（评论/回复/添加 issue）返回
+    403 insufficient_scope（响应体 {"error":"insufficient_scope",
+    "error_description":"The request requires higher privileges..."}）。
+    此前设置页保存时不做任何校验，不可用的 token 直接落盘，用户反复
+    重新保存仍 403。修复：保存真实 token 时先调
+    /personal_access_tokens/self 校验有效性 + api scope，不满足直接
+    400 拒绝且不落盘，并给出明确指引。
+    """
+
+    def test_save_without_api_scope_rejected(self, client, monkeypatch):
+        """token 只含 read_api（无 api scope）：400 拒绝并明确提示勾选
+        api，且不得落盘（复现用例：issue #133 用户配置的正是这种 token）。"""
+        from botler.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "GitLabClient",
+                            StubOwnerValidateClient)
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={
+            "gitlab": {"owner_token": "readonly-token"}})
+        assert resp.status_code == 400, resp.text
+        assert "api scope" in resp.json()["detail"]
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "owner_token" not in config_text, "校验失败不得落盘"
+
+    def test_save_valid_token_with_api_scope_ok(self, client, monkeypatch):
+        """token 有效且含 api scope：正常保存落盘。"""
+        from botler.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "GitLabClient",
+                            StubOwnerValidateClient)
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={
+            "gitlab": {"owner_token": "valid-token"}})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["gitlab"]["owner_token_masked"] != ""
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "owner_token: valid-token" in config_text
+
+    def test_save_invalid_token_rejected(self, client, monkeypatch):
+        """token 无效/已过期（401）：400 拒绝并提示重新生成，不落盘。"""
+        from botler.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "GitLabClient",
+                            StubOwnerValidateClient)
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={
+            "gitlab": {"owner_token": "invalid-token"}})
+        assert resp.status_code == 400, resp.text
+        assert "无效或已过期" in resp.json()["detail"]
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "owner_token" not in config_text
+
+    def test_save_blank_or_masked_keeps_existing(self, client, monkeypatch):
+        """空串/掩码值 = 保持现有凭据：跳过校验也不覆盖（与既有语义一致）。"""
+        from botler.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "GitLabClient",
+                            StubOwnerValidateClient)
+        tc, tmp_path = client
+        # 先保存一个有效 token
+        assert tc.put("/api/settings", json={
+            "gitlab": {"owner_token": "valid-token"}}).status_code == 200
+        before = tc.get("/api/settings").json()["gitlab"]["owner_token_masked"]
+        # 掩码值保存 → 保持现有
+        resp = tc.put("/api/settings", json={
+            "gitlab": {"owner_token": "glpa****xxxx"}})
+        assert resp.status_code == 200, resp.text
+        # 空串保存 → 保持现有
+        resp = tc.put("/api/settings", json={"gitlab": {"owner_token": "  "}})
+        assert resp.status_code == 200, resp.text
+        after = tc.get("/api/settings").json()["gitlab"]["owner_token_masked"]
+        assert after == before
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "owner_token: valid-token" in config_text
+
+    def test_save_old_gitlab_fallback_validity(self, client, monkeypatch):
+        """旧版 GitLab 无 self 端点（404）：降级只校验 token 有效性，
+        有效则放行（无法查 scope 时不过度拦截）。"""
+        from botler.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "GitLabClient",
+                            StubOwnerValidateClient)
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={
+            "gitlab": {"owner_token": "no-self-endpoint"}})
+        assert resp.status_code == 200, resp.text
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "owner_token: no-self-endpoint" in config_text
