@@ -99,6 +99,9 @@ dsh:
   provider: deepseek-official        # provider 路由（SDK 默认组合注册）
   model: deepseek-v4-flash           # 模型 id
   max_tokens: null                   # 可选：单请求输出 token 上限（null=provider 默认）
+  reasoning_effort: ""               # 可选：推理等级（off / high / max，issue #123）；
+                                     #   空 = 不设置（SDK 默认 high）；设置页「dsh 引擎」
+                                     #   卡片可选，保存后自动派生 Cordis 注入，无需手工配
   session_root: ""                   # 可选：会话持久化目录（断点续跑数据）；
                                      #   留空 = SDK 默认（环境变量 DSH_SESSION_ROOT）
   cordis: ""                         # 可选：自定义 Cordis 配置路径（需保留
@@ -111,6 +114,14 @@ dsh:
 切回 claude 引擎只需把 `worker.engine` 改回 `claude`，dsh 段可保留。
 dsh 段同样可通过设置页 API 写回（`PUT /api/settings` 的 dsh 段），
 `api_key` 回显掩码。
+
+**推理等级（issue #123）**：deepseek-harness runtime 的 `llm-deepseek`
+adapter 支持 `reasoningEffort`（仅 `off` / `high` / `max` 三档，SDK 默认
+`high`）。`dsh.reasoning_effort` 留空 = 不设置（跟随 SDK 默认）；设置后
+botler 基于内置默认 Cordis 组合（或自定义 `cordis` 文件）自动派生一份
+注入该配置的组合文件（缓存于系统临时目录 `botler-dsh-cordis/`），
+dsh 引擎执行时作为 `cordis` 传给 SDK——无需手工维护 cordis 文件。
+自定义 `cordis` 文件缺失或未包含 `llm-deepseek` 条目时任务报错提示。
 
 ## 4. 停止 / 超时语义（与子进程引擎的差异）
 

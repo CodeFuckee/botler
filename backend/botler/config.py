@@ -125,6 +125,10 @@ class Settings:
     dsh_provider: str = "deepseek-official"
     dsh_model: str = "deepseek-v4-flash"
     dsh_max_tokens: int | None = None
+    # 推理等级（issue #123）：deepseek-harness SDK 支持 reasoningEffort
+    # （off / high / max）。空串 = 不设置（SDK 默认 high）；dsh 引擎执行时
+    # 通过派生 Cordis 组合注入 llm-deepseek 配置（见 dsh_runner.py）。
+    dsh_reasoning_effort: str = ""
     dsh_session_root: str = ""
     dsh_cordis: str = ""
     dsh_runtime_bin: str = ""
@@ -175,8 +179,8 @@ KNOWN_FIELDS = {
                "engine", "issue_priority"},
     "claude": {"command", "args"},
     "hermes": {"command", "args"},
-    "dsh": {"provider", "model", "max_tokens", "session_root", "cordis",
-            "runtime_bin", "base_url", "api_key"},
+    "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
+            "session_root", "cordis", "runtime_bin", "base_url", "api_key"},
     "templates": {"default", "resume"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
@@ -324,6 +328,7 @@ class ConfigManager:
             dsh_provider=str(dsh.get("provider", "deepseek-official")).strip() or "deepseek-official",
             dsh_model=str(dsh.get("model", "deepseek-v4-flash")).strip() or "deepseek-v4-flash",
             dsh_max_tokens=dsh.get("max_tokens") if isinstance(dsh.get("max_tokens"), int) else None,
+            dsh_reasoning_effort=str(dsh.get("reasoning_effort", "")).strip(),
             dsh_session_root=str(dsh.get("session_root", "")).strip(),
             dsh_cordis=str(dsh.get("cordis", "")).strip(),
             dsh_runtime_bin=str(dsh.get("runtime_bin", "")).strip(),

@@ -318,6 +318,7 @@ class TestDshSettings:
         assert dsh["provider"] == "deepseek-official"
         assert dsh["model"] == "deepseek-v4-flash"
         assert dsh["max_tokens"] is None
+        assert dsh["reasoning_effort"] == ""
         assert dsh["session_root"] == ""
         assert dsh["api_key_masked"] == ""
 
@@ -327,18 +328,21 @@ class TestDshSettings:
             "provider": "deepseek-official",
             "model": "deepseek-chat",
             "max_tokens": 8192,
+            "reasoning_effort": "max",
             "session_root": "/var/dsh-sessions",
         }})
         assert resp.status_code == 200
         dsh = resp.json()["dsh"]
         assert dsh["model"] == "deepseek-chat"
         assert dsh["max_tokens"] == 8192
+        assert dsh["reasoning_effort"] == "max"
         assert dsh["session_root"] == "/var/dsh-sessions"
         # 写回 config.yaml 生效（重读磁盘）
         config = ConfigManager(str(tmp_path / "config.yaml"))
         s = config.load()
         assert s.dsh_model == "deepseek-chat"
         assert s.dsh_max_tokens == 8192
+        assert s.dsh_reasoning_effort == "max"
 
     def test_update_dsh_api_key_masked(self, client):
         """api_key 明文写入；GET 只返回掩码。"""
@@ -377,6 +381,27 @@ class TestDshSettings:
         for bad in (0, -1, "8192", 1.5):
             resp = tc.put("/api/settings", json={"dsh": {"max_tokens": bad}})
             assert resp.status_code == 400, f"max_tokens={bad} 应拒绝"
+
+    def test_update_dsh_rejects_bad_reasoning_effort(self, client):
+        """推理等级（issue #123）：白名单 off/high/max + 空串，其余拒绝。"""
+        tc, _ = client
+        for bad in ("low", "medium", "MAX", 123, None, ["max"]):
+            resp = tc.put("/api/settings",
+                          json={"dsh": {"reasoning_effort": bad}})
+            assert resp.status_code == 400, f"reasoning_effort={bad!r} 应拒绝"
+        # 白名单值 + 空串合法（空白串 strip 归一，避免空白字符串落盘）
+        for ok in ("off", "high", "max", "", " high "):
+            resp = tc.put("/api/settings",
+                          json={"dsh": {"reasoning_effort": ok}})
+            assert resp.status_code == 200, f"reasoning_effort={ok!r} 应接受"
+
+    def test_update_dsh_reasoning_effort_blank_normalized(self, client):
+        """空白串归一为空（不设置），不落盘空白字符（issue #123）。"""
+        tc, _ = client
+        resp = tc.put("/api/settings",
+                      json={"dsh": {"reasoning_effort": "   "}})
+        assert resp.status_code == 200
+        assert resp.json()["dsh"]["reasoning_effort"] == ""
 
     def test_update_dsh_accepts_null_max_tokens(self, client):
         """max_tokens: null = 恢复 provider 默认。"""

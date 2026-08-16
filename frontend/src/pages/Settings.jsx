@@ -181,6 +181,8 @@ export default function Settings() {
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
+        // dsh 引擎推理等级（issue #123）：跟随全局「保存」提交
+        dsh: { reasoning_effort: settings.dsh?.reasoning_effort || '' },
         ui: { timezone: settings.ui?.timezone || '' },
         notifications: { ...settings.notifications },
         sso: buildSsoPatch(),
@@ -532,6 +534,40 @@ export default function Settings() {
           {settings.env.anthropic_base_url
             ? <> <code>ANTHROPIC_BASE_URL={settings.env.anthropic_base_url}</code> · <code>ANTHROPIC_MODEL={settings.env.anthropic_model}</code></>
             : '（未配置 ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY，请检查 .env）'}
+        </p>
+      </div>
+
+      {/* dsh 引擎（issue #84）：deepseek-harness SDK 推理等级设置（issue #123）。
+           SDK 运行时 llm-deepseek adapter 支持 reasoningEffort（off / high / max），
+           botler 在设置后自动派生 Cordis 注入，无需手工维护 cordis 文件 */}
+      <div className="card">
+        <h2>dsh 引擎</h2>
+        <table className="table kv">
+          <tbody>
+            <tr>
+              <th>推理等级 <code>reasoning_effort</code></th>
+              <td>
+                <select
+                  className="input"
+                  value={settings.dsh?.reasoning_effort || ''}
+                  onChange={(e) => setSettings((s) => ({
+                    ...s,
+                    dsh: { ...s.dsh, reasoning_effort: e.target.value },
+                  }))}
+                >
+                  <option value="">默认（不设置，SDK 默认 high）</option>
+                  <option value="off">off — 关闭推理（更快更省）</option>
+                  <option value="high">high — 高</option>
+                  <option value="max">max — 最高（更严谨，更慢更贵）</option>
+                </select>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="muted small">
+          dsh 引擎（deepseek-harness SDK）的推理等级（reasoningEffort）：控制模型思考深度，
+          off = 关闭推理、high = 高、max = 最高。修改后点击上方「保存」生效，对新领取的
+          dsh 引擎任务生效，运行中任务不受影响。留空 = 不设置（SDK 默认）。
         </p>
       </div>
 

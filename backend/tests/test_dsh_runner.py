@@ -17,6 +17,7 @@ import threading
 import time
 import types
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -613,3 +614,176 @@ class TestDeltaCoalescing:
         assert len(self._event_lines(lines, "stream_delta")) == 1
         # 除结果行外不应有逐字碎行（事件行总量 = 1 条合并文本 + 1 条结果）
         assert len(lines) == 2
+
+
+# ---- issue #123：推理等级（Cordis 组合注入 reasoningEffort）----
+
+# 内置默认组合的等价结构（含 !!js 标签条目与条目间注释，行级编辑需保持）
+_DEFAULT_CORDIS = """\
+# Bundled default config comment
+- id: sdk-jsonrpc-server
+  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+
+# JSONL persistence comment
+- id: sessions
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT ?? './.sessions'
+"""
+
+
+class TestBuildEffortCordis:
+    """build_effort_cordis_text：在 llm-deepseek 条目注入推理等级。"""
+
+    def _entry(self, text: str) -> str:
+        """提取 llm-deepseek 条目块（到下一个顶层条目或文件末尾）用于断言。"""
+        start = text.index("- id: llm-deepseek")
+        end = len(text)
+        for line in text.splitlines()[1:]:
+            if line and not line[0].isspace() and line.strip().startswith("- id:"):
+                pos = text.find(line, start + 1)
+                if pos >= 0:
+                    end = pos
+                break
+        return text[start:end]
+
+    def test_injects_into_entry_without_config(self):
+        """默认组合无 config：紧跟条目属性行注入 config + reasoningEffort。"""
+        out = dsh_runner.build_effort_cordis_text(_DEFAULT_CORDIS, "max")
+        entry = self._entry(out)
+        assert "reasoningEffort: max" in entry
+        # 注入点紧跟 name 行，且位于下一个条目的注释块之前
+        name_line = entry.index("name: '@deepseek-ai/dsh-llm-deepseek'")
+        cfg_pos = entry.index("config:")
+        assert cfg_pos > name_line
+        assert cfg_pos < entry.index("# JSONL persistence comment")
+
+    def test_other_entries_unchanged(self):
+        """只改 llm-deepseek 条目，其余条目（含 !!js 行）原样保留。"""
+        out = dsh_runner.build_effort_cordis_text(_DEFAULT_CORDIS, "off")
+        assert "root: !!js process.env.DSH_SESSION_ROOT" in out
+        assert "reasoningEffort: off" in out
+        assert out.count("config:") == 2  # sessions 原有 config + 新增的
+
+    def test_replaces_existing_reasoning_effort(self):
+        """已有 reasoningEffort：替换值而非叠加键（重复注入幂等）。"""
+        base = """\
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    thinking: enabled
+    reasoningEffort: high
+    maxTokens: 4096
+"""
+        out = dsh_runner.build_effort_cordis_text(base, "max")
+        entry = self._entry(out)
+        assert "reasoningEffort: max" in entry
+        assert "reasoningEffort: high" not in entry
+        assert entry.count("reasoningEffort") == 1
+        # 同 config 块内其他键不被破坏
+        assert "thinking: enabled" in entry and "maxTokens: 4096" in entry
+
+    def test_inserts_into_existing_config_block(self):
+        """已有 config 块但无 reasoningEffort：作为该块首键插入。"""
+        base = """\
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    maxTokens: 4096
+"""
+        out = dsh_runner.build_effort_cordis_text(base, "high")
+        entry = self._entry(out)
+        cfg_idx = entry.index("config:")
+        eff_idx = entry.index("reasoningEffort: high")
+        tok_idx = entry.index("maxTokens: 4096")
+        assert cfg_idx < eff_idx < tok_idx  # 首键插在 config 与既有键之间
+
+    def test_missing_entry_raises(self):
+        with pytest.raises(ValueError, match="llm-deepseek"):
+            dsh_runner.build_effort_cordis_text(
+                "- id: foo\n  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'\n",
+                "max")
+
+    def test_invalid_effort_raises(self):
+        for bad in ("low", "medium", "MAX", ""):
+            with pytest.raises(ValueError, match="推理等级取值非法"):
+                dsh_runner.build_effort_cordis_text(_DEFAULT_CORDIS, bad)
+
+
+class TestResolveEffortCordis:
+    """resolve_dsh_cordis：派生缓存 + 基底选择。"""
+
+    def test_empty_effort_returns_original_cordis(self):
+        for empty in (None, "", "   "):
+            assert dsh_runner.resolve_dsh_cordis("/x/cordis.yml", empty) == "/x/cordis.yml"
+
+    def test_custom_cordis_derived_and_cached(self, tmp_path):
+        """自定义 cordis 为基底：派生文件含注入配置，原文件不被修改。"""
+        base = tmp_path / "custom.yml"
+        base.write_text(_DEFAULT_CORDIS, encoding="utf-8")
+        out = dsh_runner.resolve_dsh_cordis(str(base), "max")
+        assert out != str(base)
+        assert Path(out).is_file()
+        text = Path(out).read_text(encoding="utf-8")
+        assert "reasoningEffort: max" in text
+        assert "root: !!js process.env.DSH_SESSION_ROOT" in text
+        # 原文件未被动过
+        assert base.read_text(encoding="utf-8") == _DEFAULT_CORDIS
+        # 同参复用同一缓存路径（幂等）
+        again = dsh_runner.resolve_dsh_cordis(str(base), "max")
+        assert again == out
+
+    def test_bundled_default_derived(self, tmp_path, monkeypatch):
+        """未配自定义 cordis：以内置默认组合为基底派生。"""
+        out = dsh_runner.resolve_dsh_cordis(
+            None, "high", bundled_text_provider=lambda: _DEFAULT_CORDIS)
+        assert Path(out).is_file()
+        assert "reasoningEffort: high" in Path(out).read_text(encoding="utf-8")
+
+    def test_missing_custom_cordis_raises(self):
+        with pytest.raises(FileNotFoundError, match="不存在"):
+            dsh_runner.resolve_dsh_cordis("/no/such/cordis.yml", "max")
+
+    def test_custom_cordis_without_entry_raises(self, tmp_path):
+        base = tmp_path / "no-entry.yml"
+        base.write_text("- id: foo\n  name: bar\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="llm-deepseek"):
+            dsh_runner.resolve_dsh_cordis(str(base), "max")
+
+
+class TestReasoningEffortPassthrough:
+    """DshRunner 透传：推理等级非空时 cordis 变为派生路径。"""
+
+    def test_runner_passes_derived_cordis(self, fake_sdk, tmp_path):
+        """reasoning_effort 设置后：SDK 收到的 cordis 是派生文件（非原文件）。"""
+        base = tmp_path / "cordis.yml"
+        base.write_text(_DEFAULT_CORDIS, encoding="utf-8")
+        runner, _ = _mk_runner(cordis=str(base), reasoning_effort="max")
+        runner.start()
+        _wait_done(runner)
+        config = FakeHarness.created[0].config
+        assert config.cordis != str(base)
+        assert Path(config.cordis).is_file()
+        assert "reasoningEffort: max" in Path(config.cordis).read_text(
+            encoding="utf-8")
+
+    def test_runner_empty_effort_keeps_cordis(self, fake_sdk):
+        """reasoning_effort 为空：cordis 原样透传（既有行为不变）。"""
+        runner, _ = _mk_runner(cordis="/conf/cordis.yml", reasoning_effort="")
+        runner.start()
+        _wait_done(runner)
+        assert FakeHarness.created[0].config.cordis == "/conf/cordis.yml"
+
+    def test_runner_invalid_effort_fails_with_error(self, fake_sdk, tmp_path):
+        """非法推理等级：worker 产 error 行（不静默忽略）。"""
+        base = tmp_path / "cordis.yml"
+        base.write_text(_DEFAULT_CORDIS, encoding="utf-8")
+        runner, lines = _mk_runner(cordis=str(base), reasoning_effort="low")
+        runner.start()
+        _wait_done(runner)
+        assert runner.finish() == 1
+        data = _last_json(lines)
+        assert data is not None
+        assert "推理等级取值非法" in data.get("error", "")

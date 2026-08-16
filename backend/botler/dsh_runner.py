@@ -10,6 +10,13 @@
 （_dsh_result）、SSE 解析（parse_hermes_event_line）与日志落盘设施
 直接复用，无需新协议解析。
 
+推理等级（issue #123）：deepseek-harness runtime 的 llm-deepseek
+adapter 支持 reasoningEffort（off / high / max），通过 Cordis 组合中
+该条目的 config.reasoningEffort 注入。SDK 层不直接暴露该参数，本模块
+在设置了 dsh.reasoning_effort 时，基于（自定义或内置默认）Cordis 组合
+派生一份注入配置的文件（行级文本编辑，默认组合含 !!js 标签无法用
+PyYAML 直接加载），缓存到临时目录后作为 cordis 传给 SDK。
+
 SDK 为可选依赖（同 hermes 部署模式）：requirements.txt 不声明；
 Docker 部署镜像已内置（issue #112：Dockerfile 构建期自动安装 + import
 校验）。开发机 / pm2 部署未安装时 start() 抛 DshSdkNotInstalledError
@@ -19,10 +26,14 @@ Docker 部署镜像已内置（issue #112：Dockerfile 构建期自动安装 + i
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+import tempfile
 import threading
 import time
 from importlib.util import find_spec
+from pathlib import Path
 from typing import Callable
 
 # SDK 安装指引（部署机清华 pip 源未同步 rc 版，需用阿里镜像；
@@ -35,6 +46,141 @@ INSTALL_HINT = (
 
 class DshSdkNotInstalledError(Exception):
     """deepseek-harness SDK 未安装（含安装指引）。"""
+
+# ---- 推理等级（issue #123）：Cordis 组合注入 reasoningEffort ----
+
+# llm-deepseek 条目标识（内置默认组合与本项目的自定义组合均用它）
+_LLM_DEEPSEEK_NAME = "@deepseek-ai/dsh-llm-deepseek"
+# runtime 侧 llm-deepseek adapter 白名单（启动时校验，非法值直接拒绝）
+REASONING_EFFORT_CHOICES = ("off", "high", "max")
+
+
+def _entry_start(lines: list[str]) -> int | None:
+    """定位 llm-deepseek 条目起始行（- id: llm-deepseek；无 id 时回退 name）。"""
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("- id:"):
+            ident = s[len("- id:"):].strip().strip("'\"")
+            if ident == "llm-deepseek":
+                return i
+    for i, line in enumerate(lines):
+        if _LLM_DEEPSEEK_NAME in line:
+            # name 行本身以 - 开头（单行条目）或上一行是 - id:
+            return i if line.strip().startswith("-") else i - 1
+    return None
+
+
+def _entry_end(lines: list[str], start: int) -> int:
+    """条目块结束行（下一个顶层 - id: 的起始行；无则到末尾）。"""
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if line and not line[0].isspace() and line.strip().startswith("- id:"):
+            return i
+    return len(lines)
+
+
+def _indent_of(line: str) -> str:
+    return line[: len(line) - len(line.lstrip(" \t"))]
+
+
+def _child_indent(lines: list[str], start: int, end: int) -> str:
+    """条目块内首个非空子键的缩进（无则空串）。"""
+    for i in range(start, end):
+        s = lines[i]
+        if s.strip() and (s.startswith(" ") or s.startswith("\t")):
+            return _indent_of(s)
+    return ""
+
+
+def _find_key(lines: list[str], start: int, end: int, key: str) -> int | None:
+    """条目块内查找指定键（键名精确匹配冒号前缀，如 config: / reasoningEffort:）。"""
+    for i in range(start, end):
+        s = lines[i].strip()
+        if s == f"{key}:" or s.startswith(f"{key}:"):
+            return i
+    return None
+
+
+def build_effort_cordis_text(base: str, effort: str) -> str:
+    """在 Cordis 组合文本的 llm-deepseek 条目注入 reasoningEffort 配置。
+
+    - 条目无 config 块：条目末尾追加 config + reasoningEffort；
+    - 已有 config 块：已有 reasoningEffort 则替换值，否则插入为该块首键；
+    - 找不到 llm-deepseek 条目：抛 ValueError（调用方转为可读运行错误）。
+    行级文本编辑而非 YAML 解析：内置默认组合含 !!js 标签，PyYAML 无法
+    直接加载；推理等级字段是纯标量，行级注入足够稳健。
+    """
+    effort = (effort or "").strip()
+    if effort not in REASONING_EFFORT_CHOICES:
+        raise ValueError(
+            f"推理等级取值非法: {effort or ''!r}（可选 {' / '.join(REASONING_EFFORT_CHOICES)}）")
+    lines = base.splitlines()
+    start = _entry_start(lines)
+    if start is None:
+        raise ValueError(
+            f"Cordis 配置未包含 llm-deepseek 条目（{_LLM_DEEPSEEK_NAME}），"
+            "无法注入推理等级")
+    end = _entry_end(lines, start)
+    out = list(lines)
+    cfg = _find_key(lines, start, end, "config")
+    if cfg is None:
+        # 无 config 块：紧跟条目自身属性行（name 行，缺省为条目首行）插入，
+        # 避免插到条目后紧跟的下一个条目注释块里（保持组合文件可读）
+        indent = _child_indent(lines, start + 1, end) or "  "
+        anchor = _find_key(lines, start, end, "name")
+        insert_at = (anchor + 1) if anchor is not None else (start + 1)
+        out[insert_at:insert_at] = [
+            f"{indent}config:", f"{indent}  reasoningEffort: {effort}"]
+    else:
+        cfg_indent = _indent_of(lines[cfg])
+        eff = _find_key(lines, cfg + 1, end, "reasoningEffort")
+        if eff is None:
+            child = _child_indent(lines, cfg + 1, end) or cfg_indent + "  "
+            out.insert(cfg + 1, f"{child}reasoningEffort: {effort}")
+        else:
+            indent = _indent_of(lines[eff])
+            out[eff] = re.sub(
+                r"reasoningEffort\s*:.*$",
+                f"reasoningEffort: {effort}", lines[eff], count=1)
+            out[eff] = indent + out[eff].lstrip()
+    return "\n".join(out) + "\n"
+
+
+def resolve_dsh_cordis(cordis: str | None, reasoning_effort: str | None,
+                       bundled_text_provider=None) -> str | None:
+    """返回实际传给 SDK 的 cordis 路径（issue #123）。
+
+    reasoning_effort 为空 → 原样返回 cordis（None = SDK 内置默认组合）；
+    非空 → 以自定义 cordis（存在时）或 SDK 内置默认组合为基底，派生一份
+    注入 reasoningEffort 的组合文件，缓存到系统临时目录（内容哈希命名，
+    配置不变即复用），返回派生路径。自定义文件缺失 / 无 llm-deepseek
+    条目时抛异常，由 worker 转为可读运行错误。
+    """
+    effort = (reasoning_effort or "").strip()
+    if not effort:
+        return cordis
+    if cordis:
+        base = Path(cordis)
+        if not base.is_file():
+            raise FileNotFoundError(f"自定义 Cordis 配置不存在: {cordis}")
+        base_text = base.read_text(encoding="utf-8")
+        ref = f"custom:{base.resolve()}"
+    else:
+        if bundled_text_provider is None:
+            from deepseek_harness_runtime import bundled_default_config_path
+            base_text = bundled_default_config_path().read_text(encoding="utf-8")
+        else:
+            base_text = bundled_text_provider()
+        ref = "bundled"
+    text = build_effort_cordis_text(base_text, effort)
+    cache_dir = Path(tempfile.gettempdir()) / "botler-dsh-cordis"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(
+        f"{ref}\x00{effort}\x00{base_text}".encode("utf-8")).hexdigest()[:16]
+    out = cache_dir / f"cordis-{digest}.yml"
+    if not out.exists() or out.read_text(encoding="utf-8") != text:
+        out.write_text(text, encoding="utf-8")
+    return str(out)
 
 
 def _event_line(event: str, extra: dict) -> str:
@@ -257,6 +403,7 @@ class DshRunner:
                  provider: str = "deepseek-official",
                  model: str = "deepseek-v4-flash",
                  max_tokens: int | None = None,
+                 reasoning_effort: str | None = None,
                  cwd: str | None = None,
                  session_root: str | None = None,
                  cordis: str | None = None,
@@ -271,6 +418,8 @@ class DshRunner:
         self.provider = provider
         self.model = model
         self.max_tokens = max_tokens
+        # 推理等级（issue #123）：非空时派生 Cordis 注入 reasoningEffort
+        self.reasoning_effort = reasoning_effort
         self.cwd = cwd
         self.session_root = session_root
         self.cordis = cordis
@@ -338,13 +487,16 @@ class DshRunner:
                 None, None, self.session_id, error="stopped"))
             return
         try:
+            # issue #123：推理等级经派生 Cordis 注入 llm-deepseek 配置
+            # （非空时生成缓存文件，为空则原样透传用户 cordis）
+            cordis = resolve_dsh_cordis(self.cordis, self.reasoning_effort)
             config = DeepSeekHarnessConfig(
                 provider=self.provider,
                 model=self.model,
                 max_tokens=self.max_tokens,
                 cwd=self.cwd,
                 session_root=self.session_root,
-                cordis=self.cordis,
+                cordis=cordis,
                 runtime_bin=self.runtime_bin,
                 base_url=self.base_url,
                 api_key=self.api_key,
@@ -352,7 +504,12 @@ class DshRunner:
             )
             self._harness = DeepSeekHarness(config)
         except Exception as exc:
+            # 初始化失败（含推理等级注入的 cordis 派生错误）：与运行失败
+            # 同协议产 error 结果行，executor 才拿得到错误详情落任务日志
             self._error = f"dsh 运行时初始化失败: {exc}"
+            self._coalescer.flush()
+            self.on_line(build_result_line(
+                None, None, self.session_id, error=self._error))
             return
         try:
             result = self._harness.run(

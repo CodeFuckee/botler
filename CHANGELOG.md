@@ -129,6 +129,33 @@
 
 ### Added
 
+- **设置页新增 dsh 引擎推理等级设置（issue #123）**：
+  需求「deepseek harness sdk是可以设置推理等级的，在设置页面添加deepseek
+  harness推理等级的设置」。deepseek-harness runtime 的 `llm-deepseek`
+  adapter 支持 `reasoningEffort`（`off` / `high` / `max` 三档，SDK 默认
+  `high`），但 SDK 的 `DeepSeekHarnessConfig` 未直接暴露该参数。实现：
+  - **后端**：`Settings` 新增 `dsh.reasoning_effort`（空 = 不设置），
+    GET/PUT `/api/settings` 透出与校验（白名单 `off` / `high` / `max`，
+    空串允许，非法值 400 提前拦截）；
+  - **推理等级注入**（`dsh_runner.py`）：`DshRunner` 新增
+    `reasoning_effort` 参数，非空时基于内置默认 Cordis 组合（或自定义
+    `cordis` 文件）行级注入 `llm-deepseek` 条目的
+    `config.reasoningEffort`（默认组合含 `!!js` 标签无法用 PyYAML 加载，
+    故采用行级文本编辑），按内容哈希缓存到系统临时目录
+    `botler-dsh-cordis/`，executor 执行时把 `cfg.dsh_reasoning_effort`
+    透传给 `DshRunner`；自定义 cordis 缺失 / 无 `llm-deepseek` 条目时
+    任务以可读错误失败，不静默忽略；
+  - **前端**：设置页新增「dsh 引擎」卡片，推理等级下拉
+    （默认 / off / high / max，含语义说明），跟随全局「保存」提交；
+  - **文档**：`config.example.yaml`、`README.md` 设置表、
+    `docs/dsh-engine-deployment.md` 同步补充配置说明。
+  - **测试**：后端新增 cordis 注入（默认组合注入 / 已有 config 替换 /
+    已有 config 首键插入 / 缺条目报错 / 非法值报错）、`resolve_dsh_cordis`
+    派生缓存（空 effort 原样返回 / 自定义与内置基底 / 缺失文件报错）、
+    settings API（GET 默认值 / PUT 持久化 / 非法值 400）、DshRunner 透传
+    派生 cordis；前端新增设置页 dsh 卡片源码 + 渲染/保存交互用例；
+    后端与前端全量测试通过。
+
 - **新增 UI 优化参考文档——同类开源项目调研与设计借鉴（issue #121）**：
   issue「界面优化讨论，现在界面布局和样式都不够美观，帮助找一些类似的
   开源项目，可以参考ui设计」为讨论型需求，本期不实施界面改造，调研结论

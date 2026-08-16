@@ -1305,7 +1305,11 @@ class ClaudeExecutor:
                 runner = DshRunner(
                     prompt=prompt, session_id=resume_session,
                     provider=cfg.dsh_provider, model=cfg.dsh_model,
-                    max_tokens=cfg.dsh_max_tokens, cwd=str(workdir),
+                    max_tokens=cfg.dsh_max_tokens,
+                    # 推理等级（issue #123）：dsh.reasoning_effort 经
+                    # DshRunner 派生 Cordis 注入 SDK，空串 = 不设置
+                    reasoning_effort=cfg.dsh_reasoning_effort,
+                    cwd=str(workdir),
                     session_root=cfg.dsh_session_root or None,
                     cordis=cfg.dsh_cordis or None,
                     runtime_bin=cfg.dsh_runtime_bin or None,

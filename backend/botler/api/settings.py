@@ -85,6 +85,8 @@ def get_settings(request: Request):
             "provider": s.dsh_provider,
             "model": s.dsh_model,
             "max_tokens": s.dsh_max_tokens,
+            # 推理等级（issue #123）：off / high / max，空串 = 不设置
+            "reasoning_effort": s.dsh_reasoning_effort,
             "session_root": s.dsh_session_root,
             "cordis": s.dsh_cordis,
             "runtime_bin": s.dsh_runtime_bin,
@@ -337,6 +339,19 @@ def _validate_dsh(patch: dict) -> None:
         val = patch["max_tokens"]
         if not isinstance(val, int) or val <= 0:
             raise HTTPException(400, "dsh.max_tokens 必须是正整数或 null")
+    if "reasoning_effort" in patch:
+        # 推理等级（issue #123）：deepseek-harness runtime 仅支持
+        # off / high / max（llm-deepseek adapter 配置 schema 白名单），
+        # 空串 = 不设置（跟随 SDK 默认）；非法值提前拦截避免任务运行时报错
+        val = patch["reasoning_effort"]
+        if not isinstance(val, str):
+            raise HTTPException(
+                400, "dsh.reasoning_effort 必须是字符串（off / high / max，空串=不设置）")
+        val = val.strip()
+        if val not in ("", "off", "high", "max"):
+            raise HTTPException(
+                400, f"dsh.reasoning_effort 取值非法: {val}（可选 off / high / max，空串=不设置）")
+        patch["reasoning_effort"] = val
 
 
 def _validate_browse(patch: dict) -> None:
