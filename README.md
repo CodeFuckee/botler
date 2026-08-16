@@ -223,6 +223,8 @@ GET    /api/issues/overview           已启用仓库开放 issue 聚合（10s �
 POST   /api/issues/{project_id}/{iid}/close   关闭指定 issue（概览页右边栏「关闭 issue」按钮，issue #94）
 POST   /api/issues/{project_id}/{iid}/retry   重新执行 issue 对应的任务（概览页右边栏「重试」按钮：复用最近失败/中断任务或新建任务入队，issue #117）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120）
+POST   /api/issues/{project_id}/{iid}/comments   添加 issue 评论（概览页右边栏「添加评论」，正文必填，成功后清缓存并返回精简评论，issue #125）
+POST   /api/issues/{project_id}/{iid}/comments/{note_id}/reply   回复 issue 某条评论（概览页右边栏「回复评论」，后端经 discussions API 解析评论所在线程后追加回复，issue #125）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
 GET    /api/auth/status               登录状态探测（SSO 是否启用 + 当前用户，issue #27）

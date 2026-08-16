@@ -25,6 +25,12 @@
 // 返回 404）；成功后本地标记即时更新（displayLabels 覆盖）并通知
 // 父组件刷新列表（onLabelsUpdated）；失败保留编辑态可重试。
 //
+// issue #125：评论区块新增「添加评论」与「回复评论」——区块底部评论
+// 输入区（POST /api/issues/{project_id}/{iid}/comments）与每条评论
+// 的「回复」按钮（内联回复框，POST /api/issues/{project_id}/{iid}/
+// comments/{note_id}/reply）；成功后本地即时追加新评论并叠加评论
+// 计数（localNotesCount），无需重新拉取详情；失败保留输入内容可重试。
+//
 // 交互约定：
 // - 列表项本身不再直接跳转 GitLab，跳转统一走抽屉右上角
 //   「在 GitLab 中打开」按钮（web_url 新窗口）；
@@ -142,6 +148,19 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 随抽屉打开一起拉取，不单独请求 /api/settings
   const [engine, setEngine] = useState(null)
   const [engineErr, setEngineErr] = useState('')
+  // issue #125：添加评论与回复评论状态——
+  // commentText 新评论输入内容；posting 提交中（按钮禁用防重复）；
+  // postErr 评论失败信息；replyingTo 正在回复的评论 id（null=未回复）；
+  // replyText 回复输入内容；replying 回复提交中；replyErr 回复失败
+  // 信息；localNotesCount 本次会话新增评论数（评论行计数 = 快照 + 新增）
+  const [commentText, setCommentText] = useState('')
+  const [posting, setPosting] = useState(false)
+  const [postErr, setPostErr] = useState('')
+  const [replyingTo, setReplyingTo] = useState(null)
+  const [replyText, setReplyText] = useState('')
+  const [replying, setReplying] = useState(false)
+  const [replyErr, setReplyErr] = useState('')
+  const [localNotesCount, setLocalNotesCount] = useState(null)
 
   // Esc 关闭抽屉（SSR 测试环境无 document 时跳过）
   useEffect(() => {
@@ -376,6 +395,80 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     </ul>
   }
 
+  // ---- issue #125：添加评论与回复评论 ----
+
+  // 评论行计数：轮询快照（issue 对象）+ 本次会话新增。新评论已在
+  // 后端落库，但快照要等下一轮轮询才更新，本地先行叠加展示更准确
+  const notesCount = localNotesCount ?? i.user_notes_count
+
+  function bumpNotesCount() {
+    setLocalNotesCount((prev) => (typeof prev === 'number' ? prev
+      : (typeof i.user_notes_count === 'number' ? i.user_notes_count : 0)) + 1)
+  }
+
+  // 可评论条件：带 project_id/iid 且详情已加载成功（加载中/失败时
+  // 隐藏输入区，避免对不可知目标发言）
+  const canComment = hasDetail && !detailErr && notes !== null
+
+  // 添加评论：POST /comments 提交正文（去空白非空才可提交）；成功后
+  // 本地追加返回的评论并清空输入框（无需重拉详情）；失败保留输入
+  // 内容可重试
+  async function handlePostComment() {
+    const text = commentText.trim()
+    if (!text || posting) return
+    setPosting(true)
+    setPostErr('')
+    try {
+      const d = await api.post(`/api/issues/${i.project_id}/${i.iid}/comments`,
+                               { body: text })
+      if (d && d.note) {
+        setNotes((prev) => [...(prev || []), d.note])
+        setCommentText('')
+        bumpNotesCount()
+      }
+    } catch (e) {
+      setPostErr(e.message || '评论失败')
+    } finally {
+      setPosting(false)
+    }
+  }
+
+  // 展开/收起某条评论的回复框（同一时刻只展开一个）
+  function startReply(noteId) {
+    setReplyingTo(noteId)
+    setReplyText('')
+    setReplyErr('')
+  }
+
+  function cancelReply() {
+    setReplyingTo(null)
+    setReplyText('')
+    setReplyErr('')
+  }
+
+  // 发送回复：POST /comments/{note_id}/reply；成功后本地追加回复并
+  // 收起回复框；失败保留输入内容可重试
+  async function handleSendReply(noteId) {
+    const text = replyText.trim()
+    if (!text || replying) return
+    setReplying(true)
+    setReplyErr('')
+    try {
+      const d = await api.post(
+        `/api/issues/${i.project_id}/${i.iid}/comments/${noteId}/reply`,
+        { body: text })
+      if (d && d.note) {
+        setNotes((prev) => [...(prev || []), d.note])
+        cancelReply()
+        bumpNotesCount()
+      }
+    } catch (e) {
+      setReplyErr(e.message || '回复失败')
+    } finally {
+      setReplying(false)
+    }
+  }
+
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <div className="drawer issue-drawer" onClick={(e) => e.stopPropagation()}>
@@ -460,7 +553,9 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             <tr><th>里程碑</th><td>{i.milestone || '—'}</td></tr>
             <tr><th>负责人</th><td>{assigneeNames.length > 0 ? assigneeNames.join('、') : '—'}</td></tr>
             <tr><th>评论</th>
-              <td>{typeof i.user_notes_count === 'number' ? i.user_notes_count : '—'}</td></tr>
+              {/* issue #125：计数 = 轮询快照 + 本次会话新增（新评论
+                  已落库，快照要等下一轮轮询才更新） */}
+              <td>{typeof notesCount === 'number' ? notesCount : '—'}</td></tr>
           </tbody>
         </table>
         <div className="issue-drawer-desc">
@@ -498,8 +593,58 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                     <p className="muted">（无内容）</p>
                   )}
                 </div>
+                {/* issue #125：回复评论——「回复」按钮展开内联回复框；
+                    发送成功后本地追加回复并收起（同评论列表结构） */}
+                <div className="comment-actions">
+                  <button type="button"
+                          className="btn btn-small comment-reply-btn"
+                          onClick={() => startReply(n.id)}
+                          title={`回复 ${noteAuthorName(n)}`}>回复</button>
+                </div>
+                {replyingTo === n.id && (
+                  <div className="comment-reply-box">
+                    <textarea className="comment-input" rows="2"
+                              placeholder={`回复 @${noteAuthorName(n)}…`}
+                              value={replyText}
+                              onChange={(e) => setReplyText(e.target.value)} />
+                    {replyErr && (
+                      <div className="issue-drawer-error" role="alert">
+                        {replyErr}
+                      </div>
+                    )}
+                    <div className="comment-reply-actions">
+                      <button type="button" className="btn btn-small"
+                              onClick={cancelReply} disabled={replying}>取消</button>
+                      <button type="button" className="btn btn-small btn-primary"
+                              disabled={replying || !replyText.trim()}
+                              onClick={() => handleSendReply(n.id)}>
+                        {replying ? '回复中…' : '发送回复'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
+            {/* issue #125：添加评论——区块底部输入区；详情加载成功后
+                才显示（加载中/失败时隐藏，避免对不可知目标发言） */}
+            {canComment && (
+              <div className="comment-composer">
+                <textarea className="comment-input" rows="2"
+                          placeholder="写下你的评论…"
+                          value={commentText}
+                          onChange={(e) => setCommentText(e.target.value)} />
+                {postErr && (
+                  <div className="issue-drawer-error" role="alert">{postErr}</div>
+                )}
+                <div className="comment-composer-actions">
+                  <button type="button" className="btn btn-small btn-primary"
+                          disabled={posting || !commentText.trim()}
+                          onClick={handlePostComment}>
+                    {posting ? '发表中…' : '发表评论'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <div className="issue-notes-block">
             <h3>活动</h3>

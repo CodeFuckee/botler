@@ -110,6 +110,18 @@ class StubGitLab:
         self.issue_by_key: dict[tuple[int, int], dict] = {}
         self.fail_get_issue_errors: dict[tuple[int, int], Exception] = {}
         self.get_issue_calls: list[tuple[int, int]] = []
+        # issue #125：评论/回复桩——add_comment_calls 记录 (project_id,
+        # iid, body)；add_comment_errors[(project_id, iid)] 注入异常；
+        # add_comment_result 配置返回对象（None 时用默认 note）；
+        # reply_calls 记录 (project_id, iid, note_id, body)；
+        # reply_errors[(project_id, iid)] 注入异常；reply_result 配置
+        # 返回对象
+        self.add_comment_calls: list[tuple[int, int, str]] = []
+        self.add_comment_errors: dict[tuple[int, int], Exception] = {}
+        self.add_comment_result: dict | None = None
+        self.reply_calls: list[tuple[int, int, int, str]] = []
+        self.reply_errors: dict[tuple[int, int], Exception] = {}
+        self.reply_result: dict | None = None
 
     def list_project_members(self, project_id):
         """项目成员查询（issue #92）：按 project_id 配置，可故障注入。"""
@@ -207,6 +219,32 @@ class StubGitLab:
             "description": None, "author": None, "milestone": None,
             "assignees": [], "user_notes_count": 0,
         }))
+
+    def add_comment(self, project_id, iid, body):
+        """添加评论桩（issue #125）：记录参数，可注入异常、可配置返回。"""
+        self.add_comment_calls.append((project_id, iid, body))
+        err = self.add_comment_errors.get((project_id, iid))
+        if err is not None:
+            raise err
+        if self.add_comment_result is not None:
+            return self.add_comment_result
+        return {"id": 9001, "body": body, "system": False,
+                "author": {"name": "code01", "username": "project_bot",
+                           "avatar_url": "https://gitlab.example.com/a.png"},
+                "created_at": "2026-08-16T10:00:00.000+08:00"}
+
+    def reply_to_note(self, project_id, iid, note_id, body):
+        """回复评论桩（issue #125）：记录参数，可注入异常、可配置返回。"""
+        self.reply_calls.append((project_id, iid, note_id, body))
+        err = self.reply_errors.get((project_id, iid))
+        if err is not None:
+            raise err
+        if self.reply_result is not None:
+            return self.reply_result
+        return {"id": 9002, "body": body, "system": False,
+                "author": {"name": "code01", "username": "project_bot",
+                           "avatar_url": "https://gitlab.example.com/a.png"},
+                "created_at": "2026-08-16T11:00:00.000+08:00"}
 
 
 def make_issue(iid: int, title: str,
@@ -1947,5 +1985,192 @@ class TestIssueLabels:
         stub.labels_update_errors[(42, 64)] = httpx.HTTPError("connect timeout")
 
         resp = tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
+
+        assert resp.status_code == 502
+
+
+class TestIssueComments:
+    """POST /api/issues/{project_id}/{iid}/comments 与
+    POST /api/issues/{project_id}/{iid}/comments/{note_id}/reply：
+    概览页右边栏「添加评论」与「回复评论」（issue #125）。
+
+    添加评论复用 GitLabClient.add_comment（notes API）；回复评论由
+    GitLabClient.reply_to_note 先解析目标评论所在 discussion 再追加
+    note（notes API 响应不含 discussion_id）。两者共用校验：正文去
+    空白后为空 → 400（GitLab 对空正文同样拒绝，提前校验）。成功后
+    清空概览缓存（user_notes_count/updated_at 已变化）并返回新建
+    评论的精简对象（与 detail 的 notes 条目同结构，前端本地追加）。
+    错误映射：仓库不存在/未启用 → 404，GitLab 404（issue/评论不存在）
+    → 404，GitLab 其他错误与网络错误 → 502。
+    """
+
+    def test_add_comment_success(self, client):
+        """正常添加：stub 收到正确参数、返回精简 note（时间转 UTC）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.post("/api/issues/42/64/comments",
+                       json={"body": "  新评论内容  "})
+
+        assert resp.status_code == 201
+        assert stub.add_comment_calls == [(42, 64, "新评论内容")]
+        note = resp.json()["note"]
+        assert note["id"] == 9001
+        assert note["body"] == "新评论内容"
+        assert note["system"] is False
+        assert note["author"] == {
+            "name": "code01", "username": "project_bot",
+            "avatar_url": "https://gitlab.example.com/a.png"}
+        # 时间统一转 UTC 无后缀（前端 fmtTime 解析约定）
+        assert note["created_at"] == "2026-08-16 02:00:00"
+
+    def test_add_comment_empty_body(self, client):
+        """正文为空/纯空白 → 400，且不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "   "})
+
+        assert resp.status_code == 400
+        assert "不能为空" in resp.json()["detail"]
+        assert stub.add_comment_calls == []
+
+    def test_add_comment_repo_not_found(self, client):
+        """GitLab project_id 无对应启用仓库 → 404，不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.post("/api/issues/999/64/comments",
+                       json={"body": "hi"})
+
+        assert resp.status_code == 404
+        assert "仓库" in resp.json()["detail"]
+        assert stub.add_comment_calls == []
+
+    def test_add_comment_repo_disabled(self, client):
+        """仓库未启用 → 404。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo", enabled=False)
+
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "hi"})
+
+        assert resp.status_code == 404
+        assert stub.add_comment_calls == []
+
+    def test_add_comment_issue_missing(self, client):
+        """GitLab 返回 404（issue 不存在）→ 404。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.add_comment_errors[(42, 64)] = GitLabError(
+            "404 Not Found", status_code=404)
+
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "hi"})
+
+        assert resp.status_code == 404
+        assert "不存在" in resp.json()["detail"]
+
+    def test_add_comment_gitlab_server_error(self, client):
+        """GitLab 上游 5xx → 502，不假装成功。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.add_comment_errors[(42, 64)] = GitLabError(
+            "500 Internal Server Error", status_code=500)
+
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "hi"})
+
+        assert resp.status_code == 502
+
+    def test_add_comment_network_error(self, client):
+        """网络错误（httpx.HTTPError）→ 502。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.add_comment_errors[(42, 64)] = httpx.HTTPError("connect timeout")
+
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "hi"})
+
+        assert resp.status_code == 502
+
+    def test_add_comment_clears_overview_cache(self, client):
+        """添加评论成功后清空概览缓存（user_notes_count 已变化）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.issues_by_project = {42: [make_issue(1, "x")]}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+        stub.issues_by_project = {42: []}
+
+        tc.post("/api/issues/42/64/comments", json={"body": "hi"})
+
+        assert tc.get("/api/issues/overview").json()["total"] == 0
+
+    def test_reply_success(self, client):
+        """正常回复：stub 收到 (project_id, iid, note_id, body)。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.post("/api/issues/42/64/comments/201/reply",
+                       json={"body": "回复内容"})
+
+        assert resp.status_code == 201
+        assert stub.reply_calls == [(42, 64, 201, "回复内容")]
+        note = resp.json()["note"]
+        assert note["id"] == 9002
+        assert note["body"] == "回复内容"
+        assert note["created_at"] == "2026-08-16 03:00:00"
+
+    def test_reply_empty_body(self, client):
+        """回复正文为空/纯空白 → 400，不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.post("/api/issues/42/64/comments/201/reply",
+                       json={"body": ""})
+
+        assert resp.status_code == 400
+        assert stub.reply_calls == []
+
+    def test_reply_repo_not_found(self, client):
+        """仓库不存在 → 404，不触碰 GitLab。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.post("/api/issues/999/64/comments/201/reply",
+                       json={"body": "hi"})
+
+        assert resp.status_code == 404
+        assert stub.reply_calls == []
+
+    def test_reply_note_missing(self, client):
+        """被回复评论不存在（GitLab 404）→ 404。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.reply_errors[(42, 64)] = GitLabError(
+            "评论 201 不存在", status_code=404)
+
+        resp = tc.post("/api/issues/42/64/comments/201/reply",
+                       json={"body": "hi"})
+
+        assert resp.status_code == 404
+        assert "不存在" in resp.json()["detail"]
+
+    def test_reply_gitlab_server_error(self, client):
+        """GitLab 上游 5xx → 502。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.reply_errors[(42, 64)] = GitLabError(
+            "500 Internal Server Error", status_code=500)
+
+        resp = tc.post("/api/issues/42/64/comments/201/reply",
+                       json={"body": "hi"})
+
+        assert resp.status_code == 502
+
+    def test_reply_network_error(self, client):
+        """网络错误（httpx.HTTPError）→ 502。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.reply_errors[(42, 64)] = httpx.HTTPError("connect timeout")
+
+        resp = tc.post("/api/issues/42/64/comments/201/reply",
+                       json={"body": "hi"})
 
         assert resp.status_code == 502

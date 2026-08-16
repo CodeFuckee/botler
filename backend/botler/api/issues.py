@@ -521,6 +521,87 @@ def issue_detail(request: Request, project_id: int, iid: int):
             "engine": _issue_engine(c, project_id, iid)}
 
 
+# ---- issue #125：概览页右边栏添加评论与回复评论 ----
+
+
+class IssueCommentCreate(BaseModel):
+    """评论内容（添加评论 / 回复评论共用）。"""
+    body: str
+
+
+def _comment_text(raw) -> str:
+    """评论内容归一化：去首尾空白，空串返回 ''（调用方按 400 处理）。"""
+    return (raw or "").strip()
+
+
+def _comment_client(c, row):
+    """评论/回复用的 GitLab client：与详情接口一致（per-repo token
+    优先，无 token 回退全局 bot token）。"""
+    return _repo_client(c, row) or c.gitlab
+
+
+def _create_comment(request: Request, project_id: int, iid: int,
+                    text: str, reply_to: int | None = None) -> dict:
+    """添加评论 / 回复评论共用实现（issue #125）。
+
+    定位仓库与客户端选择与 detail 接口一致；正文为空 → 400（GitLab
+    对空正文同样拒绝，提前校验避免上游错误）；回复时先由
+    GitLabClient.reply_to_note 解析目标评论所在 discussion（notes
+    API 不含 discussion_id）。成功后清空概览缓存（user_notes_count
+    与 updated_at 已变化，下一轮轮询立即反映）。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    if not text:
+        raise HTTPException(400, "评论内容不能为空")
+    client = _comment_client(c, row)
+    try:
+        if reply_to is None:
+            note = client.add_comment(project_id, iid, text)
+        else:
+            note = client.reply_to_note(project_id, iid, reply_to, text)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "评论不存在") from e
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    clear_issue_cache()
+    return {"note": _trim_note(note)}
+
+
+@router.post("/{project_id}/{iid}/comments", status_code=201)
+def create_issue_comment(request: Request, project_id: int, iid: int,
+                         body: IssueCommentCreate):
+    """添加 issue 评论（issue #125：概览页右边栏「添加评论」）。
+
+    正文必填（去空白后为空 → 400）。成功后清空概览缓存并返回新建
+    评论的精简对象（前端本地即时追加展示，无需重新拉取详情）。
+    错误映射：仓库不存在/未启用 → 404；GitLab 404（issue 不存在）
+    → 404；GitLab 其他错误与网络错误 → 502。
+    """
+    return _create_comment(request, project_id, iid,
+                           _comment_text(body.body))
+
+
+@router.post("/{project_id}/{iid}/comments/{note_id}/reply", status_code=201)
+def reply_issue_comment(request: Request, project_id: int, iid: int,
+                        note_id: int, body: IssueCommentCreate):
+    """回复 issue 某条评论（issue #125：概览页右边栏「回复评论」）。
+
+    与添加评论同一正文校验；note_id 为被回复评论的 id（后端经
+    discussions API 解析其所在线程后追加回复）。成功后清空概览缓存
+    并返回新建回复的精简对象。错误映射：仓库不存在/未启用 → 404；
+    GitLab 404（issue/评论不存在）→ 404；GitLab 其他错误与网络
+    错误 → 502。
+    """
+    return _create_comment(request, project_id, iid,
+                           _comment_text(body.body), reply_to=note_id)
+
+
 # ---- issue #92：概览页添加 issue 表单与创建 ----
 
 

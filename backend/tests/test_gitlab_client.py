@@ -457,3 +457,136 @@ class TestReopenIssue:
         client._request = boom
         with pytest.raises(GitLabError):
             client.reopen_issue(125, 24)
+
+
+class TestReplyToNote:
+    """reply_to_note（issue #125）：回复 issue 评论 = 向该评论所在
+    discussion 追加 note。
+
+    notes API 响应不含 discussion_id（GitLab 19 实测），故先 GET
+    discussions 解析目标 note 所在 discussion id，再 POST discussions
+    带 in_reply_to_discussion_id 追加；note 不存在（含异常数据）抛
+    404，回复成功返回创建的 note 对象。
+    """
+
+    def _stub(self, client: GitLabClient, discussions: list[dict],
+              post: dict | None = None, post_error: Exception | None = None):
+        """替换 _paged（discussions 列表）与 _request（POST 回复），
+        记录调用参数。"""
+        captured: dict = {"paged": [], "request": []}
+
+        def fake_paged(path, **kwargs):
+            captured["paged"].append((path, kwargs))
+            return discussions
+
+        def fake_request(method, path, **kwargs):
+            captured["request"].append((method, path, kwargs))
+            if post_error is not None:
+                raise post_error
+            return post or {"id": "disc-reply",
+                            "notes": [{"id": 888, "body": "回复内容",
+                                       "system": False}]}
+
+        client._paged = fake_paged
+        client._request = fake_request
+        return captured
+
+    def test_replies_to_note_in_its_discussion(self):
+        """找到目标 note 所在 discussion，向该 discussion 追加回复。"""
+        client = make_client()
+        captured = self._stub(client, [
+            {"id": "d1", "notes": [{"id": 5}, {"id": 6}]},
+            {"id": "d2", "notes": [{"id": 7}]},
+        ])
+
+        note = client.reply_to_note(42, 7, 6, "收到")
+
+        # 先拉 discussions 解析 note 所在线程
+        assert captured["paged"] == [
+            ("/projects/42/issues/7/discussions", {})]
+        # 再向该 discussion 追加回复（in_reply_to_discussion_id）
+        method, path, kwargs = captured["request"][0]
+        assert method == "POST"
+        assert path == "/projects/42/issues/7/discussions"
+        assert kwargs["json"] == {"body": "收到",
+                                  "in_reply_to_discussion_id": "d1"}
+        assert note["id"] == 888
+        assert note["body"] == "回复内容"
+
+    def test_note_in_first_discussion(self):
+        """目标 note 在第一条 discussion 中（单评论线程场景）。"""
+        client = make_client()
+        captured = self._stub(client, [
+            {"id": "only", "notes": [{"id": 5}]},
+        ])
+
+        client.reply_to_note(42, 7, 5, "hi")
+
+        assert captured["request"][0][2]["json"] == {
+            "body": "hi", "in_reply_to_discussion_id": "only"}
+
+    def test_note_not_found_raises_404(self):
+        """discussions 中找不到目标 note → 404，且不发回复请求。"""
+        client = make_client()
+        captured = self._stub(client, [
+            {"id": "d1", "notes": [{"id": 5}]},
+            {"id": "d2", "notes": [{"id": 6}]},
+        ])
+
+        with pytest.raises(GitLabError) as exc:
+            client.reply_to_note(42, 7, 999, "hi")
+
+        assert exc.value.status_code == 404
+        assert captured["request"] == []
+
+    def test_empty_discussions_raises_404(self):
+        """无任何 discussion → 404。"""
+        client = make_client()
+        captured = self._stub(client, [])
+
+        with pytest.raises(GitLabError) as exc:
+            client.reply_to_note(42, 7, 1, "hi")
+
+        assert exc.value.status_code == 404
+        assert captured["request"] == []
+
+    def test_malformed_discussion_entries_skipped(self):
+        """异常数据（非 dict discussion / 缺 notes / 非 dict note）
+        应跳过，不影响正常查找。"""
+        client = make_client()
+        captured = self._stub(client, [
+            "bad-string",
+            {"id": "broken", "notes": "not-a-list"},
+            {"id": "d3", "notes": [None, "x", {"id": 42}]},
+            {"id": "d4", "notes": [{"id": 43}]},
+        ])
+
+        note = client.reply_to_note(42, 7, 42, "hi")
+
+        assert note["id"] == 888
+        assert captured["request"][0][2]["json"] == {
+            "body": "hi", "in_reply_to_discussion_id": "d3"}
+
+    def test_reply_response_without_notes_returns_discussion(self):
+        """响应缺 notes（异常结构）时原样返回，由调用方容错。"""
+        client = make_client()
+        captured = self._stub(client,
+                              [{"id": "d1", "notes": [{"id": 1}]}],
+                              post={"id": "odd-response"})
+
+        note = client.reply_to_note(42, 7, 1, "hi")
+
+        assert note == {"id": "odd-response"}
+
+    def test_gitlab_error_propagates(self):
+        """上游报错原样上抛（由 API 层映射 HTTP 状态）。"""
+        client = make_client()
+        captured = self._stub(
+            client,
+            [{"id": "d1", "notes": [{"id": 1}]}],
+            post_error=GitLabError("GitLab API 错误 500: boom", 500))
+
+        with pytest.raises(GitLabError) as exc:
+            client.reply_to_note(42, 7, 1, "hi")
+
+        assert exc.value.status_code == 500

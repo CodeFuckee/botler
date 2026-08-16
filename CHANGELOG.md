@@ -129,6 +129,32 @@
 
 ### Added
 
+- **概览页 issue 右边栏新增「添加评论」与「回复评论」（issue #125）**：
+  需求「在概览页面弹出的issue的右边栏，实现可以添加评论、以及回复
+  评论」。实现：
+  - **后端**：新增 `POST /api/issues/{project_id}/{iid}/comments`
+    （添加评论，复用 `GitLabClient.add_comment` 的 notes API）与
+    `POST /api/issues/{project_id}/{iid}/comments/{note_id}/reply`
+    （回复评论）两个端点；回复语义经实测确认——GitLab 的 notes API
+    响应不含 `discussion_id`，回复需先 GET discussions 解析目标评论
+    所在线程 id，再 POST discussions 带 `in_reply_to_discussion_id`
+    追加（`GitLabClient.reply_to_note` 新增方法，note 不存在抛 404）；
+    正文去空白后为空 → 400（GitLab 对空正文同样拒绝，提前校验）；
+    成功后清空概览缓存（user_notes_count/updated_at 已变化）并返回
+    精简评论对象（与 detail 的 notes 条目同结构）；
+  - **前端**（`IssueDrawer`）：评论区块底部新增评论输入区（占位
+    「写下你的评论…」，空内容/提交中禁用按钮），每条评论下「回复」
+    按钮展开内联回复框（占位「回复 @作者…」，支持取消）；添加/回复
+    成功后本地即时追加新评论、清空输入并叠加评论计数（快照 + 本次
+    新增），无需重新拉取详情；失败保留输入内容可重试；详情加载中/
+    失败时不显示输入区（避免对不可知目标发言）；
+  - **测试**：后端新增 21 用例（评论/回复端点 14：成功/空正文 400/
+    仓库不存在/未启用 404/GitLab 404/5xx→502/网络错误→502/清缓存，
+    以及 `reply_to_note` 单元 7：线程解析/404/异常数据跳过/响应容错）；
+    前端新增 9 用例（渲染态、添加评论成功/空输入/失败保留、回复
+    成功/取消/失败保留、加载失败隐藏输入区）；后端 1077 + 前端 563
+    全量测试通过。
+
 - **使用 apple-design skill 优化全部页面（issue #124）**：
   需求「使用apple-design skill优化所有页面，禁止少优化一个页面」。按
   apple-design skill（Apple 流体交互/材质与深度/响应/排版/可及性原则）

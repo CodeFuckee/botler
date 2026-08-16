@@ -367,11 +367,55 @@ class GitLabClient:
         return self._paged(f"/projects/{project_id}/issues", **params)
 
     def add_comment(self, project_id: int, iid: int, body: str) -> dict:
+        """添加 issue 评论（issue #125：概览页右边栏「添加评论」）。
+
+        GitLab notes API：POST /projects/{id}/issues/{iid}/notes，
+        返回新建的 note 对象（system=false）。
+        """
         note = self._request(
             "POST", f"/projects/{project_id}/issues/{iid}/notes",
             json={"body": body})
         assert isinstance(note, dict)
         return note
+
+    def reply_to_note(self, project_id: int, iid: int, note_id: int,
+                      body: str) -> dict:
+        """回复 issue 某条评论（issue #125：概览页右边栏「回复评论」）。
+
+        GitLab 回复语义：评论（note）挂在 discussion 下，回复 = 向该
+        discussion 追加一条 note——POST /projects/{id}/issues/{iid}/
+        discussions 带 in_reply_to_discussion_id。notes API 响应不含
+        discussion_id（GitLab 19 实测无该字段），故先 GET discussions
+        解析目标 note 所在 discussion id；找不到（note 不存在/异常
+        数据）抛 404（由调用方映射为 HTTP 404）。
+
+        回复成功返回创建的 note 对象（discussions API 响应为
+        discussion 对象，取 notes[0]；异常响应缺 notes 时原样返回，
+        由调用方 _trim_note 容错）。
+        """
+        discussions = self._paged(
+            f"/projects/{project_id}/issues/{iid}/discussions")
+        discussion_id = None
+        for disc in discussions or []:
+            if not isinstance(disc, dict):
+                continue
+            for n in disc.get("notes") or []:
+                if isinstance(n, dict) and n.get("id") == note_id:
+                    discussion_id = disc.get("id")
+                    break
+            if discussion_id:
+                break
+        if discussion_id is None:
+            raise GitLabError(f"评论 {note_id} 不存在", 404)
+        resp = self._request(
+            "POST", f"/projects/{project_id}/issues/{iid}/discussions",
+            json={"body": body,
+                  "in_reply_to_discussion_id": discussion_id})
+        assert isinstance(resp, dict)
+        notes = resp.get("notes")
+        if isinstance(notes, list) and notes:
+            return notes[0]
+        return resp
 
     def list_issue_notes(self, project_id: int, iid: int,
                          limit: int | None = None) -> list[dict]:
