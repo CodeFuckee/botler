@@ -265,8 +265,10 @@ class _DeltaCoalescer:
 def format_dsh_notification(method: str, payload: dict) -> list[str]:
     """SDK 通知 → hermes 风格事件行列表（0..n 行，逐行回调 on_line）。
 
-    - session.event：assistant/message 的 content blocks → text/thinking/
-      tool_use 事件行；turn/end → status；SDK 内部簿记（inbox/spliced）
+    - session.event：assistant/message 的 content blocks → 仅 tool_use
+      事件行（issue #144：text/thinking/reasoning 已由 assistant/chunk
+      流式增量逐字发布过，完整块再转事件行会导致任务详情页事件流同一
+      语句出现两次）；turn/end → status；SDK 内部簿记（inbox/spliced）
       跳过；未知类型 → raw 行（仅落日志诊断，parse_hermes_event_line
       不发布 SSE）
     - session.status → status 行
@@ -348,7 +350,15 @@ def _turn_end_status_line(reason) -> str:
 
 
 def _format_assistant_content(data: dict) -> list[str]:
-    """assistant/message 的 content blocks → 事件行（多块保序，未知块跳过）。"""
+    """assistant/message 的 content blocks → 事件行（多块保序，未知块跳过）。
+
+    issue #144：SDK 对同一 assistant 输出先发 assistant/chunk 流式增量
+    （text-delta/reasoning-delta 已转 stream_delta/thinking 实时展示），
+    再发 assistant/message 完整块（内容由这些增量拼成）。若完整块的
+    text/thinking/reasoning 也转事件行，任务详情页事件流里同一语句会
+    出现两次（日志实测：每条语句都成对出现）。因此完整块只保留 chunks
+    未覆盖的 tool_use（转 tool_start），文本/思考块不再产行。
+    """
     message = data.get("message")
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, list):
@@ -358,21 +368,7 @@ def _format_assistant_content(data: dict) -> list[str]:
         if not isinstance(block, dict):
             continue
         btype = block.get("type")
-        if btype == "text":
-            text = block.get("text")
-            if isinstance(text, str) and text:
-                lines.append(_event_line("stream_delta", {"text": text}))
-        elif btype == "thinking":
-            text = block.get("thinking")
-            if isinstance(text, str) and text:
-                lines.append(_event_line("thinking", {"text": text}))
-        elif btype == "reasoning":
-            # issue #115：真实 SDK 的思考块类型是 reasoning（字段 text，
-            # 与 thinking 块同语义），此前不识别导致思考内容从未透传
-            text = block.get("text")
-            if isinstance(text, str) and text:
-                lines.append(_event_line("thinking", {"text": text}))
-        elif btype == "tool_use":
+        if btype == "tool_use":
             lines.append(_event_line("tool_start", {
                 "tool": block.get("name", "?"),
                 "input": block.get("input")}))

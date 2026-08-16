@@ -314,6 +314,27 @@
 
 ### Fixed
 
+- **dsh 引擎（deepseek-harness SDK）任务详情页事件流同一语句出现两次（issue #144）**：
+  用户反馈「使用 deepseek harness sdk 作为执行引擎时候，任务详情页里的事件流，同样
+  的语句都是出现两次」。根因：SDK 对同一 assistant 输出会先后发射两类通知——
+  `assistant/chunk`（text-delta / reasoning-delta 流式增量）与 `assistant/message`
+  （由增量拼成的完整 content 块）；`dsh_runner._format_assistant_content` 把两类
+  都转成 `stream_delta` / `thinking` 事件行，导致事件流（SSE 实时 + 日志回放）里
+  每条语句都出现两次（任务 #242 日志实测：143 条唯一文本中 31 条精确成对重复，
+  其余为增量片段 + 完整句的成对重复）。
+  实现：
+  - 后端 `botler/dsh_runner.py`：`_format_assistant_content` 仅保留 chunks 未覆盖
+    的 `tool_use` 块（转 `tool_start`），`text` / `thinking` / `reasoning` 完整块
+    不再产事件行——流式阶段（chunk 增量）已实时展示过同一内容，完整块重复发布是
+    冗余；`format_dsh_notification` docstring 同步说明（issue #144）；
+  - 测试：`test_dsh_runner.py` 新增复现用例
+    `test_message_after_chunk_delta_not_duplicated`（chunk 增量 + 完整块同内容
+    时，完整块不产行）；原 `test_text_block_becomes_stream_delta` /
+    `test_thinking_block_becomes_thinking` / `test_reasoning_block_becomes_thinking`
+    / `test_multi_block_keeps_order` 适配新语义（message 文本/思考块不产行，仅
+    tool_use 转 tool_start）；
+  - 后端全量 pytest 1264 passed、前端 node --test 645 passed。
+
 - **「界面显示」卡片取消勾选「显示未启用项目」后没有保存按钮，无法保存设置（issue #142 反馈轮）**：
   用户反馈「取消勾选后没有保存按钮，无法保存设置」。现状与差距：issue #142 新增的
   `ui.show_disabled_repos` 开关位于「界面显示」卡片，而设置页全局「保存」按钮在上方

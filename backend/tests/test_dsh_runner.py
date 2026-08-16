@@ -291,22 +291,24 @@ def _note(method, payload):
 
 
 class TestFormatNotification:
-    def test_text_block_becomes_stream_delta(self):
+    def test_message_text_block_does_not_duplicate_stream_delta(self):
+        """issue #144：assistant/message 的 text 块是 chunk 增量的完整拼装，
+        不再产出 stream_delta（避免事件流同一语句出现两次）。"""
         lines = dsh_runner.format_dsh_notification("session.event", {
             "sessionId": "s1",
             "event": {"type": "assistant/message",
                       "data": {"message": {"content": [
                           {"type": "text", "text": "正在修复…"}]}}}})
-        assert lines == [json.dumps({"event": "stream_delta",
-                                     "text": "正在修复…"}, ensure_ascii=False)]
+        assert lines == []
 
-    def test_thinking_block_becomes_thinking(self):
+    def test_message_thinking_block_does_not_duplicate_thinking(self):
+        """issue #144：assistant/message 的 thinking 块（chunk reasoning-delta
+        的完整拼装）不再产出 thinking 事件行。"""
         lines = dsh_runner.format_dsh_notification("session.event", {
             "event": {"type": "assistant/message",
                       "data": {"message": {"content": [
                           {"type": "thinking", "thinking": "分析中"}]}}}})
-        assert lines == [json.dumps({"event": "thinking",
-                                     "text": "分析中"}, ensure_ascii=False)]
+        assert lines == []
 
     def test_tool_use_block_becomes_tool_start(self):
         lines = dsh_runner.format_dsh_notification("session.event", {
@@ -318,7 +320,9 @@ class TestFormatNotification:
                                      "input": {"command": "pytest"}},
                                     ensure_ascii=False)]
 
-    def test_multi_block_keeps_order(self):
+    def test_multi_block_only_tool_use_emitted(self):
+        """issue #144：完整块多块场景——text 块（chunk 已流式）不产行，
+        仅 tool_use 块转 tool_start。"""
         lines = dsh_runner.format_dsh_notification("session.event", {
             "event": {"type": "assistant/message",
                       "data": {"message": {"content": [
@@ -326,10 +330,9 @@ class TestFormatNotification:
                           {"type": "tool_use", "name": "bash",
                            "input": {"command": "ls"}},
                           {"type": "text", "text": "完成"}]}}}})
-        assert len(lines) == 3
-        assert json.loads(lines[0])["event"] == "stream_delta"
-        assert json.loads(lines[1])["event"] == "tool_start"
-        assert json.loads(lines[2])["event"] == "stream_delta"
+        assert len(lines) == 1
+        assert json.loads(lines[0])["event"] == "tool_start"
+        assert json.loads(lines[0])["tool"] == "bash"
 
     def test_turn_end_becomes_status(self):
         lines = dsh_runner.format_dsh_notification("session.event", {
@@ -406,18 +409,16 @@ class TestFormatNotification:
         assert json.loads(lines[0]) == {"event": "raw",
                                         "type": "assistant/chunk"}
 
-    def test_reasoning_block_becomes_thinking(self):
-        """真实 SDK 的思考块类型是 reasoning（非 thinking）：必须透传为
-        thinking 事件行（任务 #194 #195 诊断发现：思考内容从未出现在
-        SSE/任务日志中，诊断链路缺失过程可见性）。"""
+    def test_message_reasoning_block_does_not_duplicate_thinking(self):
+        """issue #144：真实 SDK 的思考块类型是 reasoning（字段 text），
+        完整块由 chunk reasoning-delta 增量拼成，不再重复产 thinking
+        事件行（增量已在流式阶段实时透传）。"""
         lines = dsh_runner.format_dsh_notification("session.event", {
             "event": {"type": "assistant/message",
                       "data": {"message": {"content": [
                           {"type": "reasoning",
                            "text": "先检查 401 根因"}]}}}})
-        assert lines == [json.dumps({"event": "thinking",
-                                     "text": "先检查 401 根因"},
-                                    ensure_ascii=False)]
+        assert lines == []
 
     def test_assistant_chunk_text_delta_becomes_stream_delta(self):
         """真实 SDK 流式增量块 text-delta：透传为 stream_delta（实时流）。"""
@@ -476,6 +477,36 @@ class TestFormatNotification:
         assert dsh_runner.format_dsh_notification(
             "session.event",
             {"event": {"type": "assistant/message"}}) == []  # 缺 data
+
+    def test_message_after_chunk_delta_not_duplicated(self):
+        """issue #144：SDK 同一 assistant 输出先发 assistant/chunk 流式
+        增量、再发 assistant/message 完整块——完整块不得再产出
+        stream_delta/thinking 事件行，否则任务详情页事件流里同一语句
+        出现两次（deepseek-harness 0.1.0rc6 实测：text-delta /
+        reasoning-delta 逐字流式后，assistant/message 携带由这些增量
+        拼成的完整 content 块，两者都转事件行 → 事件流重复）。
+        """
+        chunk_lines = (
+            dsh_runner.format_dsh_notification("session.event", {
+                "event": {"type": "assistant/chunk",
+                          "data": {"chunk": {"type": "text-delta",
+                                             "index": 0,
+                                             "text": "正在修复…"}}}})
+            + dsh_runner.format_dsh_notification("session.event", {
+                "event": {"type": "assistant/chunk",
+                          "data": {"chunk": {"type": "reasoning-delta",
+                                             "index": 0,
+                                             "text": "先看根因"}}}}))
+        msg_lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "assistant/message",
+                      "data": {"message": {"content": [
+                          {"type": "text", "text": "正在修复…"},
+                          {"type": "reasoning", "text": "先看根因"}]}}}})
+        # 流式增量照常产出（实时事件流的来源）
+        assert [json.loads(l)["event"] for l in chunk_lines] == [
+            "stream_delta", "thinking"]
+        # 完整块不再重复产出文本事件（修复点：杜绝事件流重复）
+        assert msg_lines == []
 
 
 class TestResultLine:
