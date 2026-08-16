@@ -214,7 +214,6 @@
     前端 616 + 后端 1200 全量测试通过。
 
 - **显示 gitlab token 隔离：设置页 owner gitlab token 所有 Agent 均不可使用（issue #130）**：
-：设置页 owner gitlab token 所有 Agent 均不可使用（issue #130）**：
   需求「显示gitlab token隔离，设置页面里的owner gitlab token，所有agent都不可以实现，
   已经在系统架构上实现隔离，避免agent错误调用；owner gitlab token只允许在概览页面上
   编辑issue、添加issue、关闭issue、在issue添加评论以及回复issue评论的时候使用，其他
