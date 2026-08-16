@@ -6,6 +6,31 @@
 
 ### Added
 
+- **灵感 / CI/CD 页面可配置是否显示未启用项目（issue #142）**：
+  需求「灵感页面和 ci\cd 页面显示是否显示未启用项目，增加通过设置去配置」。
+  实现：
+  - 设置项 `ui.show_disabled_repos`（默认 `true` = 显示，保持现状）：灵感板块
+    与 CI/CD 流水线板块是否展示 Botler 中未启用的仓库；`false` 时两个板块只
+    展示已启用仓库，未启用仓库不再发起 GitLab 流水线查询（省流量）；
+  - 后端 `config.py`：`Settings` 新增 `ui_show_disabled_repos` 字段（布尔，
+    缺省/非布尔回退默认），`KNOWN_FIELDS["ui"]` 加入 `show_disabled_repos`；
+    `api/settings.py` 读写（GET 返回 / PUT 校验布尔，非法值 400）与保存后
+    清空流水线概览缓存（开关立即生效，不等 10 秒 TTL）；
+  - 后端 `api/pipelines.py` / `api/inspirations.py`：`_collect` 与
+    `inspiration_overview` 在设置关闭时过滤 `enabled=false` 的仓库；
+  - 前端 `Settings.jsx`「界面显示」卡片新增「显示未启用项目」复选框
+    （`ui.show_disabled_repos`），随全局「保存」提交；
+  - 文档：`README.md` 关键配置表、`backend/config.example.yaml` 新增
+    `ui.show_disabled_repos` 说明；
+  - 测试：`test_api_settings.py` 新增 `TestShowDisabledReposSettings` 5 用例
+    （默认 true / false 持久化 / 重新开启 / 非布尔拒绝 / 部分更新不影响
+    timezone）；`test_api_pipelines.py` 新增设置关闭时过滤未启用仓库用例
+    （不发起 GitLab 查询）；`test_api_inspirations.py` 新增默认包含未启用
+    仓库 / 关闭时过滤 / 已启用仓库灵感不受影响 3 用例；前端
+    `settings-show-disabled-repos.test.mjs`（新）3 用例（开关存在 / 说明覆盖
+    灵感与 CI/CD / 保存提交）。
+
+
 - **插件体系：执行引擎 / 大模型 API 供应商 / webhook 发送任务消息插件化（issue #140）**：
   需求「平台想要实现一个插件体系，把执行引擎、大模型 api 供应商、webhook 发送
   任务消息都做成插件的形式，设计一个实现方案」。

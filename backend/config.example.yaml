@@ -136,6 +136,13 @@ backup:
   enabled: true            # 定时备份开关（每天 03:00 Asia/Shanghai 自动备份）
   retention_days: 30       # 保留策略：只保留最近 N 天的备份（清理更旧的）
 
+ui:
+  # 界面显示（issue #142）：灵感板块 / CI/CD 流水线板块是否显示未启用项目。
+  # true = 显示（未启用仓库带「未启用」徽章，默认）；false = 两个板块只展示
+  # 已启用仓库（后端接口直接过滤，未启用仓库不再发起 GitLab 流水线查询）。
+  # 设置页「界面显示」卡片可修改，保存后立即生效。
+  show_disabled_repos: true
+
 notifications:
   # 网页通知（issue #21）：浏览器 Notification API 弹系统通知，时机可在设置页配置。
   # 前端按开关过滤，改设置立即生效无需重启；需浏览器授权且页面保持打开。

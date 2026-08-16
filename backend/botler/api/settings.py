@@ -117,6 +117,9 @@ def get_settings(request: Request):
         "ui": {
             # 页面时间显示时区（IANA 名，空 = 跟随浏览器本机时区）
             "timezone": s.ui_timezone,
+            # 灵感 / CI/CD 页面是否显示未启用项目（issue #142）：
+            # true = 显示（未启用仓库带徽章），false = 只展示已启用仓库
+            "show_disabled_repos": s.ui_show_disabled_repos,
         },
         "notifications": {
             # 网页通知（issue #21）：总开关 + 各通知时机开关
@@ -250,6 +253,9 @@ def update_settings(request: Request, body: dict):
     if ui is not None:
         _validate_ui(ui)
         c.config.update_ui(ui)
+        # issue #142：清空流水线概览缓存（TTL 10 秒），开关立即生效
+        from .pipelines import clear_pipeline_cache
+        clear_pipeline_cache()
 
     notify = body.get("notifications")
     if notify is not None:
@@ -514,7 +520,10 @@ def _validate_backup(patch: dict) -> None:
 
 
 def _validate_ui(patch: dict) -> None:
-    """校验 ui 段：timezone 为空串（跟随浏览器）或合法 IANA 时区名（issue #14）。"""
+    """校验 ui 段：timezone 为空串（跟随浏览器）或合法 IANA 时区名（issue #14）；
+    show_disabled_repos 必须是布尔值（issue #142）。"""
+    if "show_disabled_repos" in patch and not isinstance(patch["show_disabled_repos"], bool):
+        raise HTTPException(400, "ui.show_disabled_repos 必须是布尔值")
     if "timezone" in patch:
         val = patch["timezone"]
         if not isinstance(val, str):

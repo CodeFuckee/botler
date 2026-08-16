@@ -238,7 +238,12 @@ export default function Settings() {
         claude: { command: settings.claude.command, args: settings.claude.args },
         // dsh 引擎推理等级（issue #123）：跟随全局「保存」提交
         dsh: { reasoning_effort: settings.dsh?.reasoning_effort || '' },
-        ui: { timezone: settings.ui?.timezone || '' },
+        ui: {
+          timezone: settings.ui?.timezone || '',
+          // 灵感 / CI/CD 页面是否显示未启用项目（issue #142）：
+          // 关闭 = 两个板块只展示已启用仓库
+          show_disabled_repos: settings.ui?.show_disabled_repos !== false,
+        },
         notifications: { ...settings.notifications },
         ...(settings.webhook ? { webhook: buildWebhookPatch() } : {}),
         sso: buildSsoPatch(),
@@ -487,6 +492,20 @@ export default function Settings() {
         <table className="table kv">
           <tbody>
             <tr>
+              <th>显示未启用项目 <code>ui.show_disabled_repos</code></th>
+              <td>
+                <input
+                  type="checkbox"
+                  className="check-input"
+                  checked={settings.ui?.show_disabled_repos !== false}
+                  onChange={(e) => setSettings((s) => ({
+                    ...s,
+                    ui: { ...(s.ui || {}), show_disabled_repos: e.target.checked },
+                  }))}
+                />
+              </td>
+            </tr>
+            <tr>
               <th>显示时区 <code>ui.timezone</code></th>
               <td>
                 <input
@@ -504,8 +523,10 @@ export default function Settings() {
           </tbody>
         </table>
         <p className="muted small">
-          任务创建/开始/完成时间与执行日志时间戳按此时区显示；留空则跟随本机浏览器时区（默认与访问者本机一致），
-          修改后点击上方「保存」立即生效，无需刷新。
+          灵感板块与 CI/CD 流水线板块是否显示未启用项目：勾选 = 显示（未启用仓库带
+          「未启用」徽章，默认）；取消 = 两个板块只展示已启用仓库。
+          任务创建/开始/完成时间与执行日志时间戳按显示时区展示；留空则跟随本机浏览器时区
+          （默认与访问者本机一致），修改后点击上方「保存」立即生效，无需刷新。
         </p>
       </div>
 

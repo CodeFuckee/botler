@@ -278,6 +278,29 @@ class TestPipelinesOverview:
         assert len(data["errors"]) == 2
         assert all(p["pipeline"] is None for p in data["pipelines"])
 
+
+    def test_overview_hides_disabled_repos_when_setting_off(self, api_app):
+        """ui.show_disabled_repos=false：未启用仓库从概览结果中过滤（issue #142）。
+
+        设置关闭后，灵感 / CI/CD 页面都不再显示未启用项目；未启用仓库不再
+        发起 GitLab 查询（避免无效流量），也不进 errors 列表。
+        """
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="on", enabled=True)
+        _add_repo(db, project_id=43, name="off", enabled=False)
+        stub.pipelines_by_project = {42: make_pipeline(731, status="success")}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+        app.state.ctx.config.update_ui({"show_disabled_repos": False})
+
+        resp = TestClient(app).get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [p["repo_name"] for p in data["pipelines"]] == ["on"]
+        assert data["errors"] == []
+        # 未启用仓库不应发起流水线查询（enabled 过滤发生在遍历之前）
+        assert "pipeline:43" not in stub.calls
+
     def test_overview_includes_disabled_repo(self, client):
         """未启用仓库也返回并查询流水线（issue #39 第二轮），enabled 字段透传。"""
         tc, stub, db, tmp_path = client

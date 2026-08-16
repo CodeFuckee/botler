@@ -57,6 +57,12 @@ def _notify_default(notify: dict, key: str, default: bool) -> bool:
 DEFAULT_ISSUE_PRIORITY = ["bug", "test", "feature"]
 
 
+def _ui_default(ui: dict, key: str, default: bool) -> bool:
+    """读取界面显示开关配置：缺省或非布尔值回退默认（issue #142）。"""
+    val = ui.get(key, default)
+    return val if isinstance(val, bool) else default
+
+
 def _issue_priority_labels(worker: dict) -> list[str]:
     """读取 worker.issue_priority（issue #76）：必须是字符串列表且非空，
     否则回退默认顺序（防御手动编辑 config.yaml 写坏的情况）。"""
@@ -149,6 +155,10 @@ class Settings:
     backup_enabled: bool = True
     backup_retention_days: int = 30
     ui_timezone: str = ""  # 页面显示时区（IANA 名，空 = 跟随浏览器本机时区；issue #14）
+    # 灵感 / CI/CD 页面是否显示未启用项目（issue #142）：默认 true = 显示
+    # （未启用仓库带「未启用」徽章，保持现状）；false = 两个板块只展示
+    # 已启用仓库（后端接口直接过滤，未启用仓库不再发起 GitLab 查询）。
+    ui_show_disabled_repos: bool = True
     # 网页通知（issue #21）：总开关 + 各通知时机开关，前端按此过滤弹系统通知
     notifications_enabled: bool = True
     notify_task_needs_interaction: bool = True
@@ -210,7 +220,7 @@ KNOWN_FIELDS = {
     "templates": {"default", "resume"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
-    "ui": {"timezone"},
+    "ui": {"timezone", "show_disabled_repos"},
     "notifications": {"enabled", "task_needs_interaction", "issue_completed",
                       "queue_empty", "queue_no_work"},
     "webhook": {"enabled", "url", "content_type", "authorization",
@@ -396,6 +406,7 @@ class ConfigManager:
             backup_enabled=bool(backup.get("enabled", True)),
             backup_retention_days=int(backup.get("retention_days", 30)),
             ui_timezone=(ui.get("timezone") or "").strip(),
+            ui_show_disabled_repos=_ui_default(ui, "show_disabled_repos", True),
             notifications_enabled=_notify_default(notify, "enabled", True),
             notify_task_needs_interaction=_notify_default(notify, "task_needs_interaction", True),
             notify_issue_completed=_notify_default(notify, "issue_completed", True),

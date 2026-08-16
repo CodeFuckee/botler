@@ -108,6 +108,53 @@ class TestTimezoneSettings:
         assert "时区" in resp.json()["detail"]
 
 
+
+
+class TestShowDisabledReposSettings:
+    """ui.show_disabled_repos 段：灵感 / CI/CD 页面是否显示未启用项目（issue #142）。"""
+
+    def test_get_settings_show_disabled_repos_default_true(self, client):
+        """未配置时默认 true（保持现状：显示未启用项目）。"""
+        tc, tmp_path = client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["show_disabled_repos"] is True
+
+    def test_update_show_disabled_repos_false_persists(self, client):
+        """PUT ui.show_disabled_repos=false 写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ui": {"show_disabled_repos": False}})
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["show_disabled_repos"] is False
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "show_disabled_repos: false" in config_text
+
+    def test_update_show_disabled_repos_back_to_true(self, client):
+        """关闭后重新开启：true 正常写回。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"ui": {"show_disabled_repos": False}})
+        resp = tc.put("/api/settings", json={"ui": {"show_disabled_repos": True}})
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["show_disabled_repos"] is True
+
+    def test_update_show_disabled_repos_rejects_non_bool(self, client):
+        """非布尔值拒绝保存（400）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ui": {"show_disabled_repos": "yes"}})
+        assert resp.status_code == 400
+        assert "show_disabled_repos" in resp.json()["detail"]
+
+    def test_partial_update_preserves_timezone(self, client):
+        """部分更新：只改 show_disabled_repos 不影响 timezone。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"ui": {"timezone": "Asia/Shanghai"}})
+        resp = tc.put("/api/settings", json={"ui": {"show_disabled_repos": False}})
+        assert resp.status_code == 200
+        ui = resp.json()["ui"]
+        assert ui["show_disabled_repos"] is False
+        assert ui["timezone"] == "Asia/Shanghai"
+
+
 class TestSsoSettings:
     """sso 段：Synology SSO 登录配置（issue #27）。"""
 

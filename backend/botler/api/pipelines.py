@@ -1,7 +1,8 @@
 """概览页 CI/CD 流水线状态 API（issue #39）。
 
-GET /api/pipelines/overview：遍历所有配置仓库（含未启用，issue #39 第二轮），
-返回各仓库最新一次流水线的整体状态与按 jobs 聚合的 stage 进度（stage 顺序
+GET /api/pipelines/overview：遍历所有配置仓库（含未启用，issue #39 第二轮；
+设置 ui.show_disabled_repos=false 时只返回已启用仓库，issue #142），返回
+各仓库最新一次流水线的整体状态与按 jobs 聚合的 stage 进度（stage 顺序
 = jobs 首次出现顺序，即 .gitlab-ci.yml 定义顺序），供概览页以 GitLab CI/CD
 风格展示：
 - 运行完成没有（pipeline.status 是否终态）
@@ -171,10 +172,17 @@ def _repo_client(c, row) -> GitLabClient | None:
 
 
 def _collect(c) -> dict:
-    """遍历所有配置仓库（含未启用，issue #39 第二轮），聚合各仓库最新流水线状态。"""
+    """遍历所有配置仓库（含未启用，issue #39 第二轮），聚合各仓库最新流水线状态。
+
+    issue #142：设置 ui.show_disabled_repos=false 时跳过未启用仓库（不再发起
+    GitLab 查询），灵感 / CI/CD 页面均只展示已启用项目。
+    """
     pipelines: list[dict] = []
     errors: list[str] = []
+    show_disabled = c.config.get().ui_show_disabled_repos
     for row in c.db.list_repos():
+        if not show_disabled and not row["enabled"]:
+            continue
         entry = {"repo_id": row["id"], "repo_name": row["name"],
                  "enabled": bool(row["enabled"]),
                  "pipeline": None, "stages": [], "commit_time": None}

@@ -8,7 +8,8 @@
 - GET    /api/inspirations/overview：聚合所有未软删除仓库（按优先级
   升序、同优先级按仓库 id，与 list_repos 一致），每个仓库带灵感列表
   （按 updated_at 降序）。无灵感的仓库也返回（前端展示空状态 + 添加
-  表单），与开放 issue 板块同构。
+  表单），与开放 issue 板块同构。设置 ui.show_disabled_repos=false 时
+  只返回已启用仓库（issue #142）。
 - POST   /api/inspirations：创建灵感（repo_id + content 必填）。
 - PUT    /api/inspirations/{id}：更新灵感内容（刷新 updated_at）。
 - DELETE /api/inspirations/{id}：删除灵感。
@@ -84,6 +85,9 @@ def inspiration_overview(request: Request):
     """
     c = request.app.state.ctx
     repos = c.db.list_repos()
+    # issue #142：设置关闭时隐藏未启用项目（灵感 / CI/CD 页面一致）
+    if not c.config.get().ui_show_disabled_repos:
+        repos = [r for r in repos if r["enabled"]]
     insp_rows = c.db.list_inspirations()
     by_repo: dict[int, list[dict]] = {}
     for row in insp_rows:

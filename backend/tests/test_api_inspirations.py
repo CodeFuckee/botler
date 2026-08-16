@@ -95,6 +95,38 @@ class TestOverview:
         names = [x["repo_name"] for x in r.json()["repos"]]
         assert names == ["alive"]
 
+
+    def test_includes_disabled_repo_by_default(self, client):
+        """默认（show_disabled_repos=true）：未启用仓库照常返回，enabled=false 透传。"""
+        tc, db = client
+        _add_repo(db, 1, "enabled-repo", enabled=True)
+        _add_repo(db, 2, "disabled-repo", enabled=False)
+        r = tc.get("/api/inspirations/overview")
+        repos = r.json()["repos"]
+        assert [x["repo_name"] for x in repos] == ["enabled-repo", "disabled-repo"]
+        assert repos[1]["enabled"] is False
+
+    def test_hides_disabled_repo_when_setting_off(self, api_app):
+        """ui.show_disabled_repos=false：未启用仓库从灵感聚合中过滤（issue #142）。"""
+        app, db = api_app
+        _add_repo(db, 1, "enabled-repo", enabled=True)
+        _add_repo(db, 2, "disabled-repo", enabled=False)
+        app.state.ctx.config.update_ui({"show_disabled_repos": False})
+        r = TestClient(app).get("/api/inspirations/overview")
+        assert [x["repo_name"] for x in r.json()["repos"]] == ["enabled-repo"]
+
+    def test_hides_disabled_repo_but_keeps_its_inspirations_data(self, api_app):
+        """设置关闭时已启用仓库的灵感列表不受影响（issue #142 边界）。"""
+        app, db = api_app
+        repo = _add_repo(db, 1, "enabled-repo", enabled=True)
+        _add_repo(db, 2, "disabled-repo", enabled=False)
+        db.create_inspiration(repo, "只属于启用仓库的灵感")
+        app.state.ctx.config.update_ui({"show_disabled_repos": False})
+        r = TestClient(app).get("/api/inspirations/overview")
+        repos = r.json()["repos"]
+        assert [x["repo_name"] for x in repos] == ["enabled-repo"]
+        assert repos[0]["inspirations"][0]["content"] == "只属于启用仓库的灵感"
+
     def test_inspirations_ordered_by_updated_at_desc(self, client):
         tc, db = client
         repo = _add_repo(db, 1, "botler")
