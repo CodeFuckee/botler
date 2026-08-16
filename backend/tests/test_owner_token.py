@@ -7,8 +7,10 @@
 2. owner-token-guide 端点返回教程文档，文档缺失 404；
 3. executor：_call_with_fallback(prefer_owner=True) 编辑 issue 优先 owner
    token；owner 401/403 回退原链路；默认（非编辑）调用不受影响；
-4. executor：_build_env 注入 GITLAB_TOKEN 优先 owner token；_askpass_script
-   （git 推送凭据）始终用 bot token 不含 owner token（严禁推送代码）；
+4. executor：_build_env 注入 GITLAB_TOKEN 绝不注入 owner token（issue
+   #130：agent 无论如何都不能使用 owner token，只能用自己仓库的认证
+   token / 全局 bot token）；_askpass_script（git 推送凭据）始终用 bot
+   token 不含 owner token（严禁推送代码）；
 5. executor：成功/失败收尾的评论与标签调用传 prefer_owner=True，而查询
    提交/检查最后作者等非编辑调用保持原链路；
 6. reconciler：终态标签补打（编辑 issue）优先 owner token，owner 失效
@@ -239,11 +241,14 @@ class TestExecutorOwnerToken:
         assert result == "ok"
         assert seen == ["test-token"]
 
-    def test_build_env_gitlab_token_prefers_owner(self, executor, monkeypatch):
-        """会话 GITLAB_TOKEN 优先 owner token（编辑 issue 用途）。"""
+    def test_build_env_never_injects_owner_token(self, executor, monkeypatch):
+        """issue #130：agent 会话绝不注入 owner token（owner token 只允许
+        在概览页 issue 编辑操作时由平台使用），配置了 owner token 时
+        GITLAB_TOKEN 仍用 remote/全局 bot token。"""
         monkeypatch.setattr(executor, "_task_gitlab_token", lambda repo: None)
         env = executor._build_env(_REPO, {"project_id": 42, "iid": 1})
-        assert env["GITLAB_TOKEN"] == "owner-token-1"
+        assert env["GITLAB_TOKEN"] == "test-token"
+        assert "owner-token-1" not in env["GITLAB_TOKEN"]
 
     def test_build_env_falls_back_to_remote_then_global(self, executor, monkeypatch):
         """未配置 owner token 时保持既有优先级：remote token → 全局 bot token。"""

@@ -54,7 +54,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..database import normalize_issue_updated_at
-from ..gitlab_client import GitLabError
+from ..gitlab_client import GitLabClient, GitLabError
 from .pipelines import _commit_time_utc, _repo_client
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,10 @@ def clear_issue_cache() -> None:
     with _CACHE_LOCK:
         _CACHE["expires_at"] = 0.0
         _CACHE["data"] = None
+    # owner client 缓存（issue #130）：测试隔离 + 配置变更后重建
+    global _OWNER_CLIENT, _OWNER_CLIENT_TOKEN
+    _OWNER_CLIENT = None
+    _OWNER_CLIENT_TOKEN = "" 
 
 
 def _trim_issue(issue: dict, label_colors: dict) -> dict:
@@ -233,6 +237,54 @@ def issues_overview(request: Request):
     return result
 
 
+
+# ---- issue #130：概览页 issue 编辑操作优先 owner token ----
+# owner gitlab token 只允许在概览页面上编辑 issue、添加 issue、关闭 issue、
+# 在 issue 添加评论以及回复 issue 评论的时候使用，其他场景都不得使用；
+# agent 无论如何都不能使用 owner gitlab token（executor 会话环境不注入），
+# 只能使用自己仓库的认证 token 进行 issue 编辑。
+
+# owner client 缓存（按 token 值判断重建，与 executor._owner_gitlab_client
+# 同模式）：配置变化（config.yaml 重载）后下次调用自动换新 client。
+_OWNER_CLIENT: GitLabClient | None = None
+_OWNER_CLIENT_TOKEN: str = ""
+
+
+def _owner_client(c) -> GitLabClient | None:
+    """owner token 客户端（issue #130）：概览页 issue 编辑操作优先使用。
+
+    未配置 owner token 返回 None（调用方沿用原链路 per-repo → 全局）。
+    """
+    cfg = c.config.get()
+    token = (cfg.gitlab_owner_token or "").strip()
+    if not token:
+        return None
+    global _OWNER_CLIENT, _OWNER_CLIENT_TOKEN
+    if _OWNER_CLIENT is None or _OWNER_CLIENT_TOKEN != token:
+        _OWNER_CLIENT = GitLabClient(
+            cfg.gitlab_url, token, verify_ssl=cfg.verify_ssl)
+        _OWNER_CLIENT_TOKEN = token
+    return _OWNER_CLIENT
+
+
+def _issue_edit_call(c, row, call):
+    """概览页 issue 编辑操作执行（issue #130）：优先 owner token 客户端。
+
+    未配置 owner token 或 owner 401/403（token 失效/权限不足）时回退原
+    链路（per-repo → 全局 bot token），与 executor 的编辑回退一致。
+    非编辑调用（查询、推送、流水线等）绝不使用 owner token。
+    """
+    owner = _owner_client(c)
+    if owner is not None:
+        try:
+            return call(owner)
+        except GitLabError as e:
+            if e.status_code not in (401, 403):
+                raise
+            logger.info("概览页编辑 owner token 失效（%s），回退原链路重试", e)
+    return call(_repo_client(c, row) or c.gitlab)
+
+
 def _enabled_repo_by_project_id(c, project_id: int) -> dict | None:
     """按 GitLab project_id 查找「已启用」仓库（issue #94 关闭接口与
     issue #97 详情接口共用）；无匹配返回 None。"""
@@ -259,9 +311,8 @@ def close_issue(request: Request, project_id: int, iid: int):
     row = _enabled_repo_by_project_id(c, project_id)
     if row is None:
         raise HTTPException(404, "仓库不存在或未启用")
-    client = _repo_client(c, row) or c.gitlab
     try:
-        client.close_issue(project_id, iid)
+        _issue_edit_call(c, row, lambda cl: cl.close_issue(project_id, iid))
     except GitLabError as e:
         if e.status_code == 404:
             raise HTTPException(404, "issue 不存在") from e
@@ -417,9 +468,9 @@ def update_issue_labels(request: Request, project_id: int, iid: int,
     remove = _normalize_label_names(body.remove)
     if not add and not remove:
         raise HTTPException(400, "没有需要变更的标记")
-    client = _repo_client(c, row) or c.gitlab
     try:
-        issue = client.add_labels(project_id, iid, add, remove=remove or None)
+        issue = _issue_edit_call(
+            c, row, lambda cl: cl.add_labels(project_id, iid, add, remove=remove or None))
     except GitLabError as e:
         if e.status_code == 404:
             raise HTTPException(404, "issue 不存在") from e
@@ -428,7 +479,7 @@ def update_issue_labels(request: Request, project_id: int, iid: int,
         # per-repo client 可能指向不可达 host（remote url 解析出的地址）
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
     clear_issue_cache()
-    label_colors = _fetch_label_colors(client, project_id)
+    label_colors = _fetch_label_colors(_repo_client(c, row) or c.gitlab, project_id)
     return {"labels": _trim_issue(issue, label_colors)["labels"]}
 
 
@@ -534,12 +585,6 @@ def _comment_text(raw) -> str:
     return (raw or "").strip()
 
 
-def _comment_client(c, row):
-    """评论/回复用的 GitLab client：与详情接口一致（per-repo token
-    优先，无 token 回退全局 bot token）。"""
-    return _repo_client(c, row) or c.gitlab
-
-
 def _create_comment(request: Request, project_id: int, iid: int,
                     text: str, reply_to: int | None = None) -> dict:
     """添加评论 / 回复评论共用实现（issue #125）。
@@ -556,12 +601,12 @@ def _create_comment(request: Request, project_id: int, iid: int,
         raise HTTPException(404, "仓库不存在或未启用")
     if not text:
         raise HTTPException(400, "评论内容不能为空")
-    client = _comment_client(c, row)
     try:
-        if reply_to is None:
-            note = client.add_comment(project_id, iid, text)
-        else:
-            note = client.reply_to_note(project_id, iid, reply_to, text)
+        def _do(cl):
+            if reply_to is None:
+                return cl.add_comment(project_id, iid, text)
+            return cl.reply_to_note(project_id, iid, reply_to, text)
+        note = _issue_edit_call(c, row, _do)
     except GitLabError as e:
         if e.status_code == 404:
             raise HTTPException(404, "评论不存在") from e
@@ -638,7 +683,11 @@ def _form_meta_labels(labels: list[dict]) -> list[dict]:
 
 def _issue_create_client(c, row):
     """创建 issue 用的 GitLab client：与 issue 查询一致的 per-repo
-    client 优先（仓库自身 token），无 token 回退全局 bot token。"""
+    client 优先（仓库自身 token），无 token 回退全局 bot token。
+
+    仅 form-meta（添加 issue 弹窗的成员/标签数据源，只读查询）使用；
+    create_issue 写操作走 _issue_edit_call（issue #130：owner token
+    优先）。"""
     return _repo_client(c, row) or c.gitlab
 
 
@@ -714,11 +763,12 @@ def create_issue(request: Request, body: IssueCreate):
     if body.assignee_id is None:
         raise HTTPException(400, "请选择分配人")
     description = (body.description or "").strip() or None
-    client = _issue_create_client(c, row)
     try:
-        issue = client.create_issue(
-            row["gitlab_project_id"], title, description=description,
-            assignee_id=body.assignee_id, labels=labels)
+        issue = _issue_edit_call(
+            c, row,
+            lambda cl: cl.create_issue(
+                row["gitlab_project_id"], title, description=description,
+                assignee_id=body.assignee_id, labels=labels))
     except GitLabError as e:
         raise HTTPException(502, f"创建 issue 失败: {e}") from e
     except httpx.HTTPError as e:

@@ -31,3 +31,5 @@ logs/
 .git-credentials
 # dsh 引擎 SDK 默认会话目录（运行时产物，断点续跑数据应配 dsh.session_root 指向持久目录）
 **/.sessions/
+# CI 运行时 uv 缓存（部署机器生成，不入库）
+cache/

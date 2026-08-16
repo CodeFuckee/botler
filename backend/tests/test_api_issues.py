@@ -2174,3 +2174,146 @@ class TestIssueComments:
                        json={"body": "hi"})
 
         assert resp.status_code == 502
+
+
+# ---- issue #130：概览页 issue 编辑操作优先 owner token ----
+
+class TestIssueEditOwnerToken:
+    """概览页 issue 编辑操作（关闭/编辑标签/添加评论/回复评论/添加
+    issue）优先使用 owner gitlab token（issue #130）：owner token 只允许
+    在概览页面上编辑 issue、添加 issue、关闭 issue、在 issue 添加评论
+    以及回复 issue 评论的时候使用，其他场景都不得使用。未配置 owner
+    token 或 owner 401/403 时回退原链路（per-repo → 全局 bot token）。
+    """
+
+    @staticmethod
+    def _enable_owner(ctx, token="owner-token-1"):
+        ctx.config.update_gitlab({"owner_token": token})
+
+    def test_close_prefers_owner_token(self, api_app, monkeypatch):
+        """关闭 issue：配置 owner token 时优先使用 owner client。"""
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        seen = []
+        from botler.api import issues as issues_mod
+
+        def fake_client(url, token, verify_ssl=True, webhook_base_url=None):
+            seen.append(token)
+            return stub
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", fake_client)
+        tc = TestClient(app)
+        resp = tc.post("/api/issues/42/64/close")
+        assert resp.status_code == 200, resp.text
+        assert seen == ["owner-token-1"], f"关闭 issue 应优先 owner token（实际 {seen}）"
+        assert stub.close_calls == [(42, 64)]
+
+    def test_close_without_owner_uses_original(self, client):
+        """未配置 owner token：关闭 issue 沿用原链路（全局 stub）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="demo")
+        resp = tc.post("/api/issues/42/64/close")
+        assert resp.status_code == 200
+        assert stub.close_calls == [(42, 64)]
+
+    def test_close_owner_401_falls_back(self, api_app, monkeypatch):
+        """owner token 失效（401）：回退原链路重试。"""
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        from botler.api import issues as issues_mod
+
+        class OwnerStub:
+            def __init__(self, url, token, verify_ssl=True, webhook_base_url=None):
+                self.token = token
+            def close_issue(self, project_id, iid):
+                raise GitLabError("owner 401", 401)
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", OwnerStub)
+        tc = TestClient(app)
+        resp = tc.post("/api/issues/42/64/close")
+        assert resp.status_code == 200, resp.text
+        assert stub.close_calls == [(42, 64)], "owner 401 后应回退原链路关闭"
+
+    def test_labels_prefers_owner_token(self, api_app, monkeypatch):
+        """编辑 issue 标签：配置 owner token 时优先 owner client。"""
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        seen = []
+        from botler.api import issues as issues_mod
+
+        def fake_client(url, token, verify_ssl=True, webhook_base_url=None):
+            seen.append(token)
+            return stub
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", fake_client)
+        tc = TestClient(app)
+        resp = tc.put("/api/issues/42/64/labels",
+                      json={"add": ["bot-done"], "remove": []})
+        assert resp.status_code == 200, resp.text
+        assert seen == ["owner-token-1"]
+        assert stub.labels_update_calls == [(42, 64, ["bot-done"], None)]
+
+    def test_comment_prefers_owner_token(self, api_app, monkeypatch):
+        """添加 issue 评论：配置 owner token 时优先 owner client。"""
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        seen = []
+        from botler.api import issues as issues_mod
+
+        def fake_client(url, token, verify_ssl=True, webhook_base_url=None):
+            seen.append(token)
+            return stub
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", fake_client)
+        tc = TestClient(app)
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "测试评论"})
+        assert resp.status_code == 201, resp.text
+        assert seen == ["owner-token-1"]
+        assert stub.add_comment_calls == [(42, 64, "测试评论")]
+
+    def test_reply_prefers_owner_token(self, api_app, monkeypatch):
+        """回复 issue 评论：配置 owner token 时优先 owner client。"""
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        seen = []
+        from botler.api import issues as issues_mod
+
+        def fake_client(url, token, verify_ssl=True, webhook_base_url=None):
+            seen.append(token)
+            return stub
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", fake_client)
+        tc = TestClient(app)
+        resp = tc.post("/api/issues/42/64/comments/55/reply",
+                       json={"body": "回复内容"})
+        assert resp.status_code == 201, resp.text
+        assert seen == ["owner-token-1"]
+        assert stub.reply_calls == [(42, 64, 55, "回复内容")]
+
+    def test_create_issue_prefers_owner_token(self, api_app, monkeypatch):
+        """添加 issue：配置 owner token 时优先 owner client。"""
+        app, stub, db, tmp_path = api_app
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        seen = []
+        from botler.api import issues as issues_mod
+
+        def fake_client(url, token, verify_ssl=True, webhook_base_url=None):
+            seen.append(token)
+            return stub
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", fake_client)
+        tc = TestClient(app)
+        resp = tc.post("/api/issues", json={
+            "repo_id": repo_id, "title": "新 issue",
+            "assignee_id": 7, "labels": ["feature"],
+        })
+        assert resp.status_code == 201, resp.text
+        assert seen == ["owner-token-1"]
+        assert stub.create_calls[0][0] == 42
+        assert stub.create_calls[0][1]["title"] == "新 issue"

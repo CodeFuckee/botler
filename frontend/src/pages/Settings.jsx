@@ -614,9 +614,15 @@ export default function Settings() {
       <BackupManager />
 
       {/* Owner GitLab Token（issue #87）：专用于编辑 issue（评论/标签）的
-          个人访问令牌，严禁用于推送代码与处理流水线 */}
+          个人访问令牌，严禁用于推送代码与处理流水线。
+          issue #130：系统架构层已隔离——所有 Agent 均不可使用，只允许
+          在概览页面编辑 issue、添加 issue、关闭 issue、添加评论与回复
+          评论时由平台使用；Agent 只能使用自己仓库的认证 token 编辑 issue */}
       <div className="card">
-        <h2>Owner GitLab Token（issue 编辑专用）</h2>
+        <h2>
+          Owner GitLab Token（issue 编辑专用）
+          <span className="badge badge-muted owner-token-isolated">已隔离 · Agent 不可用</span>
+        </h2>
         <table className="table kv">
           <tbody>
             <tr>
@@ -644,10 +650,16 @@ export default function Settings() {
           )}
         </div>
         <p className="muted small">
-          该 token 专门用来编辑 issue（写评论、打标签），botler 绝不会用它推送代码或处理
-          流水线——推送与流水线操作仍使用 bot token。推荐用仓库 Reporter 角色的低权限账号
-          申请（账号权限层面杜绝越权使用），申请步骤见下方「查看 token 申请教程」。
-          留空保存 = 保持现有 token。
+          🔒 <strong>隔离状态</strong>：该 token 已由系统架构隔离，<strong>所有 Agent
+          均不可使用</strong>——Agent 处理 issue 时只能使用自己仓库的认证 token 进行
+          issue 编辑，会话环境中绝不会注入此 token。
+        </p>
+        <p className="muted small">
+          <strong>允许使用范围</strong>：仅限在概览页面上编辑 issue、添加 issue、关闭 issue、
+          在 issue 添加评论以及回复 issue 评论时由平台使用；其他场景（推送代码、处理流水线
+          等）一律不得使用，botler 绝不会用它推送代码或处理流水线——推送与流水线操作仍
+          使用 bot token。推荐用仓库 Reporter 角色的低权限账号申请（账号权限层面杜绝越权
+          使用），申请步骤见下方「查看 token 申请教程」。留空保存 = 保持现有 token。
         </p>
         <div className="guide-box">
           <button className="btn" onClick={() => setOwnerGuideOpen((v) => !v)}>

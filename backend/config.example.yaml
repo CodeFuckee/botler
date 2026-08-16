@@ -5,6 +5,10 @@ gitlab:
   url: https://home.chenkaidi.top:509
   bot_token: ${GITLAB_BOT_TOKEN}      # bot 账号 PAT，scope 至少 api + write_repository
   # owner_token（issue #87，可选）：专用于编辑 issue（评论/标签）的 PAT。
+  # issue #130：该 token 已在系统架构层隔离——所有 Agent 均不可使用
+  # （agent 会话环境绝不注入，agent 只能用自己仓库的认证 token 编辑
+  # issue）；只允许在概览页面编辑 issue、添加 issue、关闭 issue、添加
+  # 评论与回复评论时由平台使用，严禁用于推送代码/操作流水线。
   # 推荐用仓库 Reporter 角色的低权限账号申请（账号层面杜绝推送代码/
   # 操作流水线），教程见 docs/GitLab-Owner-Token-申请教程.md。
   # 留空 = 未配置，编辑 issue 沿用 bot token / remote 内嵌 token。

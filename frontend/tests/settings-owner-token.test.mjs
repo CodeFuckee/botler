@@ -35,7 +35,8 @@ after(() => vite.close())
 
 /** 提取指定标题卡片的源码片段（与 settings-sso-save-button.test.mjs 同款工具） */
 function cardSource(src, title) {
-  const re = new RegExp(`<div className="card">\\s*<h2>${title}<\\/h2>[\\s\\S]*?(?=\\n\\s*<div className="card">|$)`)
+  // issue #130：h2 内允许追加徽章等元素，匹配到 </h2> 为止
+  const re = new RegExp(`<div className="card">\\s*<h2>\\s*${title}[\\s\\S]*?<\\/h2>[\\s\\S]*?(?=\\n\\s*<div className="card">|$)`)
   const m = src.match(re)
   return m ? m[0] : null
 }
@@ -84,6 +85,26 @@ test('卡片说明明确用途边界：仅编辑 issue，严禁推送代码/处�
   assert.match(card, /严禁|不会|绝不/, '说明应声明严禁/不会用于推送代码与流水线')
   assert.match(card, /推送/, '说明应提及推送代码')
   assert.match(card, /流水线/, '说明应提及流水线')
+})
+
+test('issue #130：卡片显示隔离徽章（已隔离 · Agent 不可用）', () => {
+  const card = cardSource(settingsSrc, 'Owner GitLab Token（issue 编辑专用）')
+  assert.ok(card, '设置页应存在 Owner GitLab Token 配置卡片')
+  assert.match(card, /已隔离/, '标题应显示「已隔离」徽章')
+  assert.match(card, /Agent 不可用/, '徽章应注明 Agent 不可用')
+})
+
+test('issue #130：说明明确隔离规则——Agent 不可使用、仅限概览页 issue 编辑、Agent 用自己仓库 token', () => {
+  const card = cardSource(settingsSrc, 'Owner GitLab Token（issue 编辑专用）')
+  assert.ok(card, '设置页应存在 Owner GitLab Token 配置卡片')
+  assert.match(card, /所有 Agent[\s\S]{0,20}不可使用/, '应注明所有 Agent 均不可使用')
+  assert.match(card, /概览页/, '应注明允许使用范围在概览页面')
+  assert.match(card, /添加 issue/, '允许范围应包含添加 issue')
+  assert.match(card, /关闭 issue/, '允许范围应包含关闭 issue')
+  assert.match(card, /添加评论/, '允许范围应包含添加评论')
+  assert.match(card, /回复 issue 评论/, '允许范围应包含回复 issue 评论')
+  assert.match(card, /自己仓库的认证 token/, '应注明 Agent 只能使用自己仓库的认证 token')
+  assert.match(card, /绝不/, '应声明绝不用于推送代码/流水线')
 })
 
 test('卡片内提供申请教程折叠区（GET /api/settings/owner-token-guide + Markdown 渲染）', () => {

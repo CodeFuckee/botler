@@ -787,14 +787,15 @@ class ClaudeExecutor:
     def _build_env(self, repo: dict, issue: dict) -> dict:
         cfg = self.config.get()
         env = self._clean_process_env()
-        # 会话 GITLAB_TOKEN 注入优先级（issue #87 调整）：owner token
-        # （编辑 issue 专用）> remote url 内嵌 token > 全局 bot token。
-        # issue #79：全局 bot token 失效后 Claude 侧 API（写结果评论等）
-        # 401 失败，remote 内嵌 token 与平台侧 per-repo 兜底对齐。
-        # git 推送凭据不走 GITLAB_TOKEN（走 GIT_ASKPASS 的 bot token），
-        # 因此 owner token 注入不会触碰推送路径。
-        env["GITLAB_TOKEN"] = (cfg.gitlab_owner_token or ""
-                               or self._task_gitlab_token(repo)
+        # 会话 GITLAB_TOKEN 注入（issue #130 调整）：agent 会话绝不注入
+        # owner token（owner token 只允许在概览页 issue 编辑操作时由平台
+        # 使用，见 api/issues.py；agent 无论如何都不能使用 owner token）。
+        # 优先级：remote url 内嵌 token（仓库自己的认证 token）> 全局
+        # bot token。issue #79：全局 bot token 失效后 Claude 侧 API
+        # （写结果评论等）401 失败，remote 内嵌 token 与平台侧 per-repo
+        # 兜底对齐。git 推送凭据不走 GITLAB_TOKEN（走 GIT_ASKPASS 的
+        # bot token）。
+        env["GITLAB_TOKEN"] = (self._task_gitlab_token(repo)
                                or cfg.gitlab_token)
         env["GITLAB_URL"] = cfg.gitlab_url
         env["PROJECT_ID"] = str(issue["project_id"])

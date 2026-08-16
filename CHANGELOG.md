@@ -6,6 +6,40 @@
 
 ### Fixed
 
+- **显示 gitlab token 隔离：设置页 owner gitlab token 所有 Agent 均不可使用（issue #130）**：
+  需求「显示gitlab token隔离，设置页面里的owner gitlab token，所有agent都不可以实现，
+  已经在系统架构上实现隔离，避免agent错误调用；owner gitlab token只允许在概览页面上
+  编辑issue、添加issue、关闭issue、在issue添加评论以及回复issue评论的时候使用，其他
+  场景都不得使用；agent无论如何都不能使用owner gitlab token，他只能使用自己仓库的
+  认证token来进行issue编辑」。现状与差距：owner token（issue #87）已掩码展示、git
+  推送凭据走 bot token 不含 owner，但 agent 会话环境 `GITLAB_TOKEN` 仍把 owner
+  token 作为最高优先级注入——agent 能拿到并错误调用 owner token，与"所有 Agent
+  不可使用"矛盾；概览页 issue 编辑操作也未优先使用 owner token。
+  实现：
+  - 后端 `executor.py`：`_build_env` 会话 `GITLAB_TOKEN` 注入改为
+    remote url 内嵌 token（仓库自己的认证 token）→ 全局 bot token，**绝不注入
+    owner token**（owner 只允许在概览页 issue 编辑操作时由平台使用）；git 推送
+    凭据仍走 `GIT_ASKPASS` 的 bot token，不受影响；
+  - 后端 `api/issues.py`：新增 `_owner_client`（按 token 值缓存重建）与
+    `_issue_edit_call`（owner 优先、owner 401/403 回退 per-repo → 全局）；
+    概览页 5 处 issue 编辑操作（关闭 issue、编辑标签、添加评论、回复评论、
+    添加 issue）统一优先 owner token，符合"只允许在概览页面上编辑 issue 时
+    使用"；form-meta（只读查询）保持原链路；
+  - 前端 `Settings.jsx`：Owner GitLab Token 卡片标题新增「已隔离 · Agent
+    不可用」徽章（`h2 .badge` 对齐样式），说明区明确隔离规则——所有 Agent
+    均不可使用、允许使用范围（仅概览页编辑/添加/关闭 issue、添加/回复评论）、
+    Agent 只能使用自己仓库的认证 token 编辑 issue；
+  - 文档：`config.example.yaml` owner_token 注释补充隔离说明；
+  - **测试**：后端 `test_owner_token.py` 原"会话 GITLAB_TOKEN 优先 owner"
+    用例改为"绝不注入 owner token"；`test_api_issues.py` 新增 7 用例（关闭/
+    标签/评论/回复/添加 issue 优先 owner、未配置 owner 沿用原链路、owner
+    401 回退原链路）；前端 `settings-owner-token.test.mjs` 新增 2 用例（隔离
+    徽章显示、隔离规则说明），`cardSource` 正则兼容 h2 内徽章；后端 1084 +
+    前端 565 全量测试通过。
+
+
+### Fixed
+
 - **dsh 引擎事件流极其冗长：一句话拆成好多个单独字（issue #122）**：
   需求「使用 deepseek harness sdk 执行引擎时，事件流会变得极其冗长，
   因为一句话会拆成好多个单独字」。诊断：dsh 引擎（deepseek-harness
