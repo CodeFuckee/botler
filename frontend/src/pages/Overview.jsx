@@ -396,42 +396,47 @@ export default function Overview() {
         )}
       </section>
 
-      <p className="muted">正在执行的任务（每 {OVERVIEW_POLL_MS / 1000} 秒自动刷新）</p>
-      {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
-      {tasks.length === 0 && !error ? (
-        <div className="empty-state">
-          <span className="empty-icon" aria-hidden="true">⚙️</span>
-          <p className="muted">当前没有正在执行的任务</p>
-        </div>
-      ) : (
-        <div className="overview-grid">
-          {tasks.map((t) => {
-            const lines = liveLines[t.id] || []
-            const meta = STATUS_META[t.status] || { label: t.status, cls: '' }
-            return (
-              <div key={t.id} className="card overview-card">
-                <div className="overview-card-head">
-                  <span className="overview-repo" title="仓库">📁 {t.repo_name || '（已删除）'}</span>
-                  <span className={'badge ' + meta.cls}>{meta.label}</span>
+      {/* HIG 布局（issue #111）：任务板块补 section 容器 + h2 标题，
+          与「开放 Issue」「CI/CD 流水线」两板块结构对齐，视觉层级一致 */}
+      <section className="tasks-section">
+        <h2>正在执行的任务</h2>
+        <p className="muted">每 {OVERVIEW_POLL_MS / 1000} 秒自动刷新</p>
+        {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
+        {tasks.length === 0 && !error ? (
+          <div className="empty-state">
+            <span className="empty-icon" aria-hidden="true">⚙️</span>
+            <p className="muted">当前没有正在执行的任务</p>
+          </div>
+        ) : (
+          <div className="overview-grid">
+            {tasks.map((t) => {
+              const lines = liveLines[t.id] || []
+              const meta = STATUS_META[t.status] || { label: t.status, cls: '' }
+              return (
+                <div key={t.id} className="card overview-card">
+                  <div className="overview-card-head">
+                    <span className="overview-repo" title="仓库">📁 {t.repo_name || '（已删除）'}</span>
+                    <span className={'badge ' + meta.cls}>{meta.label}</span>
+                  </div>
+                  <div className="overview-issue">
+                    {t.issue_url ? (
+                      <a href={t.issue_url} target="_blank" rel="noreferrer"
+                         title="在 GitLab 中打开 issue">
+                        #{t.issue_iid} — {t.issue_title || '—'}
+                      </a>
+                    ) : (
+                      <span>#{t.issue_iid} — {t.issue_title || '—'}</span>
+                    )}
+                  </div>
+                  <pre className="log-view overview-log">
+                    {lines.join('\n') || '（暂无输出）'}
+                  </pre>
                 </div>
-                <div className="overview-issue">
-                  {t.issue_url ? (
-                    <a href={t.issue_url} target="_blank" rel="noreferrer"
-                       title="在 GitLab 中打开 issue">
-                      #{t.issue_iid} — {t.issue_title || '—'}
-                    </a>
-                  ) : (
-                    <span>#{t.issue_iid} — {t.issue_title || '—'}</span>
-                  )}
-                </div>
-                <pre className="log-view overview-log">
-                  {lines.join('\n') || '（暂无输出）'}
-                </pre>
-              </div>
-            )
-          })}
-        </div>
-      )}
+              )
+            })}
+          </div>
+        )}
+      </section>
 
       <section className="pipelines-section">
         <h2>CI/CD 流水线</h2>

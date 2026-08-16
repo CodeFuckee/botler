@@ -60,16 +60,30 @@
   --dur-fast: 150ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
-  /* 间距（HIG 匠心：4px / 8px 网格） */
+  /* 间距（HIG 布局：4px / 8px 网格，检查清单 #2「不出现随机像素值」） */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  /* 内容外边距（HIG 布局：通用数值速查——iOS 默认约 16pt、大屏 20pt）。
+     桌面取 20px 大屏档；窄视口经下方媒体查询回落 16px（iOS 默认档）。
+     .content / .topnav / .card 统一引用，保证全局外边距一致成组（布局指南） */
+  --gutter: 20px;
   /* 响应式（issue #15）：内容区宽度与表格省略列上限，宽屏媒体查询下放宽 */
   --content-width: 1100px;
   --ellipsis-max: 340px;
+}
+
+/* HIG 布局：窄视口（手机竖屏 ≤640px）安全区适配——
+   1. 内容外边距回落 16px（HIG 数值速查：iOS 默认 16pt，大屏才是 20pt）；
+   2. 设置页/详情页 kv 表格标签列 180px → 120px，窄屏下输入控件不被挤压；
+   3. 顶导航允许横向滚动（导航项多时不截断，HIG 适配性：窗口大小调整
+      内容不截断——见 .topnav 的 overflow-x） */
+@media (max-width: 640px) {
+  :root { --gutter: 16px; }
+  .table.kv th { width: 120px; }
 }
 
 /* HIG 灵活：跟随系统深色模式（Geist Dark 基调）。仅翻转令牌，组件零改动 */
@@ -133,34 +147,41 @@ body {
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 
 /* ---- 顶部导航 ---- */
+/* HIG 布局：导航层浮于内容之上（sticky），不随内容同平面滚动；
+   窄视口导航项超出时横向滚动而非截断溢出（检查清单 #7/#5） */
 .topnav {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 0 20px;
+  gap: var(--space-1);
+  padding: 0 var(--gutter);
   height: 52px;
   background: var(--bg-card);
   box-shadow: 0 1px 0 var(--hairline);
   position: sticky;
   top: 0;
   z-index: 10;
+  overflow-x: auto;
+  scrollbar-width: none; /* 隐藏横向滚动条，保留手势/触控板横向滚动 */
 }
+.topnav::-webkit-scrollbar { display: none; }
 .brand {
   font-weight: 700;
   font-size: 16px;
   letter-spacing: -0.01em;
-  margin-right: 16px;
+  margin-right: var(--space-4);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
+  flex-shrink: 0;
 }
 .brand-dot { font-size: 16px; line-height: 1; }
 .navlink {
   color: var(--muted);
   text-decoration: none;
-  padding: 6px 12px;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius);
   font-weight: 500;
+  flex-shrink: 0; /* 窄视口下导航项不被压缩截断，超出部分横向滚动 */
   transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 .navlink:hover { color: var(--text); background: var(--bg-hover-soft); }
@@ -183,11 +204,13 @@ body {
   color: var(--text);
 }
 
+/* HIG 布局：内容区即安全区——左右外边距引用 --gutter（桌面 20px /
+   窄屏 16px），顶部 24px 起步、底部 60px 留白保证滚动内容延伸到底部 */
 .content {
   width: 100%;
   max-width: var(--content-width);
   margin: 0 auto;
-  padding: 24px 20px 60px;
+  padding: var(--space-5) var(--gutter) 60px;
 }
 
 /* 窄视口内容区断点（issue #70）：任务表格按优先级渐进隐藏列
@@ -228,37 +251,39 @@ body {
   :root { --content-width: max(1440px, calc(100vw - 100px)); --ellipsis-max: 520px; }
 }
 
-h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 16px; }
+h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 var(--space-4); }
 h1 .badge { margin-left: 10px; vertical-align: middle; }
-h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+h2 { font-size: 14px; margin: 0 0 var(--space-3); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
 
 /* 原生控件跟随主色 */
 input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 
 /* ---- 卡片 ---- */
+/* HIG 布局：卡片内边距引用 --gutter（桌面 20px / 窄屏 16px），
+   与内容区外边距同一节奏（布局指南：内容周围应用标准外边距） */
 .card {
   background: var(--bg-card);
   box-shadow: var(--shadow-card);
   border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 16px;
+  padding: var(--gutter);
+  margin-bottom: var(--space-4);
 }
 
 /* ---- 表单 ---- */
 .form-row {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 .form-row.wrap { flex-wrap: wrap; }
 .form-row.center { justify-content: center; }
 .add-method {
   display: inline-flex;
-  gap: 6px;
+  gap: var(--space-2);
   align-items: center;
   cursor: pointer;
-  padding: 6px 12px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 14px;
@@ -277,11 +302,11 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 }
 .remote-option {
   display: inline-flex;
-  gap: 6px;
+  gap: var(--space-2);
   align-items: center;
   cursor: pointer;
   font-size: 13px;
-  padding: 4px 10px;
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   white-space: nowrap;
@@ -326,7 +351,8 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: var(--radius);
-  padding: 7px 14px;
+  /* HIG 布局：内边距 8px 16px 落在 4px 网格（原 7px 14px 为随机值） */
+  padding: var(--space-2) var(--space-4);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -358,11 +384,11 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .btn-danger { color: var(--err); }
 .btn-danger:hover { background: var(--err-weak); border-color: var(--err); }
 .btn-danger:not(:disabled):active { background: var(--err-weak); transform: translateY(1px); }
-.btn-sm { padding: 3px 10px; font-size: 12px; }
+.btn-sm { padding: var(--space-1) var(--space-2); font-size: 12px; }
 .btn-wide { padding: 8px 36px; }
 .btn-upload { cursor: pointer; }
 .btn-upload:hover { background: var(--bg-hover); border-color: var(--border-hover); }
-.checkbox-label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.checkbox-label { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; }
 
 .saved-hint { color: var(--ok); }
 .err-hint { color: var(--err); }
@@ -372,15 +398,15 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding: 14px 4px;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-1);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 .repo-item:last-child { border-bottom: none; }
 .repo-main { min-width: 0; }
-.repo-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.repo-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.repo-name { font-weight: 600; display: flex; align-items: center; gap: var(--space-2); }
+.repo-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .test-chip { padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
 .test-chip.ok { color: var(--ok); background: var(--ok-weak); }
 .test-chip.bad { color: var(--err); background: var(--err-weak); }
@@ -390,8 +416,8 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
    在容器内横向滚动而非溢出卡片白色底 */
 .table-wrap { overflow-x: auto; }
 /* 任务列表翻页组件（issue #50）：上一页/页码/下一页横向排列，窄视口自动换行 */
-.pagination { display: flex; align-items: center; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
-.pagination .muted.small { margin-left: 8px; }
+.pagination { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap; }
+.pagination .muted.small { margin-left: var(--space-2); }
 .table { width: 100%; border-collapse: collapse; }
 /* 任务列表固定布局（issue #28 第二轮）：table-layout: auto 下表格被内容撑到
    min-content（实测 1628px），而 .content max-width 封顶 1600px，任何桌面视口
@@ -481,15 +507,15 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 /* vertical-align: middle（issue #31）：badge 与尝试次数数值同行混排时，基线对齐
    会让胶囊 padding/border 下沉到基线以下、小字号视觉中心偏低，改为 middle 与
    数值居中对齐（折行问题另见尝试列宽度，两者配合才真正同线） */
-.badge.resume { margin-left: 6px; background: var(--primary-weak); color: var(--primary); font-size: 11px; vertical-align: middle; }
+.badge.resume { margin-left: var(--space-2); background: var(--primary-weak); color: var(--primary); font-size: 11px; vertical-align: middle; }
 
 /* ---- 统计条 ---- */
-.stats-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.stats-row { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-4); }
 .stat-chip {
   background: var(--bg-card);
   box-shadow: var(--shadow-border);
   border-radius: var(--radius);
-  padding: 7px 14px;
+  padding: var(--space-2) var(--space-3);
   font-size: 13px;
 }
 .status-dot {
@@ -497,7 +523,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--muted);
-  margin-right: 6px;
+  margin-right: var(--space-2);
 }
 .status-dot.status-running { background: var(--primary); }
 .status-dot.status-succeeded { background: var(--ok); }
@@ -511,13 +537,13 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: var(--space-3);
   overflow-x: auto;
   font-family: var(--mono);
   font-size: 12.5px;
 }
 .log-line { padding: 1px 0; }
-.log-line .log-ts { color: var(--muted); margin-right: 8px; }
+.log-line .log-ts { color: var(--muted); margin-right: var(--space-2); }
 .log-line .log-level { display: inline-block; width: 42px; color: var(--muted); }
 .log-error { color: var(--err); }
 .log-warn { color: var(--warn); }
@@ -526,7 +552,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: var(--space-3);
   overflow: auto;
   max-height: 500px;
   font-family: var(--mono);
@@ -544,14 +570,14 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 /* ---- 提示 ---- */
 .alert {
   border-radius: var(--radius);
-  padding: 10px 14px;
-  margin-bottom: 12px;
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
   cursor: pointer;
   border: 1px solid transparent;
 }
 .alert-error { background: var(--err-weak); border-color: rgba(229, 72, 77, 0.35); color: var(--err); }
 .alert-ok { background: var(--ok-weak); border-color: rgba(23, 163, 74, 0.35); color: var(--ok); cursor: default; }
-.alert.small { padding: 6px 10px; margin-bottom: 6px; font-size: 12.5px; }
+.alert.small { padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2); font-size: 12.5px; }
 
 .muted { color: var(--muted); }
 .small { font-size: 12.5px; }
@@ -580,10 +606,10 @@ code {
   max-width: 92vw;
   height: 100%;
   overflow-y: auto;
-  padding: 16px;
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 /* issue #85：issue 详情右边栏——复用 drawer 基础样式，加宽容纳正文 */
 .issue-drawer {
@@ -603,7 +629,7 @@ code {
 }
 .issue-drawer-desc {
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: var(--space-3);
   overflow-wrap: break-word;
 }
 /* issue #94：关闭 issue 失败的错误提示（按钮下方一行红字） */
@@ -620,20 +646,20 @@ code {
 /* issue #97：右边栏「评论」与「活动」区块（描述下方分区展示） */
 .issue-notes {
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }
 .issue-notes-block h3 {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   font-size: 14px;
 }
 .issue-notes-block .muted {
   margin: 0;
 }
 .issue-notes .notes-retry {
-  margin-left: 8px;
+  margin-left: var(--space-2);
 }
 .comment-list,
 .activity-list {
@@ -642,19 +668,19 @@ code {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2);
 }
 .comment-item {
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 10px;
+  padding: var(--space-3);
   background: var(--bg);
 }
 .comment-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 .comment-avatar {
   width: 24px;
@@ -689,8 +715,8 @@ code {
 .activity-item {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 4px 0;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
   font-size: 13px;
 }
 .activity-dot {
@@ -727,14 +753,14 @@ code {
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  gap: 12px;
+  padding: var(--space-4);
+  gap: var(--space-3);
 }
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .modal-close {
   padding: 2px 10px;
@@ -749,7 +775,7 @@ code {
 .folder-nav {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
 }
 .folder-path {
   flex: 1;
@@ -763,7 +789,7 @@ code {
 .folder-hidden-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   white-space: nowrap;
   color: var(--muted);
   font-size: 13px;
@@ -777,16 +803,16 @@ code {
   max-height: 46vh;
   background: var(--bg);
 }
-.folder-empty { padding: 24px; text-align: center; }
-.folder-empty .empty-icon { font-size: 24px; line-height: 1; display: block; margin-bottom: 8px; }
+.folder-empty { padding: var(--space-5); text-align: center; }
+.folder-empty .empty-icon { font-size: 24px; line-height: 1; display: block; margin-bottom: var(--space-2); }
 /* 加载态行内排列（spinner + 文案） */
-.folder-empty.loading-hint { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.folder-empty.loading-hint { display: flex; align-items: center; justify-content: center; gap: var(--space-2); }
 .folder-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   background: none;
   border: none;
   border-bottom: 1px solid var(--border);
@@ -808,7 +834,7 @@ code {
 .modal-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--space-2);
 }
 /* 自定义对话框（issue #105）：替代浏览器原生 alert/confirm 弹窗，
    样式沿用 .modal 体系，仅收窄宽度并保留消息换行 */
@@ -825,7 +851,7 @@ code {
 .repo-edit .edit-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: 13px;
   color: var(--muted);
 }
@@ -833,7 +859,7 @@ code {
 .repo-edit .edit-checkbox {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: 14px;
 }
 /* 失败详细原因弹窗（任务列表「详情」按钮） */
@@ -845,7 +871,7 @@ code {
   font-size: 12px;
   line-height: 1.7;
 }
-.btn-gap-left { margin-left: 8px; }
+.btn-gap-left { margin-left: var(--space-2); }
 .error-summary {
   font-size: 13px;
   color: var(--text);
@@ -855,7 +881,7 @@ code {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2);
 }
 .error-attempt {
   border: 1px solid var(--border);
@@ -865,15 +891,15 @@ code {
 .error-attempt-head {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
-  padding: 6px 10px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   background: var(--bg);
   font-size: 13px;
   color: var(--muted);
 }
 .error-attempt-trace {
   margin: 0;
-  padding: 10px;
+  padding: var(--space-3);
   max-height: 220px;
   overflow: auto;
   white-space: pre-wrap;
@@ -887,21 +913,21 @@ code {
    实时执行面板（issue #20）：任务详情页聊天记录 + 实时输出
    ============================================================ */
 .live-session {
-  margin-left: 8px;
+  margin-left: var(--space-2);
   font-size: 12px;
 }
 /* 聊天记录（issue #52）：无内部垂直滚动条，消息完整展示 */
 .chat-list {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px;
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
 }
 .chat-msg {
   max-width: 88%;
-  padding: 6px 10px;
+  padding: var(--space-2) var(--space-3);
   border-radius: 10px;
   font-size: 13px;
   line-height: 1.6;
@@ -932,7 +958,7 @@ code {
 }
 .chat-tool-name {
   font-weight: 600;
-  margin-right: 8px;
+  margin-right: var(--space-2);
 }
 .chat-tool-result {
   align-self: flex-start;
@@ -946,15 +972,15 @@ code {
   background: var(--err-weak);
 }
 .chat-err-badge {
-  margin-right: 6px;
+  margin-right: var(--space-2);
   font-size: 11px;
 }
 /* 事件流（SSE 实时输出，issue #52）：无内部垂直滚动条，事件完整展示 */
 .event-list {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px;
-  margin-bottom: 16px;
+  padding: var(--space-3);
+  margin-bottom: var(--space-4);
   font-size: 13px;
 }
 /* 区块折叠标题按钮（issue #52）：事件流/聊天记录用 h3 级样式，
@@ -962,7 +988,7 @@ code {
 .section-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   width: 100%;
   background: none;
   border: none;
@@ -974,17 +1000,17 @@ code {
 }
 .section-toggle:hover { color: var(--primary); }
 .section-toggle .chevron { color: var(--muted); flex: 0 0 auto; }
-.section-toggle-h3 { font-size: 15px; font-weight: 600; margin: 14px 0 8px; }
+.section-toggle-h3 { font-size: 15px; font-weight: 600; margin: var(--space-4) 0 var(--space-2); }
 .section-toggle-h2 {
   font-size: 14px;
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
 }
 .event-row {
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
   line-height: 1.6;
   word-break: break-word;
 }
@@ -1003,7 +1029,7 @@ code {
   background: var(--primary-weak);
   border: 1px solid rgba(0, 112, 243, 0.15);
   border-radius: 10px;
-  padding: 6px 10px;
+  padding: var(--space-2) var(--space-3);
   font-size: 13px;
 }
 
@@ -1113,7 +1139,7 @@ code {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 16px;
+  padding: var(--space-6) var(--space-4);
 }
 .login-card {
   width: 380px;
@@ -1128,7 +1154,7 @@ code {
 }
 .login-card .alert {
   text-align: left;
-  margin-bottom: 14px;
+  margin-bottom: var(--space-3);
 }
 /* 导航栏当前登录用户（issue #27）；issue #9 第二轮：版本徽标移入设置页后，
    由 user-chip 承接 margin-left:auto 占据导航栏最右侧 */
@@ -1136,7 +1162,7 @@ code {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   font-size: 13px;
   color: var(--muted);
 }
@@ -1148,14 +1174,14 @@ code {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .label-chip {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-card);
@@ -1213,7 +1239,7 @@ code {
 .overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
   align-items: start;
 }
 .overview-card {
@@ -1223,8 +1249,8 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 .overview-repo {
   font-weight: 600;
@@ -1233,7 +1259,7 @@ code {
   white-space: nowrap;
 }
 .overview-issue {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1246,14 +1272,26 @@ code {
   background: var(--bg);
 }
 
+/* ---- 概览页正在执行的任务板块（issue #32）----
+   HIG 布局（issue #111）：与开放 Issue / CI/CD 流水线板块结构对齐——
+   section 容器 + h2 标题 + muted 说明行，三板块视觉层级一致；
+   板块间距统一 var(--space-5) 节奏（8pt 网格，检查清单 #2/#4） */
+.tasks-section {
+  margin-top: var(--space-5);
+}
+.tasks-section h2 {
+  font-size: 16px;
+  margin: 0 0 var(--space-1);
+}
+
 /* ---- 概览页 CI/CD 流水线（issue #39）：每仓库一张卡，
    参考 GitLab CI/CD 阶段图：横向 stage 节点条 + 状态色 ---- */
 .pipelines-section {
-  margin-top: 24px;
+  margin-top: var(--space-5);
 }
 .pipelines-section h2 {
   font-size: 16px;
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
 }
 /* issue #107：列数与开放 Issue 板块统一（以开放 Issue 为标准）——
    auto-fit + minmax(280px, 1fr)，宽屏下与开放 Issue 板块同为 4 列
@@ -1261,7 +1299,7 @@ code {
 .pipelines-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
   align-items: start;
 }
 .pipeline-card {
@@ -1271,8 +1309,8 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 .pipeline-repo {
   font-weight: 600;
@@ -1290,7 +1328,7 @@ code {
 }
 .pipeline-ref {
   display: block;
-  margin-bottom: 10px;
+  margin-bottom: var(--space-2);
   font-size: 12px;
   color: var(--muted);
   font-family: var(--mono);
@@ -1301,13 +1339,13 @@ code {
 /* 最近流水线对应提交的提交时间 + 距今多久（issue #43） */
 .pipeline-commit-time {
   display: block;
-  margin: -6px 0 10px;
+  margin: calc(var(--space-1) * -1) 0 var(--space-2);
   font-size: 12px;
   color: var(--muted);
 }
 .pipeline-stages {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   overflow-x: auto;
   padding: 2px 0;
 }
@@ -1315,7 +1353,7 @@ code {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 44px;
 }
 .pipeline-stage-name {
@@ -1350,11 +1388,11 @@ code {
 /* ---- 概览页开放 issue 聚合（issue #64）：每仓库一张卡，
    组内按最后更新时间降序列出开放 issue ---- */
 .issues-section {
-  margin-top: 24px;
+  margin-top: var(--space-5);
 }
 .issues-section h2 {
   font-size: 16px;
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
 }
 /* issue #96：自适应列网格——宽度足够时 4 个仓库卡片一行放下（此前固定
    3 列，4 个仓库 3+1 分两行）；列最小宽 280px，窄视口自动降列回退，
@@ -1362,7 +1400,7 @@ code {
 .issues-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
   align-items: start;
 }
 .issue-repo-card {
@@ -1374,8 +1412,8 @@ code {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 /* issue #102：仓库名独占首行、任意断行完整显示——此前
    nowrap+ellipsis+overflow:hidden 使 flex 子项自动最小尺寸为 0，
@@ -1396,7 +1434,7 @@ code {
 .add-issue .edit-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: 13px;
   color: var(--muted);
 }
@@ -1409,13 +1447,13 @@ code {
 .label-picker {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
 }
 .label-choice {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   cursor: pointer;
   user-select: none;
 }
@@ -1425,22 +1463,22 @@ code {
 /* issue #108：右边栏标记编辑区——编辑按钮贴近标记胶囊；编辑态为
    纵向排布的标记多选 + 操作按钮（保存/取消右对齐） */
 .labels-edit-btn {
-  margin-left: 8px;
+  margin-left: var(--space-2);
 }
 .labels-edit {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .labels-edit-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   justify-content: flex-end;
 }
 /* issue #80：仓库卡片内按 bot 终态标签分组——组标题行 + 计数，
    空组不渲染；组标题提供分组视觉分隔 */
 .issue-group {
-  margin-top: 10px;
+  margin-top: var(--space-3);
 }
 .issue-group:first-child {
   margin-top: 0;
@@ -1448,8 +1486,8 @@ code {
 .issue-group-head {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  margin-bottom: 2px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 .issue-group-title {
   font-size: 12px;
@@ -1469,8 +1507,8 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 8px;
-  padding: 6px 0;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
   border-top: 1px solid var(--border);
 }
 .issue-item:first-child {
@@ -1482,7 +1520,7 @@ code {
 .issue-item-running {
   background: var(--primary-weak);
   border-left: 3px solid var(--primary);
-  padding-left: 8px;
+  padding-left: var(--space-2);
 }
 .issue-main {
   min-width: 0;
@@ -1547,8 +1585,8 @@ code {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  margin-top: 4px;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
 }
 .label-pill {
   display: inline-block;
@@ -1579,7 +1617,7 @@ code {
 .issue-side {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   flex-shrink: 0;
   padding-top: 2px;
 }
@@ -1613,10 +1651,10 @@ code {
 /* 使用者看不到仓库本地文档，设置页直接展示 docs/Synology-SSO-配置指南.md
    的渲染结果；guide-content 内是轻量 Markdown 渲染器（components/Markdown.jsx）
    输出的 h1~h4 / p / pre / ul / ol / table / blockquote，沿用页面既有风格 */
-.guide-box { margin-top: 12px; }
+.guide-box { margin-top: var(--space-3); }
 .guide-content {
-  margin-top: 10px;
-  padding: 14px 16px;
+  margin-top: var(--space-2);
+  padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg);
@@ -1672,20 +1710,20 @@ code {
 .provider-cell {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .provider-form {
-  margin: 10px 0;
-  padding: 12px 14px;
+  margin: var(--space-2) 0;
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-card);
 }
-.provider-form h3 { margin: 0 0 10px; font-size: 14px; }
+.provider-form h3 { margin: 0 0 var(--space-2); font-size: 14px; }
 .provider-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 1;
   min-width: 220px;
   font-size: 12.5px;
@@ -1694,5 +1732,5 @@ code {
 .provider-select {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }

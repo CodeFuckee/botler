@@ -53,16 +53,27 @@ after(() => vite.close())
 
 // ---- styles.css 常量提取（与 tasks-responsive-cols.test.mjs 风格一致）----
 
-// .content 左右 padding 之和（styles.css：padding: 24px 20px 60px）
-const CONTENT_PAD_X = 40
+// 解析 var(--space-N) 引用为 :root token 的 px 值（issue #111 间距 token 化）
+function resolveSpaceVar(css, ref) {
+  const m = ref.match(/^var\((--space-\d+)\)$/)
+  if (!m) return null
+  const root = css.match(/:root\s*\{([^}]*)\}/s)
+  assert.ok(root, 'styles.css 缺少 :root token 定义')
+  const v = root[1].match(new RegExp(`${m[1]}:\\s*(\\d+)px`))
+  assert.ok(v, `styles.css 缺少 ${m[1]} token 定义`)
+  return Number(v[1])
+}
 
-// issues-list 网格间距（styles.css 提取，防漂移）
+// .content 左右 padding 之和（styles.css：padding 引用 --gutter，桌面 20px）
+const CONTENT_PAD_X = 2 * resolveSpaceVar(styles, 'var(--gutter)')
+
+// issues-list 网格间距（styles.css 提取，防漂移；支持 px 字面量与 token 引用）
 function issuesListGap(css) {
   const m = css.match(/\.issues-list\s*\{([^}]*)\}/)
   assert.ok(m, 'styles.css 缺少 .issues-list 规则')
-  const gap = m[1].match(/gap:\s*(\d+)px/)
+  const gap = m[1].match(/gap:\s*(?:(\d+)px|(var\(--space-\d+\)))/)
   assert.ok(gap, '.issues-list 缺少 px 间距')
-  return Number(gap[1])
+  return gap[1] ? Number(gap[1]) : resolveSpaceVar(css, gap[2])
 }
 
 // .issues-list 的 minmax 最小列宽（styles.css 提取，防漂移）

@@ -24,7 +24,21 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 const tasks = readFileSync(path.join(ROOT, 'src/pages/Tasks.jsx'), 'utf8')
 
-// 提取指定 className 中每个 class 在 styles.css 里定义的 margin-left 总和（px）
+// 提取指定 className 中每个 class 在 styles.css 里定义的 margin-left 总和（px）。
+// 值支持 px 字面量与 var(--space-N) token 引用（issue #111 间距 token 化，
+// 引用值从 :root token 定义解析，语义与字面量等价）
+function resolvePx(value) {
+  const ref = value.trim().match(/^var\((--space-\d+)\)$/)
+  if (ref) {
+    const root = styles.match(/:root\s*\{([^}]*)\}/s)
+    assert.ok(root, 'styles.css 缺少 :root token 定义')
+    const v = root[1].match(new RegExp(`${ref[1]}:\\s*(\\d+)px`))
+    assert.ok(v, `styles.css 缺少 ${ref[1]} token 定义`)
+    return Number(v[1])
+  }
+  return parseFloat(value) || 0
+}
+
 function marginLeftSum(className) {
   let sum = 0
   for (const cls of className.split(/\s+/)) {
@@ -34,7 +48,7 @@ function marginLeftSum(className) {
     // margin-left 直取；margin 简写按标准语义取左外边距：
     // 1 值→四边相同；2 值→上下/左右；3 值→上/左右/下；4 值→上/右/下/左
     for (const m of body.matchAll(/(margin-left|margin)\s*:\s*([^;]+);/g)) {
-      const parts = m[2].trim().split(/\s+/).map((v) => parseFloat(v) || 0)
+      const parts = m[2].trim().split(/\s+/).map(resolvePx)
       const left = m[1] === 'margin-left'
         ? parts[0]
         : parts.length === 4 ? parts[3] : parts.length >= 2 ? parts[1] : parts[0]
