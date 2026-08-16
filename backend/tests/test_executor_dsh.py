@@ -333,6 +333,34 @@ class TestRunDshOnce:
         row = dsh_executor.db.get_task(task_id)
         assert row["dsh_session_id"] == "dsh-sess-1"
 
+    def test_multiline_output_parseable_success_and_session_persist(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """issue #119：多行事件输出拼接必须保留换行，否则结果行解析失败。
+
+        复现：DshRunner 的 on_line 回调逐条收到事件行（行尾无换行符），
+        _run_dsh_once 若用 ''.join 拼接，output 无换行分隔，_last_json_object
+        按行扫描只拿到首个事件对象（finish_reason 缺失）→ _dsh_result 误判
+        failed → 触发重试；且 _persist_dsh_session_id 同样解析不到 session_id
+        → 断点续跑失效 → 每次重试都是全新会话（重复开发任务），重试耗尽后
+        任务显示失败（任务 #198 #199 日志：引擎 exit 0、结果行 completed 仍失败）。
+        """
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        # 事件行 + 结果行（真实 DshRunner 回调逐行 on_line 的真实形态）
+        fake_runner.preset_lines = [
+            json.dumps({"event": "raw", "type": "step/end"},
+                       ensure_ascii=False),
+            json.dumps({"event": "status", "message": "回合结束: completed"},
+                       ensure_ascii=False),
+            _RESULT_LINE,
+        ]
+        code, output = dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        assert code == 0
+        # 结果行必须可解析：成功判定 + 会话 id 落库（断点续跑）
+        assert dsh_executor._dsh_result(output) == "success"
+        row = dsh_executor.db.get_task(task_id)
+        assert row["dsh_session_id"] == "dsh-sess-1"
+
     def test_stop_returns_stop_exit_code_and_calls_stop(
             self, dsh_executor, monkeypatch, tmp_path, fake_runner):
         _patch_workspace(monkeypatch, dsh_executor, tmp_path)

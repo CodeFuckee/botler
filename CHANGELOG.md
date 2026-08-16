@@ -6,6 +6,30 @@
 
 ### Fixed
 
+- **dsh 引擎任务重复开发直至失败（任务 #198 #199 根因，issue #119）**：
+  需求「使用 deepseek harness SDK 作为执行引擎开发的时候，为什么会重复
+  开发任务，直至显示失败，但是 claude code 作为执行引擎就不会」。诊断
+  （任务 #198 #199 日志）：dsh 引擎多次尝试均 `exit 0`、输出结果行
+  `finish_reason: completed` 且 final_response 非空（agent 实际已完成
+  开发），却仍被判失败并重试，每次重试重新开发（约 4 分钟/次），重试
+  耗尽后任务显示失败。根因：`_run_dsh_once` 收集 DshRunner 的
+  `on_line` 回调事件行（行尾无换行符）后以 `''.join(lines)` 拼接，
+  `output` 整串无换行分隔——下游 `_last_json_object` 按行扫描只能
+  `raw_decode` 出**首个**事件对象（如 `{"event": "raw", ...}`），
+  拿不到末尾结果行的 `finish_reason` → `_dsh_result` 误判 `failed`
+  → 触发重试；`_persist_dsh_session_id` 同样解析不到 `session_id`
+  → 断点续跑失效 → 每次重试都是全新会话（重复开发任务）。claude
+  （stream-json 逐行）与 hermes（NDJSON）输出天然换行分隔，故不受
+  影响。修复（executor `_run_dsh_once`）：
+  - 事件行拼接改为 `'\n'.join(lines)`（与日志落盘 `line + "\n"`
+    一致），结果行可被 `_dsh_result` / `_persist_dsh_session_id` /
+    `_extract_error` 正确解析：成功判定恢复、会话 id 正常落库、
+    断点续跑生效，不再重复开发。
+  - **测试**：`test_executor_dsh.py` 新增 1 用例（多行事件 + 结果行
+    输出：`_dsh_result == "success"` 且 `dsh_session_id` 落库，
+    修复前该用例复现 `failed` 误判）；后端 1021 + 前端 516 全量
+    测试通过。
+
 - **dsh 引擎任务全部运行失败（任务 #194 #195 根因，issue #115）**：
   需求「任务 #194 #195 使用 deepseek 执行引擎都运行失败了，请诊断
   原因并修复 bug」。诊断：任务切换 `worker.engine: dsh` 后执行，

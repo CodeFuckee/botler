@@ -1330,7 +1330,14 @@ class ClaudeExecutor:
                     break
                 time.sleep(0.05)
             exit_code = runner.finish()
-            output = "".join(lines)
+            # issue #119：事件行拼接必须保留换行分隔（与日志落盘 line + "\n"
+            # 一致）。DshRunner 的 on_line 回调行尾无换行，若用 ''.join 拼接，
+            # output 整串无换行 → _last_json_object 按行扫描只解析到首个事件
+            # 对象（finish_reason 缺失）→ _dsh_result 误判 failed → 触发重试；
+            # _persist_dsh_session_id 同样解析不到 session_id → 断点续跑失效
+            # → 每次重试都是全新会话（重复开发任务），重试耗尽后任务显示失败
+            # （任务 #198 #199 日志：引擎 exit 0、结果行 completed 仍失败）。
+            output = "\n".join(lines)
 
             if stopped:
                 self.db.add_log(task_id, "warn",
