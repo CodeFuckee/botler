@@ -147,6 +147,13 @@ class PluginRegistry:
         self._plugins: dict[PluginKind, dict[str, Plugin]] = {
             kind: {} for kind in PluginKind
         }
+        # 外部插件来源跟踪（issue #145 插件管理页）：路径 → 该模块注册的
+        # (kind, name) 列表；反向表 (kind, name) → 来源路径，供插件页
+        # 展示外部来源与卸载（移除配置 + 注册表）使用。内置插件不入表。
+        self._external_by_path: dict[str, list[tuple[PluginKind, str]]] = {}
+        self._external_path: dict[tuple[PluginKind, str], str] = {}
+        # load_external 执行期间当前模块路径（register 据此标记外部来源）
+        self._loading_external_path: str | None = None
 
     # ---- 注册与查询 ----
 
@@ -160,6 +167,11 @@ class PluginRegistry:
                 f"插件重复注册: {plugin.kind.value}/{plugin.name}"
                 f"（已存在: {existing.description or existing.name}）")
         self._plugins[plugin.kind][plugin.name] = plugin
+        # 外部加载期间注册 → 记录来源（供插件管理页展示/卸载）
+        if self._loading_external_path is not None:
+            self._external_by_path.setdefault(
+                self._loading_external_path, []).append((plugin.kind, plugin.name))
+            self._external_path[(plugin.kind, plugin.name)] = self._loading_external_path
         logger.debug("插件已注册: %s", plugin)
 
     def get(self, kind: PluginKind, name: str) -> Plugin:
@@ -185,11 +197,15 @@ class PluginRegistry:
 
     # ---- 外部插件加载 ----
 
-    def load_external(self, module_paths: list[str] | None) -> list[str]:
+    def load_external(self, module_paths: list[str] | None,
+                     errors: list[str] | None = None) -> list[str]:
         """加载外部插件模块（worker.plugin_paths），返回成功加载的路径列表。
 
         模块内调用 :func:`register_plugin` 完成登记；加载 / 注册失败仅记
         日志告警，不阻塞应用启动（与 webhook 推送同容错策略）。
+
+        ``errors`` 可选收集器：非 None 时把每个失败模块的原因追加进去
+        （插件管理页安装校验需要精确错误信息，见 api/plugins.py）。
         """
         loaded: list[str] = []
         for path in module_paths or []:
@@ -206,19 +222,57 @@ class PluginRegistry:
                     continue
                 module = importlib.util.module_from_spec(spec)
                 # 执行模块期间 register_plugin 注册到当前注册表
-                # （而非全局），保证「加载进哪个注册表就注册进哪个」
+                # （而非全局），保证「加载进哪个注册表就注册进哪个」；
+                # 同时记录当前模块路径，register 据此标记外部来源
                 global _active_registry
                 previous = _active_registry
                 _active_registry = self
+                previous_path = self._loading_external_path
+                self._loading_external_path = path
                 try:
                     spec.loader.exec_module(module)
                 finally:
                     _active_registry = previous
+                    self._loading_external_path = previous_path
                 loaded.append(path)
                 logger.info("外部插件加载成功: %s", path)
-            except Exception:  # noqa: BLE001 插件加载失败不阻塞应用启动
+            except Exception as e:  # noqa: BLE001 插件加载失败不阻塞应用启动
                 logger.exception("外部插件加载失败: %s", path)
+                if errors is not None:
+                    errors.append(f"{path}: {e}")
         return loaded
+
+
+    # ---- 外部插件来源查询与移除（issue #145 插件管理页） ----
+
+    def registered_external(self, path: str) -> list[tuple[PluginKind, str]]:
+        """返回指定路径模块注册的全部 (kind, name)（未注册返回空列表）。"""
+        return list(self._external_by_path.get(path, []))
+
+    def path_of(self, kind: PluginKind, name: str) -> str | None:
+        """外部插件来源路径；内置插件返回 None。"""
+        return self._external_path.get((kind, name))
+
+    def remove_external(self, path: str) -> list[tuple[PluginKind, str]]:
+        """按来源路径移除该模块注册的全部外部插件，返回移除的列表。
+
+        内置插件（无外部来源）不受影响；路径未注册过插件时幂等返回空。
+        """
+        removed = list(self._external_by_path.get(path, []))
+        for kind, name in removed:
+            self._plugins[kind].pop(name, None)
+            self._external_path.pop((kind, name), None)
+        self._external_by_path.pop(path, None)
+        if removed:
+            logger.info("外部插件已卸载: %s（%s 个插件）", path, len(removed))
+        return removed
+
+    def clear_external(self) -> int:
+        """清空全部外部插件（重载前调用），返回移除的插件数量。"""
+        total = 0
+        for path in list(self._external_by_path):
+            total += len(self.remove_external(path))
+        return total
 
 
 # ---- 全局注册表单例与便捷函数 ----

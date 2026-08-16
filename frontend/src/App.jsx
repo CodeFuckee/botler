@@ -7,6 +7,7 @@ import Labels from './pages/Labels.jsx'
 import Tasks from './pages/Tasks.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
+import Plugins from './pages/Plugins.jsx'
 import Login from './pages/Login.jsx'
 import DialogHost from './components/DialogHost.jsx'
 import { api, setDisplayTz, setSsoEnabled } from './api.js'
@@ -90,6 +91,10 @@ export default function App() {
         <NavLink to="/labels" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           标记库
         </NavLink>
+        {/* 插件管理页（issue #145）：所有插件的安装、卸载和设置都在这个界面 */}
+        <NavLink to="/plugins" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+          插件
+        </NavLink>
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           设置
         </NavLink>
@@ -113,6 +118,7 @@ export default function App() {
           <Route path="/tasks/:id" element={<TaskDetail />} />
           <Route path="/templates" element={<Templates />} />
           <Route path="/labels" element={<Labels />} />
+          <Route path="/plugins" element={<Plugins />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>

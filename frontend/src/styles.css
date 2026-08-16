@@ -2336,3 +2336,55 @@ code {
   font-weight: 700;
   color: var(--primary);
 }
+
+/* ---- 插件管理页（issue #145） ---- */
+/* 插件列表：响应式网格卡片，每张卡片 = 一个插件（名称/描述/版本/来源/操作） */
+.plugin-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-3) 0 var(--space-4);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-3);
+}
+.plugin-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-border);
+  padding: var(--space-3) var(--space-3);
+}
+.plugin-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.plugin-name { font-weight: 600; }
+.plugin-kind { font-size: 12px; }
+.plugin-desc { margin: var(--space-2) 0 0; }
+/* 外部插件来源路径 / 供应商预设：等宽字体，长路径允许折行不撑破卡片 */
+.plugin-path {
+  margin: var(--space-1) 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+.plugin-actions { margin-top: var(--space-2); display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+/* 外部插件徽章：与「内置」徽章（badge-default）区分 */
+.badge-external { background: var(--primary-weak); color: var(--primary); }
+/* 安装表单：多行路径输入框等宽字体、可垂直拉伸 */
+.plugin-install-input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+}
+/* 默认执行引擎设置：radio 选项横排 */
+.plugin-engine-options {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin: var(--space-2) 0;
+}
+.plugin-engine-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.plugins-group { margin-bottom: var(--space-3); }

@@ -187,6 +187,16 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
   `botler.plugins.register_plugin` 注册），启动时加载，可新增引擎 / 供应商 / 发送通道；
 - **统一容错**：任一通道失败仅记日志，绝不阻塞任务收尾。
 
+**插件管理页（issue #145）**：顶部导航「插件」入口（`/plugins`）集中管理
+所有插件的安装、卸载与设置——
+- *安装*：输入外部插件模块路径（每行一个，即 `worker.plugin_paths` 扩展点），
+  后端校验（文件存在 / 模块可加载 / 至少注册一个插件 / 与已安装插件无冲突）
+  通过后写入配置并热加载，无需重启即生效；
+- *卸载*：仅外部插件可卸载（配置与注册表同时移除，内置插件带「内置」徽章）；
+- *设置*：默认执行引擎（executor 插件，复用 `worker.engine`，与设置页
+  「任务调度」卡片同源）+ 外部插件重新加载；列表同时展示模型供应商插件的
+  默认接口 / 模型预设。
+
 完整设计见 [`docs/插件体系设计方案.md`](docs/插件体系设计方案.md)（接口定义 / 迁移清单 / 测试计划 / 演进方向）。
 
 ## 配置说明
@@ -246,6 +256,11 @@ POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook
 POST   /api/repos/{id}/reconcile     立即扫描该仓库，把「assignee 是 bot 但任务表无活跃记录」的 open issues 补入队列（仓库页与概览页「对账」按钮，issue #17/#134）
 GET/PUT /api/repos/{id}/template      仓库模版
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）
+GET    /api/plugins                    插件列表（按分类分组，含内置/外部来源与供应商预设；插件管理页数据源，issue #145）
+POST   /api/plugins/install            安装外部插件模块（校验后写入 worker.plugin_paths 并热加载；失败不落盘，issue #145）
+POST   /api/plugins/uninstall          卸载外部插件（配置与注册表同时移除；内置插件不可卸载，issue #145）
+POST   /api/plugins/reload             按 worker.plugin_paths 清空并重载外部插件（issue #145）
+PUT    /api/plugins/settings           插件设置：默认执行引擎（executor 插件，复用 worker.engine，issue #145）
 POST   /api/settings/reconcile-now    手动触发对账
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138）
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url）

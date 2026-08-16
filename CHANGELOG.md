@@ -6,6 +6,47 @@
 
 ### Added
 
+- **插件管理页面（issue #145）**：
+  需求「增加一个插件页面可以插件进行管理，所有插件的安装、卸载和插件的设置
+  都在这个界面」。基于插件体系（issue #140）落地设计文档规划的「前端插件
+  管理页」演进项，新增独立「插件」页面（顶部导航入口，路由 `/plugins`）：
+  - 后端 `api/plugins.py`（新）：`GET /api/plugins` 按分类（executor /
+    model_provider / notifier）分组返回全部已注册插件，含内置/外部来源
+    （外部插件附来源路径）与模型供应商默认预设（display_name /
+    default_base_url / default_model，与设置页「生图模型」预设同源）；
+    `POST /api/plugins/install` 安装外部插件模块——隔离注册表试加载校验
+    （文件存在 / 模块可导入且至少注册一个插件 / 与已安装插件无同名同分类
+    冲突），通过后写入 `worker.plugin_paths` 并热加载到全局注册表（无需
+    重启），任何校验失败 400 拒绝且不落盘，热加载防御性失败回滚配置；
+    `POST /api/plugins/uninstall` 卸载外部插件（配置与注册表同时移除，
+    内置插件命中「未安装」校验不可卸载）；`POST /api/plugins/reload` 按
+    当前 `plugin_paths` 清空并重载外部插件；`PUT /api/plugins/settings`
+    设置默认执行引擎（executor 插件设置，复用 `worker.engine`，白名单由
+    插件注册表派生，外部引擎插件自动纳入）；
+  - 后端 `plugins/base.py`：`PluginRegistry` 增加外部插件来源跟踪
+    （`_external_by_path` / `_external_path`）与 `registered_external` /
+    `path_of` / `remove_external` / `clear_external`，`load_external`
+    支持 `errors` 收集器（安装校验需要精确失败原因）；
+  - 前端 `pages/Plugins.jsx`（新）：按分类分组展示全部插件卡片（名称/描述/
+    版本/内置徽章/外部来源路径/供应商默认预设）；「安装外部插件」表单
+    （多行路径输入，逐项提交）；外部插件「卸载」按钮（confirmDialog
+    确认）；「默认执行引擎」radio 设置（executor 插件）；「重新加载外部
+    插件」按钮；操作结果 alert 反馈；`App.jsx` 新增「插件」导航与 `/plugins`
+    路由；`styles.css` 新增 `.plugin-list` / `.plugin-card` /
+    `.badge-external` / `.plugin-install-input` / `.plugin-engine-options`
+    等样式；
+  - 文档：`README.md` 插件体系章节补充插件管理页说明、API 一览新增
+    `/api/plugins` 五个端点；
+  - 测试：后端 `test_api_plugins.py`（新）17 用例（列表分组与内置完整性 /
+    供应商预设 / 外部来源标记 / 安装成功落盘+热加载 / 空白 strip+重复安装
+    拒绝 / 空路径与文件不存在拒绝 / 模块未注册插件拒绝 / 模块加载失败拒绝 /
+    与内置插件冲突拒绝 / 卸载移除配置+注册表 / 未安装与空路径拒绝 / 重载
+    幂等 / 引擎设置合法持久化与非法拒绝）；前端 `plugins-page.test.mjs`
+    （新）12 用例（导航与路由 / 页面结构与 API 端点源码断言 / 分组渲染
+    内置与外部插件 / 安装提交 POST / 引擎切换保存 PUT）。
+
+
+
 - **灵感一键提交为 GitLab issue（issue #143）**：
   需求「灵感组件，在编辑按钮左边添加一个，添加issue的按钮，点击之后将灵感的
   文本，作为issue的标题和描述，通过gitlab api添加issue，默认添加标记feature
