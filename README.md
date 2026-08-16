@@ -190,6 +190,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `dsh.max_tokens` / `session_root` / `cordis` / `runtime_bin` / `base_url` / `api_key` | — | dsh 引擎可选参数（输出上限 / 会话持久化目录 / 自定义 Cordis 配置 / 自定义 runtime / 兼容端点），部署见 `docs/dsh-engine-deployment.md` |
 | `dsh.reasoning_effort` | 空（SDK 默认 high） | dsh 引擎推理等级（issue #123）：`off` / `high` / `max`，设置页「dsh 引擎」卡片可选；设置后自动派生 Cordis 注入 SDK 运行时 |
 | `browse.default_path` | 空（服务器用户主目录 `~`） | 目录选择对话框的初始定位目录；支持 `~` 展开，路径不存在时自动回退主目录 |
+| `ai_providers[]` | 空列表 | AI API 供应商配置（设置页「AI API 供应商」卡片增删改查，issue #46）：每项 `{name, provider, base_url, api_key, model, enabled}`，内置 DeepSeek / OpenAI / Anthropic / Gemini / Moonshot / 通义千问 / 智谱 / 硅基流动 / Ollama / OpenRouter 预设；api_key 落盘 config.yaml（支持 `${ENV}` 引用），API 只返回掩码。dsh 引擎未配 api_key 时回退 provider=deepseek 且启用的项（issue #115）；概览页「DeepSeek 账户余额」（issue #138）同样按此链解析 Key（dsh 段 > AI 供应商 deepseek 项 > 环境变量 `DEEPSEEK_API_KEY`）代调 `GET https://api.deepseek.com/user/balance` 展示余额 |
 | `image_models[]` | 空列表 | 生图模型配置（设置页「生图模型」卡片增删改查，issue #135/#137）：每项 `{name, provider, base_url, api_key, model, enabled}`，内置 Gemini Nano Banana Pro（默认模型 `gemini-3-pro-image`，generateContent 接口）与 GPT Image 2（默认模型 `gpt-image-2`，OpenAI images 接口）两个预设；api_key 落盘 config.yaml（支持 `${ENV}` 引用），API 只返回掩码；后端 `image_models.py` 提供统一调用封装，设置页测试按钮走 `POST /api/settings/image-model-test` 真实调用一次生图接口验证配置可用 |
 | `notifications.enabled` | true | 网页通知总开关（任务需交互 / issue 完成 / 队列空 / 无新任务，逐项可关） |
 | `webhook.enabled` | false | Webhook 消息推送总开关（issue #136）：任务完成（成功收尾）时调用 webhook 推送消息；设置页「消息推送 Webhook」卡片可配置 |
@@ -220,6 +221,7 @@ POST   /api/repos/{id}/reconcile     立即扫描该仓库，把「assignee 是 
 GET/PUT /api/repos/{id}/template      仓库模版
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）
 POST   /api/settings/reconcile-now    手动触发对账
+GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138）
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url）
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url）
 GET    /api/tasks/{id}/logs           任务日志

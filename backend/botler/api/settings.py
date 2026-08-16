@@ -751,3 +751,46 @@ def _validate_image_models(patch, current: list[dict]) -> list[dict]:
 
 def ctx_of(request: Request):
     return request.app.state.ctx
+
+
+@router.get("/deepseek-balance")
+def get_deepseek_balance(request: Request):
+    """查询 DeepSeek 账户余额（issue #138）。
+
+    概览页调用：设置里配置了 DeepSeek API（dsh 段 / AI 供应商 deepseek
+    项 / 环境变量 DEEPSEEK_API_KEY）时返回余额信息；未配置返回
+    configured=false（前端不展示余额卡片）。Key 由后端读取并代调
+    ``GET https://api.deepseek.com/user/balance``，明文不流转到前端
+    （与 ai_providers 掩码同安全策略）；查询失败返回 error 字段
+    （不抛 500，与 webhook-test 同容错策略）。
+    """
+    from datetime import datetime, timezone
+
+    from ..deepseek_balance import (
+        DeepSeekBalanceClient,
+        DeepSeekBalanceError,
+        resolve_deepseek_credentials,
+    )
+    c = ctx_of(request)
+    settings = c.config.get()
+    api_key, base_url = resolve_deepseek_credentials(settings)
+    if not api_key:
+        return {"configured": False, "balance": None, "error": None}
+    try:
+        client = DeepSeekBalanceClient(
+            api_key=api_key, base_url=base_url,
+            verify_ssl=settings.verify_ssl)
+        data = client.fetch()
+        # fetched_at 与后端惯例一致：UTC 无时区后缀（前端 fmtTime 补 Z 解析）
+        fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        return {
+            "configured": True,
+            "balance": {
+                "is_available": bool(data.get("is_available")),
+                "balance_infos": data.get("balance_infos") or [],
+                "fetched_at": fetched_at,
+            },
+            "error": None,
+        }
+    except DeepSeekBalanceError as e:
+        return {"configured": True, "balance": None, "error": str(e)}

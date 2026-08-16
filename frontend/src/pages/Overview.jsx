@@ -25,6 +25,10 @@ export const ISSUE_POLL_MS = 15000
 // 请求压力，与开放 issue 板块同频（本地改动提交后手动刷新即时生效）
 export const INSPIRATION_POLL_MS = 15000
 
+// DeepSeek 账户余额轮询间隔（issue #138）：余额变化不频繁，60 秒低频
+// 轮询 + 卡片内手动刷新按钮兜底（后端代调 deepseek user/balance）
+export const DEEPSEEK_BALANCE_POLL_MS = 60000
+
 // 流水线整体状态 → 徽章映射（issue #39）。样式类复用任务状态徽章
 // status-*（视觉语义一致：成功绿 / 失败红 / 运行蓝 / 其余灰）
 export const PIPELINE_STATUS_META = {
@@ -200,6 +204,11 @@ export default function Overview() {
   const [editingInspiration, setEditingInspiration] = useState(null)
   // 编辑框草稿内容
   const [editInspirationDraft, setEditInspirationDraft] = useState('')
+  // DeepSeek 账户余额（issue #138）：null=未加载/未配置；
+  // {configured, balance, error} 为 /api/settings/deepseek-balance 返回
+  const [dsBalance, setDsBalance] = useState(null)
+  // 余额接口请求失败（网络/后端异常）时的错误文案
+  const [dsBalanceError, setDsBalanceError] = useState('')
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
@@ -313,6 +322,27 @@ export default function Overview() {
     return () => clearInterval(t)
   }, [loadInspirations])
 
+  // DeepSeek 账户余额（issue #138）：后端代调 deepseek user/balance，
+  // API Key 明文不流转到前端（与 ai_providers 掩码同安全策略）；
+  // 未配置时后端返回 configured=false，前端不渲染余额卡片
+  const loadDeepSeekBalance = useCallback(async () => {
+    try {
+      const d = await api.get('/api/settings/deepseek-balance')
+      setDsBalance(d || { configured: false, balance: null, error: null })
+      setDsBalanceError('')
+    } catch (e) {
+      // 余额展示尽力而为：接口失败不打扰页面，保留上次数据（未加载
+      // 成功过则 dsBalance 保持 null，卡片不渲染）
+      setDsBalanceError(e.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadDeepSeekBalance()
+    const t = setInterval(loadDeepSeekBalance, DEEPSEEK_BALANCE_POLL_MS)
+    return () => clearInterval(t)
+  }, [loadDeepSeekBalance])
+
   // ---- 灵感增删改（issue #131）：仅写 Botler 本地数据库 ----
 
   // 记录新灵感：内容去首尾空白，空内容不发请求；成功后清草稿并刷新列表
@@ -377,6 +407,68 @@ export default function Overview() {
   return (
     <div>
       <h1>概览</h1>
+
+      {/* issue #138：DeepSeek 账户余额——设置里配置了 deepseek api 时
+          在概览页展示（未配置时整卡不渲染，页面保持简洁）。数据由后端
+          代调 https://api.deepseek.com/user/balance 获取，Key 不外发 */}
+      {dsBalance && dsBalance.configured && (
+        <section className="deepseek-balance-section">
+          <h2>DeepSeek 账户余额</h2>
+          <p className="muted">
+            来自 DeepSeek user/balance 接口（每 {DEEPSEEK_BALANCE_POLL_MS / 1000} 秒自动刷新）
+          </p>
+          {(dsBalance.error || dsBalanceError) && (
+            <div className="alert alert-error" role="alert">
+              {dsBalance.error || dsBalanceError}
+            </div>
+          )}
+          {dsBalance.balance && (
+            <div className="deepseek-balance-body">
+              <div className="deepseek-balance-head">
+                {dsBalance.balance.is_available ? (
+                  <span className="ok-text">✓ 账户可用</span>
+                ) : (
+                  <span className="muted">账户不可用</span>
+                )}
+                {dsBalance.balance.fetched_at && (
+                  <span className="muted small" title="查询时间">
+                    更新于 {fmtTime(dsBalance.balance.fetched_at)}
+                  </span>
+                )}
+              </div>
+              {(dsBalance.balance.balance_infos || []).length === 0 ? (
+                <div className="empty-state small">
+                  <span className="empty-icon" aria-hidden="true">💰</span>
+                  <p className="muted">暂无余额信息</p>
+                </div>
+              ) : (
+                <ul className="deepseek-balance-list">
+                  {(dsBalance.balance.balance_infos || []).map((info, i) => (
+                    <li key={i} className="deepseek-balance-item">
+                      <span className="deepseek-balance-currency" title="币种">
+                        {info.currency || '—'}
+                      </span>
+                      <span className="deepseek-balance-total" title="总余额">
+                        {info.total_balance != null ? `${info.total_balance}` : '—'}
+                      </span>
+                      <span className="muted small" title="赠送余额">
+                        赠送 {info.granted_balance ?? '—'}
+                      </span>
+                      <span className="muted small" title="充值余额">
+                        充值 {info.topped_up_balance ?? '—'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          <div className="form-row">
+            <button type="button" className="btn btn-small"
+                    onClick={loadDeepSeekBalance}>↻ 刷新</button>
+          </div>
+        </section>
+      )}
 
       {/* issue #68：板块排序调整——开放 Issue 置于页面顶部，
           其后为 CI/CD 流水线。

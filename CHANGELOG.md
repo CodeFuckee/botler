@@ -6,6 +6,33 @@
 
 ### Added
 
+- **设置里配置了 deepseek api 时，概览页展示 DeepSeek 账户余额（issue #138）**：
+  需求「如果设置里配置了 deepseek api，则在概览页面显示 deepseek 账户里的余额」，
+  请求接口为 `GET https://api.deepseek.com/user/balance`（`Authorization: Bearer <TOKEN>`）。
+  实现：
+  - 后端 `deepseek_balance.py`（新模块）：`resolve_deepseek_credentials` 凭据解析链
+    （与 executor._dsh_credentials 一致：dsh 段 api_key > 设置页「AI API 供应商」
+    provider=deepseek 且启用的项 > 环境变量 `DEEPSEEK_API_KEY`）；
+    `DeepSeekBalanceClient`——httpx 代调 user/balance（10s 超时，verify_ssl 跟随全局，
+    `Authorization: Bearer` 认证，预设 base_url 尾部 `/v1` 归一化后拼 `/user/balance`，
+    与需求示例地址一致）；API Key 只存在于服务端，明文不流转到前端；
+  - 后端 `api/settings.py`：新增 `GET /api/settings/deepseek-balance`——未配置 Key 返回
+    configured=false（前端不渲染卡片）；已配置则代调查询返回
+    `{configured, balance:{is_available, balance_infos, fetched_at}, error}`；
+    查询失败返回 error 字段（不抛 500，与 webhook-test 同容错策略）；
+  - 前端 `pages/Overview.jsx`：新增「DeepSeek 账户余额」卡片——配置了 deepseek api 时
+    展示（未配置整卡不渲染），显示账户可用状态 / 币种 / 总余额 / 赠送 / 充值余额 /
+    更新时间，60 秒低频轮询 + 「↻ 刷新」按钮；接口失败保留上次数据不打扰页面；
+  - 前端 `styles.css`：新增 deepseek-balance-* 余额卡片样式（与其他概览板块视觉一致）；
+  - 文档：`README.md` API 一览新增余额端点、配置说明补充 `ai_providers[]` 行并说明
+    余额 Key 解析链；
+  - 测试：后端 `test_deepseek_balance.py`（新）18 用例（凭据解析链优先级 / 停用与空
+    key 跳过 / 环境变量兜底 / base_url 归一化 / 客户端请求构造与响应解析 / 非 2xx、
+    超时、网络异常 / 端点未配置、成功、接口报错、环境变量配置且无 Key 泄露）+
+    `test_api_settings.py` 全量回归；前端 `overview-deepseek-balance.test.mjs`（新）
+    9 用例（源码断言 / 渲染卡片各字段 / 未配置不渲染 / 接口报错与网络失败容错 /
+    刷新按钮重新请求 / 空余额空状态）+ 概览页既有 240 用例全量回归。
+
 - **设置页「识图模型」改为「生图模型」，并新增测试按钮验证配置可用（issue #137）**：
   需求「把设置里的识图模型改成生图模型，同时增加一个测试按钮，在用户配置好url、
   apikey以及生图模式后，可以调用测试按钮，测试生图模型是否能用」。上一轮（issue
