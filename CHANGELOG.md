@@ -129,6 +129,41 @@
 
 ### Added
 
+- **使用 apple-design skill 优化全部页面（issue #124）**：
+  需求「使用apple-design skill优化所有页面，禁止少优化一个页面」。按
+  apple-design skill（Apple 流体交互/材质与深度/响应/排版/可及性原则）
+  对全部 8 个页面（概览/仓库/任务/任务详情/模版/标记库/设置/登录）落地
+  统一优化，全部收敛在共享设计系统 `styles.css`，无页面遗漏：
+  - **材质与深度（Materials & depth）**：顶导航由实心不透明条改为半透明
+    毛玻璃悬浮层——`@supports (backdrop-filter)` 下 `blur(20px)
+    saturate(180%)` + 半透明 `--nav-bg-glass`（浅色 rgba(255,255,255,.78)
+    / 深色 rgba(10,10,10,.72)），内容从其下方滚动；不支持时回退纯色
+    `--nav-bg` 兜底；`prefers-reduced-transparency: reduce` 时回退纯色
+    无模糊；`prefers-contrast: more` 时导航/卡片补明确边框、次级文字加深；
+  - **动效（Motion）**：模态/抽屉/遮罩「材质化入场」——新增
+    `@keyframes surface-in`（scale .97 + translateY 8px + 淡入，模拟材质
+    到达而非纯 opacity 淡入）/ `drawer-in`（从右滑入，空间一致性）/
+    `overlay-in`（遮罩先淡入）；`.modal`/`.login-card`/`.guide-content`
+    用 `--dur`（200ms）+ `--ease-spring`，`.drawer` 用 240ms，全部落在
+    150–300ms 区间且受既有 `prefers-reduced-motion` 全局降级保护；
+    高频动画元素（spinner/阶段节点/模态/抽屉）补 `will-change` 合成层
+    提示（帧级流畅，只动 transform/opacity）；
+  - **响应（Response）**：按钮按下升级为 Apple 风格微缩放
+    `translateY(1px) scale(0.98)`；issue-link / section-toggle /
+    modal-close / folder-item / add-method / remote-option /
+    label-choice 补齐 active 按下即时反馈；概览 issue 行、仓库行、标签行
+    补 hover 过渡反馈（运行中高亮行 hover 保持蓝色弱底不被覆盖）；
+    概览流水线/开放 issue 卡片 hover 轻抬升 + 阴影加深；
+  - **排版（Typography）**：正文启用 `font-optical-sizing: auto`；
+    新增字号相关字距 token `--tracking-display`（大标题负字距收紧）与
+    `--tracking-caption`，h1 引用负字距；表格启用 `tabular-nums` 等宽
+    数字，数字跳变不抖动；折叠标题（任务详情/模版页）hover 变主色平滑
+    过渡；
+  - **测试**：新增 `apple-design.test.mjs` 17 用例逐条验收（毛玻璃材质/
+    token 双主题/减弱透明/增强对比度/三类入场动画时长区间/响应按下态/
+    排版/页面覆盖清单 8 页无一遗漏），前端 551 + 后端 1056 全量测试
+    通过。
+
 - **设置页新增 dsh 引擎推理等级设置（issue #123）**：
   需求「deepseek harness sdk是可以设置推理等级的，在设置页面添加deepseek
   harness推理等级的设置」。deepseek-harness runtime 的 `llm-deepseek`

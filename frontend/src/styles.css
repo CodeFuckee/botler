@@ -60,6 +60,14 @@
   --dur-fast: 150ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  /* 材质（apple-design：导航毛玻璃悬浮层——半透明底色 + 背景模糊，内容从
+     其下方滚动；prefers-reduced-transparency 时回退纯色） */
+  --nav-bg: #ffffff;
+  --nav-bg-glass: rgba(255, 255, 255, 0.78);
+  /* 排版字距（apple-design：字号相关字距——大标题负字距收紧、小字正字距
+     提升可读性；深色/浅色共用，无需翻转） */
+  --tracking-display: -0.015em;
+  --tracking-caption: 0.02em;
   /* 间距（HIG 布局：4px / 8px 网格，检查清单 #2「不出现随机像素值」） */
   --space-1: 4px;
   --space-2: 8px;
@@ -97,6 +105,8 @@
     --bg-hover-soft: rgba(255, 255, 255, 0.06);
     --hairline: rgba(255, 255, 255, 0.1);
     --overlay: rgba(0, 0, 0, 0.6);
+    --nav-bg: #0a0a0a;
+    --nav-bg-glass: rgba(10, 10, 10, 0.72);
     --text: #ededed;
     --muted: #888888;
     --border: #2a2a2a;
@@ -132,12 +142,58 @@
   }
 }
 
+/* ============================================================
+   apple-design 动效与材质（issue #124）：流体交互——即时响应、
+   材质化入场、空间一致性、帧级流畅（transform/opacity 合成）
+   ============================================================ */
+
+/* 表面材质化入场：从「将要到达」的微缩放/位移淡入到就位（而非纯 opacity
+   淡入），模拟真实材质落在界面上；时长走 --dur（200ms，150–300ms 区间） */
+@keyframes surface-in {
+  from { opacity: 0; transform: scale(0.97) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+/* 右侧抽屉滑入：空间一致性——从右侧进入（退出应沿同路径向右） */
+@keyframes drawer-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+/* 遮罩淡入：模态/抽屉背后的压暗层先于表面出现 */
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+
+
+/* 响应（apple-design §1：反馈活在按下瞬间）：可交互元素按下即时反馈 */
+.issue-link:active { color: var(--primary); opacity: 0.75; }
+.section-toggle:active { opacity: 0.75; }
+.modal-close:active { background: var(--bg-active); color: var(--text); }
+.folder-item:active:not(:disabled) { background: var(--bg-active); }
+.add-method:active,
+.remote-option:active { transform: scale(0.98); }
+.label-choice:active { opacity: 0.8; }
+
+/* 帧级流畅（apple-design §11：只动 transform/opacity 合成属性，
+   动画元素提示浏览器提升合成层，避免布局/绘制抖动） */
+.spinner { will-change: transform; }
+.pipeline-stage-dot { will-change: opacity; }
+.modal { will-change: transform, opacity; }
+.drawer { will-change: transform, opacity; }
+
+/* 折叠标题颜色过渡（任务详情/模版页 section-toggle hover 变主色平滑，
+   不再生硬跳变） */
+.section-toggle { transition: color var(--dur-fast) var(--ease-out); }
+
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  /* apple-design 排版：系统字体光学尺寸自动调节（字号变化时字形随之微调） */
+  font-optical-sizing: auto;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   font-size: 14px;
@@ -155,13 +211,23 @@ body {
   gap: var(--space-1);
   padding: 0 var(--gutter);
   height: 52px;
-  background: var(--bg-card);
+  /* apple-design 材质：纯色兜底（不支持 backdrop-filter 或系统减弱透明时） */
+  background: var(--nav-bg);
   box-shadow: 0 1px 0 var(--hairline);
   position: sticky;
   top: 0;
   z-index: 10;
   overflow-x: auto;
   scrollbar-width: none; /* 隐藏横向滚动条，保留手势/触控板横向滚动 */
+}
+/* apple-design 材质与深度：支持 backdrop-filter 时导航转为半透明毛玻璃悬浮层，
+   内容从其下方滚动（而非实心不透明条）——背景模糊 + 饱和度增强模拟真实材质 */
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .topnav {
+    background: var(--nav-bg-glass);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
 }
 .topnav::-webkit-scrollbar { display: none; }
 .brand {
@@ -251,7 +317,7 @@ body {
   :root { --content-width: max(1440px, calc(100vw - 100px)); --ellipsis-max: 520px; }
 }
 
-h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 var(--space-4); }
+h1 { font-size: 20px; font-weight: 600; letter-spacing: var(--tracking-display); margin: 0 0 var(--space-4); }
 h1 .badge { margin-left: 10px; vertical-align: middle; }
 h2 { font-size: 14px; margin: 0 0 var(--space-3); color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
 
@@ -370,7 +436,8 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .btn:focus-visible { box-shadow: var(--focus-ring); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 /* HIG 熟悉感：active 态按下反馈，所有按钮（含主/危险变体）统一 */
-.btn:not(:disabled):active { transform: translateY(1px); background: var(--bg-active); }
+/* apple-design 响应：按下微缩放 + 下沉（Apple 风格 press 反馈，即时不拖沓） */
+.btn:not(:disabled):active { transform: translateY(1px) scale(0.98); background: var(--bg-active); }
 .btn-primary {
   background: var(--primary-strong);
   border-color: var(--primary-strong);
@@ -379,11 +446,11 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .btn-primary:not(:disabled):active {
   background: var(--primary-hover);
-  transform: translateY(1px);
+  transform: translateY(1px) scale(0.98);
 }
 .btn-danger { color: var(--err); }
 .btn-danger:hover { background: var(--err-weak); border-color: var(--err); }
-.btn-danger:not(:disabled):active { background: var(--err-weak); transform: translateY(1px); }
+.btn-danger:not(:disabled):active { background: var(--err-weak); transform: translateY(1px) scale(0.98); }
 .btn-sm { padding: var(--space-1) var(--space-2); font-size: 12px; }
 .btn-wide { padding: 8px 36px; }
 .btn-upload { cursor: pointer; }
@@ -402,7 +469,10 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   padding: var(--space-4) var(--space-1);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+  /* apple-design 响应：行 hover 微反馈 */
+  transition: background var(--dur-fast) var(--ease-out);
 }
+.repo-item:hover { background: var(--bg-hover); }
 .repo-item:last-child { border-bottom: none; }
 .repo-main { min-width: 0; }
 .repo-name { font-weight: 600; display: flex; align-items: center; gap: var(--space-2); }
@@ -418,7 +488,8 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 /* 任务列表翻页组件（issue #50）：上一页/页码/下一页横向排列，窄视口自动换行 */
 .pagination { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap; }
 .pagination .muted.small { margin-left: var(--space-2); }
-.table { width: 100%; border-collapse: collapse; }
+/* apple-design 排版：表格数字列等宽数字对齐（tabular-nums），数字跳变不抖动 */
+.table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 /* 任务列表固定布局（issue #28 第二轮）：table-layout: auto 下表格被内容撑到
    min-content（实测 1628px），而 .content max-width 封顶 1600px，任何桌面视口
    下容器都装不下表格，水平滚动条必然出现。改为 table-layout: fixed + 12 列
@@ -598,6 +669,8 @@ code {
   display: flex;
   justify-content: flex-end;
   z-index: 100;
+  /* apple-design：遮罩先淡入，压暗背景 */
+  animation: overlay-in var(--dur-fast) var(--ease-out);
 }
 .drawer {
   background: var(--bg-card);
@@ -610,6 +683,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  /* apple-design：从右滑入（空间一致性——退出应沿同路径向右） */
+  animation: drawer-in 240ms var(--ease-spring);
 }
 /* issue #85：issue 详情右边栏——复用 drawer 基础样式，加宽容纳正文 */
 .issue-drawer {
@@ -743,6 +818,8 @@ code {
   align-items: center;
   justify-content: center;
   z-index: 100;
+  /* apple-design：遮罩先淡入，压暗背景 */
+  animation: overlay-in var(--dur-fast) var(--ease-out);
 }
 .modal {
   background: var(--bg-card);
@@ -755,6 +832,8 @@ code {
   flex-direction: column;
   padding: var(--space-4);
   gap: var(--space-3);
+  /* apple-design：表面材质化入场（缩放+位移+淡入，而非生硬闪现） */
+  animation: surface-in var(--dur) var(--ease-spring);
 }
 .modal-header {
   display: flex;
@@ -1145,6 +1224,8 @@ code {
   width: 380px;
   max-width: 100%;
   text-align: center;
+  /* apple-design 动效：登录卡材质化入场（scale+fade，非生硬闪现） */
+  animation: surface-in var(--dur) var(--ease-spring);
 }
 /* HIG 目标感：登录页品牌标识（首屏即明白产品身份） */
 .login-brand {
@@ -1185,7 +1266,10 @@ code {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-card);
+  /* apple-design 响应：行 hover 微反馈 */
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
+.label-chip:hover { background: var(--bg-hover); border-color: var(--border-hover); }
 
 .label-color {
   width: 14px;
@@ -1252,6 +1336,12 @@ code {
 }
 .pipeline-card {
   min-width: 0;
+  /* apple-design 匠心：卡片 hover 轻抬升 + 阴影加深（仅在可点击卡片） */
+  transition: box-shadow var(--dur) var(--ease-out), transform var(--dur) var(--ease-out);
+}
+.pipeline-card:hover {
+  box-shadow: var(--shadow-pop);
+  transform: translateY(-1px);
 }
 .pipeline-head {
   display: flex;
@@ -1353,6 +1443,12 @@ code {
 }
 .issue-repo-card {
   min-width: 0;
+  /* apple-design 匠心：卡片 hover 轻抬升 + 阴影加深（仅在可点击卡片） */
+  transition: box-shadow var(--dur) var(--ease-out), transform var(--dur) var(--ease-out);
+}
+.issue-repo-card:hover {
+  box-shadow: var(--shadow-pop);
+  transform: translateY(-1px);
 }
 /* issue #102：头部允许换行——竖屏平板窄卡片（auto-fit 降为 1 列
    ≈280px）中仓库名不再被优先级/计数/添加按钮等固定项压缩至不可见 */
@@ -1456,7 +1552,12 @@ code {
 .issue-item {
   padding: var(--space-2) 0;
   border-top: 1px solid var(--border);
+  /* apple-design 响应：行 hover 微反馈（浅背景渐变出现，非生硬跳变） */
+  transition: background var(--dur-fast) var(--ease-out);
 }
+.issue-item:hover { background: var(--bg-hover); }
+/* 运行中高亮项保持蓝色弱底（hover 不被中性灰覆盖） */
+.issue-item.issue-item-running:hover { background: var(--primary-weak); }
 .issue-item:first-child {
   border-top: none;
   padding-top: 0;
@@ -1651,6 +1752,8 @@ code {
   overflow-y: auto;
   font-size: 13.5px;
   line-height: 1.7;
+  /* apple-design 动效：指南展开时材质化入场 */
+  animation: surface-in var(--dur) var(--ease-out);
 }
 .guide-content h1 { margin: 4px 0 12px; font-size: 17px; }
 .guide-content h2 { margin: 18px 0 8px; padding-bottom: 4px; font-size: 15px; border-bottom: 1px solid var(--border); }
@@ -1723,3 +1826,22 @@ code {
   align-items: center;
   gap: var(--space-2);
 }
+
+/* apple-design 可及性：系统开启「减弱透明」时毛玻璃回退纯色材质（无模糊），
+   保证悬浮层文字在任何背景下可读 */
+@media (prefers-reduced-transparency: reduce) {
+  .topnav {
+    background: var(--nav-bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* apple-design 可及性：系统开启「增强对比度」时悬浮层/卡片补明确边框，
+   边界在任何背景下清晰可辨；次级文字加深保证可读 */
+@media (prefers-contrast: more) {
+  .topnav { box-shadow: none; border-bottom: 1px solid var(--border); }
+  .card { box-shadow: none; border: 1px solid var(--border); }
+  .muted { color: var(--text); }
+}
+

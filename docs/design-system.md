@@ -54,6 +54,10 @@ Botler UI 采用 **Vercel Geist 设计体系（浅色主题）** —— 一套�
 | `--err` | `#e5484d` | 错误（Geist error） |
 | `--err-weak` | `rgba(229,72,77,0.08)` | 错误弱底 |
 | `--mono` | `'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace` | 等宽字体（代码/日志/路径） |
+| `--nav-bg` | 浅 `#ffffff` / 深 `#0a0a0a` | 顶导航纯色兜底（不支持毛玻璃 / 系统减弱透明时） |
+| `--nav-bg-glass` | 浅 `rgba(255,255,255,.78)` / 深 `rgba(10,10,10,.72)` | 顶导航毛玻璃半透明底色（apple-design 材质） |
+| `--tracking-display` | `-0.015em` | 大标题负字距（Apple 排版：大字收紧，随字号变化） |
+| `--tracking-caption` | `0.02em` | 小字正字距（辅助信息可读性） |
 | `--radius` | `6px` | 常规圆角（按钮、输入框、卡片、徽标底） |
 | `--radius-lg` | `12px` | 大圆角（模态框） |
 | `--shadow-border` | `0 0 0 1px rgba(0,0,0,0.08)` | 发丝线阴影边框（stat-chip 等） |
@@ -110,12 +114,16 @@ font-family: var(--mono);
 - 优先使用系统字体栈（Apple/微软经验证的现代字体），不引入外部字体包
 - 中文场景依赖系统回退字体（PingFang SC / 微软雅黑），不单独加载中文字体
 - 若后续要引入 [Geist 字体](https://vercel.com/font)（npm 包 `geist`），仅作为拉丁字符优先字体，中文回退栈保持不变
+- `body` 启用 `font-optical-sizing: auto`（Apple 排版：系统字体光学尺寸随字号自动调节）
+- 表格启用 `font-variant-numeric: tabular-nums`（数字列等宽对齐，数字跳变不抖动）
+- 字距按字号分层：大标题用 `--tracking-display` 负字距收紧，小字辅助信息用
+  `--tracking-caption` 正字距提升可读性，正文保持 `0`（Apple 排版原则）
 
 ### 4.2 字号层级
 
 | 场景 | 字号 | 字重 | 备注 |
 |---|---|---|---|
-| 页面标题 `h1` | 20px | 600 | `letter-spacing: -0.01em` |
+| 页面标题 `h1` | 20px | 600 | `letter-spacing: var(--tracking-display)`（负字距收紧） |
 | 区块标题 `h2` | 14px | 600 | 全大写 + `0.05em` 字距，灰色（区块功能标签） |
 | 正文/表格/输入 | 14px | 400 | 默认 |
 | 弱化文本 `.small` | 12.5px | 400 | 辅助说明 |
@@ -169,12 +177,17 @@ font-family: var(--mono);
 
 ### 7.1 顶部导航（`.topnav`）
 
-- 白底、52px 高、吸顶（`position: sticky`），底部 1px 发丝线阴影分隔
+- 52px 高、吸顶（`position: sticky`），底部 1px 发丝线阴影分隔
+- **毛玻璃材质（apple-design）**：支持 `backdrop-filter` 时底色为半透明
+  `--nav-bg-glass` + `blur(20px) saturate(180%)`，内容从其下方滚动（材质层）；
+  不支持时回退纯色 `--nav-bg`；`prefers-reduced-transparency: reduce` 时
+  回退纯色无模糊；`prefers-contrast: more` 时补明确底部分隔边框
 - 品牌：粗体 16px，与链接用 16px 间距
 - 导航链接：12px 水平内边距、6px 圆角
   - 默认：`--muted` 灰色
   - 悬停：文本变 `--text` + `rgba(0,0,0,0.04)` 背景
   - 激活（当前页）：`--primary` 蓝字 + `--primary-weak` 蓝底
+  - 按下（active）：微缩放反馈
 
 ### 7.2 卡片（`.card`）
 
@@ -245,11 +258,25 @@ font-family: var(--mono);
 - 关闭按钮（`.modal-close`）：无边框、灰色，hover 微灰底
 - 目录列表（`.folder-list`）：浅灰底容器 + `--border` 边框，条目 hover 白底
 
+## 7.11 动效（apple-design）
+
+- **材质化入场**：模态/弹窗用 `@keyframes surface-in`（`scale(.97)` +
+  `translateY(8px)` + 淡入，`--dur` 200ms + `--ease-spring`）；右侧抽屉用
+  `@keyframes drawer-in`（`translateX(100%)` → 0，240ms，空间一致性——从右
+  进入）；遮罩用 `@keyframes overlay-in`（先于表面淡入）。所有入场时长
+  落在 150–300ms 区间，并受 `prefers-reduced-motion` 全局降级保护
+- **帧级流畅**：只动 `transform`/`opacity` 合成属性；高频动画元素
+  （spinner、流水线阶段节点、模态、抽屉）声明 `will-change` 提升合成层
+- **响应反馈**：按钮按下 `translateY(1px) scale(0.98)` 微缩放；可交互行
+  （issue 行/仓库行/标签行）hover 背景过渡；可点击卡片（流水线/开放 issue）
+  hover 轻抬升 + 阴影加深
+
 ## 8. 交互规范
 
 | 状态 | 通用规则 |
 |---|---|
 | hover | 可交互元素必须有可见反馈：按钮变灰底、链接变主色、输入框边框加深、列表行灰底 |
+| active | 按下即时反馈：按钮 `translateY(1px) scale(0.98)` 微缩放；链接/折叠标题/关闭按钮/选项胶囊 opacity/背景变化（反馈活在按下瞬间） |
 | focus | 键盘焦点必须可见：输入框/按钮用 `--focus-ring` 焦点环（3px 半透明蓝） |
 | disabled | 一律 `opacity: 0.5` + `cursor: not-allowed` |
 | 选中 | 单选/复选胶囊：蓝边框 + 蓝字 + 蓝弱底 |
