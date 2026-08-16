@@ -1232,6 +1232,36 @@ class ClaudeExecutor:
 
     # ---- dsh 引擎（issue #84）----
 
+    def _dsh_credentials(self, cfg) -> tuple[str | None, str | None]:
+        """dsh 引擎 API Key / Base URL 解析链，返回 (api_key, base_url)。
+
+        优先级：dsh 段显式配置 > 设置页「AI 供应商」中 provider=deepseek
+        且 enabled 的项（issue #115）> 环境变量 DEEPSEEK_API_KEY /
+        DEEPSEEK_BASE_URL（SDK 默认读取，botler 不覆盖，返回 None 即
+        由 SDK 兜底）。
+
+        issue #115 根因：任务 #194 #195 切 dsh 引擎后全部失败——用户
+        只在设置页「AI 供应商」配过 DeepSeek key，dsh 段未配、部署机
+        环境无 DEEPSEEK_API_KEY，SDK 无 key 可用 → DeepSeek API 401
+        AUTH → finish_reason=error → 判失败。key 已在平台上配过却不
+        消费，属于配置链路断裂，在此补齐回退。
+        """
+        api_key = cfg.dsh_api_key or None
+        base_url = cfg.dsh_base_url or None
+        if api_key is None:
+            provider = next(
+                (p for p in (getattr(cfg, "ai_providers", None) or [])
+                 if isinstance(p, dict)
+                 and str(p.get("provider", "")).strip() == "deepseek"
+                 and bool(p.get("enabled", True))
+                 and str(p.get("api_key", "") or "").strip()),
+                None)
+            if provider is not None:
+                api_key = str(provider.get("api_key", "")).strip() or None
+                base_url = base_url or (
+                    str(provider.get("base_url", "") or "").strip() or None)
+        return api_key, base_url
+
     def _run_dsh_once(self, task_id: int, repo: dict, issue: dict,
                       resume_session: str | None = None) -> tuple[int, str]:
         """执行一次 dsh 引擎（deepseek-harness SDK 进程内调用）。返回 (exit_code, output)。
@@ -1273,6 +1303,9 @@ class ClaudeExecutor:
 
         try:
             try:
+                # issue #115：dsh 段未配 key 时回退设置页「AI 供应商」的
+                # deepseek 项（用户已在该处配过 key，此前未被消费）
+                dsh_api_key, dsh_base_url = self._dsh_credentials(cfg)
                 runner = DshRunner(
                     prompt=prompt, session_id=resume_session,
                     provider=cfg.dsh_provider, model=cfg.dsh_model,
@@ -1280,8 +1313,8 @@ class ClaudeExecutor:
                     session_root=cfg.dsh_session_root or None,
                     cordis=cfg.dsh_cordis or None,
                     runtime_bin=cfg.dsh_runtime_bin or None,
-                    base_url=cfg.dsh_base_url or None,
-                    api_key=cfg.dsh_api_key or None,
+                    base_url=dsh_base_url,
+                    api_key=dsh_api_key,
                     env=env, on_line=_on_line)
                 runner.start()
             except DshSdkNotInstalledError as e:

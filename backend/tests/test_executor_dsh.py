@@ -30,6 +30,7 @@ worker: {worker}
 claude: {{}}
 hermes: {hermes}
 dsh: {dsh}
+ai_providers: {ai_providers}
 templates: {{}}
 repos: []
 """
@@ -46,14 +47,25 @@ _RESULT_LINE = json.dumps({"final_response": "已修复并推送，issue #7 处�
                            "finish_reason": "completed",
                            "session_id": "dsh-sess-1"}, ensure_ascii=False)
 
+# 设置页「AI 供应商」里的 DeepSeek 项（issue #115：dsh 引擎凭据回退源）
+_AI_PROVIDERS_DEEPSEEK = """
+- name: deepseek
+  provider: deepseek
+  base_url: https://api.deepseek.com/v1
+  api_key: sk-ai-provider-key
+  model: deepseek-v4-flash
+  enabled: true
+"""
+
 
 def _mk_config(tmp_path, worker_extra="{}", dsh_extra="{}",
-               hermes_extra="{}") -> ConfigManager:
+               hermes_extra="{}", ai_providers_extra="[]") -> ConfigManager:
     """worker_extra / dsh_extra / hermes_extra 为整段子键文本（非空时需自带前置换行）。"""
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         CONFIG_TEXT.format(worker=worker_extra, dsh=dsh_extra,
-                           hermes=hermes_extra),
+                           hermes=hermes_extra,
+                           ai_providers=ai_providers_extra),
         encoding="utf-8")
     return ConfigManager(str(config_path))
 
@@ -181,6 +193,73 @@ class TestEngine:
         assert executor._engine(executor.config.get()) == "claude"
 
 
+class TestDshCredentials:
+    """_dsh_credentials：dsh 段显式配置 > ai_providers deepseek 项 > 环境变量（SDK 默认）。
+
+    issue #115 复现：用户仅设置页「AI 供应商」配过 DeepSeek key，dsh 段
+    未配且部署机环境无 DEEPSEEK_API_KEY → 任务 #194 #195 全部 401 失败。
+    """
+
+    def test_explicit_dsh_settings_win(self, tmp_path):
+        config = _mk_config(
+            tmp_path, dsh_extra="\n  api_key: sk-dsh\n  base_url: https://x/v1",
+            ai_providers_extra=_AI_PROVIDERS_DEEPSEEK)
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == ("sk-dsh", "https://x/v1")
+
+    def test_falls_back_to_ai_provider_deepseek(self, tmp_path):
+        """dsh 段未配 → ai_providers 的 deepseek 项（enabled）回退。"""
+        config = _mk_config(tmp_path, ai_providers_extra=_AI_PROVIDERS_DEEPSEEK)
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (
+            "sk-ai-provider-key", "https://api.deepseek.com/v1")
+
+    def test_ai_provider_fills_only_missing_fields(self, tmp_path):
+        """dsh 段只配 base_url：api_key 回退、base_url 保留 dsh 段值。"""
+        config = _mk_config(
+            tmp_path, dsh_extra="\n  base_url: https://self-host/v1",
+            ai_providers_extra=_AI_PROVIDERS_DEEPSEEK)
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (
+            "sk-ai-provider-key", "https://self-host/v1")
+
+    def test_disabled_ai_provider_skipped(self, tmp_path):
+        """deepseek 项 enabled=false → 不回退（key 不可用）。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: deepseek
+  provider: deepseek
+  base_url: https://api.deepseek.com/v1
+  api_key: sk-disabled
+  model: deepseek-v4-flash
+  enabled: false
+""")
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (None, None)
+
+    def test_non_deepseek_provider_skipped(self, tmp_path):
+        """provider 非 deepseek 的项（如 openai）不回退。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: openai
+  provider: openai
+  base_url: https://api.openai.com/v1
+  api_key: sk-openai
+  model: gpt-4o
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (None, None)
+
+    def test_none_when_no_source(self, tmp_path):
+        """dsh 段与 ai_providers 均无 deepseek 凭据 → (None, None)（SDK 读环境）。"""
+        config = _mk_config(tmp_path)
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (None, None)
+
+
 class TestRunDshOnce:
     """_run_dsh_once：构造参数、工作区、环境、SDK 配置透传。"""
 
@@ -210,6 +289,30 @@ class TestRunDshOnce:
         assert kwargs["model"] == "deepseek-v4-flash"
         assert kwargs["max_tokens"] == 49152
         assert kwargs["session_root"] == "/var/dsh-sessions"
+
+    def test_ai_provider_credentials_passed_to_runner(
+            self, monkeypatch, tmp_path, fake_runner):
+        """issue #115：dsh 段无 key 时，ai_providers 的 deepseek 凭据传给 runner。"""
+        config = _mk_config(
+            tmp_path, worker_extra="\n  engine: dsh",
+            ai_providers_extra=_AI_PROVIDERS_DEEPSEEK)
+        ex = _mk_executor(tmp_path, config)
+        _patch_workspace(monkeypatch, ex, tmp_path)
+        fake_runner.preset_lines = [_RESULT_LINE]
+        ex._run_dsh_once(1, _REPO, _ISSUE)
+        kwargs = fake_runner.instances[0].kwargs
+        assert kwargs["api_key"] == "sk-ai-provider-key"
+        assert kwargs["base_url"] == "https://api.deepseek.com/v1"
+
+    def test_ai_provider_credentials_none_passed_as_none(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """无任何凭据源时传 None（SDK 读环境 DEEPSEEK_API_KEY 兜底，行为不变）。"""
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_lines = [_RESULT_LINE]
+        dsh_executor._run_dsh_once(1, _REPO, _ISSUE)
+        kwargs = fake_runner.instances[0].kwargs
+        assert kwargs["api_key"] is None
+        assert kwargs["base_url"] is None
 
     def test_resume_passes_session_id_and_keeps_workspace(
             self, dsh_executor, monkeypatch, tmp_path, fake_runner):

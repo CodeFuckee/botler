@@ -330,6 +330,73 @@ class TestFormatNotification:
                                      "message": "回合结束: completed"},
                                     ensure_ascii=False)]
 
+    def test_turn_end_error_includes_failure_message(self):
+        """issue #115：turn/end 的 error 细节透传（401 等失败原因可见）。
+
+        任务 #194 #195 失败详情只有「回合结束: error」，看不到 AUTH 401
+        原因；error.message 必须拼进状态行供日志/SSE/error_detail 诊断。
+        """
+        lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "turn/end",
+                      "data": {"reason": {
+                          "kind": "error",
+                          "error": {"message": "Authentication Fails, "
+                                              "Your api key is invalid",
+                                    "code": "AUTH", "status": 401}}}}})
+        data = json.loads(lines[0])
+        assert data["event"] == "status"
+        assert data["message"] == ("回合结束: error（Authentication Fails, "
+                                   "Your api key is invalid）")
+
+    def test_turn_end_error_with_failure_field(self):
+        """assistant/chunk 风格的 failure 字段同样透传。"""
+        lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "turn/end",
+                      "data": {"reason": {
+                          "kind": "error",
+                          "failure": {"message": "model timeout",
+                                      "code": "TIMEOUT"}}}}})
+        data = json.loads(lines[0])
+        assert data["message"] == "回合结束: error（model timeout）"
+
+    def test_turn_end_max_tokens_plain(self):
+        """max-tokens 等无 message 的 kind：不附加细节（行为不变）。"""
+        lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "turn/end",
+                      "data": {"reason": {"kind": "max-tokens"}}}})
+        assert lines == [json.dumps({"event": "status",
+                                     "message": "回合结束: max-tokens"},
+                                    ensure_ascii=False)]
+
+    def test_assistant_chunk_finish_error_becomes_status(self):
+        """assistant/chunk 的 finish/error 块：透传 failure message 为状态行。
+
+        真实运行中 LLM 调用失败的细节在这个块里（turn/end 只带摘要），
+        此前整块落 raw 丢 message，任务日志无法诊断。
+        """
+        lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "assistant/chunk",
+                      "data": {"turn": 1, "step": 1,
+                               "chunk": {"type": "finish",
+                                         "reason": {"kind": "error",
+                                                    "failure": {
+                                                        "message": "model "
+                                                                   "overloaded",
+                                                        "code": "BUSY",
+                                                        "status": 503}}}}}})
+        data = json.loads(lines[0])
+        assert data["event"] == "status"
+        assert data["message"] == "模型调用失败: model overloaded"
+
+    def test_assistant_chunk_non_error_stays_raw(self):
+        """assistant/chunk 的普通内容块仍落 raw（行为不变）。"""
+        lines = dsh_runner.format_dsh_notification("session.event", {
+            "event": {"type": "assistant/chunk",
+                      "data": {"chunk": {"type": "delta",
+                                         "text": "流式增量"}}}})
+        assert json.loads(lines[0]) == {"event": "raw",
+                                        "type": "assistant/chunk"}
+
     def test_session_status_notification(self):
         lines = dsh_runner.format_dsh_notification(
             "session.status", {"sessionId": "s1", "status": "idle"})

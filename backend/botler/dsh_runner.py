@@ -77,12 +77,42 @@ def _format_session_event(event) -> list[str]:
     if etype == "assistant/message":
         return _format_assistant_content(data)
     if etype == "turn/end":
-        reason = data.get("reason")
-        kind = reason.get("kind") if isinstance(reason, dict) else None
-        return [_event_line("status", {"message": f"回合结束: {kind}"})]
+        return [_turn_end_status_line(data.get("reason"))]
+    if etype == "assistant/chunk":
+        # issue #115：LLM 调用失败细节在 finish/error 块（turn/end 只带
+        # 摘要 kind），此前整块落 raw 丢 message，任务日志/失败详情无法
+        # 诊断（任务 #194 #195 只显示「回合结束: error」）。失败时透传
+        # 为 status 行（SSE 可见 + error_detail 可提取），其余仍落 raw。
+        chunk = data.get("chunk")
+        if isinstance(chunk, dict) and chunk.get("type") == "finish":
+            reason = chunk.get("reason")
+            if isinstance(reason, dict) and reason.get("kind") == "error":
+                failure = reason.get("failure") or reason.get("error")
+                message = (failure.get("message")
+                           if isinstance(failure, dict) else None)
+                if isinstance(message, str) and message:
+                    return [_event_line("status",
+                                        {"message": f"模型调用失败: {message}"})]
+        return [_event_line("raw", {"type": etype})]
     if etype == "agent/inbox/spliced":
         return []  # SDK 内部簿记，不产行
     return [_event_line("raw", {"type": etype})]
+
+
+def _turn_end_status_line(reason) -> str:
+    """turn/end 的状态行：kind 非 completed 时附带 error/failure message。
+
+    issue #115：401 AUTH 等失败原因在 reason.error.message /
+    reason.failure.message 里，只输出 kind 会丢失诊断信息。
+    """
+    kind = reason.get("kind") if isinstance(reason, dict) else None
+    message = f"回合结束: {kind}"
+    if isinstance(reason, dict) and kind not in (None, "completed"):
+        detail = reason.get("error") or reason.get("failure")
+        text = detail.get("message") if isinstance(detail, dict) else None
+        if isinstance(text, str) and text:
+            message += f"（{text}）"
+    return _event_line("status", {"message": message})
 
 
 def _format_assistant_content(data: dict) -> list[str]:

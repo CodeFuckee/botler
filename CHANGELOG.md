@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **dsh 引擎任务全部运行失败（任务 #194 #195 根因，issue #115）**：
+  需求「任务 #194 #195 使用 deepseek 执行引擎都运行失败了，请诊断
+  原因并修复 bug」。诊断：任务切换 `worker.engine: dsh` 后执行，
+  dsh runtime 启动正常、prompt 正常发出，但 DeepSeek API 因无 Key
+  拒绝（401 AUTH）→ `turn/end` reason.kind=error → 判定失败、3 次
+  重试耗尽。Key 缺失链：config.yaml 无 dsh 段（dsh.api_key 空）、
+  部署机环境无 `DEEPSEEK_API_KEY`（.env 未配），而用户实际把
+  DeepSeek key 配在设置页「AI 供应商」（`ai_providers`），该配置
+  此前无任何消费者——用户在平台上配过 key 却完全不生效。修复：
+  - **凭据解析链**（executor 新增 `_dsh_credentials`）：dsh 段显式
+    配置 > `ai_providers` 中 `provider=deepseek` 且 enabled 的项 >
+    环境变量 `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`（SDK 默认读取，
+    botler 不覆盖）；`_run_dsh_once` 按解析结果传 runner；
+  - **失败诊断透传**（dsh_runner）：`turn/end` 非 completed 时把
+    reason.error/failure.message 拼进状态行；`assistant/chunk` 的
+    finish/error 块（LLM 失败细节所在）透传为「模型调用失败: …」
+    状态行——此前两者均被丢弃，任务日志与失败详情只有「回合结束:
+    error」，无法诊断 401 等具体原因；
+  - **验证**：本地以生产 config 回退解析出 key 后真实跑 SDK 会话
+    `finish_reason=completed`；假 key 场景输出含完整 AUTH 401 文本。
+  - **测试**：`test_executor_dsh.py` 新增 8 用例（显式优先 / deepseek
+    项回退 / 缺项互填 / disabled·非 deepseek 跳过 / 无源为 None /
+    runner 透传与 None 透传），`test_dsh_runner.py` 新增 6 用例
+    （turn/end error·failure 透传 / max-tokens 不附加 / assistant
+    chunk finish error 转状态行 / 非 error 仍 raw）；前端 493 +
+    后端 989 全量测试通过。
+
 ### Added
 
 - **设置页新增「任务执行引擎」设置项（issue #113）**：

@@ -19,12 +19,27 @@ Python SDK，进程内调用）。`dsh` 引擎经 botler 自带的
 
 - 部署机 Python ≥ 3.10（botler 后端 venv 本身即满足），Linux x64/arm64
   或 macOS 14+（arm64）；
-- 可访问 DeepSeek API（或兼容端点），且已配置环境变量：
+- 可访问 DeepSeek API（或兼容端点），且已配置凭据（三选一，见下方
+  「凭据解析链」）：
   ```bash
-  export DEEPSEEK_API_KEY=sk-xxx        # DeepSeek API Key（必填）
+  export DEEPSEEK_API_KEY=sk-xxx        # 方式一：环境变量（SDK 默认读取）
   # export DEEPSEEK_BASE_URL=...        # 可选：OpenAI 兼容代理端点
   ```
   botler 以 pm2 管理时，写进 `data/backend/.env` 即可（load_dotenv 加载）。
+
+### 凭据解析链（issue #115）
+
+dsh 引擎的 API Key / Base URL 按以下优先级解析，命中即用：
+
+1. **config.yaml 的 `dsh.api_key` / `dsh.base_url`** 显式配置；
+2. **设置页「AI 供应商」中 `provider: deepseek` 且启用的项**
+   （issue #115 起：用户在该处配过的 DeepSeek key 会被 dsh 引擎消费，
+   此前配置了却不生效导致任务 401 全部失败）；
+3. **环境变量 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL`**（SDK 默认
+   读取，botler 不覆盖）。
+
+三处均未配置时任务会失败，任务日志/失败详情将显示具体的 API 错误
+（如 `模型调用失败: Authentication Fails, ...`），可按此排查。
 
 ## 2. 安装 SDK
 
@@ -124,7 +139,7 @@ dsh 引擎与 claude / hermes 引擎等价支持断点续跑：SDK 以 JSONL + c
 | 现象 | 排查 |
 |------|------|
 | 任务日志报「dsh 引擎需要 deepseek-harness-sdk，未安装」 | Docker 部署：重新构建镜像（issue #112 起镜像已内置 SDK）；pm2 CI 部署：重跑流水线（issue #112 起 deploy job 自动安装）；手动 pm2/systemd 部署：执行 `deploy/install-dsh-sdk.sh`（阿里镜像 + 全版本号已内置） |
-| 结果行 `finish_reason: error` | DeepSeek API 调用失败：检查 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` 与网络连通性 |
+| 结果行 `finish_reason: error` | DeepSeek API 调用失败：先看任务日志/失败详情中的具体错误（issue #115 起 `turn/end` 与 `assistant/chunk` 的 error/failure message 已透传，如 401 AUTH / 400 模型名 / 网络超时），再按「凭据解析链」检查 `dsh.api_key` / 设置页 AI 供应商 deepseek 项 / `DEEPSEEK_API_KEY` 与 `DEEPSEEK_BASE_URL`、网络连通性 |
 | 结果行 `finish_reason: max-tokens` | 输出超上限被截断：调大 `dsh.max_tokens` 或简化任务 |
 | 任务反复重试、日志尾部结果行含 error 字段 | 查看结果行 error 文本（含异常类型与消息）与事件行定位 |
 | 设置页「本地环境检测」dsh 未安装 | SDK 未装或不在 botler 的 venv：Docker 部署重建镜像；pm2 CI 部署重跑流水线；手动 pm2/systemd 部署执行 `deploy/install-dsh-sdk.sh`（检测项为 pip 包检测，不走 PATH） |
