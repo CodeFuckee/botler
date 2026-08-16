@@ -210,7 +210,7 @@ PUT    /api/repos/{id}                更新仓库（名称/启用/优先级/模
 DELETE /api/repos/{id}                删除仓库
 POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook）
 GET/PUT /api/repos/{id}/template      仓库模版
-GET/PUT /api/settings                 系统设置（写回 config.yaml）
+GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 亦为概览页 issue 右边栏「执行引擎」行数据源，issue #118）
 POST   /api/settings/reconcile-now    手动触发对账
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url）
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url）

@@ -56,6 +56,27 @@ export function isFailedTask(issue) {
   return hasFailed
 }
 
+// ---- issue #118：任务执行引擎类型 ----
+// 概览页弹出的 issue 右边栏展示任务执行引擎的类型：抽屉打开时从
+// GET /api/settings 读取 worker.engine（issue #113 引入的全局配置，
+// claude / hermes / dsh，默认 claude，对新领取任务生效）。文案与
+// 设置页「任务调度」卡片下拉选项一致。
+export const ENGINE_META = {
+  claude: { label: 'Claude Code CLI' },
+  hermes: { label: 'hermes-agent' },
+  dsh: { label: 'deepseek-harness SDK' },
+}
+
+// 引擎 → 展示文本（纯函数导出，便于测试）：null/undefined 表示加载中；
+// 空值/纯空白回退默认 claude；未知值（配置手改非法）原样展示兜底，
+// 保证抽屉不因异常引擎值崩溃
+export function engineDisplay(raw) {
+  if (raw === null || raw === undefined) return '加载中…'
+  const v = String(raw).trim().toLowerCase()
+  if (!v) return ENGINE_META.claude.label
+  return (ENGINE_META[v] || {}).label || v
+}
+
 // Esc 键判定（纯函数导出，便于测试）
 export function isEscapeKey(e) {
   return !!e && e.key === 'Escape'
@@ -113,6 +134,12 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   const [savingLabels, setSavingLabels] = useState(false)
   const [labelErr, setLabelErr] = useState('')
   const [displayLabels, setDisplayLabels] = useState(null)
+  // issue #118：任务执行引擎类型——engine null=加载中；engineErr 非空=
+  // 加载失败（执行引擎行显示「—」）；成功值经 engineDisplay 归一展示。
+  // 引擎为全局配置（worker.engine），随抽屉打开拉取保证最新，拉取失败
+  // 不阻塞其余信息展示
+  const [engine, setEngine] = useState(null)
+  const [engineErr, setEngineErr] = useState('')
 
   // Esc 关闭抽屉（SSR 测试环境无 document 时跳过）
   useEffect(() => {
@@ -123,6 +150,24 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // 拉取任务执行引擎类型（issue #118）：GET /api/settings 的
+  // worker.engine，未返回/空值回退默认 claude；失败记录错误展示「—」
+  const loadEngine = useCallback(async () => {
+    setEngine(null)
+    setEngineErr('')
+    try {
+      const s = await api.get('/api/settings')
+      const v = s && s.worker ? s.worker.engine : ''
+      setEngine((typeof v === 'string' && v.trim()) ? v : 'claude')
+    } catch (e) {
+      setEngineErr(e.message || '加载失败')
+    }
+  }, [])
+
+  useEffect(() => {
+    loadEngine()
+  }, [loadEngine])
 
   const i = issue || {}
   // 有效状态：本次点击关闭成功后本地立即标记 closed（后端已确认），
@@ -377,6 +422,19 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             <tr><th>仓库</th><td>{repoName || '—'}</td></tr>
             <tr><th>状态</th>
               <td><span className={'badge ' + stateMeta.cls}>{stateMeta.label}</span></td></tr>
+            {/* issue #118：任务执行引擎类型——展示当前 worker.engine
+                （claude / hermes / dsh）；加载失败显示「—」，其余信息
+                不受影响 */}
+            <tr><th>执行引擎</th>
+              <td>
+                {engineErr ? (
+                  <span title={`加载失败：${engineErr}`}>—</span>
+                ) : (
+                  <span title={`任务执行引擎 ${engine || '加载中'}`}>
+                    {engineDisplay(engine)}
+                  </span>
+                )}
+              </td></tr>
             <tr><th>作者</th><td>{author}</td></tr>
             <tr><th>创建时间</th><td>{fmtTime(i.created_at)}</td></tr>
             <tr><th>更新时间</th><td>{fmtTime(i.updated_at)}</td></tr>

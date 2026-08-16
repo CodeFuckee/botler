@@ -120,13 +120,18 @@ function drawerText(root) {
 }
 
 test('打开抽屉拉取 detail 接口（路径按 project_id/iid 拼接）', async () => {
+  // issue #118：抽屉打开还会拉取 /api/settings（执行引擎行），
+  // 计数只统计 detail 路径调用
   const getMock = mock.method(api, 'get', async (pathname) => {
+    if (pathname === '/api/settings') return { worker: { engine: 'claude' } }
     assert.equal(pathname, '/api/issues/42/97/detail')
     return { notes: [] }
   })
   const { renderer, root } = await renderDrawer(OPEN_ISSUE, [], getMock)
   try {
-    assert.equal(getMock.mock.callCount(), 1, '应调用一次 detail 接口')
+    const detailCalls = getMock.mock.calls.filter(
+      (c) => String(c.arguments[0]).includes('/detail')).length
+    assert.equal(detailCalls, 1, '应调用一次 detail 接口')
     assert.ok(drawerText(root).includes('#97'), '抽屉应显示 issue 编号')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
@@ -207,8 +212,10 @@ test('加载中：detail 未返回前显示加载中文案', async () => {
 })
 
 test('接口失败：显示错误信息与重试按钮，重试可恢复', async () => {
+  // issue #118：/api/settings 正常返回（执行引擎行），detail 首调失败
   let calls = 0
-  const getImpl = async () => {
+  const getImpl = async (pathname) => {
+    if (pathname === '/api/settings') return { worker: { engine: 'claude' } }
     calls += 1
     if (calls === 1) throw new Error('GitLab API 错误: 500')
     return { notes: [NOTE_COMMENT] }
@@ -238,12 +245,17 @@ test('接口失败：显示错误信息与重试按钮，重试可恢复', async
 test('旧数据缺 project_id：不调接口，显示占位文案', async () => {
   const legacy = { ...OPEN_ISSUE }
   delete legacy.project_id
-  const getMock = mock.method(api, 'get', async () => {
-    throw new Error('不应调用接口')
+  // issue #118：执行引擎行仍需拉取 /api/settings（与 project_id 无关），
+  // 断言的是 detail 接口不被调用
+  const getMock = mock.method(api, 'get', async (pathname) => {
+    if (pathname === '/api/settings') return { worker: { engine: 'claude' } }
+    throw new Error('不应调用 detail 接口')
   })
   const { renderer, root } = await renderDrawer(legacy, null, getMock)
   try {
-    assert.equal(getMock.mock.callCount(), 0, '缺 project_id 不应调用接口')
+    const detailCalls = getMock.mock.calls.filter(
+      (c) => String(c.arguments[0]).includes('/detail')).length
+    assert.equal(detailCalls, 0, '缺 project_id 不应调用 detail 接口')
     const text = drawerText(root)
     assert.ok(text.includes('缺少仓库信息'), '应显示无法加载占位文案')
   } finally {
@@ -255,6 +267,7 @@ test('旧数据缺 project_id：不调接口，显示占位文案', async () => 
 test('切换 issue：props 变化重新拉取对应 detail', async () => {
   const other = { ...OPEN_ISSUE, iid: 98, title: '另一个 issue' }
   const getMock = mock.method(api, 'get', async (pathname) => {
+    if (pathname === '/api/settings') return { worker: { engine: 'claude' } }
     if (pathname === '/api/issues/42/97/detail') return { notes: [NOTE_COMMENT] }
     if (pathname === '/api/issues/42/98/detail') return { notes: [NOTE_ACTIVITY] }
     throw new Error('unexpected ' + pathname)
@@ -280,7 +293,9 @@ test('切换 issue：props 变化重新拉取对应 detail', async () => {
     const text = drawerText(renderer.root)
     assert.ok(text.includes('assigned to @agent'), '切换后应渲染新 issue 的活动')
     assert.ok(!text.includes('code01'), '旧评论不应残留')
-    assert.equal(getMock.mock.callCount(), 2, '应分别拉取两条 issue 的 detail')
+    const detailCalls = getMock.mock.calls.filter(
+      (c) => String(c.arguments[0]).includes('/detail')).length
+    assert.equal(detailCalls, 2, '应分别拉取两条 issue 的 detail')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

@@ -58,6 +58,24 @@
 
 ### Added
 
+- **概览页 issue 右边栏展示任务执行引擎类型（issue #118）**：
+  需求「概览页面弹出的issue右边栏，显示任务执行引擎的类型」——概览页
+  打开 issue 详情右边栏时，KV 表格新增「执行引擎」行，展示当前任务
+  执行引擎类型（`worker.engine`：claude / hermes / dsh，issue #113
+  引入的全局配置，对新领取任务生效）：
+  - **数据源**：抽屉打开时从 `GET /api/settings` 读取
+    `worker.engine`，复用现有接口无需新增后端改动；展示文案与设置页
+    「任务调度」卡片下拉选项一致（Claude Code CLI / hermes-agent /
+    deepseek-harness SDK）；
+  - **前端**：IssueDrawer 新增 `ENGINE_META` 映射与 `engineDisplay`
+    纯函数——null=加载中、空值/纯空白回退默认 claude、未知值原样
+    展示兜底不崩溃；拉取失败显示「—」不阻塞其余信息展示；
+  - **测试**：前端新增 `overview-issue-drawer-engine.test.mjs` 7 用例
+    （源码契约 / ENGINE_META 三引擎映射 / engineDisplay 边界 / 渲染
+    回显 dsh / 未返回回退 claude / 失败「—」/ 未知值兜底），并适配
+    `overview-issue-notes.test.mjs` 4 用例（新增 /api/settings 调用后
+    detail 路径计数与路由）；前端 516 全量测试通过。
+
 - **概览页 issue 右边栏新增失败任务「重试」按钮（issue #117）**：
   需求「概览页面的issue详情页面右边栏，如果是失败任务，增加一个重试
   按钮，点击之后重新执行任务」——概览页开放 issue 列表中带 `bot-failed`
