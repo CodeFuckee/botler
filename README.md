@@ -211,6 +211,7 @@ POST   /api/repos/discover            读取本地文件夹的 git remote 列表
 PUT    /api/repos/{id}                更新仓库（名称/启用/优先级/模版覆盖）
 DELETE /api/repos/{id}                删除仓库
 POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook）
+POST   /api/repos/{id}/reconcile     立即扫描该仓库，把「assignee 是 bot 但任务表无活跃记录」的 open issues 补入队列（仓库页与概览页「对账」按钮，issue #17/#134）
 GET/PUT /api/repos/{id}/template      仓库模版
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）
 POST   /api/settings/reconcile-now    手动触发对账

@@ -6,6 +6,27 @@
 
 ### Added
 
+- **概览页开放 Issue 板块：每个仓库卡片右上角新增「对账」按钮（issue #134）**：
+  需求「概览页面中的开放issue组件，每个仓库的右上角添加一个对账按钮，点击后对账该仓库issue」。
+  复用仓库页对账接口 `POST /api/repos/{repo_id}/reconcile`（issue #17）：点击后同步扫描该
+  仓库，把「assignee 是 bot 但任务表无活跃记录」的 open issues 补入任务队列，并以小字展示
+  对账结果（入队 N 个 = 发现待处理；0 个 = 无需处理；仓库停用显示后端 note；失败显示错误）。
+  实现：
+  - 前端 `Overview.jsx`：仓库卡片头右上角新增「对账」按钮（`↻ 对账`，请求中 `↻ 对账中…`
+    并禁用防重复点击，与仓库页对账按钮一致为低危操作无需确认），与「添加 Issue」按钮
+    并排成组（新增 `.issue-repo-actions` 操作组容器整体推右）；新增 `reconcileRepo`
+    回调与 `ReconcileResult` 结果展示组件（入队 >0 / 无需处理 / 停用 note / 失败错误
+    四种形态）；
+  - 前端 `styles.css`：新增 `.issue-repo-actions`（margin-left:auto 推右、inline-flex
+    并排、gap 用间距 token）、`.reconcile-btn`（white-space:nowrap 防换行）、
+    `.reconcile-result`（卡片头下方间距）；「添加 Issue」按钮推右职责移交操作组容器；
+  - 后端：无改动（复用 issue #17 的 `POST /api/repos/{id}/reconcile` 接口）；
+  - 文档：`README.md` API 一览补充 `POST /api/repos/{id}/reconcile` 行；
+  - **测试**：前端新增 `overview-repo-reconcile.test.mjs` 10 用例（按钮渲染与操作组
+    结构、点击调对账接口参数正确、请求中禁用防重复点击、入队 >0/=0 两种成功结果、
+    停用 note、失败错误、低危无需确认、源码与样式断言）；前端 587 + 后端 1117 全量
+    测试通过。
+
 - **概览页新增「灵感」板块：开放 Issue 下方、CI/CD 流水线上方按仓库随手记录新功能灵感（issue #131）**：
   需求「概览页面，在开放issue下方，ci\cd流水线上方增加灵感页面，可以在这里按仓库随手记录下来
   关于对应仓库的一些新功能的灵感，这些灵感只保存在项目的数据库，不要提交到issue上」。灵感是

@@ -1538,10 +1538,28 @@ code {
   flex-basis: 100%;
   overflow-wrap: anywhere;
 }
-/* issue #92：仓库卡片右上角「添加 Issue」按钮——推到卡片头最右侧 */
-.add-issue-btn {
+/* issue #134：仓库卡片头右侧操作组（「对账」+「添加 Issue」按钮）——
+   整体推到卡片头最右侧（此前添加按钮单独 margin-left:auto 推右，现两
+   按钮并排成组，由操作组容器统一推右） */
+.issue-repo-actions {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* issue #134：仓库卡片右上角「对账」按钮——点击立即扫描该仓库把漏单补
+   入队；white-space 防窄卡片中按钮文字换行 */
+.reconcile-btn {
   white-space: nowrap;
+}
+/* issue #92：仓库卡片右上角「添加 Issue」按钮——防文字换行（推右由
+   操作组容器 .issue-repo-actions 统一负责） */
+.add-issue-btn {
+  white-space: nowrap;
+}
+/* issue #134：对账结果小字提示——卡片头下方与 issue 分组之间留间距 */
+.reconcile-result {
+  margin-bottom: var(--space-2);
 }
 /* issue #92：添加 issue 弹窗——字段竖排（与 .repo-edit 一致），
    标签多选横向流式排布 */

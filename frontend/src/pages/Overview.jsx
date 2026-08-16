@@ -188,6 +188,8 @@ export default function Overview() {
   const [selectedIssue, setSelectedIssue] = useState(null)
   // 添加 issue 弹窗（issue #92）：打开的仓库卡片数据，null 表示关闭
   const [addIssueRepo, setAddIssueRepo] = useState(null)
+  // 对账结果: repoId -> {loading/scanned/enqueued/note/error}（issue #134）
+  const [reconcileResults, setReconcileResults] = useState({})
   // 灵感（issue #131）：概览页「灵感」板块——按仓库随手记录新功能灵感，
   // 仅保存在 Botler 本地数据库，不提交到 GitLab issue
   const [inspirationRepos, setInspirationRepos] = useState([])
@@ -350,6 +352,19 @@ export default function Overview() {
     }
   }, [loadInspirations])
 
+  // 对账（issue #134）：立即扫描该仓库，把「assignee 是 bot 但任务表无
+  // 活跃记录」的 open issues 补入队（复用仓库页对账接口，issue #17）。
+  // 与仓库页对账按钮一致为低危操作无需确认；请求中禁用防重复点击。
+  const reconcileRepo = useCallback(async (repo) => {
+    setReconcileResults((prev) => ({ ...prev, [repo.repo_id]: { loading: true } }))
+    try {
+      const res = await api.post(`/api/repos/${repo.repo_id}/reconcile`)
+      setReconcileResults((prev) => ({ ...prev, [repo.repo_id]: res }))
+    } catch (e) {
+      setReconcileResults((prev) => ({ ...prev, [repo.repo_id]: { error: e.message } }))
+    }
+  }, [])
+
   // 各任务信息块实时输出自动滚动到底部（issue #114：任务板块删除后
   // 任务块迁入开放 issue 列表项内；SSR 测试环境无 document 时跳过）
   useEffect(() => {
@@ -405,12 +420,25 @@ export default function Overview() {
                     优先级 {r.priority ?? 100}
                   </span>
                   <span className="muted">{r.issues.length} 个开放 issue</span>
-                  {/* issue #92：卡片右上角「添加 Issue」按钮——打开弹窗，
-                      提交后调用 GitLab API 在对应仓库创建 issue */}
-                  <button type="button" className="btn btn-small add-issue-btn"
-                          onClick={() => setAddIssueRepo(r)}
-                          title="在该仓库创建新 issue">＋ 添加 Issue</button>
+                  {/* issue #134：卡片右上角操作组——「对账」按钮 + issue #92
+                      「添加 Issue」按钮，整体推到卡片头最右侧 */}
+                  <div className="issue-repo-actions">
+                    <button type="button" className="btn btn-small reconcile-btn"
+                            onClick={() => reconcileRepo(r)}
+                            disabled={reconcileResults[r.repo_id]?.loading}
+                            title="立即扫描该仓库开放 issue，把分配给了 bot 但还没有任务的 issue 补入任务队列">
+                      {reconcileResults[r.repo_id]?.loading ? '↻ 对账中…' : '↻ 对账'}
+                    </button>
+                    {/* issue #92：卡片右上角「添加 Issue」按钮——打开弹窗，
+                        提交后调用 GitLab API 在对应仓库创建 issue */}
+                    <button type="button" className="btn btn-small add-issue-btn"
+                            onClick={() => setAddIssueRepo(r)}
+                            title="在该仓库创建新 issue">＋ 添加 Issue</button>
+                  </div>
                 </div>
+                {/* issue #134：对账结果——与仓库页对账结果一致，小字展示
+                    扫描/补入队结果，请求失败显示错误 */}
+                {reconcileResults[r.repo_id] && <ReconcileResult result={reconcileResults[r.repo_id]} />}
                 {(r.issues || []).length === 0 ? (
                   <div className="empty-state small">
                     <span className="empty-icon" aria-hidden="true">📋</span>
@@ -743,6 +771,21 @@ export default function Overview() {
                          loadIssues()
                        }} />
       )}
+    </div>
+  )
+}
+
+// 对账结果（issue #134）：与仓库页对账结果（issue #17）一致——
+// 入队 N 个 = 发现待处理；0 个 = 无需处理；仓库停用时后端返回 note
+function ReconcileResult({ result }) {
+  if (result.error) return <div className="alert alert-error small reconcile-result">{result.error}</div>
+  if (result.note) return <div className="small muted reconcile-result">{result.note}</div>
+  return (
+    <div className="small reconcile-result">
+      {result.enqueued > 0
+        ? <span className="test-chip ok">✓ {result.enqueued} 个待处理 issue 已入队</span>
+        : <span className="test-chip ok">✓ 无需处理</span>}
+      {result.scanned > 0 && <span className="muted">扫描 {result.scanned} 个 issue</span>}
     </div>
   )
 }
