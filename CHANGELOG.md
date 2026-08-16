@@ -193,7 +193,28 @@
 
 ### Fixed
 
+- **消息推送 Webhook 设置没有保存按钮，无法保存设置（issue #141）**：
+  需求「消息推送 Webhook设置没有保存按钮，无法保存设置」。现状与差距：设置页
+  全局「保存」按钮位于上方「任务调度」卡片，而「消息推送 Webhook」卡片在页面
+  下方，卡片内只有表单字段与「发送测试推送」按钮——用户滚动到 Webhook 卡片
+  修改配置后找不到保存入口，误以为无法保存（与 issue #27 SSO 卡片同型问题）。
+  实现：
+  - 前端 `pages/Settings.jsx`：Webhook 卡片内新增独立「保存 Webhook 配置」
+    按钮与成功提示（webhookSaved 2 秒自动消失），绑定新增 `saveWebhook`——
+    只提交 webhook 段（`PUT /api/settings {webhook: ...}`，后端支持部分更新，
+    与 `saveSso` 同模式），不影响 worker/claude/notifications 等其他设置；
+    authorization 留空 = 保持现有凭据（复用 buildWebhookPatch，与全局 save 共用）；
+    卡片说明文字由「点击上方『保存』」改为「点击下方『保存 Webhook 配置』」，
+    不再误导用户去其他卡片找保存按钮；全局「保存」按钮与既有 webhook 保存链路
+    保持不变；
+  - **测试**：新增 `frontend/tests/settings-webhook-save-button.test.mjs`
+    5 用例（卡片内含独立保存按钮且绑定 saveWebhook / saveWebhook 只提交
+    webhook 段不携带 worker 等其他字段 / authorization 留空不覆盖现有凭据 /
+    说明文字不再指向「上方保存」/ 全局保存按钮仍存在）；
+    前端 616 + 后端 1200 全量测试通过。
+
 - **显示 gitlab token 隔离：设置页 owner gitlab token 所有 Agent 均不可使用（issue #130）**：
+：设置页 owner gitlab token 所有 Agent 均不可使用（issue #130）**：
   需求「显示gitlab token隔离，设置页面里的owner gitlab token，所有agent都不可以实现，
   已经在系统架构上实现隔离，避免agent错误调用；owner gitlab token只允许在概览页面上
   编辑issue、添加issue、关闭issue、在issue添加评论以及回复issue评论的时候使用，其他

@@ -64,6 +64,11 @@ export default function Settings() {
   const [webhookAuthInput, setWebhookAuthInput] = useState('')
   const [webhookBusy, setWebhookBusy] = useState(false)
   const [webhookTestNote, setWebhookTestNote] = useState(null) // {ok, text}
+  // Webhook 卡片内独立保存（issue #141）：用户反馈「消息推送 Webhook设置
+  // 没有保存按钮」——全局「保存」按钮在上方「任务调度」卡片，Webhook 卡片
+  // 在页面下方，需在卡片内可独立保存（与 SSO 卡片 issue #27 同模式）
+  const [webhookSaveBusy, setWebhookSaveBusy] = useState(false)
+  const [webhookSaved, setWebhookSaved] = useState(false)
 
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
@@ -179,6 +184,18 @@ export default function Settings() {
         : { ok: false, text: '✗ ' + (res.error || '发送失败') })
     } catch (e) { setWebhookTestNote({ ok: false, text: '✗ ' + e.message }) }
     finally { setWebhookBusy(false) }
+  }
+
+  // Webhook 卡片内独立保存（issue #141）：只提交 webhook 段（部分更新），
+  // 后端 PUT /api/settings 支持部分更新，不影响 worker/claude 等其他设置；
+  // authorization 留空 = 保持现有凭据（buildWebhookPatch 处理）
+  const saveWebhook = async () => {
+    setWebhookSaveBusy(true); setError(''); setWebhookSaved(false)
+    try {
+      await api.put('/api/settings', { webhook: buildWebhookPatch() })
+      setWebhookSaved(true)
+      setTimeout(() => setWebhookSaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setWebhookSaveBusy(false) }
   }
 
   // SSO 卡片内独立保存（issue #27 第四轮）：只提交 sso 段，
@@ -626,8 +643,14 @@ export default function Settings() {
             </tr>
           </tbody>
         </table>
+        <div className="form-row">
+          <button className="btn btn-primary" disabled={webhookSaveBusy} onClick={saveWebhook}>
+            {webhookSaveBusy ? '保存中…' : '保存 Webhook 配置'}
+          </button>
+          {webhookSaved && <span className="saved-hint">✓ Webhook 配置已保存（已写回 config.yaml）</span>}
+        </div>
         <p className="muted small">
-          任务完成（成功收尾）时调用 webhook 进行消息推送。修改后点击上方「保存」立即生效；
+          任务完成（成功收尾）时调用 webhook 进行消息推送。修改后点击下方「保存 Webhook 配置」立即生效；
           可先点「发送测试推送」验证配置是否可用（推送失败不会影响任务收尾）。
         </p>
       </div>
