@@ -180,6 +180,10 @@ export default function Overview() {
   const [repoIssues, setRepoIssues] = useState([])
   const [issueErrors, setIssueErrors] = useState([])
   const [issueError, setIssueError] = useState('')
+  // issue #132：owner token 是否已配置——概览页 issue 编辑必须使用 owner
+  // token（未配置时后端直接 400 拦截，绝不回退 code01 身份发布）。null=
+  // 检测中，false=未配置（显示醒目提示），true=已配置/检测失败
+  const [ownerTokenOk, setOwnerTokenOk] = useState(null)
   // 详情右边栏选中的 issue（issue #85）：{issue, repoName}，null 表示关闭
   const [selectedIssue, setSelectedIssue] = useState(null)
   // 添加 issue 弹窗（issue #92）：打开的仓库卡片数据，null 表示关闭
@@ -281,6 +285,14 @@ export default function Overview() {
     return () => clearInterval(t)
   }, [loadIssues])
 
+  // issue #132：owner token 配置状态（启动时检测一次；配置变化由设置页
+  // 保存后手动刷新页面生效）
+  useEffect(() => {
+    api.get('/api/settings')
+      .then((d) => setOwnerTokenOk(!!(d.gitlab && d.gitlab.owner_token_masked)))
+      .catch(() => setOwnerTokenOk(true)) // 读取失败不打扰编辑（后端自会拦截）
+  }, [])
+
   // 灵感聚合（issue #131）：本地数据库数据，独立慢轮询；本地增删改
   // 提交成功后手动刷新，轮询兜底多标签页并发场景
   const loadInspirations = useCallback(async () => {
@@ -359,6 +371,14 @@ export default function Overview() {
       <section className="issues-section">
         <h2>开放 Issue</h2>
         <p className="muted">已启用仓库的开放 issue，按仓库优先级排序，正在运行的 issue 置顶展示任务执行详情（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
+        {ownerTokenOk === false && (
+          <div className="alert alert-warning" role="alert">
+            ⚠️ <strong>Owner GitLab Token 未配置</strong>：概览页的 issue 编辑
+            （关闭 issue / 编辑标签 / 添加评论 / 回复评论 / 添加 issue）必须使用
+            owner token，未配置时操作会被拦截（不会以 code01 身份发布）。
+            请先在「设置」页配置 <code>gitlab.owner_token</code> 后再操作。
+          </div>
+        )}
         {issueError && (
           <div className="alert alert-error" onClick={() => setIssueError('')}>{issueError}</div>
         )}

@@ -304,6 +304,21 @@ def client(api_app):
     return TestClient(app), stub, db, tmp_path
 
 
+@pytest.fixture
+def client_edit(client, monkeypatch):
+    """概览页编辑测试夹具（issue #132）：已配置 owner token，且 owner
+    client 构造重定向到同一 stub——概览页编辑必须使用 owner token，未
+    配置时直接 400 拦截；编辑用例统一走 owner 路径（写操作与旧回退
+    路径共用同一 stub，错误映射/缓存失效断言不变）。"""
+    tc, stub, db, tmp_path = client
+    tc.app.state.ctx.config.update_gitlab({"owner_token": "owner-token-1"})
+    from botler.api import issues as issues_mod
+    monkeypatch.setattr(
+        issues_mod, "GitLabClient",
+        lambda url, token, verify_ssl=True, webhook_base_url=None: stub)
+    return tc, stub, db, tmp_path
+
+
 def _add_repo(db, project_id=42, name="demo", enabled=True, priority=100) -> int:
     return db.upsert_repo(
         project_id=project_id, name=name,
@@ -866,9 +881,9 @@ class TestCloseIssue:
     错误 → 502。
     """
 
-    def test_close_success(self, client):
+    def test_close_success(self, client_edit):
         """正常关闭：stub 收到正确参数、返回 ok 与 closed 状态。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
 
         resp = tc.post("/api/issues/42/64/close")
@@ -877,9 +892,9 @@ class TestCloseIssue:
         assert resp.json() == {"ok": True, "state": "closed"}
         assert stub.close_calls == [(42, 64)]
 
-    def test_close_clears_overview_cache(self, client):
+    def test_close_clears_overview_cache(self, client_edit):
         """关闭成功后清空概览缓存：下次 overview 重新聚合、新数据生效。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.issues_by_project = {42: [make_issue(1, "x")]}
         assert tc.get("/api/issues/overview").json()["total"] == 1
@@ -913,9 +928,9 @@ class TestCloseIssue:
         assert resp.status_code == 404
         assert stub.close_calls == []
 
-    def test_close_issue_missing(self, client):
+    def test_close_issue_missing(self, client_edit):
         """GitLab 返回 404（issue 不存在/已被删除）→ 404。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.close_errors[42] = GitLabError("404 Not Found", status_code=404)
 
@@ -924,9 +939,9 @@ class TestCloseIssue:
         assert resp.status_code == 404
         assert "不存在" in resp.json()["detail"]
 
-    def test_close_gitlab_server_error(self, client):
+    def test_close_gitlab_server_error(self, client_edit):
         """GitLab 上游 5xx → 502，不假装成功。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.close_errors[42] = GitLabError("500 Internal Server Error",
                                             status_code=500)
@@ -935,9 +950,9 @@ class TestCloseIssue:
 
         assert resp.status_code == 502
 
-    def test_close_network_error(self, client):
+    def test_close_network_error(self, client_edit):
         """网络错误（httpx.HTTPError，per-repo host 不可达）→ 502。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.close_errors[42] = httpx.HTTPError("connect timeout")
 
@@ -945,9 +960,9 @@ class TestCloseIssue:
 
         assert resp.status_code == 502
 
-    def test_repeat_close_idempotent(self, client):
+    def test_repeat_close_idempotent(self, client_edit):
         """重复关闭同一 issue（如双标签页并发点击）：接口幂等成功。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
 
         r1 = tc.post("/api/issues/42/64/close")
@@ -1392,10 +1407,10 @@ class TestCreateIssue:
         body.update(overrides)
         return tc.post("/api/issues", json=body)
 
-    def test_create_success(self, client):
+    def test_create_success(self, client_edit):
         """正常路径：调用 create_issue 传参正确（labels 保持数组由
         GitLabClient 拼逗号），返回 201 与精简后的 issue 对象。"""
-        tc, stub, db, tmp_path = client
+        tc, stub, db, tmp_path = client_edit
         _add_repo(db, project_id=42, name="a")
 
         resp = self._post(tc)
@@ -1430,9 +1445,9 @@ class TestCreateIssue:
 
         assert stub.create_calls == []
 
-    def test_blank_label_elements_filtered(self, client):
+    def test_blank_label_elements_filtered(self, client_edit):
         """边界：标签含空白元素时过滤后仍合法（空白项忽略）。"""
-        tc, stub, db, tmp_path = client
+        tc, stub, db, tmp_path = client_edit
         _add_repo(db, project_id=42, name="a")
 
         resp = self._post(tc, labels=["bug", " ", "ui"])
@@ -1448,11 +1463,11 @@ class TestCreateIssue:
         assert self._post(tc, assignee_id=None).status_code == 400
         assert stub.create_calls == []
 
-    def test_description_optional(self, client):
+    def test_description_optional(self, client_edit):
         """边界：描述选填——缺失/空白时 API 层透传 None，不阻塞创建；
         请求发送前的标题填充由 GitLabClient 层兜底（issue #103，见
         test_gitlab_client.py::TestCreateIssue）。"""
-        tc, stub, db, tmp_path = client
+        tc, stub, db, tmp_path = client_edit
         _add_repo(db, project_id=42, name="a")
 
         assert self._post(tc, description="").status_code == 201
@@ -1476,9 +1491,9 @@ class TestCreateIssue:
         assert self._post(tc).status_code == 400
         assert stub.create_calls == []
 
-    def test_create_failure_returns_502(self, client):
+    def test_create_failure_returns_502(self, client_edit):
         """GitLab 创建失败 → 502，错误信息透出。"""
-        tc, stub, db, tmp_path = client
+        tc, stub, db, tmp_path = client_edit
         _add_repo(db, project_id=42, name="a")
         stub.fail_create_projects = {42}
 
@@ -1487,9 +1502,10 @@ class TestCreateIssue:
         assert resp.status_code == 502
         assert "创建 issue 失败" in resp.json()["detail"]
 
-    def test_uses_per_repo_client(self, client, monkeypatch):
-        """per-repo client 优先（与 issue 查询一致，issue #60 模式）。"""
-        tc, stub, db, tmp_path = client
+    def test_uses_owner_client(self, client_edit, monkeypatch):
+        """issue #132：创建 issue 走 owner client（配置了 owner token 时
+        per-repo client 不再参与写操作）。"""
+        tc, stub, db, tmp_path = client_edit
         _add_repo(db, project_id=42, name="a")
         per = StubGitLab()
         from botler.api import issues as issues_mod
@@ -1498,14 +1514,14 @@ class TestCreateIssue:
 
         resp = self._post(tc)
 
-        assert resp.status_code == 201
-        assert len(per.create_calls) == 1
-        assert stub.create_calls == []
+        assert resp.status_code == 201, resp.text
+        assert len(stub.create_calls) == 1, "创建 issue 应走 owner client"
+        assert per.create_calls == [], "per-repo client 不得用于概览页写操作"
 
-    def test_create_invalidates_overview_cache(self, client):
+    def test_create_invalidates_overview_cache(self, client_edit):
         """创建成功后清空 overview 缓存：下一次 overview 请求重新拉取
         （前端创建成功立即刷新列表，不能拿到 10 秒 TTL 旧缓存）。"""
-        tc, stub, db, tmp_path = client
+        tc, stub, db, tmp_path = client_edit
         _add_repo(db, project_id=42, name="a")
         stub.issues_by_project = {42: [make_issue(1, "旧 issue")]}
 
@@ -1837,9 +1853,9 @@ class TestIssueLabels:
 
         assert resp.status_code == 502
 
-    def test_put_labels_success(self, client):
+    def test_put_labels_success(self, client_edit):
         """正常更新：stub 收到 add/remove 参数，返回更新后标签（带颜色）。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.labels_by_project = {42: [
             {"id": 1, "name": "feature", "color": "#6699cc",
@@ -1865,9 +1881,9 @@ class TestIssueLabels:
         assert labels[0]["color"] == "6699cc"
         assert labels[0]["text_color"] == "FFFFFF"
 
-    def test_put_labels_add_only(self, client):
+    def test_put_labels_add_only(self, client_edit):
         """仅添加（remove 缺失）→ remove 传 None，不触发移除语义。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
 
         resp = tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
@@ -1875,9 +1891,9 @@ class TestIssueLabels:
         assert resp.status_code == 200
         assert stub.labels_update_calls == [(42, 64, ["feature"], None)]
 
-    def test_put_labels_remove_only(self, client):
+    def test_put_labels_remove_only(self, client_edit):
         """仅移除（add 缺失）→ add 传空列表。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
 
         resp = tc.put("/api/issues/42/64/labels", json={"remove": ["bug"]})
@@ -1896,10 +1912,10 @@ class TestIssueLabels:
         assert resp.status_code == 400
         assert stub.labels_update_calls == []
 
-    def test_put_labels_normalize(self, client):
+    def test_put_labels_normalize(self, client_edit):
         """标签名归一化：去空白、去重（"feature"、"feature "、"" →
         ["feature"]）后传给 GitLab。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
 
         resp = tc.put("/api/issues/42/64/labels",
@@ -1920,9 +1936,9 @@ class TestIssueLabels:
         assert resp.status_code == 400
         assert stub.labels_update_calls == []
 
-    def test_put_labels_clears_overview_cache(self, client):
+    def test_put_labels_clears_overview_cache(self, client_edit):
         """更新成功后清空概览缓存：下次 overview 重新聚合、新标签生效。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.issues_by_project = {42: [make_issue(1, "x")]}
         assert tc.get("/api/issues/overview").json()["total"] == 1
@@ -1955,9 +1971,9 @@ class TestIssueLabels:
         assert resp.status_code == 404
         assert stub.labels_update_calls == []
 
-    def test_put_labels_issue_missing(self, client):
+    def test_put_labels_issue_missing(self, client_edit):
         """GitLab 返回 404（issue 不存在/已被删除）→ 404。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.labels_update_errors[(42, 64)] = GitLabError(
             "404 Not Found", status_code=404)
@@ -1967,9 +1983,9 @@ class TestIssueLabels:
         assert resp.status_code == 404
         assert "不存在" in resp.json()["detail"]
 
-    def test_put_labels_gitlab_server_error(self, client):
+    def test_put_labels_gitlab_server_error(self, client_edit):
         """GitLab 上游 5xx → 502，不假装成功。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.labels_update_errors[(42, 64)] = GitLabError(
             "500 Internal Server Error", status_code=500)
@@ -1978,9 +1994,9 @@ class TestIssueLabels:
 
         assert resp.status_code == 502
 
-    def test_put_labels_network_error(self, client):
+    def test_put_labels_network_error(self, client_edit):
         """网络错误（httpx.HTTPError，per-repo host 不可达）→ 502。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.labels_update_errors[(42, 64)] = httpx.HTTPError("connect timeout")
 
@@ -2004,9 +2020,9 @@ class TestIssueComments:
     → 404，GitLab 其他错误与网络错误 → 502。
     """
 
-    def test_add_comment_success(self, client):
+    def test_add_comment_success(self, client_edit):
         """正常添加：stub 收到正确参数、返回精简 note（时间转 UTC）。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
 
         resp = tc.post("/api/issues/42/64/comments",
@@ -2057,9 +2073,9 @@ class TestIssueComments:
         assert resp.status_code == 404
         assert stub.add_comment_calls == []
 
-    def test_add_comment_issue_missing(self, client):
+    def test_add_comment_issue_missing(self, client_edit):
         """GitLab 返回 404（issue 不存在）→ 404。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.add_comment_errors[(42, 64)] = GitLabError(
             "404 Not Found", status_code=404)
@@ -2069,9 +2085,9 @@ class TestIssueComments:
         assert resp.status_code == 404
         assert "不存在" in resp.json()["detail"]
 
-    def test_add_comment_gitlab_server_error(self, client):
+    def test_add_comment_gitlab_server_error(self, client_edit):
         """GitLab 上游 5xx → 502，不假装成功。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.add_comment_errors[(42, 64)] = GitLabError(
             "500 Internal Server Error", status_code=500)
@@ -2080,9 +2096,9 @@ class TestIssueComments:
 
         assert resp.status_code == 502
 
-    def test_add_comment_network_error(self, client):
+    def test_add_comment_network_error(self, client_edit):
         """网络错误（httpx.HTTPError）→ 502。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.add_comment_errors[(42, 64)] = httpx.HTTPError("connect timeout")
 
@@ -2090,9 +2106,9 @@ class TestIssueComments:
 
         assert resp.status_code == 502
 
-    def test_add_comment_clears_overview_cache(self, client):
+    def test_add_comment_clears_overview_cache(self, client_edit):
         """添加评论成功后清空概览缓存（user_notes_count 已变化）。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.issues_by_project = {42: [make_issue(1, "x")]}
         assert tc.get("/api/issues/overview").json()["total"] == 1
@@ -2102,9 +2118,9 @@ class TestIssueComments:
 
         assert tc.get("/api/issues/overview").json()["total"] == 0
 
-    def test_reply_success(self, client):
+    def test_reply_success(self, client_edit):
         """正常回复：stub 收到 (project_id, iid, note_id, body)。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
 
         resp = tc.post("/api/issues/42/64/comments/201/reply",
@@ -2139,9 +2155,9 @@ class TestIssueComments:
         assert resp.status_code == 404
         assert stub.reply_calls == []
 
-    def test_reply_note_missing(self, client):
+    def test_reply_note_missing(self, client_edit):
         """被回复评论不存在（GitLab 404）→ 404。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.reply_errors[(42, 64)] = GitLabError(
             "评论 201 不存在", status_code=404)
@@ -2152,9 +2168,9 @@ class TestIssueComments:
         assert resp.status_code == 404
         assert "不存在" in resp.json()["detail"]
 
-    def test_reply_gitlab_server_error(self, client):
+    def test_reply_gitlab_server_error(self, client_edit):
         """GitLab 上游 5xx → 502。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.reply_errors[(42, 64)] = GitLabError(
             "500 Internal Server Error", status_code=500)
@@ -2164,9 +2180,9 @@ class TestIssueComments:
 
         assert resp.status_code == 502
 
-    def test_reply_network_error(self, client):
+    def test_reply_network_error(self, client_edit):
         """网络错误（httpx.HTTPError）→ 502。"""
-        tc, stub, db, _ = client
+        tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name="demo")
         stub.reply_errors[(42, 64)] = httpx.HTTPError("connect timeout")
 
@@ -2180,10 +2196,15 @@ class TestIssueComments:
 
 class TestIssueEditOwnerToken:
     """概览页 issue 编辑操作（关闭/编辑标签/添加评论/回复评论/添加
-    issue）优先使用 owner gitlab token（issue #130）：owner token 只允许
-    在概览页面上编辑 issue、添加 issue、关闭 issue、在 issue 添加评论
-    以及回复 issue 评论的时候使用，其他场景都不得使用。未配置 owner
-    token 或 owner 401/403 时回退原链路（per-repo → 全局 bot token）。
+    issue）必须使用 owner gitlab token（issue #130 + issue #132）。
+
+    owner token 只允许在概览页面上编辑 issue、添加 issue、关闭 issue、
+    在 issue 添加评论以及回复 issue 评论的时候使用，其他场景都不得
+    使用；agent 无论如何都不能使用 owner token。
+
+    issue #132 修正：未配置 owner token 或 owner 401/403 时**不得**静默
+    回退 bot token——否则用户经概览页发的评论/回复会以 code01（bot）
+    身份发布（实测复现）。必须返回明确错误提示先配置/更新 owner token。
     """
 
     @staticmethod
@@ -2209,16 +2230,18 @@ class TestIssueEditOwnerToken:
         assert seen == ["owner-token-1"], f"关闭 issue 应优先 owner token（实际 {seen}）"
         assert stub.close_calls == [(42, 64)]
 
-    def test_close_without_owner_uses_original(self, client):
-        """未配置 owner token：关闭 issue 沿用原链路（全局 stub）。"""
+    def test_close_without_owner_blocked(self, client):
+        """issue #132：未配置 owner token 时关闭 issue 必须报错提示配置，
+        不得静默回退 bot token（否则操作以 code01 身份发布）。"""
         tc, stub, db, tmp_path = client
         _add_repo(db, project_id=42, name="demo")
         resp = tc.post("/api/issues/42/64/close")
-        assert resp.status_code == 200
-        assert stub.close_calls == [(42, 64)]
+        assert resp.status_code == 400, resp.text
+        assert "owner token" in resp.json()["detail"]
+        assert stub.close_calls == [], "未配置 owner token 时不得回退 bot token"
 
-    def test_close_owner_401_falls_back(self, api_app, monkeypatch):
-        """owner token 失效（401）：回退原链路重试。"""
+    def test_close_owner_401_blocked(self, api_app, monkeypatch):
+        """issue #132：owner token 失效（401）同样报错，不回退 bot token。"""
         app, stub, db, tmp_path = api_app
         _add_repo(db, project_id=42, name="demo")
         self._enable_owner(app.state.ctx)
@@ -2233,8 +2256,9 @@ class TestIssueEditOwnerToken:
         monkeypatch.setattr(issues_mod, "GitLabClient", OwnerStub)
         tc = TestClient(app)
         resp = tc.post("/api/issues/42/64/close")
-        assert resp.status_code == 200, resp.text
-        assert stub.close_calls == [(42, 64)], "owner 401 后应回退原链路关闭"
+        assert resp.status_code == 502, resp.text
+        assert "owner token" in resp.json()["detail"]
+        assert stub.close_calls == [], "owner 401 后不得回退 bot token"
 
     def test_labels_prefers_owner_token(self, api_app, monkeypatch):
         """编辑 issue 标签：配置 owner token 时优先 owner client。"""
@@ -2317,3 +2341,65 @@ class TestIssueEditOwnerToken:
         assert seen == ["owner-token-1"]
         assert stub.create_calls[0][0] == 42
         assert stub.create_calls[0][1]["title"] == "新 issue"
+
+    def test_labels_without_owner_blocked(self, client):
+        """issue #132：未配置 owner token 时编辑标签必须报错。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="demo")
+        resp = tc.put("/api/issues/42/64/labels",
+                      json={"add": ["bot-done"], "remove": []})
+        assert resp.status_code == 400, resp.text
+        assert "owner token" in resp.json()["detail"]
+        assert stub.labels_update_calls == []
+
+    def test_comment_without_owner_blocked(self, client):
+        """issue #132：未配置 owner token 时添加评论必须报错——用户经
+        概览页的最新回复正是因此以 code01 身份发布（复现用例）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="demo")
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "测试评论"})
+        assert resp.status_code == 400, resp.text
+        assert "owner token" in resp.json()["detail"]
+        assert stub.add_comment_calls == []
+
+    def test_reply_without_owner_blocked(self, client):
+        """issue #132：未配置 owner token 时回复评论必须报错。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="demo")
+        resp = tc.post("/api/issues/42/64/comments/55/reply",
+                       json={"body": "回复内容"})
+        assert resp.status_code == 400, resp.text
+        assert "owner token" in resp.json()["detail"]
+        assert stub.reply_calls == []
+
+    def test_create_issue_without_owner_blocked(self, client):
+        """issue #132：未配置 owner token 时添加 issue 必须报错。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        resp = tc.post("/api/issues", json={
+            "repo_id": repo_id, "title": "新 issue",
+            "assignee_id": 7, "labels": ["feature"],
+        })
+        assert resp.status_code == 400, resp.text
+        assert "owner token" in resp.json()["detail"]
+        assert stub.create_calls == []
+
+    def test_comment_owner_401_blocked(self, api_app, monkeypatch):
+        """issue #132：owner token 失效（401）时评论同样报错，不回退 bot。"""
+        app, stub, db, tmp_path = api_app
+        _add_repo(db, project_id=42, name="demo")
+        self._enable_owner(app.state.ctx)
+        from botler.api import issues as issues_mod
+
+        class OwnerStub:
+            def __init__(self, url, token, verify_ssl=True, webhook_base_url=None):
+                self.token = token
+            def add_comment(self, project_id, iid, body):
+                raise GitLabError("owner 401", 401)
+
+        monkeypatch.setattr(issues_mod, "GitLabClient", OwnerStub)
+        tc = TestClient(app)
+        resp = tc.post("/api/issues/42/64/comments", json={"body": "测试评论"})
+        assert resp.status_code == 502, resp.text
+        assert "owner token" in resp.json()["detail"]
+        assert stub.add_comment_calls == []

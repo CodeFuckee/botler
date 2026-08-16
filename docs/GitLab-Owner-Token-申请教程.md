@@ -47,8 +47,11 @@ Reporter 角色）申请 token，从账号权限层面就杜绝越权使用。
 - 网页上只显示掩码（`glpa****xxxx`），明文不会回传到浏览器；
 - 输入框**留空保存 = 保持现有 token**；要清除 token 请直接编辑
   `config.yaml` 删除 `gitlab.owner_token` 后重启；
-- token 失效（401）或权限不足（403）时，Botler 会自动回退到原有链路
-  （bot token / 仓库 remote 内嵌 token），不会中断任务处理；
+- 概览页 issue 编辑时 token 失效（401）或权限不足（403）：Botler 会拦截
+  并提示更新 token，**不会**回退到 bot token（issue #132：回退会导致用户
+  经概览页发布的评论/回复以 code01 身份发出）；
+- 任务侧（Agent 评论/打标签、对账补打终态标签）**绝不使用** Owner Token，
+  始终以 bot 身份执行（issue #130：owner token 只允许概览页编辑使用）；
 - 到期后请按上述步骤重新申请并更新设置页的 token。
 
 ## 常见问题
@@ -59,5 +62,7 @@ GitLab 的 PAT scope 最细粒度是 `read_api`（只读）与 `api`（完整 AP
 推荐方案一的原因。
 
 **Q：不配置 Owner Token 会怎样？**
-Botler 照常工作，编辑 issue 仍使用 bot token（或仓库 remote 内嵌 token）。
-配置 Owner Token 后，issue 上的评论与标签操作会以你的身份执行。
+概览页的 issue 编辑（关闭 issue / 编辑标签 / 添加评论 / 回复评论 / 添加
+issue）会被拦截并提示先到设置页配置（issue #132：**不会**再以 code01 身份
+静默发布）；Agent 任务处理与对账不受影响（始终使用 bot 身份）。
+配置 Owner Token 后，概览页的 issue 编辑以你的身份（owner）执行。

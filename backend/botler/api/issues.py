@@ -268,21 +268,34 @@ def _owner_client(c) -> GitLabClient | None:
 
 
 def _issue_edit_call(c, row, call):
-    """概览页 issue 编辑操作执行（issue #130）：优先 owner token 客户端。
+    """概览页 issue 编辑操作执行（issue #130 + #132）：必须使用 owner
+    token 客户端，绝不静默回退 bot token。
 
-    未配置 owner token 或 owner 401/403（token 失效/权限不足）时回退原
-    链路（per-repo → 全局 bot token），与 executor 的编辑回退一致。
-    非编辑调用（查询、推送、流水线等）绝不使用 owner token。
+    owner token 只允许在概览页面上编辑 issue、添加 issue、关闭 issue、
+    在 issue 添加评论以及回复 issue 评论的时候使用（agent 无论如何都
+    不能使用 owner token，见 executor）；非编辑调用（查询、推送、流水
+    线等）绝不使用 owner token。
+
+    issue #132 修正：未配置 owner token 或 owner 401/403（token 失效/
+    权限不足）时**不再**回退 per-repo/全局 bot token——否则用户经概览页
+    发布的评论/回复会以 code01（bot）身份发出（实测复现）。改为返回
+    明确错误，引导先在设置页配置/更新 owner token。
     """
     owner = _owner_client(c)
-    if owner is not None:
-        try:
-            return call(owner)
-        except GitLabError as e:
-            if e.status_code not in (401, 403):
-                raise
-            logger.info("概览页编辑 owner token 失效（%s），回退原链路重试", e)
-    return call(_repo_client(c, row) or c.gitlab)
+    if owner is None:
+        raise HTTPException(
+            400,
+            "概览页 issue 编辑必须使用 owner token：gitlab.owner_token 未配置，"
+            "请先在设置页配置 Owner GitLab Token 后重试")
+    try:
+        return call(owner)
+    except GitLabError as e:
+        if e.status_code in (401, 403):
+            raise HTTPException(
+                502,
+                f"概览页 issue 编辑 owner token 失效（{e.status_code}）："
+                "请在设置页更新 Owner GitLab Token 后重试") from e
+        raise
 
 
 def _enabled_repo_by_project_id(c, project_id: int) -> dict | None:

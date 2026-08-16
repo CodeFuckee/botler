@@ -69,6 +69,36 @@
     401 回退原链路）；前端 `settings-owner-token.test.mjs` 新增 2 用例（隔离
     徽章显示、隔离规则说明），`cardSource` 正则兼容 h2 内徽章；后端 1084 +
     前端 565 全量测试通过。
+- **概览页 issue 编辑必须使用 owner token：修复未配置时静默以 code01 身份发布（issue #132）**：
+  需求「我在概览页面的最新回复，为什么是以code01的用户回复的，我不是在 issue #130里说明了，
+  概览页面的所有issue编辑都要使用owner token吗，帮我诊断并修复」。诊断：概览页 5 处 issue
+  编辑操作（关闭 issue、编辑标签、添加评论、回复评论、添加 issue）虽已「优先」owner token
+  （issue #130），但部署环境 `gitlab.owner_token` **未配置**时 `_issue_edit_call` 会静默
+  回退 per-repo/全局 bot token——用户经概览页发布的评论/回复以 code01（bot）身份发出
+  （实测复现：issue #78 最新回复「如果将hermes 的集成方式从http api改成hermes agent sdk集成…」
+  即因此以 code01 发布）。同时发现 issue #130 合规缺口：executor/reconciler 的任务生命周期
+  评论与终态标签补打仍传 `prefer_owner=True`，一旦配置 owner token，会把「🤖 Botler」机器人
+  消息以 owner 身份发布，同样违背「owner token 只允许概览页使用、agent 无论如何都不能使用」。
+  修复：
+  - 后端 `api/issues.py`：`_issue_edit_call` 改为**强制 owner token**——未配置
+    `gitlab.owner_token` 返回 400 明确提示先到设置页配置，owner 401/403 返回 502 提示
+    更新 token，**不再静默回退 bot token**（杜绝再次以 code01 身份发布）；
+  - 后端 `executor.py`：移除 `_owner_gitlab_client` 与 `_call_with_fallback` 的
+    `prefer_owner` 机制，7 处任务生命周期评论/打标签调用固定走「全局 bot token →
+    remote 内嵌 token」链路（agent 绝不使用 owner token）；
+  - 后端 `reconciler.py`：移除 `_owner_client` 与 `prefer_owner` 机制，终态标签补打
+    固定走 bot 身份（对账非概览页操作）；
+  - 前端 `Overview.jsx`：启动时检测 owner token 配置状态，未配置时开放 Issue 板块
+    顶部显示醒目警示横幅（提示概览页 issue 编辑必须使用 owner token、操作会被拦截、
+    不会以 code01 身份发布）；`styles.css` 新增 `.alert-warning` 样式；
+  - 文档：`config.example.yaml` 与 `docs/GitLab-Owner-Token-申请教程.md` 更新（未配置
+    owner token 时概览页编辑被拦截，不再回退 bot token；任务侧绝不使用 owner token）；
+  - **测试**：后端 `test_api_issues.py` 原「未配置 owner 沿用原链路 / owner 401 回退」
+    用例改为「未配置 owner 400 拦截、owner 401 502 拦截」（关闭/标签/评论/回复/添加
+    issue 全覆盖，新增 8 用例），编辑类既有用例统一走 `client_edit` 夹具（已配置
+    owner）；`test_owner_token.py` executor/reconciler 用例改为「绝不使用 owner token」
+    （bot 身份固定，全局 401 回退 remote）；后端 1110 + 前端 577 全量测试通过。
+
 
 
 ### Fixed

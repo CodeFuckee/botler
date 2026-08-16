@@ -11,7 +11,8 @@ gitlab:
   # 评论与回复评论时由平台使用，严禁用于推送代码/操作流水线。
   # 推荐用仓库 Reporter 角色的低权限账号申请（账号层面杜绝推送代码/
   # 操作流水线），教程见 docs/GitLab-Owner-Token-申请教程.md。
-  # 留空 = 未配置，编辑 issue 沿用 bot token / remote 内嵌 token。
+  # 留空 = 未配置：概览页 issue 编辑（关闭/标签/评论/回复/添加）会被拦截
+  # 并提示先配置（issue #132：不得静默回退 bot token 以 code01 身份发布）。
   # 也可用 ${ENV} 引用：owner_token: ${GITLAB_OWNER_TOKEN}
   webhook_secret: ${WEBHOOK_SECRET}   # webhook 校验 secret（任意随机串）
   bot_username: ""                    # 可选：bot 账号用户名（不填则自动识别）

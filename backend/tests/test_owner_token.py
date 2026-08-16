@@ -5,16 +5,17 @@
 1. 配置/API：GET settings 返回 owner_token_masked；PUT gitlab.owner_token
    明文保存落盘、掩码值/空串保持现有、非字符串 400、${ENV} 引用展开；
 2. owner-token-guide 端点返回教程文档，文档缺失 404；
-3. executor：_call_with_fallback(prefer_owner=True) 编辑 issue 优先 owner
-   token；owner 401/403 回退原链路；默认（非编辑）调用不受影响；
-4. executor：_build_env 注入 GITLAB_TOKEN 绝不注入 owner token（issue
-   #130：agent 无论如何都不能使用 owner token，只能用自己仓库的认证
-   token / 全局 bot token）；_askpass_script（git 推送凭据）始终用 bot
-   token 不含 owner token（严禁推送代码）；
-5. executor：成功/失败收尾的评论与标签调用传 prefer_owner=True，而查询
-   提交/检查最后作者等非编辑调用保持原链路；
-6. reconciler：终态标签补打（编辑 issue）优先 owner token，owner 失效
-   回退原链路。
+3. executor：_call_with_fallback 编辑 issue 绝不使用 owner token——即使
+   配置了 owner token（issue #130：owner token 只允许概览页 issue 编辑
+   操作时由平台使用，agent 无论如何都不能使用 owner token），任务侧
+   评论/标签固定走全局 bot token（401/403 回退 remote 内嵌 token）；
+4. executor：_build_env 注入 GITLAB_TOKEN 绝不注入 owner token（agent
+   只能用自己仓库的认证 token / 全局 bot token）；_askpass_script（git
+   推送凭据）始终用 bot token 不含 owner token（严禁推送代码）；
+5. executor：成功/失败收尾的评论与标签调用保持 bot 身份（不传 owner），
+   查询提交/检查最后作者等非编辑调用同样保持原链路；
+6. reconciler：终态标签补打绝不使用 owner token（对账不是概览页操作），
+   固定走 bot 身份，401/403 回退 remote 内嵌 token。
 """
 
 import os
@@ -173,73 +174,43 @@ def _mk_task(db, repo_id: int, issue_iid: int = 1) -> int:
 
 
 class TestExecutorOwnerToken:
-    def test_issue_edit_prefers_owner_token(self, executor):
-        """prefer_owner=True 且已配置 owner token：call 收到 owner client。"""
+    def test_issue_edit_never_uses_owner_token(self, executor):
+        """issue #130/#132：即使配置了 owner token，任务侧 issue 编辑
+        （评论/标签）也只走全局 bot token——owner token 只允许概览页
+        使用，agent 无论如何都不能使用 owner token。"""
         seen = []
 
         def call(client):
             seen.append(client.token)
             return "ok"
 
-        result, used = executor._call_with_fallback(_REPO, call, prefer_owner=True)
+        result, used = executor._call_with_fallback(_REPO, call)
         assert result == "ok"
-        assert seen == ["owner-token-1"], f"编辑 issue 应优先 owner token（实际 {seen}）"
-        assert used.token == "owner-token-1"
+        assert seen == ["test-token"], (
+            f"任务侧编辑绝不使用 owner token（实际 {seen}）")
+        assert used.token == "test-token"
 
-    def test_issue_edit_owner_401_falls_back_to_global(self, executor):
-        """owner token 失效（401）：回退原链路（全局 bot token）重试。"""
+    def test_global_401_falls_back_to_remote(self, executor, monkeypatch):
+        """全局 bot token 失效（401）：回退 remote url 内嵌 token（原链路）。"""
+        from botler import executor as executor_mod
+
+        class RemoteClient:
+            token = "remote-token"
+
+        monkeypatch.setattr(
+            executor_mod, "build_repo_client_with_username",
+            lambda repo, verify_ssl: (RemoteClient(), None))
         seen = []
 
         def call(client):
-            if client.token == "owner-token-1":
-                raise GitLabError("owner token 失效", 401)
+            if client.token == "test-token":
+                raise GitLabError("全局 token 失效", 401)
             seen.append(client.token)
-            return "global-ok"
+            return "remote-ok"
 
-        result, used = executor._call_with_fallback(_REPO, call, prefer_owner=True)
-        assert result == "global-ok"
-        assert seen == ["test-token"], f"owner 401 后应回退全局 token（实际 {seen}）"
-
-    def test_issue_edit_owner_403_falls_back_to_global(self, executor):
-        """owner token 权限不足（403）：同样回退原链路。"""
-        seen = []
-
-        def call(client):
-            if client.token == "owner-token-1":
-                raise GitLabError("owner 权限不足", 403)
-            seen.append(client.token)
-            return "global-ok"
-
-        result, _ = executor._call_with_fallback(_REPO, call, prefer_owner=True)
-        assert result == "global-ok"
-        assert seen == ["test-token"]
-
-    def test_default_call_ignores_owner_token(self, executor):
-        """默认（非编辑）调用不传 prefer_owner：即使配置了 owner token 也不用。"""
-        seen = []
-
-        def call(client):
-            seen.append(client.token)
-            return "ok"
-
-        result, _ = executor._call_with_fallback(_REPO, call)
-        assert result == "ok"
-        assert seen == ["test-token"], "非编辑调用不应使用 owner token"
-
-    def test_prefer_owner_without_token_configured(self, executor, monkeypatch):
-        """未配置 owner token 时 prefer_owner=True 行为同普通调用。"""
-        executor.config.get()  # 先加载 _data
-        executor.config._data["gitlab"]["owner_token"] = ""
-        executor.config.settings = executor.config._to_settings(executor.config._data)
-        seen = []
-
-        def call(client):
-            seen.append(client.token)
-            return "ok"
-
-        result, _ = executor._call_with_fallback(_REPO, call, prefer_owner=True)
-        assert result == "ok"
-        assert seen == ["test-token"]
+        result, used = executor._call_with_fallback(_REPO, call)
+        assert result == "remote-ok"
+        assert seen == ["remote-token"]
 
     def test_build_env_never_injects_owner_token(self, executor, monkeypatch):
         """issue #130：agent 会话绝不注入 owner token（owner token 只允许
@@ -270,9 +241,9 @@ class TestExecutorOwnerToken:
         assert "test-token" in content, "askpass 应注入 bot token"
         assert "owner-token-1" not in content, "owner token 严禁用于 git 推送"
 
-    def test_finish_succeeded_issue_edits_prefer_owner(self, executor, tmp_path, monkeypatch):
-        """成功收尾：打 bot-done 与写报告评论 prefer owner；查询提交/检查
-        最后作者等非编辑调用保持原链路。"""
+    def test_finish_succeeded_issue_edits_use_bot_token(self, executor, tmp_path, monkeypatch):
+        """成功收尾：打 bot-done 与写报告评论走 bot 身份（绝不使用 owner
+        token，issue #130）；查询提交/检查最后作者保持原链路。"""
         db = executor.db
         repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
         task_id = _mk_task(db, repo_id)
@@ -280,13 +251,12 @@ class TestExecutorOwnerToken:
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         calls = []
-        current_prefer = {"value": False}
 
         class FakeClient:
-            token = "owner-token-1"
+            token = "bot-token"
 
             def _rec(self, name):
-                calls.append((name, current_prefer["value"]))
+                calls.append(name)
 
             def add_labels(self, pid, iid, labels, remove=None):
                 self._rec("labels")
@@ -305,24 +275,19 @@ class TestExecutorOwnerToken:
             def get_bot_id(self):
                 return 99
 
-        def fake_cfw(repo, call, prefer_owner=False):
-            current_prefer["value"] = prefer_owner
-            result = call(FakeClient())
-            return result, FakeClient()
+        def fake_cfw(repo, call):
+            return call(FakeClient()), FakeClient()
 
         monkeypatch.setattr(executor, "_call_with_fallback", fake_cfw)
         executor._finish_succeeded(task_id, "ok", repo=_REPO)
 
-        by_method: dict[str, list[bool]] = {}
-        for name, prefer in calls:
-            by_method.setdefault(name, []).append(prefer)
-        assert by_method.get("labels") == [True], "打 bot-done 标签应 prefer owner"
-        assert by_method.get("comment") == [True], "写完成报告评论应 prefer owner"
-        assert by_method.get("commit") == [False], "查询提交应保持原链路"
-        assert by_method.get("last_author") == [False], "检查最后评论作者应保持原链路"
+        assert "labels" in calls, "打 bot-done 标签应被调用"
+        assert "comment" in calls, "写完成报告评论应被调用"
+        assert "commit" in calls, "查询提交应保持原链路"
+        assert "last_author" in calls, "检查最后评论作者应保持原链路"
 
-    def test_finish_failed_issue_edits_prefer_owner(self, executor, tmp_path, monkeypatch):
-        """失败收尾：失败评论与 bot-failed 标签同样 prefer owner。"""
+    def test_finish_failed_issue_edits_use_bot_token(self, executor, tmp_path, monkeypatch):
+        """失败收尾：失败评论与 bot-failed 标签同样走 bot 身份。"""
         db = executor.db
         repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
         task_id = _mk_task(db, repo_id)
@@ -330,13 +295,12 @@ class TestExecutorOwnerToken:
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
 
         calls = []
-        current_prefer = {"value": False}
 
         class FakeClient:
-            token = "owner-token-1"
+            token = "bot-token"
 
             def _rec(self, name):
-                calls.append((name, current_prefer["value"]))
+                calls.append(name)
 
             def add_labels(self, pid, iid, labels, remove=None):
                 self._rec("labels")
@@ -344,19 +308,14 @@ class TestExecutorOwnerToken:
             def add_comment(self, pid, iid, body):
                 self._rec("comment")
 
-        def fake_cfw(repo, call, prefer_owner=False):
-            current_prefer["value"] = prefer_owner
-            result = call(FakeClient())
-            return result, FakeClient()
+        def fake_cfw(repo, call):
+            return call(FakeClient()), FakeClient()
 
         monkeypatch.setattr(executor, "_call_with_fallback", fake_cfw)
         executor._finish_failed(task_id, "无法解决", output="失败输出")
 
-        by_method: dict[str, list[bool]] = {}
-        for name, prefer in calls:
-            by_method.setdefault(name, []).append(prefer)
-        assert by_method.get("comment") == [True], "失败评论应 prefer owner"
-        assert by_method.get("labels") == [True], "打 bot-failed 标签应 prefer owner"
+        assert "comment" in calls, "失败评论应被调用"
+        assert "labels" in calls, "打 bot-failed 标签应被调用"
 
 
 # ---- reconciler：终态标签补打（编辑 issue）优先 owner token ----
@@ -390,75 +349,69 @@ def _mk_terminal_task(db, repo_id: int, issue_iid: int, status: str) -> int:
 
 
 class TestReconcilerOwnerToken:
-    def test_call_prefer_owner_uses_owner_client(self, ctx, monkeypatch):
-        """prefer_owner=True 时先尝试 owner client，失败（401）回退原 client。"""
+    def test_call_never_uses_owner_client(self, ctx):
+        """issue #130/#132：对账调用绝不使用 owner client——即使配置了
+        owner token（owner token 只允许概览页 issue 编辑操作时使用）。"""
         seen = []
 
         def call(client):
             seen.append(getattr(client, "token", None))
             return "ok"
 
-        owner = SimpleNamespace(token="owner-token-1")
-        monkeypatch.setattr(ctx.reconciler, "_owner_client",
-                            lambda verify_ssl: owner)
         result, used = ctx.reconciler._call_with_fallback(
-            {"name": "demo"}, False, ctx.gitlab, call, prefer_owner=True)
+            {"name": "demo"}, False, ctx.gitlab, call)
         assert result == "ok"
-        assert seen == ["owner-token-1"], f"编辑 issue 应优先 owner（实际 {seen}）"
-        assert used is owner
+        assert seen == [None], f"对账应使用 bot 身份（实际 {seen}）"
+        assert used is ctx.gitlab
 
-    def test_call_prefer_owner_401_falls_back(self, ctx, monkeypatch):
-        """owner 401 时回退原 client 重试。"""
+    def test_global_401_falls_back_to_remote(self, ctx, monkeypatch):
+        """bot token 失效（401）：回退 remote 内嵌 token（原链路）。"""
+        from botler import reconciler as reconciler_mod
+
+        class RemoteClient:
+            token = "remote-token"
+
+        monkeypatch.setattr(
+            reconciler_mod, "build_repo_client_with_username",
+            lambda repo, verify_ssl: (RemoteClient(), None))
         seen = []
 
         def call(client):
-            if getattr(client, "token", None) == "owner-token-1":
-                raise GitLabError("owner 失效", 401)
-            seen.append("stub")
-            return "stub-ok"
+            if getattr(client, "token", None) is None:
+                raise GitLabError("全局 token 失效", 401)
+            seen.append(client.token)
+            return "remote-ok"
 
-        owner = SimpleNamespace(token="owner-token-1")
-        monkeypatch.setattr(ctx.reconciler, "_owner_client",
-                            lambda verify_ssl: owner)
         result, used = ctx.reconciler._call_with_fallback(
-            {"name": "demo"}, False, ctx.gitlab, call, prefer_owner=True)
-        assert result == "stub-ok"
-        assert seen == ["stub"], f"owner 401 后应回退原 client（实际 {seen}）"
-        assert used is ctx.gitlab
+            {"name": "demo"}, False, ctx.gitlab, call)
+        assert result == "remote-ok"
+        assert seen == ["remote-token"]
 
-    def test_backfill_labels_prefer_owner(self, ctx, monkeypatch):
-        """终态标签补打（编辑 issue）走 owner client。"""
+    def test_backfill_labels_uses_bot_client(self, ctx):
+        """issue #130/#132：终态标签补打（对账，非概览页操作）绝不使用
+        owner client，固定走 bot 身份。"""
         repo_id = ctx.db.upsert_repo(42, "demo", "https://gitlab.example.com/demo.git")
         _mk_terminal_task(ctx.db, repo_id, 1, "succeeded")
-
-        class FakeOwner:
-            def __init__(self):
-                self.labels_added = []
-
-            def add_labels(self, pid, iid, labels, remove=None):
-                self.labels_added.append((pid, iid, labels))
-                return {}
-
-        owner = FakeOwner()
-        monkeypatch.setattr(ctx.reconciler, "_owner_client",
-                            lambda verify_ssl: owner)
         ctx.reconciler.reconcile_once(repo_id=repo_id)
-        assert (42, 1, ["bot-done"]) in owner.labels_added, (
-            f"补打标签应走 owner client（实际 {owner.labels_added}）")
+        assert (42, 1, ["bot-done"]) in ctx.gitlab.labels_added, (
+            f"补打标签应走 bot client（实际 {ctx.gitlab.labels_added}）")
 
-    def test_backfill_owner_401_falls_back_to_stub(self, ctx, monkeypatch):
-        """owner token 失效时补打回退原链路，不影响对账主流程。"""
+    def test_backfill_global_401_falls_back_to_stub(self, ctx, monkeypatch):
+        """bot token 失效时补打回退 remote，不影响对账主流程。"""
         repo_id = ctx.db.upsert_repo(42, "demo", "https://gitlab.example.com/demo.git")
         _mk_terminal_task(ctx.db, repo_id, 2, "failed")
+        ctx.gitlab.add_labels = lambda project_id, iid, labels, remove=None: (
+            (_ for _ in ()).throw(GitLabError("全局 token 失效", 401)))
 
-        class FakeOwner:
-            def __init__(self):
-                self.labels_added = []
+        from botler import reconciler as reconciler_mod
 
+        class RemoteClient:
             def add_labels(self, pid, iid, labels, remove=None):
-                raise GitLabError("owner 失效", 401)
+                ctx.gitlab.labels_added.append((pid, iid, labels))
+                return {}
 
-        monkeypatch.setattr(ctx.reconciler, "_owner_client",
-                            lambda verify_ssl: FakeOwner())
+        monkeypatch.setattr(
+            reconciler_mod, "build_repo_client_with_username",
+            lambda repo, verify_ssl: (RemoteClient(), None))
         ctx.reconciler.reconcile_once(repo_id=repo_id)
         assert (42, 2, ["bot-failed"]) in ctx.gitlab.labels_added

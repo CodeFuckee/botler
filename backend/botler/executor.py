@@ -473,53 +473,24 @@ class ClaudeExecutor:
         self._procs: dict[int, subprocess.Popen] = {}
         self._stop_requests: set[int] = set()
         self._proc_lock = threading.Lock()
-        # Owner token 客户端缓存（issue #87）：按 token 值判断重建，
-        # 配置变化（config.yaml 重载）后下次调用自动换新 client。
-        self._owner_client: GitLabClient | None = None
-        self._owner_client_token: str = ""
-
     # ---- GitLab 调用兜底 ----
 
-    def _owner_gitlab_client(self) -> GitLabClient | None:
-        """Owner token 客户端（issue #87）：仅 issue 编辑操作（评论/标签）使用。
-
-        未配置 owner token 返回 None（调用方沿用原链路）。git 推送凭据
-        （_askpass_script）与流水线操作严禁使用此 token。
-        """
-        cfg = self.config.get()
-        token = (cfg.gitlab_owner_token or "").strip()
-        if not token:
-            return None
-        if self._owner_client is None or self._owner_client_token != token:
-            self._owner_client = GitLabClient(
-                cfg.gitlab_url, token, verify_ssl=cfg.verify_ssl)
-            self._owner_client_token = token
-        return self._owner_client
-
-    def _call_with_fallback(self, repo, call, prefer_owner: bool = False):
+    def _call_with_fallback(self, repo, call):
         """用全局 client 执行 call(client)；遇 401/403（全局 token 失效）
         时用仓库 remote url 内嵌 token 构建 per-repo client 重试一次。
 
-        prefer_owner=True（issue #87）：编辑 issue（评论/标签）优先用
-        owner token 客户端，owner 401/403 时回退原链路（全局 → remote）。
-        非编辑调用（流水线等待、查询提交等）不传此参数，绝不使用
-        owner token（用户要求：严禁用于推送代码与处理流水线）。
+        issue #130 + #132：任务侧（生命周期评论、打标签等）绝不使用
+        owner token——owner token 只允许在概览页 issue 编辑操作时由平台
+        使用（见 api/issues.py），agent 无论如何都不能使用 owner token。
+        因此这里固定走「全局 → remote」链路（issue #87 的 prefer_owner
+        机制已按 #130 移除）。非编辑调用（流水线等待、查询提交等）同样
+        只走此链路，绝不使用 owner token（严禁用于推送代码与处理流水线）。
 
         issue #65 补充：对账/webhook 已有此兜底，executor 的 issue 查询、
         评论、打标签仍只走全局 client——全局 token 被撤销后任务领取即
         401 失败、issue 上收不到任何评论（生产任务 #88/#89）。repo 为
         None（无仓库上下文的测试等）时仅用全局 client（行为同旧）。
         """
-        if prefer_owner and repo is not None:
-            owner = self._owner_gitlab_client()
-            if owner is not None:
-                try:
-                    return call(owner), owner
-                except GitLabError as e:
-                    if e.status_code not in (401, 403):
-                        raise
-                    logger.info("任务仓库 %s：owner token 失效（%s），"
-                                "回退原链路重试", repo["name"], e)
         if repo is None:
             return call(self.gitlab), self.gitlab
         try:
@@ -1729,8 +1700,7 @@ class ClaudeExecutor:
                     self._call_with_fallback(
                         repo, lambda c: c.add_comment(
                             project_id, issue_iid,
-                            "🤖 Botler 已收到该 issue，开始处理中…"),
-                        prefer_owner=True)
+                            "🤖 Botler 已收到该 issue，开始处理中…"))
                 except GitLabError as e:
                     self.db.add_log(task_id, "warn", f"发送处理中评论失败: {e}")
 
@@ -1898,8 +1868,7 @@ class ClaudeExecutor:
                 self._call_with_fallback(
                     repo, lambda c: c.add_labels(
                         task["project_id"], task["issue_iid"], ["bot-done"],
-                        remove=["in-progress"]),
-                    prefer_owner=True)
+                        remove=["in-progress"]))
                 # issue #49：finished_at 语义 = 系统给 issue 打上 bot-done
                 # 标记的时间。打标签成功后把 finished_at 更新为打标时刻，
                 # 任务页「用时」以它与 created_at（系统接收时间）动态计算
@@ -1958,8 +1927,7 @@ class ClaudeExecutor:
         body = "\n\n".join(parts)
         try:
             self._call_with_fallback(
-                repo, lambda c: c.add_comment(project_id, issue_iid, body),
-                prefer_owner=True)
+                repo, lambda c: c.add_comment(project_id, issue_iid, body))
             self.db.add_log(task["id"], "info", "已在 issue 上留任务完成评论")
         except GitLabError as e:
             self.db.add_log(task["id"], "warn", f"留任务完成评论失败: {e}")
@@ -2093,8 +2061,7 @@ class ClaudeExecutor:
                 self._call_with_fallback(
                     repo, lambda c: c.add_comment(
                         task["project_id"], task["issue_iid"],
-                        f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{summary}"),
-                    prefer_owner=True)
+                        f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{summary}"))
                 self.db.add_log(task_id, "info", "已在 issue 上留失败评论")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"留失败评论失败: {e}")
@@ -2102,8 +2069,7 @@ class ClaudeExecutor:
                 self._call_with_fallback(
                     repo, lambda c: c.add_labels(
                         task["project_id"], task["issue_iid"], ["bot-failed"],
-                        remove=["in-progress"]),
-                    prefer_owner=True)
+                        remove=["in-progress"]))
                 self.db.add_log(task_id, "info", "已打 bot-failed 标签")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"打 bot-failed 标签失败: {e}")
@@ -2147,8 +2113,7 @@ class ClaudeExecutor:
             try:
                 self._call_with_fallback(
                     repo, lambda c: c.add_comment(
-                        task["project_id"], task["issue_iid"], comment),
-                    prefer_owner=True)
+                        task["project_id"], task["issue_iid"], comment))
                 self.db.add_log(task_id, "info", "已在 issue 上留提问评论，等待用户回复")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"留提问评论失败: {e}")
@@ -2156,8 +2121,7 @@ class ClaudeExecutor:
                 self._call_with_fallback(
                     repo, lambda c: c.add_labels(
                         task["project_id"], task["issue_iid"], ["blocked"],
-                        remove=["in-progress"]),
-                    prefer_owner=True)
+                        remove=["in-progress"]))
                 self.db.add_log(task_id, "info", "已打 blocked 标签，等待用户回复")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"打 blocked 标签失败: {e}")

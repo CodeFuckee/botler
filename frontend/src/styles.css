@@ -662,6 +662,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
     box-shadow var(--dur-fast) var(--ease-out);
 }
 .alert-error { background: var(--err-weak); border-color: rgba(229, 72, 77, 0.35); color: var(--err); }
+.alert-warning { background: var(--warn-weak); border-color: rgba(217, 119, 6, 0.35); color: var(--warn); cursor: default; }
 .alert-ok { background: var(--ok-weak); border-color: rgba(23, 163, 74, 0.35); color: var(--ok); cursor: default; }
 .alert.small { padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2); font-size: 12.5px; }
 
