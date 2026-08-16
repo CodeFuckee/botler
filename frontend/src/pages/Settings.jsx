@@ -4,6 +4,7 @@ import { sendTestNotification } from '../notify.js'
 import AiProvidersCard from '../components/AiProvidersCard.jsx'
 import ImageModelsCard from '../components/ImageModelsCard.jsx'
 import BackupManager from '../components/BackupManager.jsx'
+import SettingsNav from '../components/SettingsNav.jsx'
 import Markdown from '../components/Markdown.jsx'
 import VersionBadge from '../components/VersionBadge.jsx'
 
@@ -257,7 +258,12 @@ export default function Settings() {
   }
 
   return (
-    <div>
+    <div className="settings-layout">
+      <SettingsNav />
+      <div className="settings-content">
+      {/* 设置页分组标题（issue #139）：与左侧导航栏分组一一对应 */}
+      <h2 className="settings-group-title">外部服务接入</h2>
+      <section id="settings-sso" className="settings-section">
       <div className="card">
         <h2>Synology SSO 登录</h2>
         <table className="table kv">
@@ -392,17 +398,23 @@ export default function Settings() {
           )}
         </div>
       </div>
+      </section>
 
       {/* AI API 供应商（issue #46）：SSO 卡片后第二位，外部服务接入类配置聚合 */}
+      <section id="settings-ai-providers" className="settings-section">
       <AiProvidersCard />
+      </section>
 
       {/* 生图模型（issue #135）：AI 供应商卡片之后，同为外部服务接入类配置 */}
+      <section id="settings-image-models" className="settings-section">
       <ImageModelsCard />
+      </section>
 
       <h1>系统设置</h1>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {saved && <div className="alert alert-ok">✓ 已保存（已写回 config.yaml）</div>}
 
+      <section id="settings-tasks" className="settings-section">
       <div className="card">
         <h2>任务调度</h2>
         <table className="table kv">
@@ -468,6 +480,8 @@ export default function Settings() {
         </div>
       </div>
 
+      </section>
+      <section id="settings-ui" className="settings-section">
       <div className="card">
         <h2>界面显示</h2>
         <table className="table kv">
@@ -495,6 +509,8 @@ export default function Settings() {
         </p>
       </div>
 
+      </section>
+      <section id="settings-notifications" className="settings-section">
       <div className="card">
         <h2>网页通知</h2>
         <table className="table kv">
@@ -558,6 +574,8 @@ export default function Settings() {
         </p>
       </div>
 
+      </section>
+      <section id="settings-webhook" className="settings-section">
       <div className="card">
         <h2>消息推送 Webhook</h2>
         <table className="table kv">
@@ -655,6 +673,9 @@ export default function Settings() {
         </p>
       </div>
 
+      </section>
+      <h2 className="settings-group-title">执行引擎</h2>
+      <section id="settings-claude" className="settings-section">
       <div className="card">
         <h2>Claude Code</h2>
         <table className="table kv">
@@ -695,6 +716,8 @@ export default function Settings() {
       {/* dsh 引擎（issue #84）：deepseek-harness SDK 推理等级设置（issue #123）。
            SDK 运行时 llm-deepseek adapter 支持 reasoningEffort（off / high / max），
            botler 在设置后自动派生 Cordis 注入，无需手工维护 cordis 文件 */}
+      </section>
+      <section id="settings-dsh" className="settings-section">
       <div className="card">
         <h2>dsh 引擎</h2>
         <table className="table kv">
@@ -726,6 +749,9 @@ export default function Settings() {
         </p>
       </div>
 
+      </section>
+      <h2 className="settings-group-title">运维与数据</h2>
+      <section id="settings-environment" className="settings-section">
       <div className="card">
         <h2>本地环境检测</h2>
         <p className="muted small">
@@ -766,13 +792,18 @@ export default function Settings() {
         </div>
       </div>
 
+      <section id="settings-backup" className="settings-section">
       <BackupManager />
+      </section>
+      </section>
 
       {/* Owner GitLab Token（issue #87）：专用于编辑 issue（评论/标签）的
           个人访问令牌，严禁用于推送代码与处理流水线。
           issue #130：系统架构层已隔离——所有 Agent 均不可使用，只允许
           在概览页面编辑 issue、添加 issue、关闭 issue、添加评论与回复
           评论时由平台使用；Agent 只能使用自己仓库的认证 token 编辑 issue */}
+      <h2 className="settings-group-title">账号与安全</h2>
+      <section id="settings-owner-token" className="settings-section">
       <div className="card">
         <h2>
           Owner GitLab Token（issue 编辑专用）
@@ -834,6 +865,8 @@ export default function Settings() {
         </div>
       </div>
 
+      </section>
+      <section id="settings-gitlab-cred" className="settings-section">
       <div className="card">
         <h2>GitLab 凭据（只读）</h2>
         <table className="table kv">
@@ -851,12 +884,17 @@ export default function Settings() {
 
       {/* 版本信息（issue #9 第二轮）：从导航栏移入设置页面底部，
           每次 CI/CD 构建自动更新版本号与构建时间 */}
+      </section>
+      <h2 className="settings-group-title">关于</h2>
+      <section id="settings-version" className="settings-section">
       <div className="card">
         <h2>版本信息</h2>
         <p className="muted small">当前版本与构建时间（每次 CI/CD 构建自动更新）：</p>
         <div className="settings-version">
           <VersionBadge />
         </div>
+      </div>
+      </section>
       </div>
     </div>
   )

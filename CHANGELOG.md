@@ -6,6 +6,29 @@
 
 ### Added
 
+- **设置页整理分组并新增左侧导航栏：可搜索设置项、折叠/展开分组子项（issue #139）**：
+  需求「设置页设置项太多，整理一下设置页面的分支，并在设置左侧添加一个导航栏，
+  导航栏可以搜索设置项，同时也可以折叠和展开分组中的子项」。
+  实现：
+  - 前端 `components/SettingsNav.jsx`（新）：设置页左侧导航栏组件，导出分组配置
+    `SETTINGS_GROUPS`（6 组 14 项，子项带锚点 id / 显示名 / 搜索关键字）——
+    顶部搜索框按名称与关键字过滤设置项（中英文别名、配置键均可命中），搜索时自动
+    展开命中分组并显示命中数，无结果给出空状态提示；每个分组可折叠/展开其子项
+    （`aria-expanded` 无障碍状态），导航头部提供「全部收起 / 全部展开」；
+    点击子项平滑滚动（`scrollIntoView` smooth）到页面相应设置区块并高亮当前项；
+  - 前端 `pages/Settings.jsx`：设置页改为两栏布局（左侧导航 + 右侧内容区），
+    按功能整理为 6 个分组（外部服务接入 / 系统设置 / 执行引擎 / 运维与数据 /
+    账号与安全 / 关于），每个设置区块包裹 `<section id=...>` 锚点（与导航子项
+    一一对应），分组间插入分组标题；既有卡片顺序与功能全部保持不变；
+  - 前端 `styles.css`：新增 `settings-layout` / `settings-sidebar` / `settings-nav*`
+    等样式（240px 吸顶导航 + 内容区，Geist 设计令牌），`scroll-margin-top` 保证
+    滚动定位不被 sticky 顶导航遮挡，窄视口（≤860px）回落单栏导航置顶；
+  - 文档：`README.md` 配置说明补充设置页导航分组与搜索/折叠交互说明；
+  - 测试：`frontend/tests/settings-nav.test.mjs`（新）15 用例（导航挂载与两栏布局 /
+    分组标题与锚点归属一一对应 / SETTINGS_GROUPS 配置完整性 / 渲染分组与子项 /
+    搜索过滤·关键字命中·自动展开·无结果空状态·清空恢复 / 分组折叠展开·全部收起
+    展开 / 点击子项 scrollIntoView 滚动与高亮 / 样式规则）+ 设置页既有用例全量回归。
+
 - **设置里配置了 deepseek api 时，概览页展示 DeepSeek 账户余额（issue #138）**：
   需求「如果设置里配置了 deepseek api，则在概览页面显示 deepseek 账户里的余额」，
   请求接口为 `GET https://api.deepseek.com/user/balance`（`Authorization: Bearer <TOKEN>`）。
