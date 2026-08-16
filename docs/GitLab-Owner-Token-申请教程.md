@@ -78,9 +78,3 @@ scope，只读 scope 提交写操作会被拒绝（403 `insufficient_scope`）�
 请到 GitLab **用户设置 → Access Tokens** 重新生成 token，**Scopes 勾选
 `api`**（账号角色仍建议 Reporter 低权限），再回设置页保存。设置页保存时
 会立即校验 scopes，缺 `api` 的 token 无法保存成功（issue #133）。
-
-**Q：为什么不配置 Owner Token 会怎样？**
-（同上条）概览页的 issue 编辑会被拦截并提示先到设置页配置（issue #132：
-**不会**再以 code01 身份静默发布）；Agent 任务处理与对账不受影响（始终
-使用 bot 身份）。配置 Owner Token 后，概览页的 issue 编辑以你的身份
-（owner）执行。
