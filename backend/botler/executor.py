@@ -32,7 +32,7 @@ import threading
 import time
 from pathlib import Path
 
-from .config import ConfigManager
+from .config import DEFAULT_RESUME_PROMPT, ConfigManager
 from .database import (
     Database, STATUS_RUNNING, STATUS_RETRYING, STATUS_SUCCEEDED, STATUS_FAILED,
     STATUS_INTERRUPTED,
@@ -77,16 +77,6 @@ COMMENT_TAIL_CHARS = 3000
 # 手动停止约定退出码（issue #35）：读循环检测到停止标记时返回，
 # 区别于 124（超时）与其他环境失败，run_task 据此走停止收尾
 STOP_EXIT_CODE = 125
-
-# 恢复执行引导语（issue #8）：中断恢复时不用完整模版重发 issue 描述，
-# 而是让 Claude 检查工作区现状后从断点继续（避免重复分析与重复评论）
-RESUME_PROMPT = """【继续处理（中断恢复）】你正在处理 {repo_name} 仓库的 issue #{issue_iid}「{issue_title}」：{issue_url}
-
-上次处理因平台重新部署而中断，你的对话与工作区改动已保留。请先检查当前状态
-（git status / git log / 未提交改动），弄清上次做到哪一步，然后从断点继续：
-完成剩余的修复/实现 → 自测 → 推送 → 用 GitLab API 关闭 issue。
-不要从零重新分析 issue（除非确认上次未开始实质工作），不要重复已经完成的工作。"""
-
 
 class ExecutorError(Exception):
     pass
@@ -841,10 +831,16 @@ class ClaudeExecutor:
         return find_session_file(session_id, self._claude_home())
 
     def _resume_prompt(self, repo: dict, issue: dict) -> str:
-        """恢复执行引导语：基于上次会话继续，不重复已完成的工作。"""
+        """恢复执行引导语：基于上次会话继续，不重复已完成的工作。
+
+        模版优先取 config 的 templates.resume（issue #116 起用户可编辑，
+        与全局默认模版同机制）；未配置/清空时回退内置默认。占位符与
+        全局模版共用 build_variables（claude/hermes/dsh 三引擎统一入口）。
+        """
+        template = self.config.get().resume_template or DEFAULT_RESUME_PROMPT
         variables = self.renderer.build_variables(
             repo["name"], issue, repo_url=_row_get(repo, "url") or "")
-        return self.renderer.render(RESUME_PROMPT, variables)
+        return self.renderer.render(template, variables)
 
     # ---- 单次执行 ----
 

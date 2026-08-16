@@ -58,6 +58,31 @@
 
 ### Added
 
+- **中断恢复提示词改为可编辑模版（issue #116）**：
+  需求「将中断恢复的提示词也做成类似全局模板一样，可以由用户编辑
+  修改的提示词」——中断恢复引导语此前硬编码在 executor.py，用户
+  无法修改，现与全局默认模版（templates.default）同机制开放编辑：
+  - **后端**：内置默认 `DEFAULT_RESUME_PROMPT` 迁入 config.py（与
+    DEFAULT_TEMPLATE 并列），新增 `templates.resume` 配置键——
+    缺失/空串归一为内置默认（中断恢复必须有引导语，不允许空模版）；
+    `GET /api/settings` 的 templates 段返回 `resume`，`PUT` 支持
+    写入（非字符串 400 拒绝，空白 = 移除自定义键恢复内置默认）；
+    executor._resume_prompt 改从 config 读取（claude/hermes/dsh
+    三引擎断点续跑统一入口，自定义对三引擎同时生效）；
+  - **政策修正（issue #109）**：旧 RESUME_PROMPT 含「用 GitLab API
+    关闭 issue」指令，与「Agent 永不主动关闭 Issue」矛盾，迁入时
+    同步修正为「不要关闭该 issue——关闭动作留给用户确认后手动执行」；
+  - **前端**：模版页新增「中断恢复模版」视图（与全局默认/仓库级
+    并列切换），复用现有编辑器与占位符表（全部 11 个占位符可用），
+    界面注明「留空保存即恢复内置默认」；
+  - **测试**：后端新增 14 用例（settings API 读写/清空恢复默认/
+    非字符串 400/部分更新不影响 default；config 加载兜底与空串归一/
+    内置默认不含关闭指令/占位符齐备/update_resume_template 写盘清键；
+    executor 渲染默认/自定义/清空回退），前端新增
+    `templates-resume-page.test.mjs` 6 用例（加载读取/视图切换/保存
+    API/恢复默认提示/后端 GET·PUT 契约）；前端 499 + 后端 1006
+    全量测试通过。
+
 - **设置页新增「任务执行引擎」设置项（issue #113）**：
   需求「设置页面增加一个设置项，用来切换后端用来编写代码的agent」——
   `worker.engine` 引擎切换逻辑（issue #47/#84）此前只能在 config.yaml

@@ -532,3 +532,59 @@ class TestEngineSettings:
         worker = resp.json()["worker"]
         assert worker["engine"] == "hermes"
         assert worker["max_concurrent_repos"] == 5
+
+
+class TestResumeTemplateSettings:
+    """templates.resume 段（issue #116）：中断恢复提示词可编辑，与全局模版同机制。
+
+    中断恢复引导语此前硬编码在 executor.py，用户无法修改；本组用例锁定
+    settings API 的读写语义：未配置返回内置默认、PUT 落盘 config.yaml、
+    清空恢复内置默认（中断恢复必须有引导语，不允许空模版）、非字符串 400。
+    """
+
+    def test_get_settings_includes_resume_default(self, client):
+        """未配置时返回内置默认恢复提示词（前端展示可编辑基线）。"""
+        tc, _ = client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        resume = resp.json()["templates"]["resume"]
+        assert "继续处理（中断恢复）" in resume
+        assert "{issue_iid}" in resume and "{repo_name}" in resume
+
+    def test_update_resume_persists(self, client):
+        """PUT templates.resume 自定义文本写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        custom = "继续处理 {repo_name} 的 issue #{issue_iid}，从断点继续。"
+        resp = tc.put("/api/settings", json={"templates": {"resume": custom}})
+        assert resp.status_code == 200
+        assert resp.json()["templates"]["resume"] == custom
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "resume:" in config_text and custom in config_text
+
+    def test_update_resume_blank_restores_default(self, client):
+        """清空/纯空白 = 移除自定义键，恢复内置默认（不允许空模版）。"""
+        tc, tmp_path = client
+        assert tc.put("/api/settings", json={
+            "templates": {"resume": "自定义恢复提示"}}).status_code == 200
+        resp = tc.put("/api/settings", json={"templates": {"resume": "   "}})
+        assert resp.status_code == 200
+        assert "继续处理（中断恢复）" in resp.json()["templates"]["resume"]
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "resume:" not in config_text
+
+    def test_update_resume_rejects_non_string(self, client):
+        """非字符串（数字/布尔/对象）400 拒绝。"""
+        tc, _ = client
+        for bad in (123, True, ["文本"], {"x": 1}):
+            resp = tc.put("/api/settings", json={"templates": {"resume": bad}})
+            assert resp.status_code == 400, f"取值 {bad!r} 应拒绝"
+            assert "必须是字符串" in resp.json()["detail"]
+
+    def test_update_resume_keeps_default_template(self, client):
+        """单独更新 resume 不影响 templates.default（部分更新）。"""
+        tc, _ = client
+        before = tc.get("/api/settings").json()["templates"]["default"]
+        assert tc.put("/api/settings", json={
+            "templates": {"resume": "新恢复提示"}}).status_code == 200
+        after = tc.get("/api/settings").json()["templates"]["default"]
+        assert after == before

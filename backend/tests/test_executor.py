@@ -1490,3 +1490,33 @@ class TestGitlabFallbackOnGlobalTokenFailure:
         assert any("任务已完成" in a[2]
                    for kind, a in calls if kind == "comment")
         assert db.get_task(task_id)["status"] == "succeeded"
+
+
+class TestResumePromptTemplate:
+    """_resume_prompt 渲染来源（issue #116）：内置默认 + config 自定义。
+
+    中断恢复引导语改为从 config（templates.resume）读取，未配置/清空时
+    回退内置默认；claude/hermes/dsh 三引擎共用 _resume_prompt 统一入口。
+    """
+
+    def test_resume_prompt_uses_builtin_default(self, executor):
+        """未配置自定义模版时用内置默认，占位符正常替换。"""
+        prompt = executor._resume_prompt(_REPO, _issue_dict())
+        assert "继续处理（中断恢复）" in prompt
+        assert "demo" in prompt          # {repo_name}
+        assert "#7" in prompt            # {issue_iid}
+        assert "标题" in prompt          # {issue_title}
+        assert "https://gitlab.example.com/x/-/issues/7" in prompt  # {issue_url}
+
+    def test_resume_prompt_uses_configured_template(self, executor):
+        """配置自定义恢复模版后渲染使用自定义文本。"""
+        executor.config.update_resume_template("恢复 {repo_name} #{issue_iid}，继续。")
+        prompt = executor._resume_prompt(_REPO, _issue_dict())
+        assert prompt == "恢复 demo #7，继续。"
+
+    def test_resume_prompt_blank_config_falls_back_to_builtin(self, executor):
+        """自定义被清空后回退内置默认。"""
+        executor.config.update_resume_template("临时自定义")
+        executor.config.update_resume_template("   ")
+        prompt = executor._resume_prompt(_REPO, _issue_dict())
+        assert "继续处理（中断恢复）" in prompt

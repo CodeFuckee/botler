@@ -131,6 +131,10 @@ class Settings:
     dsh_base_url: str = ""
     dsh_api_key: str = ""
     default_template: str = ""
+    # 中断恢复模版（issue #116）：与全局默认模版同机制，用户可在
+    # 设置 API / Web UI 模版页编辑；为空或未配置时归一为内置默认
+    # DEFAULT_RESUME_PROMPT（中断恢复必须有引导语，不允许空模版）
+    resume_template: str = ""
     browse_default_path: str | None = None
     backup_enabled: bool = True
     backup_retention_days: int = 30
@@ -173,7 +177,7 @@ KNOWN_FIELDS = {
     "hermes": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "session_root", "cordis",
             "runtime_bin", "base_url", "api_key"},
-    "templates": {"default"},
+    "templates": {"default", "resume"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
     "ui": {"timezone"},
@@ -213,6 +217,19 @@ DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以�
 
 注意：只修改与 issue 相关的代码，不要顺手重构无关部分。
 """
+
+# 恢复执行引导语（issue #8）：中断恢复时不用完整模版重发 issue 描述，
+# 而是让 Claude 检查工作区现状后从断点继续（避免重复分析与重复评论）。
+# issue #116 起迁入 config 作为内置默认（templates.resume 可编辑覆盖），
+# 并同步修正 issue #109 政策：不再指示「用 GitLab API 关闭 issue」，
+# 关闭动作留给用户确认后手动执行。
+DEFAULT_RESUME_PROMPT = """【继续处理（中断恢复）】你正在处理 {repo_name} 仓库的 issue #{issue_iid}「{issue_title}」：{issue_url}
+
+上次处理因平台重新部署而中断，你的对话与工作区改动已保留。请先检查当前状态
+（git status / git log / 未提交改动），弄清上次做到哪一步，然后从断点继续：
+完成剩余的修复/实现 → 自测 → 推送 → 在 issue 上留结果评论。
+不要从零重新分析 issue（除非确认上次未开始实质工作），不要重复已经完成的工作。
+不要关闭该 issue——关闭动作留给用户确认后手动执行（模版库规范）。"""
 
 
 class ConfigManager:
@@ -313,6 +330,8 @@ class ConfigManager:
             dsh_base_url=str(dsh.get("base_url", "")).strip(),
             dsh_api_key=str(dsh.get("api_key", "")).strip(),
             default_template=tpl.get("default", DEFAULT_TEMPLATE),
+            # 中断恢复模版（issue #116）：缺失/空串均归一为内置默认
+            resume_template=tpl.get("resume", "") or DEFAULT_RESUME_PROMPT,
             browse_default_path=browse.get("default_path") or None,
             backup_enabled=bool(backup.get("enabled", True)),
             backup_retention_days=int(backup.get("retention_days", 30)),
@@ -441,6 +460,24 @@ class ConfigManager:
     def update_default_template(self, text: str) -> Settings:
         self._reload_from_disk()
         self._data.setdefault("templates", {})["default"] = text
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_resume_template(self, text: str) -> Settings:
+        """更新中断恢复模版并写回（issue #116）。
+
+        与 update_default_template 不同：空白文本 = 移除自定义键恢复
+        内置默认（中断恢复必须有引导语，不允许空模版导致恢复会话
+        无提示词裸跑）；非空则写入 templates.resume。
+        """
+        self._reload_from_disk()
+        templates = self._data.setdefault("templates", {})
+        text = text.strip()
+        if text:
+            templates["resume"] = text
+        else:
+            templates.pop("resume", None)
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

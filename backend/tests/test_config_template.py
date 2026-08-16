@@ -152,3 +152,70 @@ class TestProjectPathPlaceholder:
         assert "{project_path" not in rendered
         assert "{gitlab_host" not in rendered
         assert "shipyard" not in rendered
+
+
+class TestResumeTemplate:
+    """中断恢复模版（issue #116）：config 加载兜底与关闭政策锁定。
+
+    恢复引导语从 executor.py 硬编码迁入 config 内置默认（DEFAULT_RESUME_PROMPT），
+    与 DEFAULT_TEMPLATE 并列；config.yaml 的 templates.resume 键缺失或为空串时
+    归一为内置默认（中断恢复必须有引导语，不允许空模版）。
+    """
+
+    # 注意：worker 行用 {{}} 转义，避免 .format() 把 {} 当位置占位符
+    CONFIG_MIN = """\
+gitlab:
+  url: https://gitlab.example.com
+  bot_token: test-token
+  webhook_secret: test-secret
+worker: {{}}
+templates: {templates}
+repos: []
+"""
+
+    def _get(self, tmp_path, templates: str):
+        path = tmp_path / "config.yaml"
+        path.write_text(self.CONFIG_MIN.format(templates=templates), encoding="utf-8")
+        return ConfigManager(str(path)).get()
+
+    def test_missing_resume_falls_back_to_builtin(self, tmp_path):
+        """config.yaml 未配置 templates.resume 时用内置默认恢复提示词。"""
+        cfg = self._get(tmp_path, "{}")
+        assert "继续处理（中断恢复）" in cfg.resume_template
+
+    def test_blank_resume_normalized_to_builtin(self, tmp_path):
+        """显式写空串也归一为内置默认（不允许空模版）。"""
+        cfg = self._get(tmp_path, '{resume: ""}')
+        assert "继续处理（中断恢复）" in cfg.resume_template
+
+    def test_custom_resume_kept(self, tmp_path):
+        """显式配置的自定义恢复提示词原样生效。"""
+        cfg = self._get(tmp_path, "{resume: 自定义恢复提示}")
+        assert cfg.resume_template == "自定义恢复提示"
+
+    def test_resume_builtin_does_not_instruct_closing_issue(self):
+        """内置恢复提示词不得指示关闭 issue（issue #109 政策，issue #116 修正）。
+
+        旧 RESUME_PROMPT 曾含「用 GitLab API 关闭 issue」指令，与
+        「Agent 永不主动关闭 Issue」矛盾；迁入 config 时同步修正。
+        """
+        from botler.config import DEFAULT_RESUME_PROMPT
+        assert "state_event=close" not in DEFAULT_RESUME_PROMPT
+        assert "关闭 issue" not in DEFAULT_RESUME_PROMPT
+        assert "不要关闭" in DEFAULT_RESUME_PROMPT
+
+    def test_resume_builtin_has_required_placeholders(self):
+        """内置默认含恢复引导所需全部占位符。"""
+        from botler.config import DEFAULT_RESUME_PROMPT
+        for ph in ("{repo_name}", "{issue_iid}", "{issue_title}", "{issue_url}"):
+            assert ph in DEFAULT_RESUME_PROMPT, f"缺少占位符 {ph}"
+
+    def test_update_resume_template_writes_and_clears(self, tmp_path):
+        """update_resume_template 写盘；空白清除键恢复内置默认。"""
+        path = tmp_path / "config.yaml"
+        path.write_text(self.CONFIG_MIN.format(templates="{}"), encoding="utf-8")
+        mgr = ConfigManager(str(path))
+        assert mgr.update_resume_template("自定义恢复提示").resume_template == "自定义恢复提示"
+        assert "自定义恢复提示" in path.read_text(encoding="utf-8")
+        assert "继续处理（中断恢复）" in mgr.update_resume_template("  ").resume_template
+        assert "resume:" not in path.read_text(encoding="utf-8")
