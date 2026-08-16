@@ -1,10 +1,11 @@
-"""灵感 API（issue #131）：概览页「灵感」板块。
+"""灵感 API（issue #131，issue #143 扩展一键提交为 GitLab issue）。
 
 需求：概览页在「开放 Issue」下方、「CI/CD 流水线」上方增加灵感板块，
-用户可按仓库随手记录关于该仓库新功能的灵感；灵感只保存在 Botler
-本地 SQLite 数据库，不提交到 GitLab issue。
+用户可按仓库随手记录关于该仓库新功能的灵感；灵感默认只保存在 Botler
+本地 SQLite 数据库（issue #131），issue #143 起支持一键将灵感提交为
+GitLab issue——灵感内容作为 issue 标题与描述、默认标签 feature + ui。
 
-接口设计（本地数据，无需 GitLab API，无缓存）：
+接口设计：
 - GET    /api/inspirations/overview：聚合所有未软删除仓库（按优先级
   升序、同优先级按仓库 id，与 list_repos 一致），每个仓库带灵感列表
   （按 updated_at 降序）。无灵感的仓库也返回（前端展示空状态 + 添加
@@ -13,19 +14,32 @@
 - POST   /api/inspirations：创建灵感（repo_id + content 必填）。
 - PUT    /api/inspirations/{id}：更新灵感内容（刷新 updated_at）。
 - DELETE /api/inspirations/{id}：删除灵感。
+- POST   /api/inspirations/{id}/add-issue（issue #143）：将灵感一键
+  提交为 GitLab issue——灵感内容同时作为标题与描述，默认标签
+  feature + ui，不指定分配人；走 owner token（复用 issues 模块的
+  _issue_edit_call，绝不回退 bot token），创建成功后清空概览缓存。
 
 校验：repo_id 必须指向存在且未软删除的仓库（400）；content 去除首尾
-空白后非空（400）、长度不超过 5000 字（400，随手笔记的合理上限）。
+空白后非空（400）、长度不超过 5000 字（400，随手笔记的合理上限）；
+add-issue 要求灵感存在（404）、所属仓库存在且未软删除（400）、仓库
+已启用（400）。
 """
 
 from __future__ import annotations
 
 import logging
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..gitlab_client import GitLabError
+from .issues import _issue_edit_call, _trim_issue, clear_issue_cache
+
 logger = logging.getLogger(__name__)
+
+# 灵感一键提交 issue 的默认标签（issue #143）：需求约定 feature + ui
+INSPIRATION_ISSUE_LABELS = ("feature", "ui")
 
 router = APIRouter(prefix="/inspirations", tags=["inspirations"])
 
@@ -135,3 +149,51 @@ def delete_inspiration(request: Request, inspiration_id: int):
     if not c.db.delete_inspiration(inspiration_id):
         raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
     return None
+
+
+@router.post("/{inspiration_id}/add-issue", status_code=201)
+def add_issue_from_inspiration(request: Request, inspiration_id: int):
+    """将灵感一键提交为 GitLab issue（issue #143）。
+
+    概览页灵感条目「添加 Issue」按钮点击后调用：灵感内容同时作为
+    issue 标题与描述，默认标签 feature + ui（GitLab 创建 issue 时
+    不存在的标签会自动创建），不指定分配人；通过 GitLab API 在灵感
+    所属仓库创建。
+
+    写操作与概览页其他 issue 编辑一致（_issue_edit_call）：必须使用
+    owner token，绝不回退 bot token——未配置 owner token 返回 400 并
+    引导设置；token 失效/权限不足返回 502。创建成功后清空概览缓存，
+    前端刷新开放 issue 列表即可看到新 issue。返回精简后的 issue 对象
+    （含 iid/web_url，供前端展示创建成功提示与跳转链接）。
+
+    错误映射：灵感不存在 → 404；所属仓库不存在/已软删除 → 400；仓库
+    未启用 → 400（与概览页添加 issue 弹窗一致）；GitLab 创建失败 →
+    502；网络错误 → 502。
+    """
+    c = request.app.state.ctx
+    insp = c.db.get_inspiration(inspiration_id)
+    if insp is None:
+        raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
+    repo = _require_repo(c, insp["repo_id"])
+    if not repo["enabled"]:
+        raise HTTPException(400, "仓库未启用")
+    # 数据库层已保证内容非空（创建/更新时校验），此处去首尾空白后
+    # 仍为空属极端数据异常，防御性拦截
+    content = insp["content"].strip()
+    if not content:
+        raise HTTPException(400, "灵感内容不能为空")
+    try:
+        issue = _issue_edit_call(
+            c, repo,
+            lambda cl: cl.create_issue(
+                repo["gitlab_project_id"], content,
+                description=content,
+                labels=list(INSPIRATION_ISSUE_LABELS)))
+    except GitLabError as e:
+        raise HTTPException(502, f"创建 issue 失败: {e}") from e
+    except httpx.HTTPError as e:
+        # owner client 可能指向不可达 host（配置的 GitLab 地址异常）
+        raise HTTPException(502, f"创建 issue 网络错误: {str(e)[:200]}") from e
+    clear_issue_cache()
+    # 标签色省略（创建刚完成，前端随即刷新列表从 overview 获取完整数据）
+    return _trim_issue(issue, {})

@@ -204,6 +204,11 @@ export default function Overview() {
   const [editingInspiration, setEditingInspiration] = useState(null)
   // 编辑框草稿内容
   const [editInspirationDraft, setEditInspirationDraft] = useState('')
+  // 一键提交为 GitLab issue 的灵感 id 集合（issue #143）：请求中按钮
+  // 禁用防重复提交
+  const [addingIssueInspIds, setAddingIssueInspIds] = useState({})
+  // 创建成功的 issue 对象（issue #143）：非空时显示成功提示与新 issue 链接
+  const [inspirationCreatedIssue, setInspirationCreatedIssue] = useState(null)
   // DeepSeek 账户余额（issue #138）：null=未加载/未配置；
   // {configured, balance, error} 为 /api/settings/deepseek-balance 返回
   const [dsBalance, setDsBalance] = useState(null)
@@ -381,6 +386,25 @@ export default function Overview() {
       setInspirationError(e.message)
     }
   }, [loadInspirations])
+
+  // 将灵感一键提交为 GitLab issue（issue #143）：灵感内容作为 issue
+  // 的标题与描述，通过 GitLab API 创建，默认标签 feature + ui；成功后
+  // 刷新开放 issue 列表并展示新 issue 链接
+  const addIssueFromInspiration = useCallback(async (ins) => {
+    if (addingIssueInspIds[ins.id]) return // 请求中禁止重复提交
+    setAddingIssueInspIds((prev) => ({ ...prev, [ins.id]: true }))
+    setInspirationCreatedIssue(null)
+    try {
+      const created = await api.post(`/api/inspirations/${ins.id}/add-issue`)
+      setInspirationCreatedIssue(created)
+      setInspirationError('')
+      await loadIssues()
+    } catch (e) {
+      setInspirationError(e.message)
+    } finally {
+      setAddingIssueInspIds((prev) => ({ ...prev, [ins.id]: false }))
+    }
+  }, [addingIssueInspIds, loadIssues])
 
   // 对账（issue #134）：立即扫描该仓库，把「assignee 是 bot 但任务表无
   // 活跃记录」的 open issues 补入队（复用仓库页对账接口，issue #17）。
@@ -682,9 +706,20 @@ export default function Overview() {
           （编辑/删除）+ 底部随手记录表单 */}
       <section className="inspirations-section">
         <h2>💡 灵感</h2>
-        <p className="muted">按仓库随手记录新功能灵感，仅保存在本地数据库，不会提交到 issue（每 {INSPIRATION_POLL_MS / 1000} 秒自动刷新）</p>
+        <p className="muted">按仓库随手记录新功能灵感，仅保存在本地数据库；可一键将灵感提交为 GitLab issue（默认标签 feature、ui；每 {INSPIRATION_POLL_MS / 1000} 秒自动刷新）</p>
         {inspirationError && (
           <div className="alert alert-error" onClick={() => setInspirationError('')}>{inspirationError}</div>
+        )}
+        {inspirationCreatedIssue && (
+          <div className="alert alert-ok" onClick={() => setInspirationCreatedIssue(null)}
+               title="点击关闭">
+            ✅ 已创建{' '}
+            <a href={inspirationCreatedIssue.web_url || '#'} target="_blank" rel="noreferrer"
+               onClick={(e) => e.stopPropagation()}>
+              {'issue #' + inspirationCreatedIssue.iid}
+            </a>
+            （默认标签 feature、ui）
+          </div>
         )}
         {inspirationRepos.length === 0 ? (
           <div className="empty-state">
@@ -736,6 +771,12 @@ export default function Overview() {
                                 {fmtAgo(ins.updated_at) || '—'}
                               </span>
                               <span className="inspiration-actions">
+                                <button type="button" className="inspiration-action-btn inspiration-add-issue-btn"
+                                        title="将灵感内容作为标题与描述，通过 GitLab API 创建 issue（默认标签 feature、ui）"
+                                        onClick={() => addIssueFromInspiration(ins)}
+                                        disabled={!!addingIssueInspIds[ins.id]}>
+                                  {addingIssueInspIds[ins.id] ? '⏳ 提交中…' : '📌 添加 Issue'}
+                                </button>
                                 <button type="button" className="inspiration-action-btn"
                                         title="编辑该灵感"
                                         onClick={() => {

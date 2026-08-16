@@ -85,6 +85,8 @@ test('源码：灵感板块位于开放 Issue 与 CI/CD 流水线之间', () => 
 async function renderOverview({
   inspirationsPayload = INSPIRATIONS_PAYLOAD,
   inspirationsError = null,
+  inspirationsAddResult = null,
+  inspirationsAddError = null,
 } = {}) {
   const getCalls = []
   const postCalls = []
@@ -101,7 +103,18 @@ async function renderOverview({
     }
     throw new Error('unexpected ' + pathname)
   })
-  mock.method(api, 'post', async (pathname, body) => { postCalls.push([pathname, body]); return { id: 99 } })
+  mock.method(api, 'post', async (pathname, body) => {
+    postCalls.push([pathname, body])
+    // issue #143：一键提交 issue 的响应可注入（成功对象 / 抛错）
+    if (String(pathname).endsWith('/add-issue')) {
+      if (inspirationsAddError) throw new Error(inspirationsAddError)
+      return inspirationsAddResult || {
+        iid: 99, title: '灵感内容',
+        web_url: 'https://gitlab.example.com/x/-/issues/99',
+      }
+    }
+    return { id: 99 }
+  })
   mock.method(api, 'put', async (pathname, body) => { putCalls.push([pathname, body]); return {} })
   mock.method(api, 'del', async (pathname) => { delCalls.push(pathname); return null })
   let renderer = null
@@ -137,6 +150,18 @@ function findButton(renderer, cls) {
   const list = findByClass(renderer, cls)
   assert.ok(list.length > 0, `找不到按钮 ${cls}`)
   return list[0]
+}
+// 编辑按钮（issue #143：编辑与「添加 Issue」共享 inspiration-action-btn
+// 基类——添加按钮带专属 inspiration-add-issue-btn 类，编辑按钮无专属
+// 类名，按类排除 + 文案双重匹配）
+function findEditButton(renderer) {
+  const btns = renderer.root.findAll((n) => n.type === 'button')
+  const hit = btns.find((b) =>
+    String(b.props.className || '').includes('inspiration-action-btn')
+    && !String(b.props.className || '').includes('inspiration-add-issue-btn')
+    && JSON.stringify(b.props.children).includes('编辑'))
+  assert.ok(hit, '找不到编辑按钮')
+  return hit
 }
 
 // ---- 渲染级断言 ----
@@ -260,7 +285,7 @@ test('交互：编辑 → 保存调 PUT，取消退出编辑态', async () => {
   const r = await renderOverview()
   try {
     // 进入编辑态
-    const editBtn = findButton(r.renderer, 'inspiration-action-btn')
+    const editBtn = findEditButton(r.renderer)
     await TestRenderer.act(async () => { editBtn.props.onClick() })
     const textareas = findByClass(r.renderer, 'inspiration-textarea')
     // 编辑态 = 2 个仓库卡片的添加表单 + 1 个编辑文本域；文档序首个是编辑文本域
@@ -280,7 +305,7 @@ test('交互：编辑 → 保存调 PUT，取消退出编辑态', async () => {
     assert.deepEqual(r.putCalls[0], ['/api/inspirations/11', { content: '支持批量处理 issue（改）' }],
                      'PUT 参数应为 {content}')
     // 取消路径：再次进入编辑后点取消
-    const editBtn2 = findButton(r.renderer, 'inspiration-action-btn')
+    const editBtn2 = findEditButton(r.renderer)
     await TestRenderer.act(async () => { editBtn2.props.onClick() })
     const cancelBtn = rendererRootFindByText(r.renderer, '取消')
     await TestRenderer.act(async () => { cancelBtn.props.onClick() })
@@ -309,6 +334,120 @@ test('交互：删除调 DELETE 并刷新列表', async () => {
     })
     assert.equal(r.delCalls.length, 1, '应调用一次 DELETE')
     assert.equal(r.delCalls[0], '/api/inspirations/11', '应删除 id=11 的灵感')
+  } finally {
+    await r.unmount()
+  }
+})
+
+// ---- issue #143：灵感一键提交为 GitLab issue ----
+
+// 在已挂载的 Overview 中点击第 index 条灵感的「添加 Issue」按钮
+async function clickAddIssue(renderer, index = 0) {
+  const btns = renderer.root.findAll(
+    (n) => n.type === 'button'
+      && String(n.props.className || '').includes('inspiration-add-issue-btn'))
+  assert.ok(btns.length > index, `找不到第 ${index} 个「添加 Issue」按钮`)
+  await TestRenderer.act(async () => {
+    btns[index].props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+  return btns[index]
+}
+
+test('源码：「添加 Issue」按钮位于「编辑」按钮左侧', () => {
+  const add = overview.indexOf('📌 添加 Issue')
+  const edit = overview.indexOf('✏️ 编辑')
+  const del = overview.indexOf('🗑️ 删除')
+  assert.ok(add >= 0 && edit >= 0 && del >= 0, '三个操作按钮文案都应存在')
+  assert.ok(add < edit, '「添加 Issue」应位于「编辑」左侧')
+  assert.ok(edit < del, '「编辑」应位于「删除」左侧')
+})
+
+test('源码：一键提交调用 POST /api/inspirations/{id}/add-issue', () => {
+  assert.match(overview, /api\.post\(`\/api\/inspirations\/\$\{ins\.id\}\/add-issue`\)/,
+               '应调用 POST /api/inspirations/{id}/add-issue')
+  assert.match(overview, /loadIssues\(\)/, '创建成功后应刷新开放 issue 列表')
+})
+
+test('渲染：每条灵感都有「添加 Issue」按钮且位于编辑按钮左侧', async () => {
+  const r = await renderOverview()
+  try {
+    assert.equal(r.renderError, null, `渲染抛错：${r.renderError?.message || r.renderError}`)
+    // 第一条灵感（id=11）的操作区按钮顺序：添加 Issue → 编辑 → 删除
+    const items = r.renderer.root.findAll(
+      (n) => String(n.props.className || '').includes('inspiration-item'))
+    assert.ok(items.length >= 1, '应有灵感条目')
+    const buttons = items[0].findAll((n) => n.type === 'button')
+    const texts = buttons.map((b) => JSON.stringify(b.props.children || ''))
+    const addIdx = texts.findIndex((t) => t.includes('添加 Issue'))
+    const editIdx = texts.findIndex((t) => t.includes('编辑'))
+    const delIdx = texts.findIndex((t) => t.includes('删除'))
+    assert.ok(addIdx >= 0, '应渲染「添加 Issue」按钮')
+    assert.ok(addIdx < editIdx, '「添加 Issue」应位于「编辑」左侧')
+    assert.ok(editIdx < delIdx, '「编辑」应位于「删除」左侧')
+  } finally {
+    await r.unmount()
+  }
+})
+
+test('交互：点击添加 issue → POST /api/inspirations/{id}/add-issue 并刷新开放 issue 列表', async () => {
+  const r = await renderOverview({ inspirationsAddResult: {
+    iid: 77, title: '灵感内容', web_url: 'https://gitlab.example.com/x/-/issues/77',
+  } })
+  try {
+    const issuesBefore = r.getCalls.filter((p) => p === '/api/issues/overview').length
+    await clickAddIssue(r.renderer, 0)
+    assert.equal(r.postCalls.length, 1, '应调用一次 POST')
+    assert.equal(r.postCalls[0][0], '/api/inspirations/11/add-issue',
+                 '应提交 id=11 的灵感')
+    const issuesAfter = r.getCalls.filter((p) => p === '/api/issues/overview').length
+    assert.ok(issuesAfter > issuesBefore, '创建成功后应重新拉取开放 issue 列表')
+    const text = treeText(r.renderer)
+    assert.ok(text.includes('issue #77'), '应展示新 issue 编号')
+    assert.ok(text.includes('https://gitlab.example.com/x/-/issues/77'),
+              '应展示新 issue 链接')
+  } finally {
+    await r.unmount()
+  }
+})
+
+test('交互：提交中按钮禁用，重复点击只发一次请求', async () => {
+  // post 桩返回挂起 promise（不 resolve），模拟请求进行中
+  let resolvePost = null
+  const r = await renderOverview()
+  mock.method(api, 'post', async (pathname, body) => {
+    r.postCalls.push([pathname, body])
+    if (String(pathname).endsWith('/add-issue')) {
+      return new Promise((resolve) => { resolvePost = resolve })
+    }
+    return { id: 99 }
+  })
+  try {
+    const btn = await clickAddIssue(r.renderer, 0)
+    // 请求进行中：按钮应禁用（防重复提交）
+    assert.equal(btn.props.disabled, true, '请求中按钮应禁用')
+    // 重复点击（disabled 仅阻止浏览器事件，测试直接调用 onClick 模拟
+    // 极端并发）——handler 内置 addingIssueInspIds 守卫，只发一次请求
+    const btn2 = r.renderer.root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('inspiration-add-issue-btn'))[0]
+    await TestRenderer.act(async () => { btn2.props.onClick() })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(r.postCalls.length, 1, '重复点击不应发起第二次请求')
+    // 释放挂起请求
+    await TestRenderer.act(async () => { resolvePost({ iid: 77, title: 'x' }) })
+  } finally {
+    await r.unmount()
+  }
+})
+
+test('交互：提交失败显示错误且不崩溃', async () => {
+  const r = await renderOverview({ inspirationsAddError: 'owner token 未配置' })
+  try {
+    await clickAddIssue(r.renderer, 0)
+    const text = treeText(r.renderer)
+    assert.ok(text.includes('owner token 未配置'), '应显示提交错误')
+    assert.ok(text.includes('💡 灵感'), '板块骨架仍应渲染')
   } finally {
     await r.unmount()
   }

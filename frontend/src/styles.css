@@ -2129,6 +2129,17 @@ code {
   color: var(--primary);
   background: var(--bg-soft);
 }
+/* issue #143：一键提交为 GitLab issue 的按钮——主色描边区分于
+   普通编辑/删除动作，请求中禁用防重复提交 */
+.inspiration-add-issue-btn {
+  color: var(--primary);
+  font-weight: 600;
+}
+.inspiration-add-issue-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--muted);
+}
 .inspiration-delete-btn:hover {
   color: var(--danger, #c0392b);
 }

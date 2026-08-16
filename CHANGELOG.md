@@ -6,6 +6,33 @@
 
 ### Added
 
+- **灵感一键提交为 GitLab issue（issue #143）**：
+  需求「灵感组件，在编辑按钮左边添加一个，添加issue的按钮，点击之后将灵感的
+  文本，作为issue的标题和描述，通过gitlab api添加issue，默认添加标记feature
+  以及ui」。
+  实现：
+  - 后端 `api/inspirations.py`：新增 `POST /api/inspirations/{id}/add-issue`——
+    灵感内容同时作为 issue 标题与描述，默认标签 `feature` + `ui`（GitLab 会
+    自动创建不存在的标签），不指定分配人；写操作走 owner token（复用
+    `issues._issue_edit_call`，未配置 owner token 返回 400 引导设置、绝不回退
+    bot token）；灵感不存在 404 / 仓库不存在或已软删除 400 / 仓库未启用 400 /
+    GitLab 故障 502；创建成功后清空概览缓存，返回精简 issue 对象
+    （含 iid/web_url 供前端提示与跳转）；
+  - 前端 `Overview.jsx`：灵感条目操作区在「编辑」按钮左侧新增
+    「📌 添加 Issue」按钮——请求中禁用防重复提交，成功展示新 issue 链接并
+    立即刷新开放 issue 列表，失败展示错误；板块说明文案同步更新；
+  - 样式 `styles.css`：新增 `.inspiration-add-issue-btn`（主色描边区分动作、
+    禁用态）（创建成功提示沿用既有 `.alert-ok` 样式）；
+  - 文档：`README.md` 后端 API 表新增 `POST /api/inspirations/{id}/add-issue`
+    一行；
+  - 测试：后端 `test_api_inspirations.py` 新增 `TestAddIssueFromInspiration`
+    8 用例（正常路径 / 多行内容保留换行 / 灵感不存在 404 / 仓库未启用 400 /
+    仓库软删除 400 / GitLab 故障 502 / 未配置 owner token 400 / 成功后清空
+    概览缓存）；前端 `overview-inspirations.test.mjs` 新增 6 用例（按钮位于
+    编辑左侧源码断言 / 提交调用路径 / 渲染按钮顺序 / 点击提交并刷新列表 /
+    提交中禁用防重复 / 失败显示错误）。
+
+
 - **灵感 / CI/CD 页面可配置是否显示未启用项目（issue #142）**：
   需求「灵感页面和 ci\cd 页面显示是否显示未启用项目，增加通过设置去配置」。
   实现：

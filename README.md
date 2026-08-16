@@ -273,9 +273,10 @@ GET    /api/issues/{project_id}/labels      项目标记池（概览页右边栏
 PUT    /api/issues/{project_id}/{iid}/labels  更新 issue 标记（add/remove 一次提交加删标记；成功后清缓存并返回更新后标记列表，issue #108）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120）
 GET    /api/inspirations/overview      概览页灵感聚合：所有未软删除仓库 + 各自灵感（仓库按优先级排序，灵感按 updated_at 降序，issue #131）
-POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；仅存本地数据库，不提交 issue）
+POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；默认仅存本地数据库，issue #131）
 PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）
 DELETE /api/inspirations/{id}         删除灵感（issue #131）
+POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143）：灵感内容同时作为标题与描述，默认标签 feature + ui，不指定分配人；写操作必须配置 owner token，成功后清概览缓存
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 
