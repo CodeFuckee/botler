@@ -174,6 +174,14 @@
 .add-method:active,
 .remote-option:active { transform: scale(0.98); }
 .label-choice:active { opacity: 0.8; }
+/* 提示条 hover/active 反馈（响应：可关闭提示悬停加深阴影提示可点、
+   按下微缩放即时反馈——概览/任务/仓库/设置等全部页面统一） */
+.alert:hover { box-shadow: var(--shadow-pop); }
+.alert:active { transform: scale(0.99); }
+/* 任务详情页「思考过程」折叠条 hover 变色提示可展开（响应：可交互元素悬停可见反馈） */
+.event-thinking summary:hover { color: var(--primary); }
+/* 标签多选胶囊 hover 反馈（新增 issue 弹窗/右边栏标记编辑：悬停微降透明度） */
+.label-choice:hover { opacity: 0.85; }
 
 /* 帧级流畅（apple-design §11：只动 transform/opacity 合成属性，
    动画元素提示浏览器提升合成层，避免布局/绘制抖动） */
@@ -645,6 +653,10 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   margin-bottom: var(--space-3);
   cursor: pointer;
   border: 1px solid transparent;
+  /* apple-design 响应：hover/active 反馈平滑过渡 */
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 .alert-error { background: var(--err-weak); border-color: rgba(229, 72, 77, 0.35); color: var(--err); }
 .alert-ok { background: var(--ok-weak); border-color: rgba(23, 163, 74, 0.35); color: var(--ok); cursor: default; }
@@ -1500,6 +1512,8 @@ code {
   gap: var(--space-1);
   cursor: pointer;
   user-select: none;
+  /* apple-design 响应：hover/active 透明度反馈平滑过渡 */
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 .label-choice input[type='checkbox'] {
   accent-color: var(--primary, #428bca);

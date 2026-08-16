@@ -183,6 +183,28 @@ test('styles.css：可交互元素补齐 active 按下态（反馈活在按下�
     '应存在 .add-method:active / .remote-option:active 组合按下反馈规则')
 })
 
+test('styles.css：可关闭提示条 hover/active 反馈（全页面 alert 点击关闭）', () => {
+  // 基础 .alert 规则应含过渡（hover 反馈平滑，不生硬跳变）
+  const body = pickRule('.alert', 'transition: background')
+  assert.ok(body, '基础 .alert 应有背景/边框/阴影过渡')
+  assert.match(body, /transition:\s*background\s+var\(--dur-fast\)/,
+    '.alert 过渡应使用 --dur-fast')
+  // hover 阴影加深 + active 按下微缩放（反馈活在按下瞬间）
+  assert.ok(ruleBody('.alert:hover'), '应存在 .alert:hover 规则（悬停加深阴影）')
+  assert.ok(ruleBody('.alert:active'), '应存在 .alert:active 规则（按下微缩放）')
+})
+
+test('styles.css：任务详情页「思考过程」折叠条 summary hover 反馈', () => {
+  assert.ok(ruleBody('.event-thinking summary:hover'),
+    '应存在 .event-thinking summary:hover 规则（可展开摘要悬停变色）')
+})
+
+test('styles.css：标签多选胶囊 hover 反馈（新增 issue 弹窗/右边栏标记编辑）', () => {
+  const body = pickRule('.label-choice', 'transition: opacity')
+  assert.ok(body, '.label-choice 应有透明度过渡')
+  assert.ok(ruleBody('.label-choice:hover'), '应存在 .label-choice:hover 规则')
+})
+
 // ---- 4. 排版：光学尺寸 + 字号相关字距 + 数字对齐 ----
 
 test('styles.css：正文启用系统字体光学尺寸（font-optical-sizing）', () => {
