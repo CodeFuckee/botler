@@ -92,11 +92,14 @@ class GeminiNanoBananaProvider(ImageProviderPlugin):
             json=payload,
         )
         if resp.status_code >= 400:
-            # 带上实际请求地址，便于用户诊断 Base URL 路径段缺失
-            # （如官方域名少了 /v1beta）导致的 404 page not found
+            # 带上实际请求地址便于诊断；404 多为自定义 Base URL 只填域名、
+            # 缺少完整路径（自定义 Base URL 原样直用语义，issue #150）
+            hint = ("；若为 404 page not found：自定义 Base URL 将作为完整"
+                    "请求地址直接使用（不再拼接接口路径），请填写含完整"
+                    "路径的地址" if resp.status_code == 404 else "")
             raise ImageModelError(
                 f"Gemini 请求失败: HTTP {resp.status_code} "
-                f"{resp.text[:200]}（请求地址: {url}）")
+                f"{resp.text[:200]}（请求地址: {url}）{hint}")
         data = resp.json()
         try:
             parts_out = data["candidates"][0]["content"]["parts"]
@@ -168,11 +171,14 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
             }
             resp = client._http.post(url, headers=headers, files=files)
         if resp.status_code >= 400:
-            # 带上实际请求地址便于诊断；404（page not found）多为
-            # Base URL 缺 /v1 路径段或域名不对，给出针对性提示
-            hint = ("；若为 404 page not found，请检查 Base URL 是否完整"
-                    "（OpenAI 官方地址通常以 /v1 结尾，例如 "
-                    "https://api.openai.com/v1）" if resp.status_code == 404 else "")
+            # 带上实际请求地址便于诊断；404（page not found）多为自定义
+            # Base URL 只填域名、缺少完整路径（issue #150 语义下自定义
+            # Base URL 会原样作为请求地址），提示用户补全完整地址
+            hint = ("；若为 404 page not found：自定义 Base URL 将作为完整"
+                    "请求地址直接使用（不再拼接 /images/generations 等接口"
+                    "路径），请填写含完整路径的地址（如 "
+                    "https://grsai.dakka.com.cn/v1/draw/completions），"
+                    "不能只填域名" if resp.status_code == 404 else "")
             raise ImageModelError(
                 f"OpenAI 请求失败: HTTP {resp.status_code} {resp.text[:200]}"
                 f"（请求地址: {url}）{hint}")

@@ -25,6 +25,24 @@
     重复 `:generateContent`），修复后全部通过；`settings-image-models-card.test.mjs` 新增
     自定义 Base URL 直用提示断言。
 
+- **生图模型 404 错误提示误导网关式自定义 Base URL（issue #150 后续反馈）**：
+  用户反馈按 issue #150 配置 grsai 的 GPT Image 2 后测试仍报
+  `OpenAI 请求失败: HTTP 404 404 page not found（请求地址:
+  https://grsai.dakka.com.cn）`——经本地实测确认：裸域名
+  `https://grsai.dakka.com.cn` 返回 404 page not found，而完整地址
+  `https://grsai.dakka.com.cn/v1/draw/completions` 返回 HTTP 200
+  （`apikey is empty`），即保存的 Base URL 只填了域名，按「自定义
+  Base URL 原样直用」语义请求裸域名必然 404，修复代码本身行为正确。
+  改动：
+  - 后端 `plugins/models.py`：OpenAI 404 提示由「官方地址通常以 /v1 结尾」
+    改为明确「自定义 Base URL 将作为完整请求地址直接使用（不再拼接
+    /images/generations 等接口路径），请填写含完整路径的地址（如
+    …/v1/draw/completions），不能只填域名」；Gemini 404 同步补充 Base URL
+    检查提示（原仅展示请求地址）；
+  - **测试**：`test_image_models.py` 新增 OpenAI 自定义完整 URL 404 提示
+    断言与 Gemini 404 提示用例，改动前可复现失败（旧提示无「完整请求地址」
+    语义、Gemini 无提示），改动后全部通过。
+
 - **生图模型「测试」无提示、OpenAI 404 无法定位且成功不返回图片（issue
   #149）**：用户配置生图模型后点「测试」没有任何提示，接口返回
   `{"ok":false,"error":"OpenAI 请求失败: HTTP 404 404 page not found"}`。

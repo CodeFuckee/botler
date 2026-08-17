@@ -155,8 +155,21 @@ class TestGeminiClient:
         with pytest.raises(ImageModelError) as exc:
             client.generate("画一只猫")
         assert "请求地址" in str(exc.value)
-        assert str(exc.value).endswith(
-            "/models/gemini-3-pro-image:generateContent）")
+        # 404 时附加 Base URL 提示（issue #150 语义），请求地址仍完整展示
+        assert ("/models/gemini-3-pro-image:generateContent）"
+                in str(exc.value))
+
+    def test_error_404_includes_base_url_hint(self):
+        """404（自定义 Base URL 缺完整路径的 page not found）应附带
+        Base URL 检查提示（与 OpenAI 一致，issue #150 语义）。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, text="404 page not found")
+
+        client = self._client(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        assert "Base URL" in str(exc.value)
+        assert "完整请求地址" in str(exc.value)
 
 
 class TestOpenAIClient:
@@ -276,6 +289,29 @@ class TestOpenAIClient:
         assert captured["url"] in str(exc.value)
         # 404 应附带 Base URL 检查提示（缺 /v1 路径段常见）
         assert "Base URL" in str(exc.value)
+
+    def test_404_hint_explains_custom_url_verbatim(self):
+        """自定义 Base URL（含完整路径）404 时：请求地址原样直用，且
+        错误提示明确「自定义 Base URL 作为完整请求地址直接使用、不再
+        拼接接口路径」（issue #150 语义的用户可诊断提示）。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(404, text="404 page not found")
+
+        client = ImageModelClient(
+            name="GPT Image", provider="openai_gpt_image",
+            base_url="https://grsai.dakka.com.cn/v1/draw/completions",
+            api_key="sk-test", timeout=5)
+        client._http = httpx.Client(transport=httpx.MockTransport(handler))
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        # 请求地址 = 自定义完整 URL，原样直用（issue #150 核心语义）
+        assert captured["url"] == "https://grsai.dakka.com.cn/v1/draw/completions"
+        assert "完整请求地址" in str(exc.value)
+        assert "不再拼接" in str(exc.value)
+        assert "grsai.dakka.com.cn/v1/draw/completions" in str(exc.value)
 
     def test_missing_image_in_response_raises(self):
         """响应 data 为空时报错。"""
