@@ -81,6 +81,7 @@ def _repo_row_to_dict(row) -> dict:
         "url": row["url"],
         "local_path": row["local_path"],
         "remote_name": row["remote_name"],
+        "remote_username": row["remote_username"],
         "prompt_template": row["prompt_template"],
         "enabled": bool(row["enabled"]),
         "priority": row["priority"],
@@ -111,6 +112,7 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
         prompt_template=repo_dict["prompt_template"] or None,
         local_path=repo_dict.get("local_path"),
         remote_name=repo_dict.get("remote_name"),
+        remote_username=repo_dict.get("remote_username"),
         priority=repo_dict["priority"],
     ))
     config.update_repos([config.repo_to_config_dict(r) for r in kept])
@@ -231,10 +233,17 @@ def add_repo(request: Request, body: RepoCreate):
         else:
             raise HTTPException(502, f"注册 webhook 失败: {e}")
 
+    # issue #153：仓库用户——remote url userinfo 的用户名（如 agent），
+    # 读取 remote url 获取后随仓库落库，设置页展示、灵感提交 issue 默认分配人。
+    # remote_url 是识别前的原始 URL（可能内嵌 user:token@），用其解析用户名。
+    from ..git_remote import parse_remote_url
+    remote_username = parse_remote_url(remote_url)["username"]
+
     repo_id = c.db.upsert_repo(
         project_id=project_id, name=name, url=url,
         prompt_template=body.prompt_template, enabled=body.enabled,
         local_path=local_path, remote_name=remote_name,
+        remote_username=remote_username,
         priority=body.priority if body.priority is not None else DEFAULT_PRIORITY)
     _sync_repo_to_config(request.app, _repo_row_to_dict(c.db.get_repo(repo_id)))
 
@@ -255,6 +264,11 @@ def update_repo(request: Request, repo_id: int, body: RepoUpdate):
     # 不覆盖 DB 中的真实凭据（与 sso client_secret 掩码模式一致）
     if fields.get("url") and "*" in fields["url"]:
         fields.pop("url")
+    # issue #153：URL 变更（未脱敏）时按新 URL 重新推导仓库用户，与
+    # 添加仓库行为一致；未变更 URL 时保留既有 remote_username。
+    if fields.get("url") and "remote_username" not in fields:
+        from ..git_remote import parse_remote_url
+        fields["remote_username"] = parse_remote_url(fields["url"])["username"]
     if fields:
         c.db.update_repo(repo_id, **fields)
     updated = _repo_row_to_dict(c.db.get_repo(repo_id))
@@ -313,6 +327,36 @@ def test_repo(request: Request, repo_id: int):
     except GitLabError as e:
         result["webhook"] = {"ok": False, "error": str(e)}
     return result
+
+
+@router.post("/{repo_id}/remote-user")
+def read_repo_remote_user(request: Request, repo_id: int):
+    """读取仓库 remote url 获取仓库用户（issue #153）。
+
+    仓库用户 = remote URL userinfo 里的用户名（https://user:token@host/...），
+    是用户在 git 配置里填写的账号（如 agent）。读取顺序：local_path 的
+    git remote -v → 回退 workspace/<name> 克隆目录 → 最后回退仓库存储的
+    url 字符串 userinfo（读取逻辑见 git_remote.read_repo_remote_username）。
+
+    读取结果写回仓库 remote_username（含 None：清除旧值）并同步
+    config.yaml，作为灵感一键提交 issue 时的默认分配人。读取是尽力而为：
+    目录不可读 / 不是 git 仓库 / 无该 remote / URL 无凭据 → 返回
+    remote_username 为 null，不报错（用户可在设置页看到说明）。
+    """
+    c = ctx_of(request)
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    from ..git_remote import read_repo_remote_username
+
+    username = read_repo_remote_username(row)
+    c.db.update_repo(repo_id, remote_username=username)
+    updated = _repo_row_to_dict(c.db.get_repo(repo_id))
+    # 仅当仓库仍存在于 config 时同步（避免把已删除的仓库写回去）
+    if any(r.project_id == updated["gitlab_project_id"] for r in c.config.get().repos):
+        _sync_repo_to_config(request.app, updated)
+    logger.info("仓库 %s 读取 remote url 仓库用户: %s", row["name"], username or "（无）")
+    return {"remote_username": username}
 
 
 @router.post("/{repo_id}/reconcile")

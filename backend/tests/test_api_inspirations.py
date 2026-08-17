@@ -72,10 +72,13 @@ def client(api_app):
     return TestClient(app), db
 
 
-def _add_repo(db, project_id, name, priority=100, enabled=True):
-    """便捷：插入一个仓库并返回本地 id。"""
+def _add_repo(db, project_id, name, priority=100, enabled=True,
+             remote_username=None):
+    """便捷：插入一个仓库并返回本地 id。remote_username 为仓库用户
+    （issue #153：remote url userinfo 用户名）。"""
     return db.upsert_repo(project_id, name, f"https://gitlab.example.com/{name}.git",
-                          enabled=enabled, priority=priority)
+                          enabled=enabled, priority=priority,
+                          remote_username=remote_username)
 
 
 class TestOverview:
@@ -317,6 +320,10 @@ class StubGitLab:
         self.create_result: dict | None = None
         self.issues_by_project: dict[int, list[dict]] = {}
         self.calls: list[tuple[int, dict]] = []
+        # issue #153：仓库用户 → 分配人解析桩
+        self.members_by_project: dict[int, list[dict]] = {}
+        self.users_by_username: dict[str, int] = {}
+        self.fail_members_projects: set[int] = set()
 
     def create_issue(self, project_id, title, description=None,
                      assignee_id=None, labels=None):
@@ -349,6 +356,17 @@ class StubGitLab:
     def list_project_labels(self, project_id):
         """项目标签桩：概览标签色映射查询，返回空列表即可。"""
         return []
+
+    def list_project_members(self, project_id):
+        """项目成员桩（issue #153）：按 project_id 配置返回，缺省空列表；
+        fail_members_projects 中的项目抛 GitLabError（模拟成员接口故障）。"""
+        if project_id in self.fail_members_projects:
+            raise GitLabError("模拟成员接口故障")
+        return list(self.members_by_project.get(project_id, []))
+
+    def get_user_id_by_username(self, username):
+        """按用户名查用户 id 桩（issue #153）：缺省查不到返回 None。"""
+        return self.users_by_username.get(username)
 
 
 @pytest.fixture
@@ -475,3 +493,110 @@ class TestAddIssueFromInspiration:
 
         tc.get("/api/issues/overview")
         assert len(stub.calls) == 2  # 缓存已失效，重新拉取
+
+# ---- issue #153：灵感提交 issue 分配人 = 仓库用户（remote url 用户名） ----
+
+class TestAddIssueFromInspirationAssignee:
+    """POST /api/inspirations/{id}/add-issue 的分配人行为（issue #153）。
+
+    仓库设置页读取 remote url 得到的仓库用户（如 agent）作为灵感提交
+    issue 时的默认分配人：后端按用户名在项目成员里解析为 GitLab 用户
+    id 传入 create_issue；未配置 / 解析不到 / 成员接口故障时保持原行为
+    （不指定分配人），不阻塞 issue 创建。
+    """
+
+    def test_remote_username_sets_assignee(self, edit_env):
+        """仓库配置了 remote_username：按项目成员解析为用户 id 传入 create_issue。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username="agent")
+        stub.members_by_project = {42: [
+            {"user_id": 7, "username": "agent", "name": "Agent"},
+            {"user_id": 8, "username": "other", "name": "Other"},
+        ]}
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] == 7
+        assert stub.create_calls[0][1]["labels"] == ["feature", "ui"]
+
+    def test_member_without_user_id_resolved_via_users(self, edit_env):
+        """边界：成员项缺 user_id（GitLab 19 实测）时按用户名查 /users 补齐。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username="agent")
+        stub.members_by_project = {42: [
+            {"user_id": None, "username": "agent", "name": "Agent"},
+        ]}
+        stub.users_by_username = {"agent": 99}
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] == 99
+
+    def test_username_not_in_members_falls_back_to_users(self, edit_env):
+        """边界：仓库用户不在项目成员列表（成员接口权限范围外）→ 查 /users 兜底。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username="agent")
+        stub.members_by_project = {42: [
+            {"user_id": 8, "username": "other", "name": "Other"},
+        ]}
+        stub.users_by_username = {"agent": 11}
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] == 11
+
+    def test_unresolvable_username_skips_assignee(self, edit_env):
+        """边界：仓库用户查不到（已删除/非成员）→ 不指定分配人，仍创建成功。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username="ghost")
+        stub.members_by_project = {42: []}
+        stub.users_by_username = {}
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] is None
+
+    def test_member_list_failure_degrades_to_no_assignee(self, edit_env):
+        """边界：成员接口故障（GitLab 异常）→ 降级不指定分配人，不阻塞创建。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username="agent")
+        stub.fail_members_projects = {42}
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] is None
+
+    def test_without_remote_username_no_assignee(self, edit_env):
+        """边界：仓库未配置仓库用户 → 不指定分配人（保持 issue #143 原行为）。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username=None)
+        stub.members_by_project = {42: [
+            {"user_id": 7, "username": "agent", "name": "Agent"},
+        ]}
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] is None
+
+    def test_empty_username_ignored(self, edit_env):
+        """边界：remote_username 为空白串 → 不指定分配人。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username="   ")
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] is None

@@ -255,6 +255,7 @@ PUT    /api/repos/{id}                更新仓库（名称/启用/优先级/模
 DELETE /api/repos/{id}                删除仓库
 POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook）
 POST   /api/repos/{id}/reconcile     立即扫描该仓库，把「assignee 是 bot 但任务表无活跃记录」的 open issues 补入队列（仓库页与概览页「对账」按钮，issue #17/#134）
+POST   /api/repos/{id}/remote-user   读取仓库 remote url 获取仓库用户（remote url userinfo 用户名，如 https://user:token@host/... 的 user；读取顺序：local_path 的 git remote → workspace 克隆 → 存储 url；结果落库并作为灵感「添加 Issue」的默认分配人，issue #153）
 GET/PUT /api/repos/{id}/template      仓库模版
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）
 GET    /api/plugins                    插件列表（按分类分组，含内置/外部来源与供应商预设；插件管理页数据源，issue #145）
@@ -292,7 +293,7 @@ GET    /api/inspirations/overview      概览页灵感聚合：所有未软删�
 POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；默认仅存本地数据库，issue #131）
 PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）
 DELETE /api/inspirations/{id}         删除灵感（issue #131）
-POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143）：灵感内容同时作为标题与描述，默认标签 feature + ui，不指定分配人；写操作必须配置 owner token，成功后清概览缓存
+POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143/#153）：灵感内容同时作为标题与描述，默认标签 feature + ui，分配人 = 仓库用户（仓库设置页读取 remote url 得到的用户名，按项目成员解析为 GitLab 用户 id；未配置/解析失败则不指定分配人）；写操作必须配置 owner token，成功后清概览缓存
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 

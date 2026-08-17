@@ -8,6 +8,12 @@ import { api } from '../api.js'
  * 调度器优先派发优先级高（数字小）的仓库；相同优先级按任务提交时间
  * 排序。URL / 本地路径不在编辑范围（涉及 webhook 重注册与 project_id
  * 变更，风险较高，按用户确认的 Q1 方案排除）。
+ *
+ * issue #153：新增「仓库用户」展示——从该仓库 remote URL 读取的用户名
+ * （如 https://user:token@host/... 的 user），提供「重新读取 remote URL」
+ * 按钮调 POST /api/repos/{id}/remote-user 重新读取并落库；该用户作为
+ * 灵感组件「添加 Issue」时的默认分配人（后端在提交时按用户名解析）。
+ * 仓库用户只读展示（来源是 remote url，不做手填，防止填错账号）。
  */
 export default function RepoEditModal({ repo, onClose, onSaved }) {
   const [name, setName] = useState(repo.name || '')
@@ -15,6 +21,24 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
   const [priority, setPriority] = useState(String(repo.priority ?? 100))
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // issue #153：仓库用户（remote url 用户名）与「重新读取 remote」状态
+  const [remoteUsername, setRemoteUsername] = useState(repo.remote_username || '')
+  const [readingRemote, setReadingRemote] = useState(false)
+
+  // issue #153：调后端重新读取仓库 remote url 的用户名并落库
+  const readRemoteUser = async () => {
+    if (readingRemote) return
+    setReadingRemote(true)
+    setError('')
+    try {
+      const res = await api.post(`/api/repos/${repo.id}/remote-user`)
+      setRemoteUsername(res.remote_username || '')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setReadingRemote(false)
+    }
+  }
 
   const save = async () => {
     setError('')
@@ -74,6 +98,22 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
         <div className="muted small">
           1~999 之间的整数，数字越小越优先；相同优先级按任务提交时间排序
         </div>
+
+        <label className="edit-field">
+          仓库用户
+          <div className="remote-user-row">
+            <code className={remoteUsername ? '' : 'remote-user-empty'}>
+              {remoteUsername || '未读取到（remote URL 无用户名）'}
+            </code>
+            <button type="button" className="btn" disabled={readingRemote} onClick={readRemoteUser}>
+              {readingRemote ? '读取中…' : '重新读取 remote URL'}
+            </button>
+          </div>
+          <span className="muted small">
+            从该仓库 remote URL 的用户名（如 https://user:token@host/... 的 user）读取；
+            灵感组件「添加 Issue」时将该用户设为默认分配人
+          </span>
+        </label>
 
         <label className="edit-checkbox">
           <input

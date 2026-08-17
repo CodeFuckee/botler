@@ -131,10 +131,50 @@ def test_migration_idempotent(tmp_path):
 
 
 def test_user_version_marker(tmp_path):
-    """迁移完成后 user_version 应为 9（v2 CST 修正 + v3 仓库优先级列 + v4 deleted_at
+    """迁移完成后 user_version 应为 10（v2 CST 修正 + v3 仓库优先级列 + v4 deleted_at
     + v5 dsh_session_id + v6 issue_labels/issue_updated_at + v7 engine
-    + v8 inspirations 灵感表 issue #131 + v9 dsh_transcript issue #146）。"""
+    + v8 inspirations 灵感表 issue #131 + v9 dsh_transcript issue #146
+    + v10 repos.remote_username 仓库用户列 issue #153）。"""
     db = Database(str(tmp_path / "ver.db"))
     with db._conn() as conn:
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 9
+    assert ver == 10
+
+
+def test_legacy_db_gets_remote_username_column(tmp_path):
+    """旧库（v9 及更早）启动迁移后 repos 表补 remote_username 列（issue #153）。
+
+    手工构造 v9 时代（repos 表无 remote_username 列）的历史库，设置
+    user_version=9，重新实例化 Database 触发 v10 迁移补列；补列后新列
+    可正常写入读取。
+    """
+    path = str(tmp_path / "legacy-remote-user.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """CREATE TABLE repos (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             gitlab_project_id INTEGER NOT NULL UNIQUE,
+             name TEXT NOT NULL,
+             url TEXT NOT NULL,
+             local_path TEXT,
+             remote_name TEXT,
+             prompt_template TEXT,
+             enabled INTEGER DEFAULT 1,
+             priority INTEGER DEFAULT 100,
+             deleted_at TEXT,
+             created_at TEXT DEFAULT (datetime('now'))
+           );
+           PRAGMA user_version = 9;""")
+    conn.close()
+
+    db = Database(path)
+    with db._conn() as conn2:
+        cols = {r["name"] for r in conn2.execute("PRAGMA table_info(repos)")}
+        assert "remote_username" in cols
+        ver = conn2.execute("PRAGMA user_version").fetchone()[0]
+    assert ver == 10
+    # 新列可正常写入读取
+    repo_id = db.upsert_repo(
+        42, "demo", "https://gitlab.example.com/group/demo.git",
+        remote_username="agent")
+    assert db.get_repo(repo_id)["remote_username"] == "agent"

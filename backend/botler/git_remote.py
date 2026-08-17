@@ -193,3 +193,52 @@ def build_client_from_url(url: str | None, verify_ssl: bool = True,
         return None
     return GitLabClient(f"{scheme}://{host}", token,
                         verify_ssl=verify_ssl, webhook_base_url=webhook_base_url)
+
+
+def read_remote_username(workdir: str, remote_name: str = "origin") -> str | None:
+    """在本地目录读取 git remote，返回指定 remote URL 内嵌的用户名。
+
+    issue #153：仓库设置页「通过读取 remote url 获取仓库用户」——仓库
+    用户即 remote URL userinfo 里的用户名（https://user:token@host/...），
+    它是用户在 git 配置里填写的账号（如 agent），灵感一键提交 issue 时
+    作为默认分配人。
+
+    目录不存在 / 不是 git 仓库 / 没有该名称的 remote / URL 无凭据时
+    返回 None（读取是尽力而为，调用方自行降级为不指定分配人，与
+    build_repo_client 失败返回 None 的语义一致）。
+    """
+    try:
+        remotes = list_local_remotes(workdir)
+    except NoGitRemoteError:
+        return None
+    match = next((r for r in remotes if r["name"] == remote_name), None)
+    if match is None:
+        return None
+    return parse_remote_url(match["url"])["username"]
+
+
+def read_repo_remote_username(row) -> str | None:
+    """按仓库行读取 remote URL 用户名（issue #153）。
+
+    仓库用户 = remote URL userinfo 里的用户名（https://user:token@host/...），
+    是用户在 git 配置里填写的账号（如 agent）。读取顺序：
+    1. local_path（本地文件夹方式添加的仓库）：服务端运行 git remote -v；
+    2. 回退 workspace/<name> 克隆目录（URL 方式添加、executor 已 clone，
+       origin 保留用户配置的 remote URL）；
+    3. 最后回退仓库存储的 url 字符串 userinfo（URL 方式添加且未 clone 时，
+       存储的是识别后的干净 URL，通常无凭据 → None）。
+    读取是尽力而为：目录不可读 / 不是 git 仓库 / 无该 remote / URL 无
+    凭据均返回 None（调用方降级为不指定分配人）。
+    """
+    d = dict(row)  # sqlite3.Row / dict 统一按 dict 访问
+    remote_name = d.get("remote_name") or "origin"
+    local_path = d.get("local_path")
+    if local_path:
+        username = read_remote_username(str(local_path), remote_name)
+        if username:
+            return username
+    workspace_dir = _WORKSPACE_ROOT / str(d["name"])
+    username = read_remote_username(str(workspace_dir), remote_name)
+    if username:
+        return username
+    return parse_remote_url(d.get("url"))["username"]

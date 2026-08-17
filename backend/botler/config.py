@@ -82,6 +82,7 @@ class RepoConfig:
     prompt_template: str | None = None
     local_path: str | None = None
     remote_name: str | None = None
+    remote_username: str | None = None  # 仓库用户（issue #153）：remote url userinfo 用户名
     priority: int = 100  # 调度优先级（issue #51）：1~999，数字越小越优先
 
 
@@ -372,6 +373,7 @@ class ConfigManager:
                 prompt_template=r.get("prompt_template"),
                 local_path=r.get("local_path"),
                 remote_name=r.get("remote_name"),
+                remote_username=r.get("remote_username"),
                 priority=int(r.get("priority", 100)),
             ))
 
@@ -747,4 +749,6 @@ class ConfigManager:
             d["local_path"] = repo.local_path
         if repo.remote_name:
             d["remote_name"] = repo.remote_name
+        if repo.remote_username:
+            d["remote_username"] = repo.remote_username
         return d

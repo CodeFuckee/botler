@@ -464,8 +464,11 @@ class TestMigrateInspirations:
             tables = {r["name"] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
+            # issue #153：v10 迁移补 remote_username 列（仓库用户）
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
-        assert ver == 9, f"user_version 应推进到 9（v9 迁移链），实际 {ver}"
+        assert ver == 10, f"user_version 应推进到 10（v10 迁移链），实际 {ver}"
+        assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
         """新库建表语句应直接含 inspirations 表（无需迁移）。"""

@@ -1261,6 +1261,25 @@ code {
   gap: var(--space-2);
   font-size: 14px;
 }
+/* issue #153：仓库设置弹窗「仓库用户」行——用户名 + 重新读取按钮横排 */
+.repo-edit .remote-user-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.repo-edit .remote-user-row code {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-inset, rgba(128, 128, 128, 0.06));
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.repo-edit .remote-user-row code.remote-user-empty {
+  color: var(--muted);
+  font-style: italic;
+}
 /* 失败详细原因弹窗（任务列表「详情」按钮） */
 /* 注意（issue #33）：.btn-mini 不设 margin-left——该 class 同时用于操作列「执行」链接，
    而「执行」是单元格第一个内容，左外边距会使其与表头文字左边缘不对齐；

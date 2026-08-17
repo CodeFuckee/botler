@@ -772,7 +772,7 @@ export default function Overview() {
                               </span>
                               <span className="inspiration-actions">
                                 <button type="button" className="inspiration-action-btn inspiration-add-issue-btn"
-                                        title="将灵感内容作为标题与描述，通过 GitLab API 创建 issue（默认标签 feature、ui）"
+                                        title="将灵感内容作为标题与描述，通过 GitLab API 创建 issue（默认标签 feature、ui；分配人为该仓库 remote url 用户，可在仓库设置页查看/重新读取）"
                                         onClick={() => addIssueFromInspiration(ins)}
                                         disabled={!!addingIssueInspIds[ins.id]}>
                                   {addingIssueInspIds[ins.id] ? '⏳ 提交中…' : '📌 添加 Issue'}

@@ -42,6 +42,39 @@
     字段 / 保存段 / 测试按钮上传流程 / 描述展示 / 预设清单 / logo 复用）。修复前新用例
     全部可复现失败（模块/组件不存在），实现后全部通过。
 
+### Added
+
+- **仓库设置页新增「仓库用户」：读取 remote url 获取仓库用户，灵感组件「添加 Issue」时将其设为默认分配人（issue #153）**：
+  仓库设置弹窗新增「仓库用户」展示与「重新读取 remote URL」按钮——仓库用户即该仓库
+  remote URL userinfo 里的用户名（如 `https://user:token@host/...` 的 `user`，用户在
+  git 配置里填写的账号）；添加/更新仓库时自动从原始 remote URL 捕获。灵感组件点击
+  「添加 Issue」一键提交 issue 时，后端把仓库用户按项目成员解析为 GitLab 用户 id 设为
+  issue 分配人（未配置 / 解析失败则保持原行为不指定分配人，不阻塞创建）。改动：
+  - 后端 `git_remote.py`：新增 `read_remote_username()`（本地目录 `git remote -v` → URL
+    userinfo 用户名，读取尽力而为失败返回 None）与 `read_repo_remote_username()`（仓库
+    行读取三级回退：local_path 的 git remote → workspace 克隆目录 → 存储 url）；
+  - 后端 `database.py`：repos 表新增 `remote_username` 列 + v10 迁移（旧库启动自动补列，
+    与既有轻量迁移链一致）；`upsert_repo` / `update_repo` 支持该列；
+  - 后端 `config.py` / `main.py`：`RepoConfig` 新增 `remote_username`，config.yaml ↔ db
+    双向同步（config 仍是唯一事实来源）；
+  - 后端 `api/repos.py`：`_repo_row_to_dict` 返回 `remote_username`；添加仓库时按原始
+    remote URL（识别前，可能内嵌凭据）自动捕获用户名；更新 url 时重新推导；新增
+    `POST /api/repos/{id}/remote-user`——重新读取并落库（含 None 清除旧值）；
+  - 后端 `api/inspirations.py`：`add_issue_from_inspiration` 分配人 = 仓库用户——按
+    项目成员（members/all）匹配用户名解析用户 id，成员项缺 user_id 时按用户名查 /users
+    补齐（与添加 issue 弹窗同源），成员接口故障/查不到时降级不指定分配人并记日志；
+  - 前端 `RepoEditModal.jsx`：设置弹窗新增「仓库用户」字段（只读展示 + 「重新读取 remote
+    URL」按钮调新增接口，读取中禁用防重复，失败展示错误），`styles.css` 新增
+    `remote-user-row` 样式；`Overview.jsx` 灵感「添加 Issue」按钮提示补充分配人说明；
+  - **测试**：`test_api_repos.py` 新增 `TestRemoteUser` 8 用例（local_path / url 读取并
+    落库、无凭据返回 null 并清除、local_path 失效回退 url、添加/更新自动捕获、列表返回、
+    404）；`test_api_inspirations.py` 新增 `TestAddIssueFromInspirationAssignee` 7 用例
+    （成员解析分配、缺 user_id 按用户名补齐、非成员兜底 /users、查不到降级、成员接口
+    故障降级、未配置/空白不指定）；`test_database_migrate.py` /
+    `test_database_legacy_cst.py` 更新迁移版本断言（v9 → v10）并新增旧库补列用例；
+    `repo-edit-remote-user.test.mjs`（新）6 用例（源码断言 + 展示/占位/重新读取/失败
+    提示）。修复前新用例全部可复现失败，实现后全部通过。
+
 ### Fixed
 
 - **生图模型测试：OpenAI 接口返回 SSE 流（text/event-stream）时按事件解析并下载生成图片，不再报「不是有效 JSON」（issue #151 用户反馈）**：

@@ -584,3 +584,113 @@ class TestAddRepoGlobalToken401Fallback:
             "local_path": str(repo_dir), "remote_name": "origin"})
         assert resp.status_code == 201, resp.text
         assert resp.json()["gitlab_project_id"] == 42
+
+
+class TestRemoteUser:
+    """POST /api/repos/{id}/remote-user（issue #153）：读取 remote url 获取仓库用户。
+
+    仓库用户 = remote URL userinfo 里的用户名（https://user:token@host/...），
+    是用户在 git 配置里填写的账号（如 agent）；灵感一键提交 issue 时作为
+    默认分配人。读取顺序：local_path 的 git remote -v → workspace 克隆 →
+    仓库存储 url 的 userinfo；读取结果落库并随 /api/repos 返回。
+    """
+
+    def test_local_path_repo_reads_and_persists(self, client, tmp_path):
+        """local_path 仓库：从本地 git remote -v 的 URL userinfo 读到用户名并落库。"""
+        tc, stub, tmp_path = client
+        repo_dir = tmp_path / "repo"
+        _init_repo_with_remotes(repo_dir, {
+            "origin": "https://agent:glpat-x@gitlab.example.com/group/project.git",
+        })
+        db = Database(str(tmp_path / "test.db"))
+        repo_id = db.upsert_repo(
+            project_id=42, name="demo", url="https://gitlab.example.com/group/project.git",
+            local_path=str(repo_dir), remote_name="origin")
+        resp = tc.post(f"/api/repos/{repo_id}/remote-user")
+        assert resp.status_code == 200
+        assert resp.json()["remote_username"] == "agent"
+        assert db.get_repo(repo_id)["remote_username"] == "agent"
+
+    def test_url_repo_reads_from_stored_url_userinfo(self, client, tmp_path):
+        """URL 方式仓库（无 local_path 克隆）：从存储的 url userinfo 读到用户名。"""
+        tc, stub, tmp_path = client
+        db = Database(str(tmp_path / "test.db"))
+        repo_id = db.upsert_repo(
+            project_id=42, name="demo",
+            url="https://bob:glpat-x@gitlab.example.com/group/project.git")
+        resp = tc.post(f"/api/repos/{repo_id}/remote-user")
+        assert resp.status_code == 200
+        assert resp.json()["remote_username"] == "bob"
+        assert db.get_repo(repo_id)["remote_username"] == "bob"
+
+    def test_clean_url_returns_null_and_clears(self, client, tmp_path):
+        """URL 无凭据：返回 null 并清除旧值（幂等，不报错）。"""
+        tc, stub, tmp_path = client
+        db = Database(str(tmp_path / "test.db"))
+        repo_id = db.upsert_repo(
+            project_id=42, name="demo",
+            url="https://gitlab.example.com/group/project.git",
+            remote_username="stale")
+        resp = tc.post(f"/api/repos/{repo_id}/remote-user")
+        assert resp.status_code == 200
+        assert resp.json()["remote_username"] is None
+        assert db.get_repo(repo_id)["remote_username"] is None
+
+    def test_local_path_broken_falls_back_to_url(self, client, tmp_path):
+        """local_path 不再是 git 仓库/目录不存在：尽力回退到存储 url 的 userinfo。"""
+        tc, stub, tmp_path = client
+        db = Database(str(tmp_path / "test.db"))
+        repo_id = db.upsert_repo(
+            project_id=42, name="remote-user-test",
+            url="https://carol:glpat-x@gitlab.example.com/group/project.git",
+            local_path=str(tmp_path / "nope"))
+        resp = tc.post(f"/api/repos/{repo_id}/remote-user")
+        assert resp.status_code == 200
+        assert resp.json()["remote_username"] == "carol"
+
+    def test_repo_not_found(self, client):
+        tc, stub, tmp_path = client
+        resp = tc.post("/api/repos/999/remote-user")
+        assert resp.status_code == 404
+
+    def test_list_repos_includes_remote_username(self, client, tmp_path):
+        """/api/repos 列表返回 remote_username（前端设置弹窗展示）。"""
+        tc, stub, tmp_path = client
+        db = Database(str(tmp_path / "test.db"))
+        db.upsert_repo(project_id=42, name="demo",
+                       url="https://gitlab.example.com/group/project.git",
+                       remote_username="agent")
+        resp = tc.get("/api/repos")
+        assert resp.status_code == 200
+        row = next(r for r in resp.json()["repos"] if r["name"] == "demo")
+        assert row["remote_username"] == "agent"
+
+    def test_add_repo_captures_remote_username(self, client, monkeypatch, tmp_path):
+        """添加仓库时自动从原始 remote url 捕获仓库用户（local_path 带凭据）。"""
+        tc, stub, tmp_path = client
+        repo_dir = tmp_path / "repo"
+        _init_repo_with_remotes(repo_dir, {
+            "origin": "https://agent:glpat-add@gitlab.example.com/group/project.git",
+        })
+        monkeypatch.setattr(
+            GitLabClient, "register_webhook",
+            lambda self, project_id, secret: {"id": 1})
+        resp = tc.post("/api/repos", json={
+            "local_path": str(repo_dir), "remote_name": "origin", "name": "demo"})
+        assert resp.status_code == 201
+        assert resp.json()["remote_username"] == "agent"
+        db = Database(str(tmp_path / "test.db"))
+        assert db.get_repo_by_project_id(42)["remote_username"] == "agent"
+
+    def test_update_repo_url_recomputes_remote_username(self, client, tmp_path):
+        """更新仓库 url（带凭据）：remote_username 随新 url 重新推导。"""
+        tc, stub, tmp_path = client
+        db = Database(str(tmp_path / "test.db"))
+        repo_id = db.upsert_repo(
+            project_id=42, name="demo",
+            url="https://old-user:glpat-a@gitlab.example.com/group/project.git")
+        resp = tc.put(f"/api/repos/{repo_id}", json={
+            "url": "https://new-user:glpat-b@gitlab.example.com/group/project.git"})
+        assert resp.status_code == 200
+        assert resp.json()["remote_username"] == "new-user"
+        assert db.get_repo(repo_id)["remote_username"] == "new-user"

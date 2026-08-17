@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS repos (
   url TEXT NOT NULL,
   local_path TEXT,
   remote_name TEXT,
+  remote_username TEXT,
   prompt_template TEXT,
   enabled INTEGER DEFAULT 1,
   priority INTEGER DEFAULT 100,
@@ -271,6 +272,13 @@ class Database:
             if "dsh_transcript" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN dsh_transcript TEXT")
             conn.execute("PRAGMA user_version = 9")
+        if ver < 10:
+            # issue #153：仓库用户（remote url userinfo 用户名）——仓库设置
+            # 页读取 remote url 获取，灵感一键提交 issue 时作为默认分配人。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+            if "remote_username" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN remote_username TEXT")
+            conn.execute("PRAGMA user_version = 10")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -387,20 +395,22 @@ class Database:
                     prompt_template: str | None = None,
                     enabled: bool = True, local_path: str | None = None,
                     remote_name: str | None = None,
+                    remote_username: str | None = None,
                     priority: int = DEFAULT_PRIORITY) -> int:
         with self._conn() as conn:
             conn.execute(
-                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, priority)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, remote_username, priority)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(gitlab_project_id) DO UPDATE SET
                      name=excluded.name, url=excluded.url,
                      prompt_template=excluded.prompt_template,
                      enabled=excluded.enabled, local_path=excluded.local_path,
                      remote_name=excluded.remote_name,
+                     remote_username=excluded.remote_username,
                      priority=excluded.priority,
                      deleted_at=NULL""",
                 (project_id, name, url, prompt_template, 1 if enabled else 0,
-                 local_path, remote_name, priority),
+                 local_path, remote_name, remote_username, priority),
             )
             # 冲突更新路径 lastrowid 不可靠（issue #62：重新添加已删除仓库），
             # 按唯一键 project_id 反查
@@ -447,7 +457,7 @@ class Database:
                    WHERE id=?""", (repo_id,))
 
     def update_repo(self, repo_id: int, **fields) -> None:
-        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "priority"}
+        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "priority"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return

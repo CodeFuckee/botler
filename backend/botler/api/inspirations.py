@@ -14,9 +14,11 @@ GitLab issue——灵感内容作为 issue 标题与描述、默认标签 featur
 - POST   /api/inspirations：创建灵感（repo_id + content 必填）。
 - PUT    /api/inspirations/{id}：更新灵感内容（刷新 updated_at）。
 - DELETE /api/inspirations/{id}：删除灵感。
-- POST   /api/inspirations/{id}/add-issue（issue #143）：将灵感一键
-  提交为 GitLab issue——灵感内容同时作为标题与描述，默认标签
-  feature + ui，不指定分配人；走 owner token（复用 issues 模块的
+- POST   /api/inspirations/{id}/add-issue（issue #143 / #153）：将灵感
+  一键提交为 GitLab issue——灵感内容同时作为标题与描述，默认标签
+  feature + ui，分配人 = 仓库用户（issue #153：仓库设置页读取 remote
+  url 得到的 userinfo 用户名，解析为 GitLab 用户 id；未配置/解析失败
+  则不指定分配人）；走 owner token（复用 issues 模块的
   _issue_edit_call，绝不回退 bot token），创建成功后清空概览缓存。
 
 校验：repo_id 必须指向存在且未软删除的仓库（400）；content 去除首尾
@@ -76,6 +78,31 @@ def _require_repo(c, repo_id: int):
     if repo is None or repo["deleted_at"] is not None:
         raise HTTPException(400, f"仓库不存在或已删除（id={repo_id}）")
     return repo
+
+
+def _resolve_repo_user_id(c, repo, username: str) -> int | None:
+    """把仓库用户（remote url 用户名）解析为 GitLab 用户 id（issue #153）。
+
+    灵感一键提交 issue 时分配人 = 仓库用户。与添加 issue 弹窗的成员
+    解析同一数据源：先在项目成员（members/all）里按 username 匹配
+    （创建 issue 的 assignee 必须是项目成员）；成员项缺 user_id
+    （GitLab 19 实测）时按 username 查 /users 补齐。项目成员里找不到
+    时兜底查 /users（同名全局用户，成员接口可能因权限范围未返回）。
+
+    用户不存在/不是项目成员 → 返回 None（调用方不指定分配人）；
+    API/网络故障抛异常，由调用方捕获降级（不阻塞 issue 创建）。
+    """
+    from .issues import _issue_create_client
+
+    client = _issue_create_client(c, repo)
+    for m in client.list_project_members(repo["gitlab_project_id"]) or []:
+        if not isinstance(m, dict) or m.get("username") != username:
+            continue
+        uid = m.get("user_id")
+        if uid is None:
+            uid = client.get_user_id_by_username(username)
+        return uid if uid is not None else None
+    return client.get_user_id_by_username(username)
 
 
 def _row_to_dict(row) -> dict:
@@ -182,12 +209,29 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
     content = insp["content"].strip()
     if not content:
         raise HTTPException(400, "灵感内容不能为空")
+    # issue #153：分配人 = 仓库用户（仓库设置页读取 remote url 得到的
+    # userinfo 用户名）。解析为 GitLab 用户 id 传入 create_issue；未配置
+    # 仓库用户 / 解析失败（用户不存在、不是成员、API 故障）时保持原
+    # 行为（不指定分配人），不阻塞 issue 创建——用户可在仓库设置页
+    # 「重新读取 remote」后重试。
+    assignee_id = None
+    username = (repo["remote_username"] or "").strip()
+    if username:
+        try:
+            assignee_id = _resolve_repo_user_id(c, repo, username)
+        except GitLabError as e:
+            logger.warning("灵感提交 issue：解析仓库用户 %s 失败，跳过分配人: %s",
+                           username, e)
+        except httpx.HTTPError as e:
+            logger.warning("灵感提交 issue：解析仓库用户 %s 网络错误，跳过分配人: %s",
+                           username, str(e)[:200])
     try:
         issue = _issue_edit_call(
             c, repo,
             lambda cl: cl.create_issue(
                 repo["gitlab_project_id"], content,
                 description=content,
+                assignee_id=assignee_id,
                 labels=list(INSPIRATION_ISSUE_LABELS)))
     except GitLabError as e:
         raise HTTPException(502, f"创建 issue 失败: {e}") from e
