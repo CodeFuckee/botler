@@ -181,7 +181,19 @@ export default function VisionModelsCard() {
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
-  if (models === null) return null // 加载失败时由卡片外 settings 的错误提示兜底
+  if (models === null) {
+    // 加载中/加载失败也渲染卡片标题 h2（issue #174）：SettingsNav 挂载时
+    // 只读取一次 DOM，若这里 return null 区块内没有标题元素，左侧导航会把
+    // 原始 id（settings-vision-models）当名称展示；与 BackupManager 加载态同款。
+    return (
+      <div className="card">
+        <h2>识图模型</h2>
+        {error
+          ? <div className="alert alert-error" onClick={load}>{error}（点击重试）</div>
+          : <p className="muted">加载中…</p>}
+      </div>
+    )
+  }
 
   const editingPreset = editing ? visionModelPresetOf(editing.form.provider) : null
 

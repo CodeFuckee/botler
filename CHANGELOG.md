@@ -4,24 +4,24 @@
 
 ## [Unreleased]
 ### Added
-- **设置页面添加左侧边栏测试，确保每个设置项都有对应的名称（issue #174）**：
-  新增前端 `tests/settings-nav-labels.test.mjs` 9 用例，从**真实源码链路**
-  校验设置页左侧导航栏「每个设置项都有对应名称」不变式，防止导航栏把原始
-  id（如 settings-vision-models）当名称展示：
-  - Settings.jsx 全部 15 个设置区块都必须有名称来源（区块内直接 `<h2>` /
-    `data-nav-label` 覆盖 / 卡片组件内 `<h2>`），解析出的导航名称不得等于
-    原始 id；
-  - 15 个已知设置项名称快照逐一断言——settings-ai-providers /
-    settings-image-models / settings-vision-models / settings-backup 四个
-    卡片区块的名称由卡片组件内 h2 提供（AiProvidersCard / ImageModelsCard /
-    VisionModelsCard / BackupManager），卡片丢失 h2 立即失败；
-  - `collectSettingsGroups` 基于真实源码结构生成导航时每个子项名称非空且
-    不等于原始 id；渲染 SettingsNav 断言侧边栏展示全部 15 个名称、无
-    `settings-` 前缀 id 泄露；
-  - SETTING_KEYWORDS 与设置区块 id 双向一致（新增设置项需同步关键词）；
-    无名称来源区块 label 回退原始 id 的兜底行为文档化；
-  - 回归验证：模拟「卡片丢 h2」「新增无名称区块」两种回归均被新用例捕获
-    （分别 5 / 7 用例失败），恢复后全量测试无 regression。
+- **设置页面添加左侧边栏测试，确保每个设置项都有对应的名称（issue #174 第二轮重写）**：
+  前端 `tests/settings-nav-labels.test.mjs` 重写并扩展至 19 用例。第一轮只做
+  **静态源码解析**，漏掉了真实运行时缺陷（见本版 Fixed 同 issue 条目），
+  本轮补齐「真实运行时」测试层：
+  - 源码链路（静态）：Settings.jsx 全部 15 个设置区块都有名称来源（区块内
+    直接 `<h2>` / `data-nav-label` 覆盖 / 卡片组件内 `<h2>`），解析出的导航
+    名称不得等于原始 id；15 个已知设置项名称快照逐一断言（settings-ai-providers
+    / settings-image-models / settings-vision-models / settings-backup 四个
+    卡片区块的名称由卡片组件内 h2 提供）；`collectSettingsGroups` 基于真实
+    源码结构生成导航时每个子项名称非空且不等于原始 id；渲染 SettingsNav 断言
+    侧边栏展示全部 15 个名称、无 `settings-` 前缀 id 泄露；SETTING_KEYWORDS
+    与设置区块 id 双向一致；无名称来源区块 label 回退原始 id 的兜底行为文档化；
+  - 真实运行时（动态）：找出**依赖异步数据提供名称的三个设置项**——
+    settings-ai-providers / settings-image-models / settings-vision-models。
+    三个卡片组件分别用真实组件 + 不同 fetch 时序验证三态：数据加载中渲染
+    标题 h2、加载失败渲染标题 h2 并支持点击重试、数据到达后渲染标题 h2；
+    再真实渲染 Settings 页，断言渲染树中每个设置区块都有 h2、15 项名称全部
+    用户可读、无 settings- 前缀 id 泄露。
 
 - **灵感记录增加与 AI agent 对话功能，方便用户探讨灵感（issue #166）**：
   概览页「灵感」板块每条灵感操作区新增「💬 对话」按钮，点击打开对话面板，
@@ -173,6 +173,20 @@
     全部通过；后端全量测试无 regression。
 
 ### Fixed
+
+- **设置页左侧导航栏把 settings-ai-providers / settings-image-models / settings-vision-models 等原始 id 当名称展示（issue #174 第二轮）**：
+  用户反馈侧边栏仍出现 settings-vision-models 等类似名称的设置项（第一轮只
+  加了静态测试、未修复运行时代码）。根因：SettingsNav 挂载时**只读取一次**
+  `.settings-content` 的 DOM 生成导航（useLayoutEffect 空依赖），而三个卡片
+  组件（AiProvidersCard / ImageModelsCard / VisionModelsCard）在数据加载中
+  （内部 useState 初始为 null）直接 `return null`——区块内没有 `<h2>`，导航
+  名称回退成原始 id（settings-ai-providers / settings-image-models /
+  settings-vision-models），数据到达后导航不会重建，异常永久保留。修复：三个
+  卡片与 BackupManager 同款，加载中/加载失败也渲染卡片标题 `<h2>`（失败时
+  展示错误原因并支持点击重试），保证 SettingsNav 挂载时每个设置区块内始终有
+  名称来源。配套测试：settings-nav-labels.test.mjs 新增运行时用例（加载中 /
+  失败 / 就绪三态标题 h2 + 真实渲染 Settings 每个区块都有 h2），实现前先红
+  后绿，全量前端 727 用例、后端 1500+ 用例无 regression。
 
 - **识图模型「测试」彻底移除 base64 内联——图片一律上传 MinIO（默认桶 public + 公开只读 + nginx 代理访问，issue #164 用户反馈续修）**：
   用户反馈「不要使用 base64」，要求图片上传 MinIO、nginx 代理 MinIO 桶、桶权限
