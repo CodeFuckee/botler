@@ -715,8 +715,11 @@ frontend:build:
     - JOB_START_TIME=$(date +%s)
     - echo "=== 1. 安装依赖（npm ci）==="
     - npm ci --registry=${NPM_REGISTRY_URL}
-    - echo "=== 2. 前端测试（node --test，issue 14 起引入）==="
-    - npm test
+    - echo "=== 2. 前端测试 + 覆盖率（node --test + c8，issue #210）==="
+    # c8（v8 引擎原生覆盖率）统计 src/ 源码，cobertura 报告供 GitLab
+    # coverage_report 摄入；--check-coverage 设置行/分支/函数/语句阈值，
+    # 低于阈值（新代码无测试悄然合入）时 job 失败阻断流水线
+    - npm run test:coverage
     - echo "=== 3. 构建前端（vite build）==="
     # 版本自增（issue #9）：BOTLER_DATA_DIR 指向持久数据目录（构建目录
     # 可能被清理，版本号不能存那里），gen-version.mjs 读取/自增
@@ -737,6 +740,10 @@ frontend:build:
   artifacts:
     paths:
       - frontend/dist
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: frontend/coverage/cobertura-coverage.xml
     expire_in: 1 day
 
 # --- 后端：Python 测试（uv 高速包管理）---
@@ -792,9 +799,14 @@ backend:test:
       echo "⏱️  步骤3 (安装依赖) 用时: $((STEP3_END - STEP3_START)) 秒"
 
       STEP4_START=$(date +%s)
-      echo "=== 4. 运行测试 ==="
+      echo "=== 4. 运行测试（pytest-cov 覆盖率统计，issue #210）==="
+      # 覆盖率门禁：总覆盖率低于 --cov-fail-under=70 时 pytest 非零退出，
+      # 流水线阻断；term-missing 输出核心模块（executor/gitlab_client/
+      # scheduler 等）逐文件覆盖情况，xml 供 GitLab coverage_report 摄入
       if [ -d tests ]; then
-        $PYTHON -m pytest tests/ -v --tb=short
+        $PYTHON -m pytest tests/ -v --tb=short \
+          --cov=botler --cov-report=term-missing --cov-report=xml \
+          --cov-fail-under=70
       else
         echo "⚠️  未发现 tests/ 目录，执行语法与导入冒烟检查"
         $PYTHON -m compileall botler -q && echo "✓ 语法检查通过"
@@ -818,6 +830,17 @@ backend:test:
       echo "  步骤3 (安装依赖):         $((STEP3_END - STEP3_START)) 秒"
       echo "  步骤4 (运行测试):         $((STEP4_END - STEP4_START)) 秒"
       echo "========================================="
+  # 覆盖率报告（issue #210）：上传 GitLab coverage_report，MR 页面展示
+  # 覆盖率对比；when: always 保证即使阈值未达（job 失败）报告也可下载查看
+  artifacts:
+    when: always
+    paths:
+      - backend/coverage.xml
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: backend/coverage.xml
+    expire_in: 1 week
 
 # ================================================================
 # Stage: e2e —— 浏览器级端到端测试（Playwright，issue #212）

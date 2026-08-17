@@ -110,6 +110,21 @@ cd backend && .venv/bin/python -m pytest tests/ -q
 # 前端单元测试（node --test：源码静态断言 + react-test-renderer 渲染断言）
 cd frontend && npm test
 
+# 覆盖率（issue #210）：pytest-cov 统计后端、c8（v8 原生）统计前端
+cd backend && .venv/bin/python -m pytest tests/ -q --cov=botler --cov-report=term-missing
+cd frontend && npm run test:coverage
+```
+覆盖率说明（issue #210）：
+- **后端**：`pytest-cov` 按 `--cov=botler` 统计全部后端模块，CI 上传
+  `coverage.xml`（Cobertura）至 GitLab coverage_report，MR 页面显示覆盖率
+  对比；总覆盖率阈值 **70%**（`--cov-fail-under=70`），低于阈值流水线阻断；
+- **前端**：`c8` 统计 `src/` 源码，CI 上传 `coverage/cobertura-coverage.xml`；
+  行/语句 **70%**、分支 **60%**、函数 **50%** 阈值（`--check-coverage`），
+  低于阈值流水线阻断；
+- **徽章**：项目主页覆盖率徽章解析后端 pytest-cov 日志中的 `TOTAL` 行
+  （`test_coverage_regex`），CI 成功后在
+  「项目 → 设置 → 通用 → 徽章」可查看/引用 `badges/main/coverage.svg`。
+
 # 浏览器级 E2E（Playwright，issue #212）：一键起真实后端 + 前端构建产物 + 真浏览器
 # 前置：backend/.venv 就绪、frontend dist 已构建（脚本缺失时自动构建）
 bash frontend/e2e/scripts/start-servers.sh                 # 跑全部 E2E

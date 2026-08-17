@@ -123,10 +123,17 @@ jobs:
           cd frontend
           npm ci
 
-      - name: 前端测试（node --test）
+      - name: 前端测试 + 覆盖率（node --test + c8，issue #210）
         run: |
           cd frontend
-          npm test
+          npm run test:coverage
+
+      - name: 上传前端覆盖率报告（Cobertura）
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-cobertura-coverage
+          path: frontend/coverage/cobertura-coverage.xml
+          if-no-files-found: error
 
       - name: 构建前端（vite build，含版本自增 gen-version.mjs）
         run: |
@@ -173,4 +180,12 @@ jobs:
           # 会激活 workspace/.venv（VIRTUAL_ENV），uv pip install 默认装到
           # 激活环境，导致 backend/.venv 为空（GitLab shell executor 无此行为）
           uv pip install --python .venv/bin/python -r requirements.txt
-          .venv/bin/python -m pytest tests/ -v --tb=short
+          # 覆盖率门禁（issue #210）：总覆盖率低于 70% 阻断；xml 供上传
+          .venv/bin/python -m pytest tests/ -v --tb=short --cov=botler --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+
+      - name: 上传后端覆盖率报告（Cobertura）
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-xml
+          path: backend/coverage.xml
+          if-no-files-found: error

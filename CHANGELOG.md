@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 ### Added
+- **CI 引入代码覆盖率门禁：后端 pytest-cov + 前端 c8 双端覆盖率报告与阈值阻断（issue #210）**：
+  此前 1500+ 后端 / 727 前端用例跑完即弃，不产出任何覆盖率报告，executor.py /
+  gitlab_client.py / scheduler.py 等核心模块覆盖情况完全不可见。本次打通「测量 →
+  报告 → 门禁 → 徽章」全链路：
+  - **后端（pytest-cov）**：`requirements.txt` 新增 `pytest-cov`，`backend:test`
+    以 `--cov=botler --cov-report=term-missing --cov-report=xml --cov-fail-under=70`
+    运行——`term-missing` 在日志逐文件列出缺失行（核心模块覆盖率直接可见），
+    `coverage.xml` 以 `coverage_report`（Cobertura）artifact 上传 GitLab，MR 页面
+    显示覆盖率与对比；**总覆盖率阈值 70%**，低于阈值 pytest 非零退出阻断流水线；
+  - **前端（c8/v8）**：`package.json` 新增 `test:coverage`（`c8 --check-coverage
+    --lines 70 --statements 70 --branches 60 --functions 50`），统计 `src/` 源码，
+    CI 上传 `coverage/cobertura-coverage.xml`，行/语句 70%、分支 60%、函数 50%
+    阈值，低于阈值阻断；
+  - **GitLab 集成**：两 job 均上传 `coverage_report` artifact；项目设置
+    `test_coverage_regex` 解析 pytest-cov `TOTAL` 行启用**覆盖率徽章**
+    （`badges/main/coverage.svg`，项目主页/README 可引用）；
+  - **基线**（首次测量）：后端 88%（executor 85% / scheduler 80% /
+    gitlab_client 59%），前端行 86.9% / 分支 80.3%；阈值均低于基线留足缓冲，
+    防「新代码无测试悄然合入」；
+  - 覆盖率产物（`coverage.xml` / `frontend/coverage/` 等）gitignore 排除，
+    不入库不镜像 GitHub；本地命令与徽章引用方式已写入 README「测试」章节。
 - **引入 Playwright 浏览器级 E2E 测试（issue #212）：真实浏览器覆盖关键用户链路**：
   此前前端测试只有源码静态断言 + react-test-renderer 渲染断言、后端只有 API 单测，
   「添加仓库 → webhook 触发 → 任务执行 → 概览展示」全链路无浏览器级验证。本次在
