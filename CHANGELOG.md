@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 ### Added
+- **设置页面添加左侧边栏测试，确保每个设置项都有对应的名称（issue #174）**：
+  新增前端 `tests/settings-nav-labels.test.mjs` 9 用例，从**真实源码链路**
+  校验设置页左侧导航栏「每个设置项都有对应名称」不变式，防止导航栏把原始
+  id（如 settings-vision-models）当名称展示：
+  - Settings.jsx 全部 15 个设置区块都必须有名称来源（区块内直接 `<h2>` /
+    `data-nav-label` 覆盖 / 卡片组件内 `<h2>`），解析出的导航名称不得等于
+    原始 id；
+  - 15 个已知设置项名称快照逐一断言——settings-ai-providers /
+    settings-image-models / settings-vision-models / settings-backup 四个
+    卡片区块的名称由卡片组件内 h2 提供（AiProvidersCard / ImageModelsCard /
+    VisionModelsCard / BackupManager），卡片丢失 h2 立即失败；
+  - `collectSettingsGroups` 基于真实源码结构生成导航时每个子项名称非空且
+    不等于原始 id；渲染 SettingsNav 断言侧边栏展示全部 15 个名称、无
+    `settings-` 前缀 id 泄露；
+  - SETTING_KEYWORDS 与设置区块 id 双向一致（新增设置项需同步关键词）；
+    无名称来源区块 label 回退原始 id 的兜底行为文档化；
+  - 回归验证：模拟「卡片丢 h2」「新增无名称区块」两种回归均被新用例捕获
+    （分别 5 / 7 用例失败），恢复后全量测试无 regression。
+
 - **灵感记录增加与 AI agent 对话功能，方便用户探讨灵感（issue #166）**：
   概览页「灵感」板块每条灵感操作区新增「💬 对话」按钮，点击打开对话面板，
   围绕该灵感与 AI agent 多轮探讨（完善想法、补充边界场景、评估可行性、
