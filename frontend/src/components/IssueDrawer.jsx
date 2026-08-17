@@ -39,6 +39,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, fmtTime } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import Markdown from './Markdown.jsx'
+import TaskDetailDrawer from './TaskDetailDrawer.jsx'  // issue #167：任务执行详情第二层右边栏
 
 // issue 状态 → 徽章映射（聚合只返回开放 issue，closed 为兜底映射）
 export const ISSUE_STATE_META = {
@@ -161,16 +162,22 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   const [replying, setReplying] = useState(false)
   const [replyErr, setReplyErr] = useState('')
   const [localNotesCount, setLocalNotesCount] = useState(null)
+  // issue #167：任务执行详情第二层右边栏——detailOpen 打开时本层
+  // 抽屉不响应 Esc（由第二层自己处理关闭，避免两层同时被 Esc 关闭）
+  const [detailOpen, setDetailOpen] = useState(false)
 
-  // Esc 关闭抽屉（SSR 测试环境无 document 时跳过）
+  // Esc 关闭抽屉（SSR 测试环境无 document 时跳过）。issue #167：任务
+  // 执行详情第二层右边栏打开时不响应 Esc（由第二层自己关闭），避免
+  // 两层抽屉同时被一次 Esc 关闭
   useEffect(() => {
     if (typeof document === 'undefined') return
     const onKey = (e) => {
+      if (detailOpen) return
       if (isEscapeKey(e)) onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, detailOpen])
 
   const i = issue || {}
   // 有效状态：本次点击关闭成功后本地立即标记 closed（后端已确认），
@@ -182,6 +189,11 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 定位仓库，旧缓存数据缺失时隐藏按钮）
   const canClose = !closed && i.state === 'opened'
     && typeof i.project_id === 'number'
+  // 可查看执行详情条件（issue #167）：带 project_id + iid（任务接口
+  // 按 project_id 定位仓库，旧缓存数据缺失时隐藏按钮，与关闭/编辑
+  // 标记按钮同约定）
+  const canViewDetail = typeof i.project_id === 'number'
+    && typeof i.iid === 'number'
   // 作者显示：name 优先，缺失回退 username，全无显示「—」
   const author = i.author && typeof i.author === 'object'
     ? (i.author.name || i.author.username || '—')
@@ -493,6 +505,14 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                 {retrying ? '重试中…' : '重试'}
               </button>
             )}
+            {/* issue #167：查看执行的详情——点击弹出第二层右边栏，展示
+                 该 issue 的任务执行详情（任务记录列表 + 事件流/聊天/
+                 日志）；无任务记录时第二层显示空态引导 */}
+            {canViewDetail && (
+              <button className="btn" onClick={() => setDetailOpen(true)}
+                      title="查看该 issue 任务的执行详情"
+                      disabled={detailOpen}>查看执行的详情</button>
+            )}
             <a className="btn" href={i.web_url} target="_blank" rel="noreferrer"
                title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
             <button className="btn modal-close" onClick={onClose} title="关闭"
@@ -660,6 +680,14 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
           </div>
         </div>
       </div>
+      {/* issue #167：任务执行详情第二层右边栏——叠加在本层抽屉之上，
+          遮罩点击/×/Esc 关闭；project_id/iid 与 repoName 传给第二层
+          用于拉取该 issue 的任务执行记录 */}
+      {detailOpen && (
+        <TaskDetailDrawer projectId={i.project_id} issueIid={i.iid}
+                          issueTitle={i.title} repoName={repoName}
+                          onClose={() => setDetailOpen(false)} />
+      )}
     </div>
   )
 }

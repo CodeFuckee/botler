@@ -654,6 +654,21 @@ class Database:
                    ORDER BY id DESC LIMIT 1""",
                 (project_id, issue_iid)).fetchone()
 
+    def list_tasks_by_issue(self, project_id: int, issue_iid: int,
+                            limit: int = 50) -> list[sqlite3.Row]:
+        """该 issue 的全部任务记录（issue #167：概览页右边栏
+        「查看执行的详情」数据源）。
+
+        按任务 id 倒序（最新在前），与 find_latest_task 的排序约定一致；
+        同 issue 可能因重新指派/对账补入队存在多条任务记录，全部返回
+        供前端任务列表切换查看。
+        """
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT * FROM tasks WHERE project_id=? AND issue_iid=?
+                   ORDER BY id DESC LIMIT ?""",
+                (project_id, issue_iid, limit)).fetchall()
+
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:
         """更新任务状态及附加字段（attempt_count / exit_code / error_message /
         error_detail / log_path / started_at / finished_at / claude_session_id /

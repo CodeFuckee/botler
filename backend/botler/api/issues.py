@@ -56,6 +56,7 @@ from pydantic import BaseModel
 from ..database import normalize_issue_updated_at
 from ..gitlab_client import GitLabClient, GitLabError
 from .pipelines import _commit_time_utc, _repo_client
+from .tasks import _task_to_dict  # issue #167：任务执行详情右边栏复用任务序列化
 
 logger = logging.getLogger(__name__)
 
@@ -593,6 +594,29 @@ def issue_detail(request: Request, project_id: int, iid: int):
     # 记录回退全局 worker.engine），前端右边栏「执行引擎」行据此展示
     return {"notes": [_trim_note(n) for n in notes or [] if isinstance(n, dict)],
             "engine": _issue_engine(c, project_id, iid)}
+
+
+@router.get("/{project_id}/{iid}/tasks")
+def issue_tasks(request: Request, project_id: int, iid: int):
+    """该 issue 的任务执行记录（issue #167：概览页右边栏「查看执行的
+    详情」数据源）。
+
+    仓库定位与 detail/close 接口一致（project_id 匹配「已启用」仓库，
+    不存在/未启用 → 404）；按 project_id + issue_iid 查任务表（id 倒序、
+    最新在前，同 issue 多条任务记录——重新指派/对账补入队/手动重试——
+    全部返回）。任务字典复用任务列表接口的序列化（含 status/engine/
+    commit_url/时间等），供前端第二层右边栏展示与切换；任务详情
+    （日志/实时执行）仍由既有 GET /api/tasks/{task_id} 与
+    /api/tasks/{task_id}/execution、/api/tasks/{task_id}/events 提供。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    rows = c.db.list_tasks_by_issue(project_id, iid)
+    repo = {"name": row["name"], "url": row["url"]}
+    return {"tasks": [_task_to_dict(r, repo) for r in rows],
+            "total": len(rows)}
 
 
 # ---- issue #125：概览页右边栏添加评论与回复评论 ----

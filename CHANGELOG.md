@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 ### Added
+- **概览页 issue 右边栏新增「查看执行的详情」按钮，点击后弹出第二层右边栏显示任务执行详情（issue #167）**：
+  概览页点击 issue 弹出的右边栏（IssueDrawer）操作区新增「查看执行的详情」按钮，点击后再
+  弹出一个右边栏（TaskDetailDrawer）展示该 issue 的任务执行详情：
+  - 后端：新增 `GET /api/issues/{project_id}/{iid}/tasks` 接口——按 project_id + issue_iid
+    返回该 issue 的全部任务执行记录（id 倒序最新在前，同 issue 因重新指派/对账补入队/手动
+    重试产生的多条任务记录全部返回），任务字典复用任务列表接口序列化（status/engine/
+    commit_url/时间等）；新增数据库方法 `list_tasks_by_issue`；仓库定位与 detail/close
+    接口一致（project_id 匹配「已启用」仓库，不存在/未启用 → 404）；
+  - 前端：新增 `frontend/src/components/TaskDetailDrawer.jsx` 第二层右边栏——打开时拉取
+    任务记录列表（默认选中最新一条，可点击切换历史任务），选中任务后拉取任务详情
+    （GET /api/tasks/{id}，含执行日志）、实时执行数据（GET /api/tasks/{id}/execution，
+    活跃任务每 3 秒增量续读聊天记录）与 SSE 事件流（逐事件展示执行过程，seq 去重防
+    断线重连重复）；详情区含元信息表（状态/引擎/来源/尝试/退出码/时间/用时/提交/错误
+    信息）、事件流、聊天记录、执行日志与「查看完整任务页」跳转；无任务记录显示空态，
+    加载失败可重试；关闭方式 × / 点击遮罩 / Esc（Esc 只关第二层，第一层 issue 抽屉
+    detailOpen 时不响应 Esc 避免两层同关）；`styles.css` 新增任务记录列表与详情区样式；
+  - **测试**：后端 `test_api_issues.py` 新增 `TestIssueTasks` 6 用例（空列表 / 多条任务
+    最新在前 / commit_url 拼接 / 不串扰其他 issue / 仓库不存在 404 / 未启用 404）；
+    前端新增 `overview-issue-task-detail-drawer.test.mjs` 17 用例（源码链路 / 纯函数
+    taskStatusMeta·renderEvent·renderChatMessage 边界 / 按钮打开第二层与任务列表展示 /
+    切换任务重拉详情 / 无任务空态 / 列表与详情加载失败重试 / ×、遮罩关闭只关第二层 /
+    Esc 关闭约定）；实现前先红后绿、实现后前后端全量测试无 regression。
+
 - **设置页面添加左侧边栏测试，确保每个设置项都有对应的名称（issue #174 第二轮重写）**：
   前端 `tests/settings-nav-labels.test.mjs` 重写并扩展至 19 用例。第一轮只做
   **静态源码解析**，漏掉了真实运行时缺陷（见本版 Fixed 同 issue 条目），

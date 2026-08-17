@@ -984,6 +984,83 @@ code {
   font-size: 14px;
 }
 
+/* issue #167：任务执行详情第二层右边栏——叠加在 issue 抽屉之上，
+   复用 drawer 基础样式并加宽，容纳任务记录列表 + 事件流/聊天/日志 */
+.task-detail-drawer {
+  width: 720px;
+}
+/* 任务记录列表：横向排布的紧凑条目，可点击切换查看历史任务 */
+.task-detail-list {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+.task-detail-list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 96px;
+  overflow-y: auto;
+}
+.task-detail-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+.task-detail-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+}
+.task-detail-item-selected {
+  border-color: var(--primary);
+  background: var(--primary-weak);
+}
+.task-detail-item-id {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.task-detail-item-engine {
+  color: var(--muted);
+  font-size: 12px;
+}
+.task-detail-item-time {
+  font-size: 12px;
+}
+.task-detail-body {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.task-detail-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-detail-full-link {
+  margin-left: auto;
+}
+/* 执行日志文件尾部折叠区（复用 log-view 等宽字体） */
+.task-detail-file-tail summary {
+  cursor: pointer;
+  color: var(--primary);
+  font-size: 13px;
+  margin: var(--space-2) 0;
+}
+.task-detail-file-tail pre {
+  margin: 0;
+}
+
 /* issue #97：右边栏「评论」与「活动」区块（描述下方分区展示） */
 .issue-notes {
   border-top: 1px solid var(--border);

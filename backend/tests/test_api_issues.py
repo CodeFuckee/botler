@@ -1759,6 +1759,113 @@ class TestIssueDetail:
         assert stub.notes_calls == []
 
 
+class TestIssueTasks:
+    """GET /api/issues/{project_id}/{iid}/tasks（issue #167）：概览页
+    issue 右边栏「查看执行的详情」数据源——该 issue 的全部任务执行记录。
+
+    仓库定位与 detail 接口一致（project_id 匹配「已启用」仓库，不存在/
+    未启用 → 404）；按 project_id + issue_iid 查任务表（id 倒序、最新
+    在前），任务字典复用任务列表接口序列化（status/engine/commit_url/
+    时间等，同 issue 多条任务记录——重新指派/对账补入队/手动重试——
+    全部返回，供前端第二层右边栏切换查看）。
+    """
+
+    def test_empty_no_task_records(self, client):
+        """边界：issue 从未执行过 → tasks 空列表、total 0。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.get("/api/issues/42/64/tasks")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"tasks": [], "total": 0}
+
+    def test_lists_all_tasks_latest_first(self, client):
+        """多条任务记录（重新指派/对账补入队）全部返回，按 id 倒序最新在前。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        # create_task 对已有活跃任务去重：每建一条先置终态再建下一条
+        t1 = db.create_task(repo_id, 42, 64, "第一次执行", triggered_by="reconcile")
+        db.set_task_status(t1, "succeeded", engine="claude",
+                           commit_sha="a" * 40)
+        t2 = db.create_task(repo_id, 42, 64, "第二次执行", triggered_by="manual")
+        db.set_task_status(t2, "failed", engine="hermes")
+        t3 = db.create_task(repo_id, 42, 64, "第三次执行")
+        db.set_task_status(t3, "running", engine="dsh", dsh_session_id="sess-1")
+
+        resp = tc.get("/api/issues/42/64/tasks")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 3
+        ids = [t["id"] for t in body["tasks"]]
+        assert ids == sorted(ids, reverse=True), "应按 id 倒序（最新在前）"
+        # 序列化字段：id/status/engine/issue/commit/时间齐备
+        latest = body["tasks"][0]
+        assert latest["id"] == t3
+        assert latest["status"] == "running"
+        assert latest["engine"] == "dsh"
+        assert latest["repo_name"] == "demo"
+        assert latest["project_id"] == 42
+        assert latest["issue_iid"] == 64
+        assert latest["issue_title"] == "第三次执行"
+        assert latest["triggered_by"] == "webhook"
+        assert latest["commit_url"] is None
+        assert body["tasks"][1]["engine"] == "hermes"
+        assert body["tasks"][1]["status"] == "failed"
+        assert body["tasks"][2]["status"] == "succeeded"
+
+    def test_commit_url_joined_from_repo_url(self, client):
+        """commit_sha 存在时拼接 GitLab 提交地址（复用任务列表序列化）。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        sha = "0123456789abcdef"
+        t1 = db.create_task(repo_id, 42, 64, "任务")
+        db.set_task_status(t1, "succeeded", engine="claude", commit_sha=sha)
+
+        resp = tc.get("/api/issues/42/64/tasks")
+
+        task = resp.json()["tasks"][0]
+        assert task["commit_sha"] == sha
+        assert task["commit_url"] == f"https://gitlab.example.com/demo/-/commit/{sha}"
+
+    def test_other_issue_tasks_not_included(self, client):
+        """只返回该 issue 的任务，不串扰同仓库其他 issue / 其他仓库。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        t1 = db.create_task(repo_id, 42, 64, "issue 64 任务")
+        db.set_task_status(t1, "succeeded", engine="claude")
+        t2 = db.create_task(repo_id, 42, 65, "issue 65 任务")
+        db.set_task_status(t2, "succeeded", engine="claude")
+
+        resp = tc.get("/api/issues/42/64/tasks")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["tasks"][0]["issue_iid"] == 64
+
+    def test_repo_not_found(self, client):
+        """GitLab project_id 无对应启用仓库 → 404。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.get("/api/issues/999/64/tasks")
+
+        assert resp.status_code == 404
+        assert "仓库" in resp.json()["detail"]
+
+    def test_disabled_repo_not_found(self, client):
+        """仓库未启用（概览聚合不展示）→ 404，与 detail/close 一致。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo", enabled=False)
+
+        resp = tc.get("/api/issues/42/64/tasks")
+
+        assert resp.status_code == 404
+        assert "仓库" in resp.json()["detail"]
+
+
 class TestIssueLabels:
     """GET /api/issues/{project_id}/labels 与 PUT /api/issues/
     {project_id}/{iid}/labels：概览页右边栏标记编辑（issue #108）。
