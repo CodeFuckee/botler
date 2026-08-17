@@ -86,7 +86,13 @@ class GitLabClient:
     # ---- 基础请求 ----
 
     def _request(self, method: str, path: str, **kwargs) -> dict | list | None:
-        resp = self._http.request(method, path, **kwargs)
+        try:
+            resp = self._http.request(method, path, **kwargs)
+        except httpx.HTTPError as e:
+            # 传输层故障（DNS 解析失败 / 连接拒绝 / 超时等）统一转 GitLabError，
+            # 调用方按「GitLab 故障」优雅降级（对账/概览单仓库失败不中断整体，
+            # issue #212 E2E 用假 GitLab 地址启动时不再裸抛 httpx 异常）
+            raise GitLabError(f"GitLab 请求失败（{path}）: {e}") from e
         if resp.status_code == 401:
             raise GitLabError("token 无效或已过期（401）", 401)
         if resp.status_code == 403:
@@ -104,8 +110,12 @@ class GitLabClient:
         items: list[dict] = []
         page = 1
         while True:
-            resp = self._http.request(
-                "GET", path, params={"page": page, "per_page": 100, **kwargs})
+            try:
+                resp = self._http.request(
+                    "GET", path, params={"page": page, "per_page": 100, **kwargs})
+            except httpx.HTTPError as e:
+                # 与 _request 一致：传输层故障统一转 GitLabError（issue #212）
+                raise GitLabError(f"GitLab 请求失败（{path}）: {e}") from e
             if resp.status_code == 404:
                 break
             if resp.status_code >= 400:
