@@ -75,6 +75,46 @@ class TestClientCommon:
         with pytest.raises(VisionModelError, match="Base URL"):
             client.describe(b"\x89PNG-test")
 
+    def test_timeout_error_includes_request_url(self):
+        """请求超时（issue #156）：错误信息应包含实际请求地址，用户可
+        据此判断 POST 到底发到了哪个 URL（超时前无法拿到响应体）。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        transport = httpx.MockTransport(handler)
+        client = VisionModelClient(
+            name="Gemini 视觉", provider="gemini_vision",
+            api_key="k", timeout=5)
+        client._http = httpx.Client(transport=transport)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x")
+        assert "请求超时" in str(exc.value)
+        assert "请求地址" in str(exc.value)
+        assert captured["url"] in str(exc.value)
+
+    def test_connect_error_includes_request_url(self):
+        """网络连接失败（DNS / 拒绝连接 / SSL 等，issue #156）：错误信息
+        应带实际请求地址，而不是只有晦涩的 httpx 异常文本（此时无响应体，
+        请求地址是唯一可诊断线索）。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            raise httpx.ConnectError("connection refused", request=request)
+
+        transport = httpx.MockTransport(handler)
+        client = VisionModelClient(
+            name="Gemini 视觉", provider="gemini_vision",
+            api_key="k", timeout=5)
+        client._http = httpx.Client(transport=transport)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x")
+        assert "网络请求失败" in str(exc.value)
+        assert "请求地址" in str(exc.value)
+        assert captured["url"] in str(exc.value)
 
 class TestGeminiVisionClient:
     def _client(self, handler, api_key="AIza-test", **kw):
@@ -174,6 +214,21 @@ class TestGeminiVisionClient:
         assert "请求地址" in str(exc.value)
         assert captured["url"] in str(exc.value)
 
+    def test_missing_content_error_includes_request_url(self):
+        """响应缺少内容（issue #156）：错误信息应同时带响应片段与实际
+        请求地址，方便用户对照网关返回内容定位问题。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={"candidates": [{}]})
+
+        client = self._client(handler)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x")
+        assert "缺少内容" in str(exc.value)
+        assert "请求地址" in str(exc.value)
+        assert captured["url"] in str(exc.value)
 
 class TestOpenAIVisionClient:
     def _client(self, handler, api_key="sk-test", provider="openai_vision", **kw):
@@ -265,6 +320,21 @@ class TestOpenAIVisionClient:
         assert captured["url"] in str(exc.value)
         assert "Base URL" in str(exc.value)
 
+    def test_missing_content_error_includes_request_url(self):
+        """响应 choices 为空（issue #156）：错误信息应同时带响应片段与
+        实际请求地址。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={"choices": []})
+
+        client = self._client(handler)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x")
+        assert "未包含文本" in str(exc.value)
+        assert "请求地址" in str(exc.value)
+        assert captured["url"] in str(exc.value)
 
 class TestCustomVisionProvider:
     """自定义 provider：走 OpenAI 兼容 chat/completions 接口（issue #152）。
@@ -301,6 +371,22 @@ class TestCustomVisionProvider:
         assert captured["url"] == self.CUSTOM_URL
         assert captured["body"]["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
         assert desc == "图中有高楼与蓝天"
+
+    def test_missing_content_error_includes_request_url(self):
+        """自定义网关响应 choices 为空（issue #156）：错误信息应带实际
+        请求地址，帮助用户对照网关返回内容定位问题。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={"choices": []})
+
+        client = self._client(handler)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x")
+        assert "未包含文本" in str(exc.value)
+        assert "请求地址" in str(exc.value)
+        assert captured["url"] in str(exc.value)
 
 class TestHelpers:
     def test_find_enabled_returns_matching(self):

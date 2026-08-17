@@ -127,11 +127,24 @@ class VisionModelClient:
         except VisionModelError:
             raise
         except httpx.TimeoutException as exc:
+            # issue #156：失败提示带上「post 给上游 API」的实际请求地址，
+            # 超时前拿不到响应体，请求地址是唯一可诊断线索
+            req = getattr(exc, "request", None)
+            url_hint = f"（请求地址: {req.url}）" if req is not None else ""
             raise VisionModelError(
-                f"识图模型「{self.name}」请求超时（>{self.timeout}s）") from exc
+                f"识图模型「{self.name}」请求超时（>{self.timeout}s）{url_hint}"
+            ) from exc
         except httpx.HTTPError as exc:
+            # issue #156：网络层失败（连接/DNS/SSL 等）同样带请求地址；
+            # 若异常携带响应（如 HTTPStatusError）则附接口返回状态码与内容
+            req = getattr(exc, "request", None)
+            url_hint = f"（请求地址: {req.url}）" if req is not None else ""
+            resp = getattr(exc, "response", None)
+            resp_hint = (f"，接口返回: HTTP {resp.status_code} {resp.text[:200]}"
+                         if resp is not None else "")
             raise VisionModelError(
-                f"识图模型「{self.name}」网络请求失败: {exc}") from exc
+                f"识图模型「{self.name}」网络请求失败: {exc}{url_hint}{resp_hint}"
+            ) from exc
 
 
 def find_enabled(models: list[dict] | None, provider: str) -> dict | None:

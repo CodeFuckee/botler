@@ -1935,3 +1935,29 @@ class TestVisionModelTestEndpoint:
             "compatible-mode/v1/chat/completions")
         assert captured["model"] == "qwen3-vl-flash"
         assert captured["provider"] == "custom"
+
+    def test_test_network_error_passes_through_request_url(self, client, monkeypatch):
+        """网络层失败（超时/连接失败，issue #156）：describe 抛出的错误
+        信息带「请求地址」，端点应完整透传给前端展示（ok=false + 错误
+        原文，不截断、不吞掉 URL 线索）。"""
+        tc, _ = client
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                pass
+
+            def describe(self, image, *, mime_type, prompt):
+                raise VisionModelError(
+                    "识图模型「Gemini 视觉」请求超时（>60s）（请求地址: "
+                    "https://api.example.com/v1beta/models/gemini-2.5-flash"
+                    ":generateContent）")
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = self._post(tc)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "请求地址" in data["error"]
+        assert "api.example.com" in data["error"]
+        assert "generateContent" in data["error"]
+

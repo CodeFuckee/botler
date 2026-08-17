@@ -117,13 +117,15 @@ class GeminiVisionProvider(VisionProviderPlugin):
             parts_out = data["candidates"][0]["content"]["parts"]
         except (KeyError, IndexError, TypeError) as exc:
             raise VisionModelError(
-                f"Gemini 响应缺少内容: {resp.text[:200]}") from exc
+                f"Gemini 响应缺少内容: {resp.text[:200]}"
+                f"（请求地址: {url}）") from exc
         texts = [str(p.get("text") or "").strip()
                  for p in parts_out if isinstance(p, dict) and p.get("text")]
         desc = "".join(t for t in texts if t)
         if not desc:
             raise VisionModelError(
-                f"Gemini 响应未包含文本描述: {resp.text[:200]}")
+                f"Gemini 响应未包含文本描述: {resp.text[:200]}"
+                f"（请求地址: {url}）")
         return desc
 
 
@@ -184,7 +186,8 @@ class OpenAIVisionProvider(VisionProviderPlugin):
             content_out = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise VisionModelError(
-                f"OpenAI 响应未包含文本描述: {resp.text[:200]}") from exc
+                f"OpenAI 响应未包含文本描述: {resp.text[:200]}"
+                f"（请求地址: {url}）") from exc
         # content 可能是字符串或分段数组（部分兼容网关返回）
         if isinstance(content_out, str):
             desc = content_out.strip()
@@ -198,7 +201,8 @@ class OpenAIVisionProvider(VisionProviderPlugin):
             desc = ""
         if not desc:
             raise VisionModelError(
-                f"OpenAI 响应未包含文本描述: {resp.text[:200]}")
+                f"OpenAI 响应未包含文本描述: {resp.text[:200]}"
+                f"（请求地址: {url}）")
         return desc
 
 
@@ -265,7 +269,8 @@ class CustomVisionProvider(VisionProviderPlugin):
             content_out = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise VisionModelError(
-                f"自定义识图模型响应未包含文本描述: {resp.text[:200]}") from exc
+                f"自定义识图模型响应未包含文本描述: {resp.text[:200]}"
+                f"（请求地址: {url}）") from exc
         if isinstance(content_out, str):
             desc = content_out.strip()
         elif isinstance(content_out, list):
@@ -278,7 +283,8 @@ class CustomVisionProvider(VisionProviderPlugin):
             desc = ""
         if not desc:
             raise VisionModelError(
-                f"自定义识图模型响应未包含文本描述: {resp.text[:200]}")
+                f"自定义识图模型响应未包含文本描述: {resp.text[:200]}"
+                f"（请求地址: {url}）")
         return desc
 
 
