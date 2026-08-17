@@ -565,6 +565,25 @@
 
 ### Fixed
 
+- **config.yaml 保存改为原子写 + 重载失败不污染内存——修复并发读半截文件导致设置保存偶发 500（issue #181 CI 诊断）**：
+  E2E settings 测试偶发失败的根因：`ConfigManager.save()` 此前直接 `open(path, "w")`
+  截断写盘，并发读（`get()` 的 mtime 自动重载 / `update_*` 写盘前 `_reload_from_disk`）
+  会读到**半截 config.yaml**——PyYAML 抛 `YAMLError`，或更糟：解析出残缺配置
+  （`gitlab` 段缺 `url`）后 `load()` 先把残缺内容赋给内存 `_data` 再 `_to_settings` 抛
+  `KeyError: 'url'`，重载失败但内存已被污染；`update_webhook` 等随后在污染数据上
+  `_to_settings` 再次 KeyError → `PUT /api/settings` 500 → 前端无「已保存」提示、
+  E2E 设置保存用例失败（且 worker 段已落盘，重试时默认值错乱）。修复：
+  - **实现**：`backend/botler/config.py` `save()` 改为原子写（同目录临时文件 +
+    `os.replace`，写入过程任何时刻读取都只能得到完整旧文件或完整新文件）；
+    `load()` 改为**先完整解析并校验（`_to_settings`）成功后才替换内存 `_data`**，
+    磁盘文件损坏/半截时抛异常、内存保持旧值不污染，`update_*` 降级继续用完整内存
+    配置工作；不残留临时文件；
+  - **测试**：`backend/tests/test_config_reload.py` 新增 3 例——残缺 YAML（gitlab 段缺
+    url）重载失败不污染内存且 `update_webhook` 不再 KeyError（修复前复现 CI 的
+    `KeyError: 'url'`）、并发读写下任何时刻读到的都是完整配置（修复前读线程捕获
+    半截/残缺）、原子写无临时文件残留；修复前全部可复现失败，修复后通过；后端全量
+    测试（1699 例）与前端全量测试（828 例）、E2E 连续 3 轮均通过，无 regression。
+
 - **GitLab 传输层故障（DNS 失败/连接拒绝/超时）裸抛 httpx 异常导致线程崩溃——统一转 GitLabError（issue #212 配套）**：
   `GitLabClient._request` / `_paged` 此前只处理 HTTP 状态码（401/403/404/>=400），
   DNS 解析失败、连接拒绝、超时等传输层故障会裸抛 `httpx.ConnectError` 等异常，绕过

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -372,8 +373,14 @@ class ConfigManager:
             )
         with open(self.path, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
-        self._data = _expand_env(raw)
-        self.settings = self._to_settings(self._data)
+        # 先完整解析并校验（_to_settings），全部成功后才替换内存 _data：
+        # 磁盘文件损坏/半截（如并发写盘）时抛异常，内存保持旧值不污染，
+        # 避免后续 update_* 在残缺数据上 _to_settings 抛 KeyError（issue #181
+        # CI 诊断：settings 保存偶发 500，gitlab['url'] KeyError）。
+        data = _expand_env(raw)
+        settings = self._to_settings(data)
+        self._data = data
+        self.settings = settings
         try:
             self._loaded_mtime = os.path.getmtime(self.path)
         except OSError:
@@ -549,9 +556,25 @@ class ConfigManager:
         )
 
     def save(self) -> None:
-        """将内存数据写回 config.yaml。"""
-        with open(self.path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(self._data, f, allow_unicode=True, sort_keys=False)
+        """将内存数据写回 config.yaml（原子写）。
+
+        先写同目录临时文件再 os.replace 原子替换：修复前直接 open('w')
+        截断写盘，并发读（get() 的 mtime 自动重载 / update_* 的
+        _reload_from_disk）会读到半截 YAML，偶发 YAMLError / 解析出残缺
+        配置导致 settings 保存 500（issue #181 CI 诊断）。
+        """
+        d = os.path.dirname(os.path.abspath(self.path)) or "."
+        fd, tmp = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=d)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                yaml.safe_dump(self._data, f, allow_unicode=True,
+                               sort_keys=False)
+            os.replace(tmp, self.path)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         try:
             self._loaded_mtime = os.path.getmtime(self.path)
         except OSError:

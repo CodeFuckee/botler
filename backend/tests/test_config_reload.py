@@ -187,3 +187,94 @@ class TestRemoveRepo:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert data["templates"]["default"] == "手动改的模版"
         assert data["repos"] == []
+
+
+# ---- issue #181 CI 诊断：save 非原子写 + load 先赋值后校验 ----
+# E2E settings 测试偶发失败根因：save() 直接 open('w') 截断写盘，并发读
+# （get() mtime 自动重载 / update_* 写盘前 _reload_from_disk）读到半截
+# config.yaml → YAMLError 或解析出残缺配置（gitlab 段缺 url）→
+# update_webhook 内 _to_settings 抛 KeyError: 'url' → PUT /api/settings 500。
+# 修复：save() 原子写（临时文件 + rename）；load() 先解析校验成功后才
+# 替换内存 _data，失败不污染内存。
+
+class TestAtomicSaveAndLoad:
+    def test_partial_yaml_does_not_pollute_memory(self, tmp_path):
+        """磁盘文件被并发写为残缺内容（gitlab 段缺 url）时，重载失败不得
+        污染内存 _data；后续 update_webhook 不得再抛 KeyError（修复前 load
+        先把残缺内容赋给 _data 再 _to_settings，reload 失败但内存已被污染，
+        settings 保存 500 的根因）。"""
+        path = tmp_path / "config.yaml"
+        _write_config(path, TEMPLATE_A)
+        cm = ConfigManager(str(path))
+        cm.get()
+
+        # 模拟并发写盘截断：残缺但可解析的 YAML（gitlab 段缺 url）
+        path.write_text(
+            "gitlab:\n  bot_token: t\n"
+            "worker:\n  max_concurrent_repos: 3\n"
+            "repos: []\n",
+            encoding="utf-8")
+
+        # get() 触发 mtime 重载：解析失败应降级保留旧配置
+        assert cm.get().default_template == TEMPLATE_A
+
+        # 修复前：update_webhook 在 reload 失败后继续用被污染的 _data，
+        # _to_settings 抛 KeyError: 'url'（CI 中 PUT /api/settings 500）
+        cm.update_webhook({"enabled": True, "url": ""})
+        assert cm.get().default_template == TEMPLATE_A
+        # 写盘恢复完整配置（gitlab.url 仍在）
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        assert data["gitlab"]["url"] == "https://gitlab.example.com"
+
+    def test_save_atomic_concurrent_reads_never_partial(self, tmp_path):
+        """并发读下 save() 原子写：写入过程中任何时刻读取都能得到完整配置
+        （修复前 open('w') 截断写，读线程会读到半截 YAML / 残缺配置）。"""
+        import threading
+
+        path = tmp_path / "config.yaml"
+        _write_config(path, TEMPLATE_A)
+        cm = ConfigManager(str(path))
+        cm.get()
+
+        stop = threading.Event()
+        errors = []
+
+        def reader():
+            while not stop.is_set():
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        data = yaml.safe_load(f)
+                    assert data["gitlab"]["url"] == \
+                        "https://gitlab.example.com", "读到残缺配置"
+                except Exception as e:  # noqa: BLE001
+                    errors.append(e)
+                    return
+
+        def writer():
+            for i in range(100):
+                cm.update_worker({"max_concurrent_repos": 3 + i % 5})
+            stop.set()
+
+        threads = [threading.Thread(target=reader) for _ in range(2)]
+        for t in threads:
+            t.start()
+        try:
+            writer()
+        finally:
+            stop.set()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"并发读读到半截/残缺配置: {errors}"
+
+    def test_save_leaves_no_temp_files(self, tmp_path):
+        """原子写后不残留临时文件。"""
+        path = tmp_path / "config.yaml"
+        _write_config(path, TEMPLATE_A)
+        cm = ConfigManager(str(path))
+        cm.get()
+        cm.update_worker({"max_concurrent_repos": 5})
+        leftovers = [p.name for p in tmp_path.iterdir()
+                     if p.name.startswith(".config-") or p.name.endswith(".tmp")]
+        assert leftovers == []
