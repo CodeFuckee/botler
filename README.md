@@ -287,7 +287,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 
 `backend/config.yaml` 是唯一事实来源，Web UI 是编辑它的外壳。直接编辑 config.yaml 的修改会被运行中的进程自动感知（检测文件变化后重载，无需重启；issue #25），且后续 Web UI 保存设置不会覆盖手动编辑的内容。凭据一律用 `${ENV_VAR}` 引用环境变量（`backend/.env`），不入库、不进日志、不进提示词。
 
-设置页设置项较多时，左侧导航栏按功能分组整理全部设置项（issue #139）——分组：外部服务接入（Synology SSO 登录 / AI API 供应商 / 生图模型）、系统设置（任务调度 / 界面显示 / 网页通知 / 消息推送 Webhook）、执行引擎（Claude Code / dsh 引擎）、运维与数据（本地环境检测 / 数据备份）、账号与安全（Owner GitLab Token / GitLab 凭据）、关于（版本信息）。导航栏支持**关键词搜索设置项**（名称与关键字命中，含中英文别名）与**分组折叠/展开**（可「全部收起 / 全部展开」），点击子项平滑滚动到页面相应设置区块并高亮；导航面板可**整体折叠**成 44px 窄栏（仅保留「展开侧边栏」入口，issue #168），折叠后内容区占满全宽、最大化编辑空间，折叠偏好本地持久化（刷新保持）；窄视口（≤860px）自动回落单栏，导航置于页面顶部。
+设置页设置项较多时，左侧导航栏按功能分组整理全部设置项（issue #139）——分组：外部服务接入（Synology SSO 登录 / AI API 供应商 / 生图模型 / 识图模型 / MinIO 对象存储）、系统设置（任务调度 / 界面显示 / 网页通知 / 消息推送 Webhook）、执行引擎（Claude Code / dsh 引擎）、运维与数据（本地环境检测 / 数据备份）、账号与安全（Owner GitLab Token / GitLab 凭据）、关于（版本信息）。导航栏支持**关键词搜索设置项**（名称与关键字命中，含中英文别名）与**分组折叠/展开**（可「全部收起 / 全部展开」），点击子项平滑滚动到页面相应设置区块并高亮；导航面板可**整体折叠**成 44px 窄栏（仅保留「展开侧边栏」入口，issue #168），折叠后内容区占满全宽、最大化编辑空间，折叠偏好本地持久化（刷新保持）；窄视口（≤860px）自动回落单栏，导航置于页面顶部。
 
 关键配置（`config.example.yaml` 中有完整示例与注释）：
 
@@ -324,7 +324,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `sso.session_days` | 7 | 登录有效期（天，1~365） |
 | `sso.redirect_uri` | 空（自动生成） | 回调地址，须与群晖侧注册一致 |
 | `sso.verify_ssl` | true | 群晖为自签名证书时设 false |
-| `minio.enabled` | false | MinIO 对象存储开关（issue #163/#164）：启用后识图模型调用时用户上传的图片先计算 SHA-256 哈希、以哈希值为对象名上传 MinIO，识图请求传 http URL 而非 base64（图片 base64 可达数十万字符，网关/模型对请求体大小敏感；阿里云百炼等兼容网关直接拒绝 data: URL）。**issue #164 起 OpenAI 兼容识图模型（openai_vision / custom）禁止 base64 内联：未启用/配置不完整时识图测试明确报错引导启用 MinIO，不再静默回退**（Gemini 官方接口仅支持 base64 inline_data，保持内联） |
+| `minio.enabled` | false | MinIO 对象存储开关（issue #163/#164/#170）：设置页「MinIO 对象存储」卡片可配置（issue #170，含 endpoint / access_key / secret_key / public_base_url 等，凭据掩码显示、留空保持现有，卡片内独立保存）。启用后识图模型调用时用户上传的图片先计算 SHA-256 哈希、以哈希值为对象名上传 MinIO，识图请求传 http URL 而非 base64（图片 base64 可达数十万字符，网关/模型对请求体大小敏感；阿里云百炼等兼容网关直接拒绝 data: URL）。**issue #164 起 OpenAI 兼容识图模型（openai_vision / custom）禁止 base64 内联：未启用/配置不完整时识图测试明确报错引导启用 MinIO，不再静默回退**（Gemini 官方接口仅支持 base64 inline_data，保持内联） |
 | `minio.endpoint` / `secure` / `verify_ssl` | `127.0.0.1:9000` / false / true | MinIO API 地址（host:port）/ 是否 https / 证书校验（自签证书设 false） |
 | `minio.access_key` / `secret_key` | 回退环境变量 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | MinIO 访问凭据（与部署写入 `data/backend/.env` 的凭据同源；支持 `${ENV}` 引用） |
 | `minio.bucket` | `public` | 识图图片对象桶（默认 `public`，不存在自动创建，并自动设为公开只读——匿名 `s3:GetObject`，识图模型可匿名取图） |

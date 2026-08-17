@@ -30,6 +30,7 @@ export const SETTING_KEYWORDS = {
   'settings-ai-providers': ['ai', 'deepseek', 'openai', 'api', '供应商'],
   'settings-image-models': ['生图', 'gemini', 'gpt', '图像', '模型'],
   'settings-vision-models': ['识图', '视觉', 'vision', 'gemini', 'gpt', '模型', '图片'],
+  'settings-minio': ['minio', '对象存储', 's3', '图片上传', 'public_base_url', '桶'],
   'settings-tasks': ['worker', '并行', '重试', '超时', '对账', 'priority'],
   'settings-ui': ['ui', '时区', 'timezone', '显示'],
   'settings-notifications': ['notification', '通知', '浏览器'],

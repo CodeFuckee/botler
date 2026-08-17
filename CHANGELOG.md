@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 ### Added
+- **设置页新增「MinIO 对象存储」配置卡片并启用识图图片上传（issue #170）**：
+  issue #163/#164 已完成 MinIO 后端链路（图片 SHA-256 哈希上传 public 桶 +
+  识图请求传 http URL + nginx 代理访问），但设置页暂未提供配置卡片（issue #163
+  CHANGELOG 明确「设置页暂未提供卡片、可编辑 config.yaml 或经 API 配置」）。
+  本次补齐 UI 并实际启用：
+  - **设置页卡片**：「外部服务接入」分组新增「MinIO 对象存储」区块
+    （`settings-minio`）——`minio.enabled`（开关）/ `endpoint` / `secure` /
+    `access_key` / `secret_key` / `bucket` / `public_base_url` / `verify_ssl`
+    全部可配置；Access Key / Secret Key 为密码输入框、掩码占位显示、留空 =
+    保持现有凭据（后端掩码不覆盖，与 SSO client_secret / webhook
+    authorization 同模式）；卡片内独立「保存 MinIO 配置」按钮（只提交 minio
+    段，不影响其他设置），全局「保存」同步提交 minio 段（与 webhook 同模式）；
+    左侧导航栏关键词映射新增 `settings-minio`（导航自动出现「MinIO 对象存储」
+    子选项，无需手工同步）；
+  - **启用运行实例**：部署机 `data/backend/config.yaml` 写入 minio 段——
+    `enabled: true`、endpoint `127.0.0.1:9000`、凭据 minioadmin（与
+    `data/backend/.env` 的 MINIO_ROOT_USER / MINIO_ROOT_PASSWORD 同源）、
+    `bucket: public`、`public_base_url: https://home.chenkaidi.top:509/minio-public`
+    （nginx 代理 MinIO public 桶地址，配置参考 `deploy/nginx-minio-public.conf`，
+    issue #164）；已端到端验证：图片字节上传 public 桶成功、返回
+    `public_base_url/bucket/<sha256 哈希>` 对象 URL；
+  - **文档**：README 设置页分组说明（补齐识图模型 + MinIO 对象存储）与 minio
+    配置表、`config.example.yaml` minio 段注释同步更新；
+  - **测试**：新增前端 `tests/settings-minio-card.test.mjs`（卡片挂载与位置 /
+    字段齐全 / 凭据留空保持现有 / PUT minio 段 / 导航关键词），同步更新
+    settings-nav-labels / settings-nav / settings-nav-collapse 三份导航测试
+    （设置区块 15 → 16，新增 `settings-minio` 名称快照），后端沿用 issue #163
+    既有 minio API 用例；前端全量 769 用例无 regression。
 - **定时暂停窗口：按时间规则停止开始新任务（issue #169）**：
   可在设置页「任务调度」卡片配置暂停窗口（如 `09:00-12:00`、`14:00-18:00`），
   窗口内调度器**停止开始新任务**，**已经开始执行的任务可以继续执行**，

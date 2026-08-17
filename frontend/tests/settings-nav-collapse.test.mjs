@@ -14,7 +14,7 @@
 // 1. 纯函数 loadSidebarCollapsed / saveSidebarCollapsed 边界用例（无存储/
 //    异常存储/乱值/写回）；
 // 2. 源码断言：折叠/展开按钮、aria 属性、持久化键与 collapsed 类；
-// 3. 渲染：默认展开（搜索框 + 15 子项 + 收起按钮）；
+// 3. 渲染：默认展开（搜索框 + 16 子项 + 收起按钮）；
 // 4. 渲染：点击「收起侧边栏」→ 导航面板隐藏、窄栏展开按钮可见、
 //    aria-expanded 翻转；
 // 5. 渲染：折叠态点击「展开侧边栏」→ 恢复搜索框与全部分组子项；
@@ -62,6 +62,7 @@ function fakeSettingsContent() {
       section('settings-ai-providers', 'AI API 供应商'),
       section('settings-image-models', '生图模型'),
       section('settings-vision-models', '识图模型'),
+      section('settings-minio', 'MinIO 对象存储'),
       group('系统设置'),
       section('settings-tasks', '任务调度'),
       section('settings-ui', '界面显示'),
@@ -184,10 +185,10 @@ test('源码：SettingsNav 提供整体折叠/展开按钮与无障碍属性', (
 
 // ---------- 渲染断言：默认展开 ----------
 
-test('渲染：默认展开——搜索框、15 个子项与「收起侧边栏」按钮可见', () => {
+test('渲染：默认展开——搜索框、16 个子项与「收起侧边栏」按钮可见', () => {
   const { renderer, root, restore } = renderNav()
   try {
-    assert.equal(linkCount(root), 15, '默认应渲染 15 个子项链接')
+    assert.equal(linkCount(root), 16, '默认应渲染 16 个子项链接')
     assert.ok(root.findAll((n) => n.type === 'input' && n.props.type === 'search').length === 1,
       '默认应显示搜索框')
     const collapse = findAriaButton(root, '收起侧边栏')
@@ -223,14 +224,14 @@ test('渲染：点击「收起侧边栏」→ 导航隐藏、窄栏展开按钮�
   }
 })
 
-test('渲染：折叠态点击「展开侧边栏」→ 恢复搜索框与 15 个子项', () => {
+test('渲染：折叠态点击「展开侧边栏」→ 恢复搜索框与 16 个子项', () => {
   const { renderer, root, restore } = renderNav()
   try {
     TestRenderer.act(() => { findAriaButton(root, '收起侧边栏')[0].props.onClick() })
     const expand = findAriaButton(root, '展开侧边栏')[0]
     TestRenderer.act(() => { expand.props.onClick() })
     assert.ok(!asideClass(root).includes('collapsed'), '展开后 aside 不应带 collapsed 类')
-    assert.equal(linkCount(root), 15, '展开后应恢复 15 个子项链接')
+    assert.equal(linkCount(root), 16, '展开后应恢复 16 个子项链接')
     assert.equal(root.findAll((n) => n.type === 'input' && n.props.type === 'search').length, 1,
       '展开后应恢复搜索框')
     assert.equal(findAriaButton(root, '收起侧边栏').length, 1, '展开后应恢复收起按钮')
@@ -268,7 +269,7 @@ test('持久化：预置折叠值时初始即折叠，预置展开值初始展�
   const expanded = renderNav({ storage: makeStorage({ [SIDEBAR_STORAGE_KEY]: '0' }) })
   try {
     assert.ok(!asideClass(expanded.root).includes('collapsed'), '预置 \u20180\u2019 应初始展开')
-    assert.equal(linkCount(expanded.root), 15, '初始展开应渲染 15 个子项')
+    assert.equal(linkCount(expanded.root), 16, '初始展开应渲染 16 个子项')
   } finally {
     TestRenderer.act(() => expanded.renderer.unmount())
     expanded.restore()

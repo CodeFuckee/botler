@@ -183,6 +183,9 @@ browse:
 # endpoint / 凭据可经 ${ENV} 引用（与部署写入 data/backend/.env 的
 # MINIO_ROOT_USER / MINIO_ROOT_PASSWORD 同源），识图模型必须能访问
 # public_base_url（自建网关走内网地址；外部模型供应商需公网可达）。
+# minio:（设置页「MinIO 对象存储」卡片可配置，issue #170；本段为 config.yaml
+#   手写等价物——endpoint / access_key / secret_key / public_base_url 等字段
+#   与卡片一一对应，凭据掩码显示、留空保持现有）
 # minio:
 #   enabled: true                    # 识图图片上传开关
 #   endpoint: "127.0.0.1:9000"       # MinIO API 地址（host:port）

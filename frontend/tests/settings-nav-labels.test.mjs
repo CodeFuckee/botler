@@ -16,7 +16,7 @@
 // 始终有名称来源。
 //
 // 测试层次：
-// A. 源码链路（静态）：15 个设置区块都有名称来源、名称不等于原始 id、
+// A. 源码链路（静态）：16 个设置区块都有名称来源、名称不等于原始 id、
 //    名称快照、4 个卡片区块 h2、SETTING_KEYWORDS 双向一致、兜底行为文档化；
 // B. 真实运行时（动态，本轮新增）：
 //    - 三个卡片「数据加载中」渲染标题 h2（根因回归：杜绝 return null）；
@@ -24,7 +24,7 @@
 //    - 数据到达后卡片渲染标题 h2；
 //    - 真实渲染 Settings 页：每个设置区块在渲染树中都有 h2（找出依赖
 //      异步数据提供名称的三个设置项，验证修复后名称来源不缺失）；
-//    - collectSettingsGroups + SettingsNav 渲染：15 项全部为可读名称。
+//    - collectSettingsGroups + SettingsNav 渲染：16 项全部为可读名称。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -109,12 +109,13 @@ function resolveName(entry) {
   return entry.id
 }
 
-/** 15 个设置项名称快照（issue #174：每个设置项都有对应的名称） */
+/** 16 个设置项名称快照（issue #174：每个设置项都有对应的名称） */
 const EXPECTED_NAMES = {
   'settings-sso': 'Synology SSO 登录',
   'settings-ai-providers': 'AI API 供应商',
   'settings-image-models': '生图模型',
   'settings-vision-models': '识图模型',
+  'settings-minio': 'MinIO 对象存储',
   'settings-tasks': '任务调度',
   'settings-ui': '界面显示',
   'settings-notifications': '网页通知',
@@ -130,9 +131,9 @@ const EXPECTED_NAMES = {
 
 // ---------- A. 源码链路：每个设置区块都有名称来源 ----------
 
-test('设置页应包含 15 个设置区块且 id 唯一（与已知设置项一致）', () => {
+test('设置页应包含 16 个设置区块且 id 唯一（与已知设置项一致）', () => {
   const entries = sectionEntries()
-  assert.equal(entries.length, 15, `应解析到 15 个设置区块，实际 ${entries.length}`)
+  assert.equal(entries.length, 16, `应解析到 16 个设置区块，实际 ${entries.length}`)
   const ids = entries.map((e) => e.id)
   assert.equal(new Set(ids).size, ids.length, '设置区块 id 不应重复')
   assert.deepEqual(
@@ -161,7 +162,7 @@ test('每个设置项的名称不等于原始 id（settings-vision-models 等不
   }
 })
 
-test('15 个已知设置项名称快照：每个设置项都有对应的名称', () => {
+test('16 个已知设置项名称快照：每个设置项都有对应的名称', () => {
   const byId = Object.fromEntries(sectionEntries().map((e) => [e.id, resolveName(e)]))
   for (const [id, expected] of Object.entries(EXPECTED_NAMES)) {
     assert.equal(byId[id], expected, `${id} 应有对应名称「${expected}」，实际「${byId[id]}」`)
@@ -235,10 +236,10 @@ function renderNavWithMirror() {
   }
 }
 
-test('collectSettingsGroups：基于真实源码结构生成 15 项，每项名称非空且不等于原始 id', () => {
+test('collectSettingsGroups：基于真实源码结构生成 16 项，每项名称非空且不等于原始 id', () => {
   const groups = collectSettingsGroups(sourceMirrorContent())
   const items = groups.flatMap((g) => g.items)
-  assert.equal(items.length, 15, `应生成 15 个设置子项，实际 ${items.length}`)
+  assert.equal(items.length, 16, `应生成 16 个设置子项，实际 ${items.length}`)
   const byId = Object.fromEntries(items.map((it) => [it.id, it.label]))
   for (const [id, name] of Object.entries(byId)) {
     assert.ok(name, `${id} 子项应有非空名称`)
@@ -255,11 +256,11 @@ test('collectSettingsGroups：基于真实源码结构生成 15 项，每项名�
   assert.equal(byId['settings-ai-providers'], 'AI API 供应商', 'settings-ai-providers 应显示为「AI API 供应商」')
 })
 
-test('渲染：左侧边栏展示全部 15 个设置项名称，无原始 id 泄露', () => {
+test('渲染：左侧边栏展示全部 16 个设置项名称，无原始 id 泄露', () => {
   const { renderer, root, restore } = renderNavWithMirror()
   try {
     const links = root.findAll((n) => n.type === 'a' && String(n.props.href || '').startsWith('#'))
-    assert.equal(links.length, 15, '应渲染 15 个子项链接')
+    assert.equal(links.length, 16, '应渲染 16 个子项链接')
     const linkTexts = new Set(links.map((l) => deepText(l)))
     for (const expected of Object.values(EXPECTED_NAMES)) {
       assert.ok(linkTexts.has(expected), `导航应展示设置项名称「${expected}」`)
@@ -453,7 +454,7 @@ test('【运行时】真实渲染 Settings：每个设置区块在渲染树中�
     })
     const sections = renderer.root.findAll(
       (n) => n.type === 'section' && String(n.props.className || '').split(/\s+/).includes('settings-section'))
-    assert.equal(sections.length, 15, `设置页应渲染 15 个设置区块，实际 ${sections.length}`)
+    assert.equal(sections.length, 16, `设置页应渲染 16 个设置区块，实际 ${sections.length}`)
     const byId = {}
     for (const s of sections) {
       const h2 = s.findAll((n) => n.type === 'h2')[0]
@@ -465,7 +466,7 @@ test('【运行时】真实渲染 Settings：每个设置区块在渲染树中�
     assert.equal(byId['settings-image-models'], '生图模型', 'settings-image-models 名称来源应存在')
     assert.equal(byId['settings-vision-models'], '识图模型', 'settings-vision-models 名称来源应存在')
     assert.equal(byId['settings-backup'], '数据备份', 'settings-backup 名称来源应存在')
-    // 全部 15 项渲染名都不是原始 id
+    // 全部 16 项渲染名都不是原始 id
     for (const [id, name] of Object.entries(byId)) {
       assert.ok(name && !name.includes('settings-'), `${id} 渲染名「${name}」不应含 settings- 前缀（必须是用户可读名称）`)
     }
