@@ -14,11 +14,12 @@ GitLab issue——灵感内容作为 issue 标题与描述、默认标签 featur
 - POST   /api/inspirations：创建灵感（repo_id + content 必填）。
 - PUT    /api/inspirations/{id}：更新灵感内容（刷新 updated_at）。
 - DELETE /api/inspirations/{id}：删除灵感。
-- POST   /api/inspirations/{id}/add-issue（issue #143 / #153）：将灵感
-  一键提交为 GitLab issue——灵感内容同时作为标题与描述，默认标签
-  feature + ui，分配人 = 仓库用户（issue #153：仓库设置页读取 remote
-  url 得到的 userinfo 用户名，解析为 GitLab 用户 id；未配置/解析失败
-  则不指定分配人）；走 owner token（复用 issues 模块的
+- POST   /api/inspirations/{id}/add-issue（issue #143 / #153 / #159）：
+  将灵感一键提交为 GitLab issue——灵感内容同时作为标题与描述，默认
+  标签 feature + ui，分配人 = 仓库用户（issue #153：仓库设置页读取
+  remote url 得到的 userinfo 用户名，解析为 GitLab 用户 id；issue #159：
+  存储值为空时提交时按 remote url 运行时读取兜底并写回仓库表，未配置/
+  解析失败则不指定分配人）；走 owner token（复用 issues 模块的
   _issue_edit_call，绝不回退 bot token），创建成功后清空概览缓存。
 
 校验：repo_id 必须指向存在且未软删除的仓库（400）；content 去除首尾
@@ -184,8 +185,10 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
 
     概览页灵感条目「添加 Issue」按钮点击后调用：灵感内容同时作为
     issue 标题与描述，默认标签 feature + ui（GitLab 创建 issue 时
-    不存在的标签会自动创建），不指定分配人；通过 GitLab API 在灵感
-    所属仓库创建。
+    不存在的标签会自动创建），分配人 = 仓库用户（issue #153/#159：
+    优先用仓库表 remote_username，存储值为空时按 remote url 运行时
+    读取兜底并写回，解析为 GitLab 用户 id；未配置/解析失败不指定
+    分配人）；通过 GitLab API 在灵感所属仓库创建。
 
     写操作与概览页其他 issue 编辑一致（_issue_edit_call）：必须使用
     owner token，绝不回退 bot token——未配置 owner token 返回 400 并
@@ -214,8 +217,29 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
     # 仓库用户 / 解析失败（用户不存在、不是成员、API 故障）时保持原
     # 行为（不指定分配人），不阻塞 issue 创建——用户可在仓库设置页
     # 「重新读取 remote」后重试。
+    #
+    # issue #159：存量仓库（issue #153 之前添加）remote_username 未落库，
+    # 仅依赖设置页手动「重新读取」体验不达预期——提交时在存储值为空时
+    # 按仓库 remote url 运行时读取兜底（read_repo_remote_username，尽力
+    # 而为：目录不可读 / 无该 remote / URL 无凭据返回 None），读到后
+    # 写回仓库表（设置页同步可见、后续调用直接用缓存值），仍读不到则
+    # 保持原行为（不指定分配人），任何情况都不阻塞 issue 创建。
     assignee_id = None
     username = (repo["remote_username"] or "").strip()
+    if not username:
+        try:
+            from ..git_remote import read_repo_remote_username
+            username = (read_repo_remote_username(repo) or "").strip()
+            if username:
+                # 运行时读到的仓库用户写回仓库表：仓库设置页展示与后续
+                # 提交不再重复读取（与设置页「重新读取 remote URL」落库
+                # 语义一致）。repo 可能是 sqlite3.Row，转 dict 再更新。
+                c.db.update_repo(repo["id"], remote_username=username)
+                repo = dict(repo)
+                repo["remote_username"] = username
+        except Exception as e:
+            logger.warning("灵感提交 issue：运行时读取仓库用户失败，跳过分配人: %s",
+                           str(e)[:200])
     if username:
         try:
             assignee_id = _resolve_repo_user_id(c, repo, username)

@@ -5,6 +5,26 @@
 ## [Unreleased]
 ### Fixed
 
+- **灵感页面「添加 Issue」未自动设置 git 仓库用户为负责人：提交时存储值缺失则按 remote url 运行时读取兜底并写回仓库表（issue #159）**：
+  概览页灵感板块「添加 Issue」一键提交为 GitLab issue 时，分配人应默认取该仓库 remote url
+  中的用户名（如 `https://user:token@host/...` 的 user，issue #153 引入的「仓库用户」）。
+  实测复现：issue #153 之前入库的存量仓库 `remote_username` 未落库为 NULL，灵感一键提交
+  issue（如灵感 #13 → issue #158）时后端只读存储值、不尝试读取 remote url，导致创建的
+  issue 没有分配人，与需求「自动设置 git 仓库用户为负责人」不符。本次修复：分配人解析在
+  存储值为空时按仓库 remote url **运行时读取**用户名兜底（`git_remote.read_repo_remote_username`，
+  读取顺序与设置页「重新读取 remote URL」一致：local_path → workspace/<name> → 存储 url），
+  读到后**写回仓库表**（设置页同步可见、后续提交直接命中缓存）；仍读不到（URL 无凭据 /
+  目录不可读 / 非 git 仓库）保持原行为（不指定分配人），任何异常都不阻塞 issue 创建。
+  改动：
+  - 后端 `api/inspirations.py` `add_issue_from_inspiration()`：`remote_username` 为空时调用
+    `read_repo_remote_username(repo)` 兜底读取并落库，再按用户名解析 GitLab 用户 id 设为
+    分配人；模块与函数文档同步补充 #159 说明；
+  - **测试**：`test_api_inspirations.py` 新增 `TestAddIssueFromInspirationRuntimeRemoteUser`
+    3 用例——存量仓库（存储值为空、local_path 带内嵌凭据 remote）提交后分配人正确解析且
+    仓库表写回 `agent`、运行时读不到用户名保持不指定分配人、运行时读取抛异常降级不阻塞
+    创建。修复前复现用例失败（`assignee_id=None`），修复后全部通过；后端全量 1428 例 +
+    前端全量 686 例通过。
+
 - **识图模型测试失败时展示「后端 POST 给上游 API 的信息」：错误提示统一带上实际请求地址 + 请求头（API Key 掩码）+ 请求体（图片 base64 截断）（issue #156）**：
   设置页「识图模型」卡片点「测试」上传图片调用识图模型，失败时前端只展示后端返回的错误文本；
   部分失败路径的信息不足以定位问题——网络层失败（超时/连接失败/DNS/SSL）只报「请求超时（>Ns）」

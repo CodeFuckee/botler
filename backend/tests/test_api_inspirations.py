@@ -73,12 +73,17 @@ def client(api_app):
 
 
 def _add_repo(db, project_id, name, priority=100, enabled=True,
-             remote_username=None):
+             remote_username=None, url=None, local_path=None,
+             remote_name=None):
     """便捷：插入一个仓库并返回本地 id。remote_username 为仓库用户
-    （issue #153：remote url userinfo 用户名）。"""
-    return db.upsert_repo(project_id, name, f"https://gitlab.example.com/{name}.git",
-                          enabled=enabled, priority=priority,
-                          remote_username=remote_username)
+    （issue #153：remote url userinfo 用户名）；url / local_path /
+    remote_name 可覆盖默认值（issue #159：运行时读取 remote url 兜底
+    场景需要构造带 local_path 与内嵌凭据 remote 的仓库）。"""
+    return db.upsert_repo(
+        project_id, name,
+        url or f"https://gitlab.example.com/{name}.git",
+        enabled=enabled, priority=priority, remote_username=remote_username,
+        local_path=local_path, remote_name=remote_name)
 
 
 class TestOverview:
@@ -594,6 +599,88 @@ class TestAddIssueFromInspirationAssignee:
         """边界：remote_username 为空白串 → 不指定分配人。"""
         tc, stub, db = edit_env
         repo = _add_repo(db, project_id=42, name="botler", remote_username="   ")
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] is None
+
+
+# ---- issue #159：仓库表 remote_username 为空时运行时读取 remote url 兜底 ----
+
+class TestAddIssueFromInspirationRuntimeRemoteUser:
+    """POST /api/inspirations/{id}/add-issue 的分配人兜底（issue #159）。
+
+    存量仓库（issue #153 之前入库）remote_username 未落库为 NULL，仅靠
+    设置页手动「重新读取 remote URL」体验不达预期。修复：提交时存储值
+    为空则按仓库 remote url 运行时读取用户名（read_repo_remote_username），
+    解析为 GitLab 用户 id 设为分配人并写回仓库表；读不到（URL 无凭据 /
+    目录不可读 / 非 git 仓库）保持原行为（不指定分配人），不阻塞创建。
+    """
+
+    def test_missing_stored_username_reads_remote_at_runtime(
+            self, edit_env, tmp_path, monkeypatch):
+        """复现：remote_username 未落库，remote url 内嵌用户名 agent →
+        运行时读取并设为分配人，且写回仓库表（设置页可见）。"""
+        import subprocess
+        # 成员解析客户端回退到桩（本地 git remote 的 host 是测试假地址，
+        # 禁止真实网络请求——生产环境 per-repo client 指向真实 GitLab，
+        # 语义一致：成员清单 + /users 查询都走同一客户端）
+        from botler.api import pipelines
+        monkeypatch.setattr(pipelines, "build_repo_client", lambda row, verify_ssl=True: None)
+        repo_dir = tmp_path / "remote-repo"
+        repo_dir.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo_dir, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin",
+             "https://agent:glpat-test@gitlab.example.com/botler.git"],
+            cwd=repo_dir, check=True)
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler",
+                         local_path=str(repo_dir))
+        # 该实例 members/all 无 user_id（GitLab 19 实测），走 /users 兜底
+        stub.members_by_project = {42: [
+            {"user_id": None, "username": "agent", "name": "Agent"}]}
+        stub.users_by_username = {"agent": 7}
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] == 7
+        # 运行时读取到的仓库用户已写回仓库表（设置页展示、后续直接命中）
+        assert db.get_repo(repo)["remote_username"] == "agent"
+
+    def test_runtime_read_failure_keeps_no_assignee(self, edit_env, monkeypatch):
+        """边界：存量仓库 remote url 无凭据（读不到用户名）→ 不指定分配人，
+        仍创建成功（与 issue #143 原行为一致），仓库表不被写入空值。"""
+        from botler import git_remote
+        monkeypatch.setattr(git_remote, "read_repo_remote_username",
+                            lambda row: None)
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username=None)
+        stub.members_by_project = {42: [
+            {"user_id": 7, "username": "agent", "name": "Agent"}]}
+        insp_id = db.create_inspiration(repo, "灵感内容")
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert stub.create_calls[0][1]["assignee_id"] is None
+        assert db.get_repo(repo)["remote_username"] is None
+
+    def test_runtime_read_exception_keeps_no_assignee(self, edit_env, monkeypatch):
+        """边界：运行时读取抛异常（目录不可读等）→ 降级不指定分配人，
+        不阻塞 issue 创建。"""
+        from botler import git_remote
+        def boom(row):
+            raise OSError("目录不可读")
+        monkeypatch.setattr(git_remote, "read_repo_remote_username", boom)
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler", remote_username=None)
+        stub.members_by_project = {42: [
+            {"user_id": 7, "username": "agent", "name": "Agent"}]}
         insp_id = db.create_inspiration(repo, "灵感内容")
 
         resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
