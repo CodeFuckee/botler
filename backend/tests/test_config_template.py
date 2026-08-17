@@ -81,7 +81,7 @@ class TestDefaultTemplate:
                     .replace("{issue_iid}", "1"))
         assert "botler" in rendered
         assert "测试 issue" in rendered
-        assert "git push origin main" in rendered
+        assert "git push origin HEAD" in rendered
         assert "state_event=close" not in rendered  # 渲染产物不得含关闭指令
         assert "（issue #1）" in rendered            # 安全提交信息示例已渲染
 

@@ -248,8 +248,9 @@ DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以�
 1. 本地工作区已由平台自动切到默认主分支并 git pull 拉取最新代码，
    直接基于最新代码分析问题、定位根因（无需自行切换分支或 git pull）
 2. 编写修复代码并自测通过（运行相关测试/构建验证）
-3. 自测通过后，直接推送到 main 分支：
-   git add -A && git commit -m "fix: 解决（issue #{issue_iid}）" && git push origin main
+3. 自测通过后，直接推送到当前分支（平台已自动切到仓库默认主分支，
+   可能是 main / master 等，不要假设分支名）：
+   git add -A && git commit -m "fix: 解决（issue #{issue_iid}）" && git push origin HEAD
 4. 推送成功后，在 issue 上留结果评论（平台会自动打 bot-done 标签）；
    不要关闭该 issue——关闭动作留给用户确认后手动执行（模版库规范）
 5. 提交信息严禁 `fix: #N` / `fixes #N` / `closes #N` / `resolves #N` 等

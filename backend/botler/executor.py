@@ -681,57 +681,149 @@ class ClaudeExecutor:
 
     def _resolve_default_branch(self, workdir: Path, remote: str,
                                 git_env: dict) -> str:
-        """解析远端默认主分支名（issue #147）。
+        """解析远端默认主分支名（issue #147 / #148 强化，不再硬编码 main）。
 
-        优先读取 ``git ls-remote --symref`` 返回的服务端 HEAD 符号引用目标，
-        并校验该分支真实存在于远端 refs（``git init --bare`` 的裸仓库 HEAD
-        可能指向不存在的 master，只有 main 被推送）；解析失败或分支缺失时
-        依次回退本地 refs/remotes/<remote>/HEAD 符号引用 → main → master
-        （与旧逻辑一致）。
+        优先读取服务端权威信息：``git ls-remote --symref`` 返回的 HEAD
+        符号引用（并校验该分支真实存在于远端 refs，``git init --bare`` 的
+        裸仓库 HEAD 可能指向不存在的 master，只有 main 被推送）。ls-remote
+        探测失败（网络/认证抖动、超时、git 异常等）时不直接回退硬编码
+        main，而是逐级降级：
+
+          1. ``git ls-remote --symref <remote>``（服务端权威）；
+          2. ``git remote show <remote>`` 解析 "HEAD branch:" 行；
+          3. 本地跟踪引用兜底：优先 ``refs/remotes/<remote>/HEAD`` 符号
+             引用，再按 main → master → 字典序 在本地已存在的跟踪分支中
+             探测（远端彻底不可达时也能拿到实际存在的分支）。
+
+        任一环节拿到的分支名都必须与「远端/本地实际存在的分支集合」核对，
+        避免解析出不存在的分支导致 checkout / pull 失败（任务 #249 根因：
+        远端只有 master 时解析出 main → fetch/checkout main 必然失败）。
+        全链路均失败（远端不可达且本地无任何跟踪引用）才最终回退 "main"。
+        """
+        branch = self._remote_default_branch_via_lsremote(
+            workdir, remote, git_env)
+        if branch:
+            return branch
+        branch = self._remote_default_branch_via_show(workdir, remote, git_env)
+        if branch:
+            return branch
+        branch = self._local_default_branch(workdir, remote)
+        if branch:
+            return branch
+        return "main"
+
+    def _remote_default_branch_via_lsremote(self, workdir: Path, remote: str,
+                                            git_env: dict) -> str | None:
+        """git ls-remote --symref 解析服务端权威默认主分支，失败返回 None。
+
+        HEAD 符号引用指向的分支不存在（如新裸仓库）时按 main → master →
+        字典序 在远端真实存在的分支中回退；远端可达但没有任何分支返回
+        None（空仓库交由下一级兜底）。
         """
         cmd = ["git", "-c", "http.sslVerify=false", "ls-remote", "--symref", remote]
         try:
             result = subprocess.run(cmd, cwd=workdir, env=git_env,
                                     capture_output=True, text=True, timeout=120)
-        except Exception:  # git 缺失/超时/异常等一律走回退链，探测不阻塞任务
-            logger.debug("ls-remote --symref 解析默认主分支失败，走回退链",
+        except Exception:  # git 缺失/超时/异常等一律走下一级降级，探测不阻塞任务
+            logger.debug("ls-remote --symref 解析默认主分支失败，走 git remote show 降级",
                          exc_info=True)
-            result = None
-        if result is not None and result.returncode == 0:
-            candidate: str | None = None
-            heads: set[str] = set()
-            for line in result.stdout.splitlines():
-                parts = line.strip().split()
-                if not parts:
-                    continue
-                if parts[0] == "ref:" and len(parts) == 3 and parts[2] == "HEAD":
-                    if parts[1].startswith("refs/heads/"):
-                        candidate = parts[1].rsplit("/", 1)[-1]
-                elif parts[0].startswith("refs/heads/"):
-                    heads.add(parts[0].rsplit("/", 1)[-1])
-            if candidate and candidate in heads:
-                return candidate
-            # HEAD 符号引用指向的分支不存在（如新裸仓库）→ 按常见命名回退
-            for name in ("main", "master"):
-                if name in heads:
+            return None
+        if result.returncode != 0:
+            logger.debug("ls-remote --symref 返回非零（%s），走 git remote show 降级: %s",
+                         result.returncode, (result.stderr or result.stdout).strip()[-200:])
+            return None
+        candidate: str | None = None
+        heads: set[str] = set()
+        for line in result.stdout.splitlines():
+            parts = line.strip().split()
+            if not parts:
+                continue
+            if parts[0] == "ref:" and len(parts) == 3 and parts[2] == "HEAD":
+                if parts[1].startswith("refs/heads/"):
+                    candidate = parts[1].rsplit("/", 1)[-1]
+            elif parts[0].startswith("refs/heads/"):
+                heads.add(parts[0].rsplit("/", 1)[-1])
+        if candidate and candidate in heads:
+            return candidate
+        # HEAD 符号引用指向的分支不存在（如新裸仓库）→ 按常见命名回退
+        for name in ("main", "master"):
+            if name in heads:
+                return name
+        if heads:
+            return sorted(heads)[0]
+        return None
+
+    def _remote_default_branch_via_show(self, workdir: Path, remote: str,
+                                        git_env: dict) -> str | None:
+        """git remote show <remote> 解析 "HEAD branch:" 行，失败返回 None。
+
+        ls-remote --symref 不可用（服务器不支持 / 探测异常）时的二次服务端
+        探测。``git remote show`` 是 git 查询远端默认分支的标准命令，输出
+        ``HEAD branch: <名>``；HEAD 悬空时输出 ``(unknown)``。
+        """
+        cmd = ["git", "remote", "show", remote]
+        try:
+            result = subprocess.run(cmd, cwd=workdir, env=git_env,
+                                    capture_output=True, text=True, timeout=120)
+        except Exception:  # 同上：任何失败走本地跟踪引用兜底
+            logger.debug("git remote show 解析默认主分支失败，走本地跟踪引用兜底",
+                         exc_info=True)
+            return None
+        if result.returncode != 0:
+            logger.debug("git remote show 返回非零（%s），走本地跟踪引用兜底",
+                         result.returncode)
+            return None
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("HEAD branch:"):
+                name = stripped.split(":", 1)[1].strip()
+                if name and name != "(unknown)":
                     return name
-            if heads:
-                return sorted(heads)[0]
-        # 回退：本地 remote HEAD 符号引用（clone / git remote set-head 生成）
+        return None
+
+    def _local_default_branch(self, workdir: Path, remote: str) -> str | None:
+        """远端不可达时用本地跟踪引用兜底解析默认主分支，没有则返回 None。
+
+        先收集本地已拉取的 ``refs/remotes/<remote>/*`` 跟踪分支集合，再
+        按优先级探测：① ``refs/remotes/<remote>/HEAD`` 符号引用（clone /
+        git remote set-head 生成，目标分支必须真实存在于本地，避免陈旧
+        HEAD 指向已删除分支）；② main → master → 字典序 取实际存在的分支。
+        注意：单分支克隆的 origin/HEAD 指向克隆分支而非远端默认分支——
+        远端不可达时无法确认真实默认分支，取本地已有分支已是最优近似
+        （远端恢复后 ls-remote 会纠正）。
+        """
+        try:
+            result = subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname:short)",
+                 f"refs/remotes/{remote}/"],
+                cwd=workdir, capture_output=True, text=True, timeout=30)
+        except Exception:  # git 缺失/超时等一律视为无本地引用
+            return None
+        if result.returncode != 0:
+            return None
+        names = {line.strip().rsplit("/", 1)[-1]
+                 for line in result.stdout.splitlines() if line.strip()}
+        names.discard("HEAD")  # 排除符号引用本身（refs/remotes/<remote>/HEAD）
         try:
             result = subprocess.run(
                 ["git", "symbolic-ref", f"refs/remotes/{remote}/HEAD"],
-                cwd=workdir, env=git_env, capture_output=True, text=True,
-                timeout=30)
+                cwd=workdir, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 ref = result.stdout.strip()
                 prefix = f"refs/remotes/{remote}/"
                 if ref.startswith(prefix):
-                    return ref[len(prefix):]
-        except Exception:  # 同上：任何失败回退 main
-            logger.debug("本地 remote HEAD 符号引用解析失败，回退 main",
+                    name = ref[len(prefix):]
+                    if name in names:  # 陈旧 HEAD 指向已删除分支时忽略
+                        return name
+        except Exception:  # 同上：任何失败按本地跟踪分支探测
+            logger.debug("本地 remote HEAD 符号引用解析失败，按本地跟踪分支探测",
                          exc_info=True)
-        return "main"
+        for name in ("main", "master"):
+            if name in names:
+                return name
+        if names:
+            return sorted(names)[0]
+        return None
 
     def _checkout_default_branch(self, workdir: Path, remote: str,
                                  branch: str, git_env: dict) -> None:

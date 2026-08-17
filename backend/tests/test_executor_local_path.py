@@ -324,6 +324,117 @@ class TestPrepareWorkspaceDefaultBranchAndPull:
         assert self._current_branch(repo) == "main"
         assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
 
+# ---- issue #148 强化：默认主分支解析不硬编码 main（master 默认分支场景） ----
+
+class TestPrepareWorkspaceDefaultBranchResolution:
+    """issue #148 用户复测仍失败（任务 #249）：怀疑目标仓库默认主分支是
+    master 而非 main。复现：`git ls-remote --symref` 探测失败（网络/认证
+    抖动）且本地缺 `refs/remotes/origin/HEAD`（手工加 remote 的仓库常见）
+    时，旧解析链一路回退到硬编码 `"main"`，而远端只有 master → checkout /
+    fetch main 必然失败。修复后逐级降级探测，全程不硬编码 main：
+    `ls-remote --symref`（服务端权威）→ `git remote show`（HEAD branch:）
+    → 本地跟踪引用（origin/HEAD 符号引用 → main → master → 字典序）。
+    """
+
+    @staticmethod
+    def _make_master_only_repo(tmp_path: Path) -> tuple[Path, Path]:
+        """远端只有 master 分支（默认主分支 master）的裸仓库 + 工作仓库。
+
+        返回 (bare, repo)。与 TestPrepareWorkspaceDefaultBranchAndPull 的
+        _make_repo_with_default 的区别：远端仅存在 master 一个分支——用户
+        怀疑的任务 #249 目标仓库形态（若解析链硬编码 main，必失败）。
+        """
+        bare = tmp_path / "remote-master.git"
+        seed = tmp_path / "seed-master"
+        repo = tmp_path / "repo-master"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "master", str(seed)], check=True)
+        (seed / "file.txt").write_text("hello\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                        "-c", "user.email=test@botler.local",
+                        "commit", "-q", "-m", "init"], check=True)
+        subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(bare)],
+                       check=True)
+        subprocess.run(["git", "-C", str(seed), "push", "-q", "-u", "origin", "master"],
+                       check=True)
+        subprocess.run(["git", "--git-dir", str(bare), "symbolic-ref", "HEAD",
+                        "refs/heads/master"], check=True)
+        subprocess.run(["git", "clone", "-q", str(bare), str(repo)], check=True)
+        return bare, repo
+
+    @staticmethod
+    def _drop_origin_head(repo: Path) -> None:
+        """删除本地 refs/remotes/origin/HEAD（手工加 remote 的仓库常缺该引用）。
+
+        git fetch --prune 不会重建它（本地实测验证），删除后本地再无
+        origin/HEAD 兜底，旧代码会一路回退到硬编码 "main"。
+        """
+        subprocess.run(["git", "-C", str(repo), "remote", "set-head", "origin", "-d"],
+                       check=True)
+
+    @staticmethod
+    def _current_branch(repo: Path) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+
+    @staticmethod
+    def _patch_git_probe_failure(monkeypatch, fail_remote_show: bool = False) -> None:
+        """让 git ls-remote（及可选 git remote show）探测命令返回失败。
+
+        模拟远端探测命令的网络/认证异常（exit 128），其余 git 命令
+        （fetch / checkout / reset / pull 等）原样执行。
+        """
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git":
+                if "ls-remote" in cmd:
+                    return subprocess.CompletedProcess(
+                        cmd, 128, "",
+                        "fatal: unable to access 'http://remote/': Could not resolve host")
+                if fail_remote_show and len(cmd) >= 3 \
+                        and cmd[1] == "remote" and cmd[2] == "show":
+                    return subprocess.CompletedProcess(
+                        cmd, 128, "",
+                        "fatal: unable to access 'http://remote/': Could not resolve host")
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def test_master_default_not_hardcoded_when_lsremote_fails(self, executor, tmp_path,
+                                                             monkeypatch):
+        """ls-remote 探测失败且本地缺 origin/HEAD 时不能硬编码 main。
+
+        用户怀疑任务 #249 目标仓库默认主分支是 master：远端只有 master，
+        ls-remote 探测抖动失败 → 旧解析链兜底硬编码 "main" → 后续 checkout /
+        fetch main 必然失败（任务重试耗尽）。修复后应经 git remote show /
+        本地跟踪引用解析出 master，prepare 成功且工作区停在 master。
+        """
+        _bare, repo = self._make_master_only_repo(tmp_path)
+        self._drop_origin_head(repo)
+        self._patch_git_probe_failure(monkeypatch)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert self._current_branch(repo) == "master"
+        assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
+
+    def test_resolve_falls_back_to_local_tracking_refs(self, executor, tmp_path,
+                                                      monkeypatch):
+        """ls-remote 与 git remote show 都失败时，用本地跟踪引用兜底解析。
+
+        远端彻底不可达（探测命令全部失败）时不能回退硬编码 main，应扫描
+        本地 refs/remotes/origin/* 跟踪分支（fetch --prune 已同步），按
+        main → master → 字典序 取实际存在的分支。
+        """
+        _bare, repo = self._make_master_only_repo(tmp_path)
+        self._drop_origin_head(repo)
+        self._patch_git_probe_failure(monkeypatch, fail_remote_show=True)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert self._current_branch(repo) == "master"
+        assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
+
+
 # ---- issue #147 补充：git pull 拉取冲突时保留现场交由 agent 手工合并 ----
 
 class TestPrepareWorkspacePullConflict:

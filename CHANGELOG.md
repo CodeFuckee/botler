@@ -28,6 +28,35 @@
     主分支不失败、本地已在默认分支名但跟踪引用缺失时 `reset --hard` 不失败）；
     后端全量 1308 用例通过（含既有 default-branch/pull 回归）。
 
+- **默认主分支解析兜底硬编码 main，master 默认分支仓库工作区准备失败
+  （issue #148 复测）**：用户复测任务 #249 仍失败，怀疑目标仓库（graph2plan）
+  默认主分支是 master 而非 main。排查确认 `_resolve_default_branch` 在
+  `git ls-remote --symref` 探测失败（网络/认证抖动）且本地缺
+  `refs/remotes/origin/HEAD`（手工加 remote 的仓库常见）时，兜底链一路
+  回退到**硬编码 "main"**——远端只有 master 时后续 `fetch/checkout main`
+  必然失败。改动：
+  - 后端 `executor.py`：`_resolve_default_branch` 重构为逐级降级探测、全程
+    不硬编码 main：① `git ls-remote --symref <remote>`（服务端权威 HEAD
+    符号引用，校验分支真实存在）；② `git remote show <remote>` 解析
+    "HEAD branch:" 行（ls-remote 不可用时的二次服务端探测，新增
+    `_remote_default_branch_via_show`）；③ 本地跟踪引用兜底（优先
+    `refs/remotes/<remote>/HEAD` 符号引用，再按 main → master → 字典序
+    扫描已拉取的跟踪分支，新增 `_local_default_branch`）；全链路失败才
+    最终回退 "main"；
+  - 后端 `config.py` `DEFAULT_TEMPLATE`：第 3 点「直接推送到 main 分支 /
+    git push origin main」改为「推送到当前分支（平台已自动切到仓库默认
+    主分支，可能是 main / master 等，不要假设分支名）/ git push origin
+    HEAD」——agent 会话内不再硬编码 main；`config.example.yaml` 同步；
+  - 文档：`docs/设计方案.md` §5.5 工作区准备命令补充 `git remote show`
+    二级探测与本地跟踪引用兜底说明、§5.6 示例模版同步 push HEAD 写法；
+  - **测试**：`test_executor_local_path.py` 新增
+    `TestPrepareWorkspaceDefaultBranchResolution` 2 用例（ls-remote 探测
+    失败 + 本地缺 origin/HEAD 时 master 默认分支仓库 prepare 不失败并停在
+    master；ls-remote 与 git remote show 都失败时经本地跟踪引用兜底解析
+    master）；修复前两用例稳定复现 `git fetch 失败 (exit 128): couldn't
+    find remote ref main`，修复后通过；`test_config_template.py` 断言同步
+    push HEAD。
+
 ### Changed
 
 - **任务开始前自动切回默认主分支并 git pull 同步最新代码（issue #147）**：
