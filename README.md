@@ -66,6 +66,9 @@ backend/
   config.example.yaml
   requirements.txt
 frontend/            React (Vite) Web UI，构建产物由 FastAPI 托管
+frontend/e2e/        Playwright 浏览器级 E2E（issue #212）：tests/ 用例、
+                     fixtures/ mock 夹具、support/ 浏览器级 mock API、
+                     scripts/ 服务编排与种子数据库、backend-config.yaml
 docs/                文档（设计方案 / UI 优化参考 / Synology SSO 配置指南）
 deploy/              pm2 与 systemd 配置
 workspace/           仓库工作区（运行时生成）
@@ -97,6 +100,36 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 供应商」（ai_providers）配置的文本对话模型——取列表第一个启用且 API Key
 > 非空的项（支持 DeepSeek / OpenAI / Gemini / Anthropic 等，未配置时给出
 > 中文提示引导到设置页）；AI 回复失败时输入保留可重试。
+
+## 测试
+
+```bash
+# 后端单元测试（pytest，API 单测 + 执行器 + 数据库迁移等）
+cd backend && .venv/bin/python -m pytest tests/ -q
+
+# 前端单元测试（node --test：源码静态断言 + react-test-renderer 渲染断言）
+cd frontend && npm test
+
+# 浏览器级 E2E（Playwright，issue #212）：一键起真实后端 + 前端构建产物 + 真浏览器
+# 前置：backend/.venv 就绪、frontend dist 已构建（脚本缺失时自动构建）
+bash frontend/e2e/scripts/start-servers.sh                 # 跑全部 E2E
+bash frontend/e2e/scripts/start-servers.sh tests/overview.spec.js   # 跑单个文件
+```
+
+### E2E 架构（issue #212）
+
+- **链路**：真实浏览器（Chromium）→ vite preview（前端构建产物，SPA 路由，`/api`
+  经 `preview.proxy` 代理）→ uvicorn（真实 FastAPI 后端，独立端口 8011 避开生产
+  8000，`BOTLER_CONFIG` / `BOTLER_DB` 指向临时目录）；
+- **mock API 模式**：只拦截依赖真实 GitLab 的接口（`issues/overview`、
+  `pipelines/overview`、`issues/form-meta`、`POST issues`，见
+  `e2e/support/mock-api.js`），其余接口（settings / tasks / 灵感 / 通知 / auth /
+  SSE 事件流）走真实后端——前后端契约与 SSE 实时交互真实验证、零真实 GitLab 依赖、
+  数据完全确定（种子数据库 + mock 夹具）；
+- **覆盖链路**：概览页加载与 issue 展示 / 添加 Issue 弹窗提交（含必填校验）/ 设置页
+  保存配置（重载验证持久化）/ 任务详情 SSE 事件流（后端回放种子执行日志逐事件渲染）；
+- **防 flaky**：`playwright.config.js` 配置 `retries: 2` + trace 保留；CI
+  `.gitlab-ci.yml` 新增 `e2e` stage（build 之后、deploy 之前，E2E 未通过不部署）。
 
 ## 部署（10.0.0.122，Ubuntu 24.04）
 

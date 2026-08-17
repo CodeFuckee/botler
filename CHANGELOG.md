@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 ### Added
+- **引入 Playwright 浏览器级 E2E 测试（issue #212）：真实浏览器覆盖关键用户链路**：
+  此前前端测试只有源码静态断言 + react-test-renderer 渲染断言、后端只有 API 单测，
+  「添加仓库 → webhook 触发 → 任务执行 → 概览展示」全链路无浏览器级验证。本次在
+  `frontend/` 引入 `@playwright/test`（1.62.x，与部署机缓存的 chromium-1234 匹配），
+  新增浏览器级 E2E 基建与核心链路用例：
+  - **配置**：`frontend/playwright.config.js`——测试目录 `e2e/tests`、单用例超时 30s、
+    断言超时 10s、**重试策略 retries: 2**（失败自动重试并保留 trace，防 flaky）、
+    chromium 单项目、失败产物（html 报告 + trace）输出 `playwright-report/` 与
+    `test-results/`（均 gitignore）；
+  - **测试用例（5 条，`frontend/e2e/tests/`）**：① 概览页加载与 issue 展示（仓库卡片、
+    issue 标题/iid、bot-done 分组）；② 添加 Issue 弹窗提交（表单校验拦截空标题 →
+    填写标题+勾选标签提交 → 请求体断言 → 列表刷新展示新 issue）；③ 设置页保存配置
+    （修改任务调度参数 → 保存成功提示 → 请求体断言 → **重载页面验证写回 config.yaml
+    持久化**）；④ 任务详情 SSE 事件流（真实后端回放种子执行日志：文本/思考/工具调用/
+    工具结果/结果摘要逐事件渲染 + done 收尾标记消失）；⑤ 添加 Issue 弹窗标题必填校验；
+  - **mock API 模式**：`e2e/support/mock-api.js` 仅拦截依赖真实 GitLab 的接口
+    （issues/overview、pipelines/overview、issues/form-meta、POST issues），其余接口
+    （settings/tasks/灵感/通知/auth/SSE）走**真实后端**（uvicorn），前后端契约与
+    SSE 事件流真实验证、零真实 GitLab 依赖、数据完全确定；
+  - **服务编排**：`e2e/scripts/start-servers.sh` 一键起真实后端（uvicorn，独立端口
+    8011 避开生产 8000，`BOTLER_CONFIG`/`BOTLER_DB` 指向临时目录）+ 真实前端构建产物
+    （vite preview，`preview.proxy` 把 /api 代理到后端，`E2E_BACKEND_URL` 可覆盖）+
+    种子数据库（`e2e/scripts/seed-e2e-db.py`：1 仓库 + 1 成功任务 + claude stream-json
+    执行日志 + 任务日志 + 灵感）；`vite.config.js` 增加 `preview.proxy`（生产默认仍指向
+    8000，行为不变）；
+  - **CI**：`.gitlab-ci.yml` 新增 `e2e` stage 与 `e2e:playwright` job（位于 build 之后、
+    deploy 之前，失败阻断部署）——依赖 frontend:build 的 dist 产物，本机起 uvicorn +
+    vite preview 后 Playwright 真浏览器跑全部用例，失败产物 7 天保留；`@playwright/test`
+    浏览器优先复用部署机 `~/.cache/ms-playwright` 缓存（chromium-1234），下载兜底走
+    npmmirror 镜像；
+  - **测试**：实现前全部 E2E 用例在无实现时可复现失败，实现后本地 5/5 通过（含真实
+    后端 SSE 回放），前端 `npm test` 727 用例与后端 pytest 全量无 regression。
 - **设置页左侧边栏支持整体折叠/展开，折叠后收成窄栏、内容区占满全宽（issue #168）**：
   设置页左侧导航栏（SettingsNav，issue #139 引入）原为固定 240px 列，只能折叠内部
   分组子项；本次新增**侧边栏整体折叠**能力：
@@ -217,6 +249,15 @@
     全部通过；后端全量测试无 regression。
 
 ### Fixed
+
+- **GitLab 传输层故障（DNS 失败/连接拒绝/超时）裸抛 httpx 异常导致线程崩溃——统一转 GitLabError（issue #212 配套）**：
+  `GitLabClient._request` / `_paged` 此前只处理 HTTP 状态码（401/403/404/>=400），
+  DNS 解析失败、连接拒绝、超时等传输层故障会裸抛 `httpx.ConnectError` 等异常，绕过
+  调用方 `except GitLabError` 的优雅降级——对账首轮线程直接崩溃打印 traceback、
+  APScheduler 定时任务标记失败。修复：两处请求统一 `except httpx.HTTPError` 转抛
+  `GitLabError("GitLab 请求失败（path）: ...")`，与「GitLab 故障不中断整体」的既有
+  设计一致（E2E 用假 GitLab 地址启动真实后端时日志干净、对账照常降级重试）；
+  `test_gitlab_client.py` 55 用例全量通过。
 
 - **调度器同权重 issue 未按创建时间排序——同优先级时改为按 issue 创建时间升序派发，创建时间越早的 issue 越先处理（issue #234）**：
   需求约定「issue 标记优先级没有区别的情况下，按照创建时间的排序来处理 issue，创建

@@ -56,6 +56,7 @@
 stages:
   - security
   - build
+  - e2e
   - deploy
   - sync
 
@@ -817,6 +818,91 @@ backend:test:
       echo "  步骤3 (安装依赖):         $((STEP3_END - STEP3_START)) 秒"
       echo "  步骤4 (运行测试):         $((STEP4_END - STEP4_START)) 秒"
       echo "========================================="
+
+# ================================================================
+# Stage: e2e —— 浏览器级端到端测试（Playwright，issue #212）
+# ----------------------------------------------------------------
+# 在 code01（shell executor）上起真实后端（uvicorn，独立端口 8011，
+# 避开生产 8000）+ 真实前端构建产物（vite preview，/api 代理到后端），
+# Playwright 真浏览器跑核心链路：概览页加载与 issue 展示 / 添加 Issue
+# 弹窗提交 / 设置页保存配置 / 任务详情 SSE 事件流。GitLab 依赖接口由
+# 浏览器级 mock 兜底（frontend/e2e/support/mock-api.js），后端用假
+# GitLab 地址 + 种子数据库，稳定且不依赖真实 GitLab。
+# 门禁：e2e 失败 → 后续 deploy 不执行（docs_only_skip 的 on_success
+# 传播），保证「E2E 未通过不部署」。
+# ================================================================
+e2e:playwright:
+  extends: [.docs_only_skip]
+  stage: e2e
+  tags:
+    - linux
+    - code01
+  timeout: 25m
+  # 依赖 frontend:build 的 dist 产物（artifacts 自动传入本 job）
+  dependencies:
+    - frontend:build
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+      prefix: frontend-npm
+    paths:
+      - frontend/node_modules/
+    policy: pull
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      # shell executor 的 PATH 可能不含 node/uv
+      export PATH="$HOME/.local/bin:$HOME/miniconda3/bin:$HOME/.cargo/bin:$PATH"
+      # Playwright 浏览器下载镜像（国内网络；本机已缓存 chromium-1234 时
+      # playwright install 直接命中缓存，不触发下载）
+      export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}"
+
+      STEP1_START=$(date +%s)
+      echo "=== 1. 后端依赖（uv 安装，与 backend:test 同模式）==="
+      cd backend
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      if [ ! -x .venv/bin/python ]; then
+        rm -rf .venv
+        uv venv .venv
+      fi
+      uv pip install -r requirements.txt -i ${PIP_INDEX_URL}
+      cd ..
+      STEP1_END=$(date +%s)
+      echo "⏱️  步骤1 (后端依赖) 用时: $((STEP1_END - STEP1_START)) 秒"
+
+      STEP2_START=$(date +%s)
+      echo "=== 2. 前端依赖 + Playwright 浏览器 ==="
+      cd frontend
+      npm ci --registry=${NPM_REGISTRY_URL}
+      npx playwright install chromium
+      cd ..
+      STEP2_END=$(date +%s)
+      echo "⏱️  步骤2 (前端依赖) 用时: $((STEP2_END - STEP2_START)) 秒"
+
+      STEP3_START=$(date +%s)
+      echo "=== 3. 启动 uvicorn + vite preview 并运行 Playwright E2E ==="
+      echo "E2E 目录: frontend/e2e（配置见 playwright.config.js）"
+      bash frontend/e2e/scripts/start-servers.sh
+      STEP3_END=$(date +%s)
+      echo "⏱️  步骤3 (E2E 运行) 用时: $((STEP3_END - STEP3_START)) 秒"
+
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [e2e:playwright] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
+      echo "========================================="
+  artifacts:
+    when: always
+    paths:
+      - frontend/playwright-report/
+      - frontend/test-results/
+    expire_in: 7 days
 
 # ================================================================
 # Stage: deploy —— 第二阶段：本机部署（pm2 + 健康检查）

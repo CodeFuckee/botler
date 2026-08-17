@@ -1,0 +1,71 @@
+# Botler E2E 后端专用配置（issue #212）
+# 与生产 config.example.yaml 同构，但全部使用假值/本地值：
+#   - GitLab 指向不存在的 gitlab.example.com + 假 token → 真实 GitLab
+#     依赖的接口（开放 issue / 流水线 / 成员标签等）由 Playwright 浏览器级
+#     mock 兜底，后端启动与其余接口完全不依赖真实 GitLab；
+#   - 无 ${ENV} 引用（E2E 环境不注入凭据，避免启动即报 ValueError）；
+#   - SSO 关闭（开放访问）、备份关闭（不写运行时备份文件）。
+# 运行时由 start-servers.sh 复制到临时目录再启动，避免写回仓库内此文件。
+
+gitlab:
+  url: https://gitlab.example.com
+  bot_token: e2e-mock-token-not-a-real-credential
+  webhook_secret: e2e-mock-webhook-secret
+  bot_username: ""
+  verify_ssl: false
+
+worker:
+  max_concurrent_repos: 3
+  task_timeout_seconds: 1800
+  max_retries: 2
+  reconcile_interval_seconds: 300
+  issue_priority: ["bug", "test", "feature"]
+  engine: claude
+
+claude:
+  command: claude
+  args: ["-p", "--output-format", "stream-json", "--verbose"]
+
+templates: {}
+
+browse:
+  default_path: ""
+
+backup:
+  enabled: false
+  retention_days: 30
+
+ui:
+  timezone: ""
+  show_disabled_repos: true
+
+notifications:
+  enabled: true
+  task_needs_interaction: true
+  issue_completed: true
+  queue_empty: true
+  queue_no_work: true
+
+webhook:
+  enabled: false
+  url: ""
+  content_type: application/json
+  authorization: ""
+  body_template: ""
+
+sso:
+  enabled: false
+  well_known_url: ""
+  client_id: ""
+  client_secret: ""
+  scope: "openid profile email"
+  session_days: 30
+  redirect_uri: ""
+  verify_ssl: true
+
+repos:
+  - project_id: 1
+    name: botler
+    url: https://gitlab.example.com/botler
+    enabled: true
+    priority: 10

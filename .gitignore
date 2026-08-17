@@ -33,3 +33,7 @@ logs/
 **/.sessions/
 # CI 运行时 uv 缓存（部署机器生成，不入库）
 cache/
+
+# Playwright E2E 产物（issue #212）
+frontend/playwright-report/
+frontend/test-results/
