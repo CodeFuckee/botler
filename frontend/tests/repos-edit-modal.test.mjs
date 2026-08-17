@@ -75,8 +75,11 @@ function findModal(renderer) {
     && node.props.className.includes('modal-overlay'))
 }
 
+// 弹窗内输入框：issue #161 起「添加仓库」表单也含默认值 100 的优先级输入框，
+// 全局查找会先命中添加表单而非弹窗字段，弹窗相关断言一律限定在弹窗内查找。
 function findInputs(renderer) {
-  return renderer.root.findAllByType('input')
+  const modal = findModal(renderer)[0]
+  return modal ? modal.findAllByType('input') : []
 }
 
 function textOf(node) {

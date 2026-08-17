@@ -14,7 +14,7 @@ export default function Repos() {
 
   // 添加表单（method: 'url' = GitLab URL 方式，'local' = 本地文件夹方式；默认本地文件夹方式）
   const [method, setMethod] = useState('local')
-  const [form, setForm] = useState({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '' })
+  const [form, setForm] = useState({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '', priority: '100' })
   const [remotes, setRemotes] = useState([])
   const [addError, setAddError] = useState('')
   // 服务器目录选择对话框
@@ -42,6 +42,16 @@ export default function Repos() {
       if (!form.local_path.trim()) { setAddError('请填写本地文件夹路径'); return }
       if (!form.remote_name) { setAddError('请先在本地文件夹中选择一个 remote'); return }
     }
+    // 调度优先级（issue #161）：1~999 整数，数字越小越优先；留空按后端默认 100
+    let priority
+    if (form.priority.trim() !== '') {
+      const num = Number(form.priority.trim())
+      if (!Number.isInteger(num) || num < 1 || num > 999) {
+        setAddError('优先级需为 1~999 之间的整数')
+        return
+      }
+      priority = num
+    }
     setBusy(true)
     try {
       await api.post('/api/repos', {
@@ -50,8 +60,9 @@ export default function Repos() {
         remote_name: method === 'local' ? form.remote_name : undefined,
         name: form.name.trim() || undefined,
         webhook_url: form.webhook_url.trim() || undefined,
+        priority,
       })
-      setForm({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '' })
+      setForm({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '', priority: '100' })
       setRemotes([])
       await load()
     } catch (e) {
@@ -198,6 +209,14 @@ export default function Repos() {
             placeholder="webhook 回调地址（可选，默认用当前访问地址；跨网络场景可覆盖）"
             value={form.webhook_url}
             onChange={(e) => setForm({ ...form, webhook_url: e.target.value })}
+          />
+        </div>
+        <div className="form-row">
+          <input
+            className="input grow"
+            placeholder="调度优先级（默认 100；1~999 整数，数字越小越优先）"
+            value={form.priority}
+            onChange={(e) => setForm({ ...form, priority: e.target.value })}
           />
         </div>
         <div className="form-row center">

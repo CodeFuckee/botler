@@ -262,7 +262,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 ```
 GET    /api/health                    健康检查
 GET    /api/repos                     仓库列表
-POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook + 在目标 GitLab 项目补齐标记库缺失的默认标签（issue #157）；priority 1~999 缺省 100）
+POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook + 在目标 GitLab 项目补齐标记库缺失的默认标签（issue #157）；priority 1~999 缺省 100，Web UI 添加仓库表单可填写调度优先级，issue #161）
 GET    /api/repos/browse              浏览服务器目录（无 path 时初始定位到 browse.default_path，默认服务器用户主目录 ~）
 POST   /api/repos/discover            读取本地文件夹的 git remote 列表
 PUT    /api/repos/{id}                更新仓库（名称/启用/优先级/模版覆盖）
