@@ -1,0 +1,2 @@
+# 混淆规则文件（release 构建时按 entry/build-profile.json5 的规则启用）
+# 当前 release 构建关闭混淆（enable: false），可按需在此补充规则。

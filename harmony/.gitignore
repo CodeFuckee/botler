@@ -1,0 +1,28 @@
+# ============================================================
+# Botler 鸿蒙端（harmony/）本地配置与构建产物
+# 说明：以下均为 DevEco Studio / hvigor / ohpm 运行时生成的
+# 本地文件，不应入库；源码与配置文件（*.ets / *.json5 / *.ts）
+# 全部入库，保证 CI 可完整复现编译。
+# ============================================================
+
+# IDE 本地配置
+.idea/
+*.iml
+.vscode/
+local.properties
+
+# hvigor 构建缓存与日志（.hvigor/ 位于工程根目录）
+.hvigor/
+
+# 模块构建产物（HAP / intermediates / 日志等）
+**/build/
+
+# ohpm 依赖目录（当前无三方依赖，保留规则供后续扩展）
+**/oh_modules/
+oh_modules/
+node_modules/
+
+# 运行时测试报告与临时文件
+**/.preview/
+**/.test/
+*.log

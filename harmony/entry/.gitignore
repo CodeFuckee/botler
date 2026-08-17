@@ -1,0 +1,6 @@
+# entry 模块构建产物与本地配置（工程级 .gitignore 已兜底，这里按 DevEco 模板再声明一次）
+/oh_modules
+/.preview
+/.test
+/.cxx
+/build

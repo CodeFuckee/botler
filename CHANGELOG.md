@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 ### Added
+- **新增鸿蒙端（Web 套壳）并在 CI/CD 中加入鸿蒙编译（issue #173）**：
+  需求「这个额外实现一个鸿蒙端，使用web套壳，同时在ci cd的流程中加入鸿蒙的编译」。
+  额外实现一个 **HarmonyOS NEXT 鸿蒙端**，使用系统 Web 组件（WebView）套壳加载
+  Botler Web 前端（React/Vite 产物由 FastAPI 同源托管），并在 CI/CD 流程中
+  加入鸿蒙的**真实编译**：
+  - **鸿蒙工程（`harmony/`，Stage 模型）**：`AppScope`（bundleName
+    `com.botler.app` / 版本 / 图标）+ `entry` 模块（`module.json5` 声明
+    INTERNET 权限与 EntryAbility；`Index.ets` 用 Web 组件加载
+    `common/AppConfig.ets` 的 `WEB_URL`（默认 `http://10.0.0.122:8000`，
+    部署机内网地址，按环境可改），原生壳补充加载动画（LoadingProgress）/
+    加载失败提示与重试（onErrorReceive + controller.refresh()）/ 返回键
+    历史回退（onBackPress + accessBackward）；目标 SDK HarmonyOS 6.1.1
+    （API 24），工程模型版本 6.0.2；应用图标由 PIL 绘制（品牌蓝圆角方块 +
+    白色 B）；
+  - **CI/CD 鸿蒙编译（`harmony:build` 作业）**：`build` 阶段新增与
+    frontend:build / backend:test 并行的编译门禁——先跑结构校验
+    （`harmony/scripts/validate_harmony.py`，配置缺失/引用断裂秒级失败），
+    再 `ohpm install` + `hvigorw assembleHap`（本机华为命令行工具链
+    `~/command-line-tools`：hvigor 6.24.3 + ohpm 6.1.2 + HarmonyOS 6.1.1
+    SDK）做真实 ArkTS 编译，产出未签名 HAP 为 artifact（CI 只验证可编译性，
+    正式签名发布需 DevEco Studio 自动签名），编译失败即阻断流水线
+    （docs_only_skip 的 on_success 传播，「鸿蒙端不可编译不部署」）；
+    `.docs_only_skip` 白名单补充 `harmony/**/*` 与 `**/*.ets`、`**/*.json5`，
+    鸿蒙改动不会被误判为 docs-only 跳过；
+  - **测试**：新增 `backend/tests/test_harmony_project.py`（10 例）——JSON5
+    迷你解析器（注释/尾逗号/单引号/无引号键/字符串内注释符不误判）、真实
+    harmony 工程通过全部结构校验（防回退）、破坏性用例（移除 INTERNET
+    权限/Web 组件/WEB_URL、非 http(s) 地址、移除 targetSdkVersion、删除
+    必需文件均能检出）；`harmony/scripts/validate_harmony.py` 为纯标准库
+    实现（内置迷你 JSON5 解析器），CI 与 pytest 双端复用；
+  - **文档**：`harmony/README.md`（目录结构 / 环境要求 / 命令行编译步骤 /
+    WEB_URL 修改 / DevEco Studio 真机运行与签名 / CI 集成说明）、README.md
+    新增「鸿蒙端」章节与目录树条目、`docs/设计方案.md` 技术栈表与 Phase 3
+    补充鸿蒙端。
 - **hermes 引擎集成方式改为 hermes agent SDK 进程内集成（issue #171）**：
   需求「帮我把hermes的集成方式改成hermes agent sdk的集成方式」。此前 hermes
   引擎（issue #47）经「子进程 + 部署机独立 hermes venv」运行

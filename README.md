@@ -75,11 +75,29 @@ frontend/            React (Vite) Web UI，构建产物由 FastAPI 托管
 frontend/e2e/        Playwright 浏览器级 E2E（issue #212）：tests/ 用例、
                      fixtures/ mock 夹具、support/ 浏览器级 mock API、
                      scripts/ 服务编排与种子数据库、backend-config.yaml
+harmony/             HarmonyOS NEXT 鸿蒙端（Web 套壳，issue #173）：系统 Web
+                     组件加载 Web 前端 + 加载动画/失败重试/返回键历史回退；
+                     CI 经 hvigorw 真实编译（详见 harmony/README.md）
 docs/                文档（设计方案 / UI 优化参考 / Synology SSO 配置指南）
 deploy/              pm2 与 systemd 配置
 workspace/           仓库工作区（运行时生成）
 logs/                任务执行日志（运行时生成）
 ```
+
+## 鸿蒙端（Web 套壳，issue #173）
+
+额外实现了 **HarmonyOS NEXT 鸿蒙端**：使用系统 Web 组件（WebView）套壳加载
+Botler Web 前端（React/Vite 产物由 FastAPI 同源托管），原生壳提供启动页 /
+加载动画 / 失败重试 / 返回键历史回退，Web 端全部能力（任务 / 详情 / 设置 /
+标签管理等）开箱即用。工程位于 `harmony/`，加载地址在
+`harmony/entry/src/main/ets/common/AppConfig.ets` 的 `WEB_URL` 中配置
+（默认 `http://10.0.0.122:8000`，按部署环境修改）。
+
+CI/CD 的 `build` 阶段新增 **`harmony:build`** 作业（与 frontend:build /
+backend:test 并行）：先跑结构校验（`harmony/scripts/validate_harmony.py`），
+再用本机华为命令行工具链（hvigorw + ohpm + HarmonyOS 6.1.1 / API 24 SDK）
+做**真实 ArkTS 编译**，产出未签名 HAP 作为 artifact，编译失败即阻断流水线
+（鸿蒙端不可编译不部署）。详细说明见 [`harmony/README.md`](harmony/README.md)。
 
 ## 快速开始（本地开发）
 

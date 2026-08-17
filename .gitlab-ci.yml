@@ -7,14 +7,15 @@
 #
 # Stage 拓扑（依赖关系）：
 #
-#   security（5 job 并行）──► build（并行）──────► deploy ──► sync
+#   security（5 job 并行）──► build（3 job 并行）──► deploy ──► sync
 #   ┌──────────────────────┐   ┌──────────────────────┐
 #   │ bandit     后端代码SAST│   │ frontend:build ────────────► deploy_to_code01
 #   │ deps-python 后端依赖CVE│   │   (React/Vite 构建)   │      (pm2 本机部署 + 健康检查)
-#   │ deps-frontend 前端依赖│   └──────────────────────┘
-#   │ semgrep    前后端SAST │
-#   │ secrets    密钥泄露检测│
-#   └──────────────────────┘
+#   │ deps-frontend 前端依赖│   │ backend:test         │
+#   │ semgrep    前后端SAST │   │   (uv + pytest)      │
+#   │ secrets    密钥泄露检测│   │ harmony:build ───────────┘  (鸿蒙端编译门禁, issue #173)
+#   └──────────────────────┘   │   (hvigorw 编译 HAP)  │
+#                              └──────────────────────┘
 #
 # 说明：
 #   - 第零阶段 security：五种免费开源工具并行做静态代码分析
@@ -31,8 +32,9 @@
 #                               WARNING（高危/中危）阻断
 #       * security:secrets       gitleaks 全仓库密钥泄露检测，
 #                               任何发现即阻断（ci/gitleaks.toml 豁免）
-#   - 第一阶段 build：frontend:build（npm 构建前端，产出 dist 产物）与
-#     backend:test（uv 安装依赖 + pytest/语法检查）并行执行
+#   - 第一阶段 build：frontend:build（npm 构建前端，产出 dist 产物）、
+#     backend:test（uv 安装依赖 + pytest/语法检查）与 harmony:build
+#     （鸿蒙端 hvigorw 真实编译，产出未签名 HAP，issue #173）并行执行
 #   - 第二阶段 deploy：必须等 frontend:build 成功且拿到 dist 产物后才
 #     部署到本机（code01 = 10.0.0.122，shell executor，pm2 管理 uvicorn）
 #
@@ -113,6 +115,7 @@ variables:
         - ci/**/*
         - data/**/*
         - .github/**/*
+        - harmony/**/*
         - Dockerfile
         - docker-compose.yml
         - .dockerignore
@@ -123,6 +126,8 @@ variables:
         - "**/*.mjs"
         - "**/*.ts"
         - "**/*.tsx"
+        - "**/*.ets"
+        - "**/*.json5"
         - "**/*.css"
         - "**/*.html"
         - "**/*.json"
@@ -745,6 +750,70 @@ frontend:build:
         coverage_format: cobertura
         path: frontend/coverage/cobertura-coverage.xml
     expire_in: 1 day
+
+# --- 鸿蒙端：编译（hvigorw 真实 ArkTS 编译，issue #173）---
+# Botler 鸿蒙端（harmony/，系统 Web 组件套壳）在 code01 上使用本机华为
+# 命令行工具链（~/command-line-tools：HarmonyOS 6.1.1 / API 24 SDK +
+# hvigor 6.24.3 + ohpm 6.1.2）做真实编译，产出未签名 HAP：
+#   1. python3 结构校验（harmony/scripts/validate_harmony.py，秒级快速失败，
+#      配置缺失/引用断裂前置检出，不消耗编译时间）；
+#   2. ohpm install（当前无三方依赖，秒级完成，为后续扩展预留）；
+#   3. hvigorw assembleHap（debug 未签名——CI 只验证「可编译性」，正式
+#      发布签名需在 DevEco Studio 中配置自动签名，见 harmony/README.md）。
+# 门禁：编译失败即阻断流水线（docs_only_skip 的 on_success 传播），
+# 保证「鸿蒙端不可编译不部署」。
+harmony:build:
+  extends: [.docs_only_skip]
+  stage: build
+  tags:
+    - linux
+    - code01
+  timeout: 20m
+  # hvigor 增量缓存（构建目录跨 job 持久化，key 基于 oh-package 依赖声明）
+  cache:
+    key:
+      files:
+        - harmony/oh-package.json5
+        - harmony/entry/oh-package.json5
+      prefix: harmony-hvigor
+    paths:
+      - harmony/.hvigor/
+      - harmony/entry/build/
+    policy: pull-push
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+      # 华为鸿蒙命令行工具链（shell executor 本机安装，PATH 可能不含）
+      export PATH="$HOME/command-line-tools/bin:$PATH"
+      export DEVECO_SDK_HOME="$HOME/command-line-tools/sdk"
+      if [ ! -x "$HOME/command-line-tools/bin/hvigorw" ]; then
+        echo "❌ 未找到鸿蒙命令行工具链: $HOME/command-line-tools/bin/hvigorw"
+        exit 1
+      fi
+      echo "=== 环境信息 ==="
+      echo "hvigorw: $(hvigorw --version)"
+      echo "ohpm: $(ohpm --version)"
+      echo "DEVECO_SDK_HOME: $DEVECO_SDK_HOME"
+    - echo "=== 1. 工程结构校验（validate_harmony.py）==="
+    - python3 harmony/scripts/validate_harmony.py
+    - echo "=== 2. 依赖安装（ohpm install）==="
+    - cd harmony
+    - ohpm install
+    - echo "=== 3. 鸿蒙编译（hvigorw assembleHap，debug 未签名）==="
+    - hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
+    - echo "=== 4. 验证 HAP 产物 ==="
+    - ls -la entry/build/default/outputs/default/*.hap
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [harmony:build] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
+      echo "========================================="
+  artifacts:
+    paths:
+      - harmony/entry/build/default/outputs/default/*.hap
+    expire_in: 1 week
 
 # --- 后端：Python 测试（uv 高速包管理）---
 # 在 gitlab-runner 机器（code01）上直接运行（shell executor），

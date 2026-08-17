@@ -1,0 +1,6 @@
+{
+  "modelVersion": "6.0.2",
+  "description": "Botler 鸿蒙端（Web 套壳）——使用系统 Web 组件加载 Botler Web 前端",
+  "dependencies": {},
+  "devDependencies": {}
+}

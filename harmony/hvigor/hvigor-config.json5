@@ -1,0 +1,21 @@
+{
+  "modelVersion": "6.0.2",
+  "dependencies": {},
+  "execution": {
+    // "analyze": "normal",                     /* 构建分析模式：normal | advanced | ultrafine | false */
+    // "daemon": true,                          /* 守护进程编译开关，默认 true */
+    // "incremental": true,                     /* 增量编译开关，默认 true */
+    // "parallel": true,                        /* 并行编译开关，默认 true */
+    // "typeCheck": false,                      /* 类型检查开关 */
+    // "optimizationStrategy": "memory"         /* 优化策略：memory | performance */
+  },
+  "logging": {
+    // "level": "info"                          /* 日志级别：debug | info | warn | error */
+  },
+  "debugging": {
+    // "stacktrace": false                      /* 堆栈输出开关 */
+  },
+  "nodeOptions": {
+    // "maxOldSpaceSize": 8192                  /* 守护进程最大堆内存（MB） */
+  }
+}

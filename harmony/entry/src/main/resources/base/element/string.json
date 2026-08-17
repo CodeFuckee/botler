@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Botler 鸿蒙端模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Botler 鸿蒙端（Web 套壳）"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Botler"
+    }
+  ]
+}
