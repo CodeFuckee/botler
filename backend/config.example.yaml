@@ -123,8 +123,10 @@ browse:
 # ai_providers 同模式）。内置预设：gemini_nano_banana（Gemini Nano
 # Banana Pro，默认模型 gemini-3-pro-image）/ openai_gpt_image（GPT
 # Image 2，默认模型 gpt-image-2），设置页选择预设自动填充默认
-# base_url 与 model（均可修改）。后端 image_models.py 提供统一调用
-# 接口（ImageModelClient.generate）。
+# base_url 与 model（均可修改）。base_url 语义：留空 / 等于预设默认 → 按官方
+# 接口拼接操作路径；自定义（不等于预设默认）→ 视为完整请求地址直接使用，
+# 不再拼接（如代理网关 https://grsai.dakka.com.cn/v1/draw/completions）。
+# 后端 image_models.py 提供统一调用接口（ImageModelClient.generate）。
 # image_models:
 #   - name: Gemini 生产环境
 #     provider: gemini_nano_banana

@@ -121,3 +121,9 @@ test('生图模型 logo 复用 gemini / openai 品牌图标', () => {
   assert.match(providers, /gemini: \{\s*\n\s*bg: '#4285F4'/, '应有 gemini logo')
   assert.match(providers, /openai: \{\s*\n\s*bg: '#10A37F'/, '应有 openai logo')
 })
+
+test('自定义 Base URL 直接作为完整请求地址使用的提示（issue #150）', () => {
+  assert.match(card, /自定义 Base URL（不等于官方预设默认值）将作为/, '应提示自定义 Base URL 语义')
+  assert.match(card, /不再自动拼接接口路径/, '应提示自定义地址不再拼接接口路径')
+  assert.match(card, /grsai\.dakka\.com\.cn\/v1\/draw\/completions/, '应给出完整地址直用示例')
+})

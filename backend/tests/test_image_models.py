@@ -319,3 +319,102 @@ class TestHelpers:
         with pytest.raises(ImageModelError):
             client_from_config({"name": "x", "provider": "nope",
                                 "api_key": "k"})
+
+
+class TestCustomBaseUrlVerbatim:
+    """自定义 base_url 视为完整调用地址直接使用（issue #150）。
+
+    用户配置完整端点（如代理网关 https://grsai.dakka.com.cn/v1/draw/completions）
+    时，请求必须原样打到该地址，不再拼接 /images/generations 等操作路径；
+    未配置 / 等于预设默认时仍按官方接口拼接（既有行为保持）。
+    """
+
+    CUSTOM_OPENAI = "https://grsai.dakka.com.cn/v1/draw/completions"
+    CUSTOM_GEMINI = ("https://grsai.dakka.com.cn/v1beta/models/"
+                     "gemini-3-pro-image:generateContent")
+
+    def _openai(self, handler, base_url=CUSTOM_OPENAI):
+        transport = httpx.MockTransport(handler)
+        client = ImageModelClient(
+            name="GPT Image", provider="openai_gpt_image",
+            base_url=base_url, api_key="sk-test", timeout=5)
+        client._http = httpx.Client(transport=transport)
+        return client
+
+    def _gemini(self, handler, base_url=CUSTOM_GEMINI):
+        transport = httpx.MockTransport(handler)
+        client = ImageModelClient(
+            name="Gemini", provider="gemini_nano_banana",
+            base_url=base_url, api_key="AIza-test", timeout=5)
+        client._http = httpx.Client(transport=transport)
+        return client
+
+    def test_openai_generations_uses_custom_url_verbatim(self):
+        """无参考图：自定义完整 URL 直接作为请求地址，不拼接
+        /images/generations。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={
+                "data": [{"b64_json": base64.b64encode(b"\x89PNG-x").decode()}],
+            })
+
+        client = self._openai(handler)
+        client.generate("画一只猫")
+        assert captured["url"] == self.CUSTOM_OPENAI
+        assert not captured["url"].endswith("/images/generations")
+
+    def test_openai_edits_uses_custom_url_verbatim(self):
+        """带参考图：自定义完整 URL 直接作为请求地址，不拼接
+        /images/edits。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={
+                "data": [{"b64_json": base64.b64encode(b"\x89PNG-x").decode()}],
+            })
+
+        client = self._openai(handler)
+        client.generate("把背景换成星空", image=b"\x89PNG-in",
+                        mime_type="image/png")
+        assert captured["url"] == self.CUSTOM_OPENAI
+        assert not captured["url"].endswith("/images/edits")
+
+    def test_gemini_uses_custom_url_verbatim(self):
+        """Gemini：自定义完整 URL（含 :generateContent 端点）直接使用，
+        不再重复拼接 /models/{model}:generateContent。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={
+                "candidates": [{"content": {"parts": [
+                    {"inlineData": {
+                        "mimeType": "image/png",
+                        "data": base64.b64encode(b"\x89PNG-x").decode(),
+                    }},
+                ]}}],
+            })
+
+        client = self._gemini(handler)
+        client.generate("画一只猫")
+        assert captured["url"] == self.CUSTOM_GEMINI
+        assert not captured["url"].endswith("/models/")
+
+    def test_default_base_url_with_trailing_slash_still_appends_path(self):
+        """等于预设默认的 base_url（含尾斜杠，rstrip 归一）仍按官方
+        接口拼接操作路径，不误判为自定义完整地址。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={
+                "data": [{"b64_json": base64.b64encode(b"\x89PNG-x").decode()}],
+            })
+
+        client = self._openai(handler, base_url="https://api.openai.com/v1/")
+        client.generate("画一只猫")
+        assert captured["url"].endswith("/images/generations")
+        assert captured["url"].startswith("https://api.openai.com/v1")

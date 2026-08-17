@@ -79,7 +79,10 @@ class GeminiNanoBananaProvider(ImageProviderPlugin):
                 },
             })
         payload = {"contents": [{"parts": parts}]}
-        url = f"{client.base_url}/models/{client.model}:generateContent"
+        # 自定义 base_url 视为完整端点直接使用（issue #150），否则按
+        # 官方接口拼接 generateContent 操作路径
+        url = self.resolve_request_url(
+            client.base_url, f"/models/{client.model}:generateContent")
         resp = client._http.post(
             url,
             headers={
@@ -141,7 +144,9 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
             "Authorization": f"Bearer {client.api_key}",
         }
         if image is None:
-            url = f"{client.base_url}/images/generations"
+            # 自定义 base_url 视为完整端点直接使用（issue #150），
+            # 否则按官方接口拼接 images/generations 操作路径
+            url = self.resolve_request_url(client.base_url, "/images/generations")
             payload = {
                 "model": client.model,
                 "prompt": prompt,
@@ -152,7 +157,7 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
             }
             resp = client._http.post(url, headers=headers, json=payload)
         else:
-            url = f"{client.base_url}/images/edits"
+            url = self.resolve_request_url(client.base_url, "/images/edits")
             files = {
                 "image": ("image", image, mime_type),
                 "prompt": (None, prompt),

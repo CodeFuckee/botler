@@ -60,6 +60,12 @@ class ImageModelClient:
     入参对应 Settings.image_models 列表项（``{name, provider, base_url,
     api_key, model, enabled}``）。``generate()`` 按 provider 查插件注册表
     分发到对应供应商实现。
+
+    ``base_url`` 语义（issue #150）：留空 / 等于预设默认 → 按官方接口在
+    默认地址后拼接操作路径（``/images/generations``、``/images/edits``、
+    ``:generateContent``）；自定义（不等于预设默认，如代理网关
+    ``https://grsai.dakka.com.cn/v1/draw/completions``）→ 作为完整请求
+    地址直接使用，不再拼接。
     """
 
     def __init__(

@@ -101,6 +101,21 @@ class ImageProviderPlugin(Plugin):
         """按 prompt（+ 可选参考图片）生成图片，返回 ImageResult 列表。"""
         raise NotImplementedError(f"生图供应商插件 {self.name} 未实现 generate()")
 
+    def resolve_request_url(self, base_url: str, api_path: str) -> str:
+        """解析生图请求地址（issue #150）。
+
+        用户配置的 base_url 分两种情况：
+        - 自定义完整端点（非空且不等于预设默认，如代理网关直接给出
+          https://grsai.dakka.com.cn/v1/draw/completions）→ 直接原样
+          作为请求地址使用，不再拼接操作路径；
+        - 未配置 / 等于预设默认（含尾斜杠归一）→ 按官方接口在默认
+          base_url 后拼接操作路径（如 /images/generations、
+          /models/{model}:generateContent）。
+        """
+        if base_url and base_url != self.default_base_url:
+            return base_url
+        return f"{self.default_base_url}{api_path}"
+
 
 class NotifierPlugin(Plugin):
     """任务消息发送通道插件：任务成功 / 失败时向通道发送消息。

@@ -6,6 +6,25 @@
 
 ### Fixed
 
+- **生图模型调用时自定义 Base URL 被再次拼接接口路径，应直接使用配置的完整地址（issue #150）**：
+  用户配置完整调用地址（如代理网关 `https://grsai.dakka.com.cn/v1/draw/completions`）
+  后，后端生图调用仍在其后拼接 `/images/generations`、`/images/edits`、
+  `/models/{model}:generateContent`，导致请求打到错误的
+  `.../v1/draw/completions/images/generations` 地址而失败。改动：
+  - 后端 `plugins/base.py`：`ImageProviderPlugin` 新增 `resolve_request_url(base_url, api_path)`
+    ——用户自定义 base_url（非空且不等于预设默认）视为完整请求地址直接原样使用，不再拼接
+    操作路径；未配置 / 等于预设默认（含尾斜杠归一）保持官方接口拼接行为；
+  - 后端 `plugins/models.py`：Gemini `generateContent` 与 OpenAI `images/generations` /
+    `images/edits` 请求地址统一改用 `resolve_request_url` 解析；
+  - 前端 `ImageModelsCard.jsx`：配置说明补充「自定义 Base URL 直接作为完整请求地址使用」
+    语义提示（含完整地址示例）；
+  - 文档：`README.md` 配置表、`config.example.yaml` 注释、`image_models.py` 类注释同步说明；
+  - **测试**：`test_image_models.py` 新增 4 用例（OpenAI generations / edits 自定义完整 URL
+    原样直用、Gemini 自定义完整 URL 原样直用、等于默认 base_url 含尾斜杠仍按官方接口
+    拼接）；修复前用例可稳定复现（URL 被拼接 `/images/generations`、`/images/edits`、
+    重复 `:generateContent`），修复后全部通过；`settings-image-models-card.test.mjs` 新增
+    自定义 Base URL 直用提示断言。
+
 - **生图模型「测试」无提示、OpenAI 404 无法定位且成功不返回图片（issue
   #149）**：用户配置生图模型后点「测试」没有任何提示，接口返回
   `{"ok":false,"error":"OpenAI 请求失败: HTTP 404 404 page not found"}`。

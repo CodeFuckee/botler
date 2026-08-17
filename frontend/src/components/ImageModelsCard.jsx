@@ -302,8 +302,12 @@ export default function ImageModelsCard() {
         选择生图模式会自动填充默认 Base URL 与模型（均可修改）；API Key 保存后仅显示掩码，
         编辑时留空 = 保持现有。配置好 Base URL / API Key / 生图模式后可点「测试」或
         「测试配置」真实调用一次生图接口验证是否可用（列表行测试用已保存配置，表单内
-        测试用当前填写值，均不落盘）。修改后点击「保存生图模型配置」写回 config.yaml，
-        重启后不丢失。
+        测试用当前填写值，均不落盘）。自定义 Base URL（不等于官方预设默认值）将作为
+        完整请求地址直接使用，不再自动拼接接口路径（如配置
+        https://grsai.dakka.com.cn/v1/draw/completions 就直接请求该地址，issue #150）；
+        留空或使用预设默认值则按官方接口拼接（/images/generations、
+        /images/edits、:generateContent）。修改后点击「保存生图模型配置」写回
+        config.yaml，重启后不丢失。
       </p>
     </div>
   )
