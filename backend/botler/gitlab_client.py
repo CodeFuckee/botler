@@ -26,6 +26,11 @@ HOOK_TIMEOUT_SECONDS = 5
 # 这些状态之一。success/skipped 视为通过，failed/canceled 视为失败。
 PIPELINE_TERMINAL_STATES = ("success", "failed", "canceled", "skipped")
 
+# GitLab issue 标题长度上限（字符）：服务端硬性限制，超过 255 字符创建
+# 接口直接 400（实测 "title is too long (maximum is 255 characters)"）；
+# 描述字段上限远大于标题（1MB 量级），正文超长不受此限制（issue #186）。
+GITLAB_ISSUE_TITLE_MAX_LEN = 255
+
 
 def _is_private_url(url: str) -> bool:
     """URL 是否指向本地/私有网络地址（GitLab 默认拒绝注册这类 webhook）。

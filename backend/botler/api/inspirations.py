@@ -15,7 +15,7 @@ GitLab issue——灵感内容作为 issue 标题与描述、默认标签 featur
 - PUT    /api/inspirations/{id}：更新灵感内容（刷新 updated_at）。
 - DELETE /api/inspirations/{id}：删除灵感。
 - POST   /api/inspirations/{id}/add-issue（issue #143 / #153 / #159 /
-  #162）：将灵感一键提交为 GitLab issue——灵感内容同时作为标题与描述，
+  #162 / #186）：将灵感一键提交为 GitLab issue——灵感内容作为标题与描述，
   默认标签 feature + ui，分配人 = 仓库用户（issue #153：仓库设置页读取
   remote url 得到的 userinfo 用户名，解析为 GitLab 用户 id；issue #159：
   存储值为空时提交时按 remote url 运行时读取兜底并写回仓库表，未配置/
@@ -33,8 +33,11 @@ GitLab issue——灵感内容作为 issue 标题与描述、默认标签 featur
 校验：repo_id 必须指向存在且未软删除的仓库（400）；content 去除首尾
 空白后非空（400）、长度不超过 5000 字（400，随手笔记的合理上限）；
 add-issue 要求灵感存在（404）、所属仓库存在且未软删除（400）、仓库
-已启用（400）；对话消息要求灵感存在（404）、消息内容非空且不超过
-2000 字（400）、已配置可用的 AI 对话供应商（400）。
+已启用（400）；issue #186：灵感内容超过 GitLab 标题上限（255 字符，
+GITLAB_ISSUE_TITLE_MAX_LEN）时标题截断到上限内并加省略号标记、描述
+保留完整内容（GitLab 描述字段可容纳远超 255 字符，标题才是硬限制）；
+对话消息要求灵感存在（404）、消息内容非空且不超过 2000 字（400）、
+已配置可用的 AI 对话供应商（400）。
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..gitlab_client import GitLabError
+from ..gitlab_client import GitLabError, GITLAB_ISSUE_TITLE_MAX_LEN
 from .issues import _issue_edit_call, _trim_issue, clear_issue_cache
 
 logger = logging.getLogger(__name__)
@@ -271,11 +274,18 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
         except httpx.HTTPError as e:
             logger.warning("灵感提交 issue：解析仓库用户 %s 网络错误，跳过分配人: %s",
                            username, str(e)[:200])
+    # issue #186：GitLab issue 标题硬上限 255 字符（GITLAB_ISSUE_TITLE_MAX_LEN，
+    # 超过则创建接口 400 拒绝 "title is too long"），而描述字段可容纳远超
+    # 255 字符——灵感内容超长时标题截断到上限内并加省略号标记，描述保留
+    # 完整内容（用户可在 GitLab 描述里输入超过 255 字符的正文）。
+    title = content
+    if len(title) > GITLAB_ISSUE_TITLE_MAX_LEN:
+        title = title[:GITLAB_ISSUE_TITLE_MAX_LEN - 1] + "…"
     try:
         issue = _issue_edit_call(
             c, repo,
             lambda cl: cl.create_issue(
-                repo["gitlab_project_id"], content,
+                repo["gitlab_project_id"], title,
                 description=content,
                 assignee_id=assignee_id,
                 labels=list(INSPIRATION_ISSUE_LABELS)))

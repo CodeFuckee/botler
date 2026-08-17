@@ -197,6 +197,20 @@
 
 ### Fixed
 
+- **从灵感一键添加 Issue：灵感内容超过 255 字符时创建失败——标题截断到 GitLab 上限（255 字符）并加省略号标记、描述保留完整内容（issue #186）**：
+  用户反馈「从灵感添加到 issue 的时候，限制了 255 个字符，但是我在 gitlab 的描述里
+  却可以输入超过 255 个字符」。根因：灵感「添加 Issue」把灵感内容**同时**作为 issue
+  标题与描述提交，而 GitLab issue 标题是服务端硬限制（最大 255 字符，超长时创建接口
+  直接 400 `title is too long (maximum is 255 characters)`，实测复现），描述字段上限
+  远大于标题（1MB 量级）——灵感内容一超过 255 字符，整次创建就被 GitLab 拒绝，
+  表现为「被限制在 255 字符」。修复：`add_issue_from_inspiration` 在内容超过
+  `GITLAB_ISSUE_TITLE_MAX_LEN`（255，gitlab_client 新增平台常量）时，标题截断到
+  254 字符并追加省略号「…」（总长 255），**描述始终保留完整灵感内容**——GitLab
+  描述支持远超 255 字符，用户可在描述里看到全部正文。配套测试：
+  `test_api_inspirations.py` 新增 2 用例（超长内容标题截断 + 描述完整、255/256
+  字符截断边界），实现前先红后绿（修复前超长标题 480 字符直传，GitLab 400 拒绝），
+  实现后后端全量测试无 regression。
+
 - **设置页左侧导航栏把 settings-ai-providers / settings-image-models / settings-vision-models 等原始 id 当名称展示（issue #174 第二轮）**：
   用户反馈侧边栏仍出现 settings-vision-models 等类似名称的设置项（第一轮只
   加了静态测试、未修复运行时代码）。根因：SettingsNav 挂载时**只读取一次**

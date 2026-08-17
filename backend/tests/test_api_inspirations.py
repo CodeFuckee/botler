@@ -435,6 +435,58 @@ class TestAddIssueFromInspiration:
         assert title == "支持批量处理 issue\n第二行：默认标签 feature 与 ui"
         assert desc == title
 
+    def test_long_content_title_truncated_description_full(self, edit_env):
+        """边界（issue #186）：灵感内容超过 GitLab issue 标题上限（255
+        字符）时——标题截断到 255 字符以内（末尾带省略号标记），描述保留
+        完整内容（GitLab 描述字段可容纳远超 255 字符，标题才是硬限制）。
+        修复前：标题=描述=完整内容，GitLab 创建接口 400 拒绝
+        （title is too long），超长灵感无法一键转 issue。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler")
+        # 约 25 字 × 20 = 500 字，远超 GitLab 标题 255 字符上限
+        content = "这是一个超过 GitLab 标题上限的灵感内容。" * 20
+        assert len(content) > 255
+        insp_id = db.create_inspiration(repo, content)
+
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+
+        assert resp.status_code == 201
+        assert len(stub.create_calls) == 1
+        args = stub.create_calls[0][1]
+        title, desc = args["title"], args["description"]
+        # 标题不超 GitLab 硬上限（255 字符），且带省略号标记截断
+        assert len(title) <= 255
+        assert title.endswith("…")
+        # 截断标题是完整内容的前缀（去掉省略号后）
+        assert content.startswith(title[:-1])
+        # 描述保留完整内容——GitLab 描述字段支持远超 255 字符
+        assert desc == content
+        assert args["labels"] == ["feature", "ui"]
+
+    def test_title_truncation_boundary(self, edit_env):
+        """边界（issue #186）：恰好 255 字符——标题保持完整不截断；
+        256 字符——标题截断到 255 字符（含省略号标记）。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, project_id=42, name="botler")
+
+        # 恰好 255 字符：不截断，标题=内容
+        exact = "界" * 255
+        insp_id = db.create_inspiration(repo, exact)
+        resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+        assert resp.status_code == 201
+        assert stub.create_calls[-1][1]["title"] == exact
+        assert stub.create_calls[-1][1]["description"] == exact
+
+        # 256 字符：截断为 254 字 + 省略号 = 255 字符，描述保留完整
+        over = "超" * 256
+        insp_id2 = db.create_inspiration(repo, over)
+        resp = tc.post(f"/api/inspirations/{insp_id2}/add-issue")
+        assert resp.status_code == 201
+        args = stub.create_calls[-1][1]
+        assert args["title"] == "超" * 254 + "…"
+        assert len(args["title"]) == 255
+        assert args["description"] == over
+
     def test_inspiration_not_found(self, edit_env):
         """边界：灵感不存在 → 404，不发起 GitLab 调用。"""
         tc, stub, db = edit_env
