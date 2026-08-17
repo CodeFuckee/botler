@@ -4,8 +4,6 @@
 
 ## [Unreleased]
 
-## [Unreleased]
-
 ### Fixed
 
 - **远端默认主分支跟踪引用缺失时工作区准备失败（issue #148）**：任务 #249
