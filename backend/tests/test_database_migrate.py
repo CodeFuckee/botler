@@ -465,7 +465,7 @@ class TestMigrateInspirations:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
-        assert ver == 8, f"user_version 应推进到 8，实际 {ver}"
+        assert ver == 9, f"user_version 应推进到 9（v9 迁移链），实际 {ver}"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
         """新库建表语句应直接含 inspirations 表（无需迁移）。"""
@@ -506,3 +506,33 @@ class TestMigrateInspirations:
         time.sleep(1.1)
         db.update_inspiration(id1, "第一条（更新）")
         assert [r["id"] for r in db.list_inspirations()] == [id1, id2]
+
+
+class TestMigrateDshTranscript:
+    """issue #146：dsh 引擎提示词/聊天记录——tasks.dsh_transcript 列迁移（v9）。"""
+
+    def test_old_db_gets_dsh_transcript_column(self, tmp_path):
+        """最老旧库（无任何新增列）初始化后应依次迁移补出 dsh_transcript 列。"""
+        path = tmp_path / "old.db"
+        _build_old_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "dsh_transcript" in cols
+
+    def test_new_db_has_dsh_transcript_column(self, tmp_path):
+        """新库建表语句应直接含 dsh_transcript 列（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "dsh_transcript" in cols
+
+    def test_set_task_status_writes_dsh_transcript(self, tmp_path):
+        """dsh_transcript 进入 _TASK_FIELDS 白名单（executor 落库可用）。"""
+        db = Database(str(tmp_path / "w.db"))
+        db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo_id = db.get_repo_by_project_id(42)["id"]
+        task_id = db.create_task(repo_id, 42, 7, "标题")
+        raw = '{"prompt": "提示词", "messages": [], "truncated": false}'
+        db.set_task_status(task_id, None, dsh_transcript=raw)
+        assert db.get_task(task_id)["dsh_transcript"] == raw

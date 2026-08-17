@@ -481,6 +481,42 @@
 
 ### Fixed
 
+- **dsh 引擎（deepseek-harness SDK）提示词未持久化、聊天记录不显示提示词（issue #146）**：
+  需求「使用deepseek harness sdk作为执行引擎的时候，提示词未持久化，聊天记录中也没有显示
+  提示词」。根因：`GET /api/tasks/{id}/execution` 的 `prompt`（「查看提示词」按钮数据源，
+  issue #90）与 `transcript`（聊天记录，issue #20）此前只从 claude 会话 jsonl
+  （`claude_session_id` 定位 `~/.claude/projects/*/<sid>.jsonl`）解析；dsh 引擎会话 id 落库在
+  `dsh_session_id`、渲染后的提示词无处落库，SDK 会话文件又是 runtime 内部格式无法像 jsonl
+  那样解析——dsh 任务详情页「查看提示词」固定显示「提示词未持久化，见执行日志」、聊天记录
+  显示「暂无聊天记录（会话尚未开始或会话文件不可读）」。修复：参照 hermes 引擎
+  `hermes_history` 落库模式，新增任务字段 `dsh_transcript`，由执行侧把提示词与消息落库，
+  execution 接口读取返回。
+  实现：
+  - 后端 `database.py`：tasks 表新增 `dsh_transcript TEXT` 列（迁移链 v8→v9，旧库自动
+    ALTER 补列），`_TASK_FIELDS` 白名单加入 `dsh_transcript`；
+  - 后端 `executor.py`：`_run_dsh_once` 在 runner 启动前先把渲染后的完整提示词落库
+    （运行中「查看提示词」即可用，不等执行结束）；`_on_line` 回调从事件行累积聊天消息
+    ——`stream_delta` 流式文本收口为 `assistant` 消息（连续增量合并为一条回复，与 claude
+    jsonl 写完完整行才落盘一致）、`tool_start` 转 `tool` 消息（含工具名与 input）、
+    `thinking`/`status`/`raw` 不进聊天记录（事件流 SSE 已实时呈现，与 claude transcript
+    只保留 text 对齐）；每次事件行后落库（运行中实时可见），停止/超时/正常结束均收口
+    落库；新增 `_persist_dsh_transcript`（消息超 `_TRANSCRIPT_MAX_MESSAGES` 条时保留首条
+    提示词与最近 N-1 条并置 truncated，与 parse_transcript 截断语义一致，落库失败不阻塞
+    任务收尾）与 `_dsh_resume_messages`（断点续跑保留上次会话历史，追加本次恢复引导语为
+    新 user 消息，与 SDK 会话内的真实输入一致）；
+  - 后端 `api/tasks.py`：`task_execution` 的 `session_id` 回退取 `dsh_session_id`；
+    `claude_session_id` 缺失时从 `dsh_transcript` 读取 `prompt` / `transcript` /
+    `transcript_truncated`（非 JSON 脏数据容错返回空，不 500）；
+  - 前端零改动：`TaskDetail.jsx` 的「查看提示词」与「聊天记录」消费的
+    `execution` 接口字段契约不变；
+  - **测试**：后端 `test_executor_dsh.py` 新增 `TestDshTranscript` 8 用例（fresh 落库
+    提示词与 user/assistant 消息、流式增量合并、tool_start 工具消息、thinking/status
+    不入列表、停止路径收口落库、断点续跑追加历史、runner 启动前提示词已落库、垃圾输出
+    容错）；`test_api_tasks.py` 新增 3 用例（dsh_transcript 返回 prompt/transcript/
+    session_id、非 JSON 脏数据空列表、truncated 标记透传）；`test_database_migrate.py`
+    新增 3 用例（旧库迁移补列、新库建表含列、set_task_status 白名单写入）；同步更新
+    `test_user_version_marker`（v8→v9）与 inspirations 迁移断言；后端 1301 全量测试通过。
+
 - **配置 Owner GitLab Token 后概览页评论/回复仍报「owner token 失效（403）」（issue #133）**：
   需求「我配置了gitlab owner token，但是回复评论、添加评论的时候报错，概览页 issue 编辑
   owner token 失效（403）：请在设置页更新 Owner GitLab Token 后重试」。诊断（部署日志

@@ -527,6 +527,73 @@ class TestTaskExecution:
 
 # ---- issue #32：概览页数据源 ----
 
+    def test_execution_dsh_transcript_returns_prompt_and_messages(self, api_app):
+        """dsh 引擎：从 dsh_transcript 返回提示词与聊天记录（issue #146）。
+
+        复现：execution 接口此前只读 claude 会话文件（claude_session_id），
+        dsh 引擎会话 id 存 dsh_session_id、提示词/消息落库 dsh_transcript
+        字段 → dsh 任务 prompt 返回 null、transcript 为空（前端显示
+        「提示词未持久化」「暂无聊天记录」）。
+        """
+        app, db, tmp_path = api_app
+        prompt = "渲染后的 dsh 提示词（issue #146）"
+        dsh_transcript = json.dumps({
+            "prompt": prompt,
+            "messages": [
+                {"role": "user", "text": prompt,
+                 "ts": "2026-08-17T08:00:00Z", "truncated": False},
+                {"role": "assistant", "text": "正在处理…",
+                 "ts": "2026-08-17T08:01:00Z", "truncated": False},
+                {"role": "tool", "tool": "Bash",
+                 "input": {"command": "ls"}, "ts": "2026-08-17T08:02:00Z"},
+            ],
+            "truncated": False,
+        }, ensure_ascii=False)
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=9, title="dsh 聊天记录",
+                           status="running")
+        db.set_task_status(task_id, None, dsh_session_id="dsh-sess-1",
+                           dsh_transcript=dsh_transcript)
+
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["session_id"] == "dsh-sess-1"          # dsh 会话 id
+        assert body["prompt"] == prompt                     # 提示词已持久化
+        assert body["transcript_truncated"] is False
+        assert [m["role"] for m in body["transcript"]] == ["user", "assistant", "tool"]
+        assert body["transcript"][0]["text"] == prompt      # 聊天记录首条 = 提示词
+        assert body["transcript"][1]["text"] == "正在处理…"
+        assert body["transcript"][2]["tool"] == "Bash"
+
+    def test_execution_dsh_transcript_invalid_json_returns_empty(self, api_app):
+        """dsh_transcript 非 JSON（脏数据）→ 返回空 transcript 不 500。"""
+        app, db, tmp_path = api_app
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=9, title="脏数据",
+                           status="running")
+        db.set_task_status(task_id, None, dsh_session_id="dsh-sess-1",
+                           dsh_transcript="not-json{{")
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["prompt"] is None
+        assert body["transcript"] == []
+
+    def test_execution_dsh_truncated_flag_returned(self, api_app):
+        """dsh_transcript 落库时截断过 → truncated 标记透传给前端。"""
+        app, db, tmp_path = api_app
+        dsh_transcript = json.dumps({
+            "prompt": "p",
+            "messages": [{"role": "user", "text": "p",
+                          "ts": "t", "truncated": False}],
+            "truncated": True,
+        }, ensure_ascii=False)
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=9, title="截断",
+                           status="running")
+        db.set_task_status(task_id, None, dsh_session_id="dsh-sess-1",
+                           dsh_transcript=dsh_transcript)
+        body = TestClient(app).get(f"/api/tasks/{task_id}/execution").json()
+        assert body["transcript_truncated"] is True
+
+
 class TestListMultiStatus:
     """GET /api/tasks 多值 status 过滤（概览页一次拉取全部正在执行的任务）。
 
@@ -650,3 +717,4 @@ class TestTaskEngineField:
         task = app_client.get(f"/api/tasks/{task_id}").json()
 
         assert task["engine"] == "hermes"
+

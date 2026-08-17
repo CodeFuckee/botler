@@ -1268,12 +1268,84 @@ class ClaudeExecutor:
                             f"执行 dsh 引擎（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
         env = self._build_env(repo, issue)
 
+        # issue #146：dsh 引擎提示词持久化 + 聊天记录落库（dsh_transcript）。
+        # claude 引擎的提示词/聊天记录来自会话 jsonl（首条 user 消息 +
+        # user/assistant/tool 行）；dsh SDK 会话文件是 runtime 内部格式，
+        # 无法像 jsonl 那样解析。这里在 executor 侧把 prompt 与事件行累积
+        # 出的消息落库，execution 接口读取返回——dsh 任务「查看提示词」
+        # 与聊天记录不再显示「提示词未持久化 / 暂无聊天记录」。
+        def _dsh_utc_ts() -> str:
+            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        # 断点续跑：resume 时保留上次会话历史，追加本次恢复引导语为新
+        # user 消息（与 SDK 会话内的真实输入一致）；fresh 从提示词开始。
+        dsh_messages: list[dict] = (
+            self._dsh_resume_messages(task_id) if resume_session else [])
+        dsh_messages.append({"role": "user", "text": prompt,
+                             "ts": _dsh_utc_ts(), "truncated": False})
+        dsh_pending: list[str] = []  # 当前 assistant 回复的流式文本片段
+
+        def _dsh_flush_pending() -> None:
+            """把累积的 assistant 流式文本收口为一条聊天消息（空则跳过）。"""
+            if not dsh_pending:
+                return
+            text = "".join(dsh_pending)
+            dsh_pending.clear()
+            if not text:
+                return
+            cut_text, cut = _truncate_text(text, _TRANSCRIPT_MAX_TEXT)
+            dsh_messages.append({"role": "assistant", "text": cut_text,
+                                 "ts": _dsh_utc_ts(), "truncated": cut})
+
+        def _dsh_accumulate(line: str) -> None:
+            """从事件行累积聊天消息（issue #146）。
+
+            stream_delta → assistant 文本片段；tool_start → 工具调用；
+            thinking/status/raw 与结果行不展示（思考/状态/簿记已在事件流
+            SSE 实时呈现，与 claude transcript 只保留 text 对齐），但会
+            先收口当前回复片段保序。
+            """
+            try:
+                data = json.loads(line)
+            except (ValueError, TypeError):
+                return
+            if not isinstance(data, dict):
+                return
+            event = data.get("event")
+            if event == "stream_delta":
+                text = data.get("text")
+                if isinstance(text, str) and text:
+                    dsh_pending.append(text)
+            elif event == "tool_start":
+                _dsh_flush_pending()
+                dsh_messages.append({
+                    "role": "tool",
+                    "tool": data.get("tool", "?"),
+                    "input": data.get("input"),
+                    "ts": _dsh_utc_ts()})
+            elif event in ("status", "raw") or "final_response" in data:
+                _dsh_flush_pending()  # 回合收口：先收口当前回复片段
+
+        def _dsh_persist() -> None:
+            """落库当前消息列表（每次事件行后调用，运行中实时可见）。
+
+            进行中的流式回复片段（dsh_pending）不强制收口——半截文本不进
+            聊天记录（与 claude 会话 jsonl 写完完整行才落盘一致），实时
+            增量由事件流 SSE 呈现；收口只发生在 tool_start / status /
+            raw / 结果行与执行结束时。
+            """
+            self._persist_dsh_transcript(task_id, prompt, dsh_messages)
+
+        # 提示词先落库：runner 启动前（执行中）「查看提示词」/聊天记录
+        # 首条 user 消息即可用，不等执行结束
+        self._persist_dsh_transcript(task_id, prompt, dsh_messages)
+
         log_path = self._log_file(task_id)
         lines: list[str] = []
         log_f = open(log_path, "w", encoding="utf-8", errors="replace")
 
         def _on_line(line: str) -> None:
-            """worker 线程回调：写日志 + 收行 + 发布 SSE（单线程顺序调用）。"""
+            """worker 线程回调：写日志 + 收行 + 发布 SSE + 累积聊天记录（单线程顺序调用）。"""
             log_f.write(line + "\n")
             log_f.flush()
             lines.append(line)
@@ -1281,6 +1353,8 @@ class ClaudeExecutor:
             if events:
                 for event in events:
                     self._publish_event(task_id, event)
+            _dsh_accumulate(line)
+            _dsh_persist()
 
         try:
             try:
@@ -1327,6 +1401,8 @@ class ClaudeExecutor:
             # → 每次重试都是全新会话（重复开发任务），重试耗尽后任务显示失败
             # （任务 #198 #199 日志：引擎 exit 0、结果行 completed 仍失败）。
             output = "\n".join(lines)
+            _dsh_flush_pending()  # 收口最后一段回复
+            _dsh_persist()  # 最终落库（停止/超时/正常共用）
 
             if stopped:
                 self.db.add_log(task_id, "warn",
@@ -1381,6 +1457,46 @@ class ClaudeExecutor:
             self.db.set_task_status(task_id, None, dsh_session_id=sid)
         except Exception as e:  # noqa: BLE001 会话 id 落库失败不阻塞任务收尾
             self.db.add_log(task_id, "warn", f"dsh 会话 id 落库失败: {e}")
+
+    def _dsh_resume_messages(self, task_id: int) -> list[dict]:
+        """断点续跑：读取上次落库的 dsh 聊天记录消息列表（issue #146）。
+
+        解析失败 / 无记录返回空列表（降级全新会话，与 _hermes_resume_data
+        的容错语义一致）。
+        """
+        task = self.db.get_task(task_id)
+        raw = _row_get(task, "dsh_transcript") if task is not None else None
+        if not raw or not str(raw).strip():
+            return []
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        messages = data.get("messages") if isinstance(data, dict) else None
+        return messages if isinstance(messages, list) else []
+
+    def _persist_dsh_transcript(self, task_id: int, prompt: str,
+                                messages: list[dict]) -> None:
+        """把 dsh 聊天记录（prompt + messages）落库（issue #146）。
+
+        messages 超上限时截断：保留首条（提示词 user 消息）与最后
+        _TRANSCRIPT_MAX_MESSAGES-1 条并置 truncated，与 claude
+        parse_transcript 截断语义一致；落库失败不影响任务收尾。
+        """
+        truncated = False
+        if len(messages) > _TRANSCRIPT_MAX_MESSAGES:
+            head = messages[:1]
+            keep = _TRANSCRIPT_MAX_MESSAGES - 1
+            messages = head + (messages[-keep:] if keep > 0 else [])
+            truncated = True
+        raw = json.dumps(
+            {"prompt": prompt or "", "messages": messages,
+             "truncated": bool(truncated)},
+            ensure_ascii=False)
+        try:
+            self.db.set_task_status(task_id, None, dsh_transcript=raw)
+        except Exception as e:  # noqa: BLE001 聊天记录落库失败不阻塞任务收尾
+            self.db.add_log(task_id, "warn", f"dsh 聊天记录落库失败: {e}")
 
     def _publish_event(self, task_id: int, event: dict) -> None:
         """归一化事件补 seq/ts 后发布到总线（SSE 实时推送）。"""

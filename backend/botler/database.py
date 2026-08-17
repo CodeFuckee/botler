@@ -39,7 +39,7 @@ DEFAULT_PRIORITY = 100
 # set_task_status / finish_task 可写的附加字段白名单
 _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
-                "hermes_history", "commit_sha", "dsh_session_id", "engine"}
+                "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript", "engine"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   issue_labels TEXT DEFAULT '[]',
   issue_updated_at TEXT DEFAULT '',
   engine TEXT DEFAULT '',
+  dsh_transcript TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -260,6 +261,16 @@ class Database:
                      updated_at TEXT DEFAULT (datetime('now'))
                    )""")
             conn.execute("PRAGMA user_version = 8")
+        if ver < 9:
+            # issue #146：dsh 引擎提示词持久化与聊天记录——claude 引擎的
+            # 提示词/聊天记录来自会话文件（claude_session_id 定位 jsonl），
+            # dsh SDK 会话文件是 runtime 内部格式无法解析，执行侧把
+            # prompt + messages 落库本列，execution 接口读取返回
+            # （「查看提示词」按钮与聊天记录数据源）。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "dsh_transcript" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN dsh_transcript TEXT")
+            conn.execute("PRAGMA user_version = 9")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -547,7 +558,7 @@ class Database:
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:
         """更新任务状态及附加字段（attempt_count / exit_code / error_message /
         error_detail / log_path / started_at / finished_at / claude_session_id /
-        hermes_history / commit_sha / dsh_session_id）。
+        hermes_history / commit_sha / dsh_session_id / dsh_transcript）。
 
         status 传 None 时只更新附加字段，不改状态。
         """

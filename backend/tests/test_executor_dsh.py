@@ -556,3 +556,155 @@ class TestRunTaskResume:
         self._run_task(dsh_executor, monkeypatch, captured)
         dsh_executor.run_task(task_id)
         assert captured["resume_session"] is None
+
+
+class TestDshTranscript:
+    """dsh 引擎提示词持久化与聊天记录落库（issue #146）。
+
+    复现背景：execution 接口只读 claude 会话文件（claude_session_id），
+    dsh 引擎会话 id 存 dsh_session_id、提示词无处落库 → dsh 任务
+    「查看提示词」显示「提示词未持久化」、聊天记录为空。修复方案：
+    参照 hermes_history 落库模式，新增 dsh_transcript（prompt +
+    messages JSON），执行中/结束后供 execution 接口读取。
+    """
+
+    def _run(self, dsh_executor, monkeypatch, tmp_path, fake_runner,
+             preset_lines, resume_session=None):
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_lines = preset_lines
+        code, _ = dsh_executor._run_dsh_once(
+            task_id, _REPO, _ISSUE, resume_session=resume_session)
+        return task_id, code
+
+    @staticmethod
+    def _line(event: str, **extra) -> str:
+        return json.dumps({"event": event, **extra}, ensure_ascii=False)
+
+    def test_fresh_run_persists_prompt_and_assistant_messages(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """fresh 执行：提示词持久化，聊天记录含 user 提示词 + assistant 文本。"""
+        task_id, code = self._run(
+            dsh_executor, monkeypatch, tmp_path, fake_runner,
+            [self._line("stream_delta", text="正在处理…"),
+             self._line("stream_delta", text="已修复"),
+             _RESULT_LINE])
+        assert code == 0
+        row = dsh_executor.db.get_task(task_id)
+        data = json.loads(row["dsh_transcript"])
+        # 提示词已持久化（渲染后的完整提示词，与 claude 会话文件首条 user 消息等价）
+        assert "AI 维护者" in data["prompt"]
+        roles = [m["role"] for m in data["messages"]]
+        assert roles == ["user", "assistant"]
+        assert "AI 维护者" in data["messages"][0]["text"]  # 聊天记录首条 = 提示词
+        assert data["messages"][1]["text"] == "正在处理…已修复"  # 流式增量合并
+        assert data["truncated"] is False
+
+    def test_tool_start_appends_tool_message(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """tool_start 事件 → 工具调用消息（含 input），回复片段先收口。"""
+        task_id, _ = self._run(
+            dsh_executor, monkeypatch, tmp_path, fake_runner,
+            [self._line("stream_delta", text="先看代码"),
+             self._line("tool_start", tool="Bash", input={"command": "ls"}),
+             _RESULT_LINE])
+        row = dsh_executor.db.get_task(task_id)
+        data = json.loads(row["dsh_transcript"])
+        roles = [m["role"] for m in data["messages"]]
+        assert roles == ["user", "assistant", "tool"]
+        assert data["messages"][1]["text"] == "先看代码"
+        assert data["messages"][2]["tool"] == "Bash"
+        assert data["messages"][2]["input"] == {"command": "ls"}
+
+    def test_thinking_status_not_in_chat(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """thinking/status 事件不进聊天记录（事件流 SSE 已展示，与 claude 对齐）。"""
+        task_id, _ = self._run(
+            dsh_executor, monkeypatch, tmp_path, fake_runner,
+            [self._line("thinking", text="先思考"),
+             self._line("stream_delta", text="回复正文"),
+             self._line("status", message="回合结束: completed"),
+             _RESULT_LINE])
+        row = dsh_executor.db.get_task(task_id)
+        data = json.loads(row["dsh_transcript"])
+        roles = [m["role"] for m in data["messages"]]
+        assert roles == ["user", "assistant"]  # 思考/状态不入列表
+        assert data["messages"][1]["text"] == "回复正文"
+
+    def test_stop_path_persists_partial_transcript(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """停止路径同样落库（flush 当前累积片段，不丢已产出文本）。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_done = False
+        fake_runner.preset_lines = [self._line("stream_delta", text="做到一半")]
+        dsh_executor.request_stop(task_id)
+        try:
+            code, _ = dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        finally:
+            dsh_executor.clear_stop_request(task_id)
+        assert code == 125
+        row = dsh_executor.db.get_task(task_id)
+        data = json.loads(row["dsh_transcript"])
+        assert "AI 维护者" in data["messages"][0]["text"]
+        assert data["messages"][1]["text"] == "做到一半"
+
+    def test_resume_appends_to_previous_history(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """断点续跑：保留上次历史并追加本次 user 消息与回复（完整会话）。"""
+        task_id = _mk_task(dsh_executor)
+        dsh_executor.db.set_task_status(
+            task_id, None,
+            dsh_transcript=json.dumps(
+                {"prompt": "上次提示词",
+                 "messages": [{"role": "user", "text": "上次提示词",
+                               "ts": "2026-08-17T08:00:00Z", "truncated": False},
+                              {"role": "assistant", "text": "上次回复",
+                               "ts": "2026-08-17T08:01:00Z", "truncated": False}],
+                 "truncated": False}, ensure_ascii=False))
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_lines = [
+            self._line("stream_delta", text="继续修复"),
+            _RESULT_LINE]
+        dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE,
+                                   resume_session="sess-9")
+        row = dsh_executor.db.get_task(task_id)
+        data = json.loads(row["dsh_transcript"])
+        roles = [m["role"] for m in data["messages"]]
+        assert roles == ["user", "assistant", "user", "assistant"]
+        assert data["messages"][2]["text"] == data["prompt"]  # 本次恢复引导语
+        assert "继续处理" in data["messages"][2]["text"]
+        assert data["messages"][3]["text"] == "继续修复"
+        # 历史保留
+        assert data["messages"][0]["text"] == "上次提示词"
+        assert data["messages"][1]["text"] == "上次回复"
+
+    def test_prompt_persisted_before_runner_starts(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """提示词在 runner 启动前已落库（运行中「查看提示词」即可用）。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        prompt_seen: dict = {}
+
+        class _CaptureRunner(_FakeRunner):
+            def start(self):
+                # runner 启动时（执行中）提示词应已在库
+                row = dsh_executor.db.get_task(task_id)
+                prompt_seen["stored"] = json.loads(
+                    row["dsh_transcript"])["prompt"]
+                super().start()
+
+        monkeypatch.setattr("botler.executor.DshRunner", _CaptureRunner)
+        fake_runner.preset_lines = [_RESULT_LINE]
+        dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        assert "AI 维护者" in prompt_seen["stored"]
+
+    def test_persist_invalid_output_keeps_value(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """无事件行输出（garbage）→ 不抛异常，落库至少含提示词消息。"""
+        task_id, code = self._run(dsh_executor, monkeypatch, tmp_path,
+                                  fake_runner, ["garbage"])
+        assert code == 0  # 结果判定失败但执行不崩
+        row = dsh_executor.db.get_task(task_id)
+        data = json.loads(row["dsh_transcript"])
+        assert data["messages"][0]["role"] == "user"

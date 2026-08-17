@@ -229,12 +229,26 @@ def task_execution(request: Request, task_id: int,
     transcript: list[dict] = []
     truncated = False
     prompt = None  # issue #90：渲染后的完整提示词（「查看提示词」按钮数据源）
-    session_id = row["claude_session_id"]
-    if session_id:
-        session_file = find_session_file(session_id)
+    # 会话文件仅 claude 引擎有（jsonl）；dsh 引擎（issue #146）的提示词与
+    # 聊天记录由执行侧落库 dsh_transcript（SDK 会话文件是 runtime 内部
+    # 格式，无法像 claude jsonl 那样解析），此处一并读取返回
+    session_id = row["claude_session_id"] or row["dsh_session_id"]
+    if row["claude_session_id"]:
+        session_file = find_session_file(row["claude_session_id"])
         if session_file:
             transcript, truncated = parse_transcript(session_file)
             prompt = read_session_prompt(session_file)
+    elif row["dsh_transcript"]:
+        try:
+            data = json.loads(row["dsh_transcript"])
+        except (ValueError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            dsh_prompt = data.get("prompt")
+            prompt = dsh_prompt if isinstance(dsh_prompt, str) and dsh_prompt else None
+            dsh_msgs = data.get("messages")
+            transcript = dsh_msgs if isinstance(dsh_msgs, list) else []
+            truncated = bool(data.get("truncated"))
 
     return {
         "status": row["status"],
