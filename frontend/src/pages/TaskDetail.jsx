@@ -37,12 +37,14 @@ function LiveMsg({ m }) {
 
 // ---- 实时事件流（SSE 推送）：逐事件展示引擎执行过程 ----
 
-function EventRow({ e }) {
-  // 归一化事件渲染：thinking（默认折叠）/ 文本 / 工具调用 / 工具结果 /
-  // 状态（session/model 等）/ 结果摘要
+function EventRow({ e, showThinking }) {
+  // 归一化事件渲染：thinking（默认隐藏，勾选「显示思考过程」后展开显示，
+  // issue #176）/ 文本 / 工具调用 / 工具结果 / 状态（session/model 等）/ 结果摘要
   if (e.kind === 'thinking') {
+    // 思考过程默认隐藏（issue #176）：未勾选时整条不渲染
+    if (!showThinking) return null
     return (
-      <details className="event-row event-thinking">
+      <details open className="event-row event-thinking">
         <summary>💭 思考过程</summary>
         <span className="pre-wrap">{e.text}</span>
       </details>
@@ -78,13 +80,14 @@ function EventRow({ e }) {
   return <div className="event-row pre-wrap">{e.text}</div>
 }
 
-function EventList({ events }) {
+function EventList({ events, showThinking }) {
   // 事件流完整渲染（issue #52）：不做虚拟化、无内部垂直滚动条，
-  // 所有事件直线完整展示，滚动交给页面最外层
+  // 所有事件直线完整展示，滚动交给页面最外层；thinking 事件是否
+  // 渲染由「显示思考过程」开关（issue #176）控制
   return (
     <div className="event-list">
       {events.length === 0 && <p className="muted">暂无事件（任务尚未开始执行）</p>}
-      {events.map((e, i) => <EventRow key={e.seq ?? i} e={e} />)}
+      {events.map((e, i) => <EventRow key={e.seq ?? i} e={e} showThinking={showThinking} />)}
     </div>
   )
 }
@@ -150,6 +153,9 @@ export default function TaskDetail() {
   const [showFileLog, setShowFileLog] = useState(true)
   // 区块折叠状态（issue #52）：事件流/聊天记录/执行日志默认展开
   const [showEvents, setShowEvents] = useState(true)
+  // 思考过程显示开关（issue #176）：事件流默认隐藏思考过程，勾选
+  // 「显示思考过程」后以展开态显示 thinking 事件
+  const [showThinking, setShowThinking] = useState(false)
   // 执行环境快照折叠面板（issue #276）：元信息区展示，默认展开可收起
   const [showEnv, setShowEnv] = useState(true)
   const [showChat, setShowChat] = useState(true)
@@ -315,12 +321,22 @@ export default function TaskDetail() {
           实时执行
           {live?.sessionId && <code className="muted small live-session">session {live.sessionId.slice(0, 8)}…</code>}
         </h2>
-        <SectionToggle open={showEvents} level="h3"
-                       onClick={() => setShowEvents(!showEvents)}>
-          事件流
-          {!eventDone && <span className="muted small">（实时推送）</span>}
-        </SectionToggle>
-        {showEvents && <EventList events={events} />}
+        <div className="event-stream-header">
+          <SectionToggle open={showEvents} level="h3"
+                         onClick={() => setShowEvents(!showEvents)}>
+            事件流
+            {!eventDone && <span className="muted small">（实时推送）</span>}
+          </SectionToggle>
+          <label className="checkbox-label thinking-toggle">
+            <input
+              type="checkbox"
+              checked={showThinking}
+              onChange={(e) => setShowThinking(e.target.checked)}
+            />
+            显示思考过程
+          </label>
+        </div>
+        {showEvents && <EventList events={events} showThinking={showThinking} />}
         <SectionToggle open={showChat} level="h3"
                        onClick={() => setShowChat(!showChat)}>
           聊天记录

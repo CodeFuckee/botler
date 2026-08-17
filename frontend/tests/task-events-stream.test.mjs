@@ -6,8 +6,9 @@
 //   /api/tasks/{id}/events，data 为归一化事件 JSON；done 事件触发 onDone
 //   并关闭连接；非法 data 容错不抛异常
 // - TaskDetail 事件流面板：运行中自动订阅；事件按序渲染（thinking 默认
-//   折叠，工具调用显示名称与输入，文本直接显示）；终态任务进入页面时
-//   回放已有事件后流结束（后端以 done 收尾）
+//   隐藏、勾选「显示思考过程」后展开显示，issue #176；工具调用显示名称
+//   与输入，文本直接显示）；终态任务进入页面时回放已有事件后流结束
+//   （后端以 done 收尾）
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
@@ -151,7 +152,7 @@ test('TaskDetail 运行中任务订阅事件流并把事件渲染进面板',
       const es = FakeEventSource.instances[0]
       assert.equal(es.url, '/api/tasks/3/events')
 
-      // 推送事件后渲染：文本 / thinking（折叠）/ 工具调用
+      // 推送事件后渲染：文本 / thinking（默认隐藏，issue #176）/ 工具调用
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'thinking', text: '先定位报错位置' })
         es.emit({ seq: 2, kind: 'text', text: '我来修复登录问题。' })
@@ -159,7 +160,7 @@ test('TaskDetail 运行中任务订阅事件流并把事件渲染进面板',
         es.emit({ seq: 4, kind: 'tool_result', text: 'On branch main', is_error: false })
       })
       const tree = JSON.stringify(renderer.toJSON())
-      assert.match(tree, /先定位报错位置/, 'thinking 内容应渲染')
+      assert.doesNotMatch(tree, /先定位报错位置/, 'thinking 默认隐藏，内容不应渲染')
       assert.match(tree, /我来修复登录问题。/, '文本事件应渲染')
       assert.match(tree, /Bash/, '工具名应渲染')
       assert.match(tree, /On branch main/, '工具结果应渲染')
