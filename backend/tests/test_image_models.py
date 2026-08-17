@@ -145,6 +145,19 @@ class TestGeminiClient:
         with pytest.raises(ImageModelError, match="未包含图像数据"):
             client.generate("画一只猫")
 
+    def test_error_response_includes_request_url(self):
+        """非 2xx 响应错误信息应包含实际请求地址（便于用户诊断
+        Base URL 路径段缺失导致的 404 page not found）。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, text="404 page not found")
+
+        client = self._client(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        assert "请求地址" in str(exc.value)
+        assert str(exc.value).endswith(
+            "/models/gemini-3-pro-image:generateContent）")
+
 
 class TestOpenAIClient:
     def _client(self, handler, api_key="sk-test"):
@@ -182,6 +195,22 @@ class TestOpenAIClient:
         assert len(results) == 1
         assert results[0].data == img
 
+    def test_generations_requests_b64_json_response_format(self):
+        """请求体携带 response_format=b64_json：OpenAI 默认只返回
+        url 字段，不显式要求则拿不到 b64_json，成功也无法回传图片。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
+            captured["body"] = json.loads(request.read().decode())
+            return httpx.Response(200, json={
+                "data": [{"b64_json": base64.b64encode(b"x").decode()}],
+            })
+
+        client = self._client(handler)
+        client.generate("生成一张图")
+        assert captured["body"]["response_format"] == "b64_json"
+
     def test_edits_request_multipart_with_image(self):
         """带参考图：POST images/edits，multipart 携带 image + prompt。"""
         png = b"\x89PNG-input-openai"
@@ -205,6 +234,23 @@ class TestOpenAIClient:
         assert "把背景换成星空".encode() in raw
         assert results[0].data == b"\x89PNG-out"
 
+    def test_edits_requests_b64_json_response_format(self):
+        """编辑接口 multipart 表单同样携带 response_format=b64_json。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = request.read()
+            return httpx.Response(200, json={
+                "data": [{"b64_json": base64.b64encode(b"x").decode()}],
+            })
+
+        client = self._client(handler)
+        client.generate("把背景换成星空", image=b"\x89PNG-in",
+                        mime_type="image/png")
+        raw = captured["body"]
+        assert b'name="response_format"' in raw
+        assert b"b64_json" in raw
+
     def test_error_response_raises(self):
         """非 2xx 响应（如 429 限流）抛出带状态码的错误。"""
         def handler(request: httpx.Request) -> httpx.Response:
@@ -213,6 +259,23 @@ class TestOpenAIClient:
         client = self._client(handler)
         with pytest.raises(ImageModelError, match="429"):
             client.generate("画一只猫")
+
+    def test_error_404_includes_request_url(self):
+        """404（如 Base URL 缺 /v1 路径段的 page not found）错误信息
+        应包含实际请求地址，帮助用户定位配置问题。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(404, text="404 page not found")
+
+        client = self._client(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        assert "404" in str(exc.value)
+        assert captured["url"] in str(exc.value)
+        # 404 应附带 Base URL 检查提示（缺 /v1 路径段常见）
+        assert "Base URL" in str(exc.value)
 
     def test_missing_image_in_response_raises(self):
         """响应 data 为空时报错。"""

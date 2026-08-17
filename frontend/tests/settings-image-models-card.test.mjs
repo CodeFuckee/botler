@@ -78,8 +78,24 @@ test('测试按钮调用 POST /api/settings/image-model-test（列表行 + 编�
 test('测试结果展示成功/失败提示', () => {
   assert.match(card, /生图测试成功，已生成/, '成功提示应包含生成张数')
   assert.match(card, /res\.error \|\| '生图测试失败'/, '失败提示应展示后端错误信息')
-  assert.match(card, /testResult\.ok \? 'saved-hint' : 'err-hint'/, '成功/失败用不同样式提示')
+  assert.match(card, /result\.ok \? 'saved-hint' : 'err-hint'/, '成功/失败用不同样式提示')
   assert.match(card, /testBusy \? '测试中…' : '测试'/, '测试中应有 busy 文案')
+})
+
+test('列表模式（非编辑）点击测试也展示结果（issue #149）', () => {
+  // 复现：此前 testResult 只在编辑表单内渲染，列表行点「测试」无任何提示
+  assert.match(card, /!editing && <TestResult result=\{testResult\} \/>/,
+    '列表模式（非编辑）也应渲染测试结果')
+})
+
+test('生图成功返回并展示生成的图片（issue #149）', () => {
+  // 复现：此前成功仅返回张数，前端无图片可展示；后端应回传首张图片
+  // base64，前端拼 data URL 后 <img> 展示
+  assert.match(card, /res\.image_base64/, '应读取后端返回的 image_base64')
+  assert.match(card, /data:.*;base64,\$\(res\.image_base64\)|data:.*;base64,\$\{res\.image_base64\}/,
+    '应把 image_base64 拼成 data URL')
+  assert.match(card, /<img className="test-image" src=\{result\.image\}/,
+    '应渲染生成图片')
 })
 
 test('providers.js 内置生图模型预设：gemini_nano_banana / openai_gpt_image / custom', () => {

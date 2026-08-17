@@ -15,6 +15,21 @@ import { IMAGE_MODEL_PRESETS, imageModelPresetOf, imageModelName, ProviderLogo }
 // （模型类型）后，可点「测试」真实调用一次生图接口验证配置是否可用——
 // 编辑表单内测试用当前表单值（未保存也可测），列表行测试用已保存配置；
 // 后端 POST /api/settings/image-model-test 返回 ok / 错误原因。
+// 测试结果展示（issue #149）：成功显示生成图片 + 张数，失败显示错误原因；
+// 列表模式（非编辑）与编辑表单内共用——此前结果只在表单内渲染，
+// 列表行点「测试」无任何提示
+function TestResult({ result }) {
+  if (!result) return null
+  return (
+    <div className={`test-result ${result.ok ? 'ok' : 'err'}`}>
+      <span className={result.ok ? 'saved-hint' : 'err-hint'}>{result.text}</span>
+      {result.image && (
+        <img className="test-image" src={result.image} alt="生图测试结果" />
+      )}
+    </div>
+  )
+}
+
 const EMPTY_FORM = {
   name: '',
   provider: 'gemini_nano_banana',
@@ -79,7 +94,14 @@ export default function ImageModelsCard() {
     try {
       const res = await api.post('/api/settings/image-model-test', payload)
       setTestResult(res.ok
-        ? { ok: true, text: `✓ 生图测试成功，已生成 ${res.images} 张图片` }
+        ? {
+            ok: true,
+            text: `✓ 生图测试成功，已生成 ${res.images} 张图片`,
+            // 后端回传首张图片 base64，拼 data URL 展示（issue #149）
+            image: res.image_base64
+              ? `data:${res.mime_type || 'image/png'};base64,${res.image_base64}`
+              : null,
+          }
         : { ok: false, text: '✗ ' + (res.error || '生图测试失败') })
     } catch (e) { setTestResult({ ok: false, text: '✗ ' + e.message }) }
     finally { setTestBusy(false) }
@@ -172,6 +194,10 @@ export default function ImageModelsCard() {
         </tbody>
       </table>
 
+      {/* 列表模式（非编辑）测试结果展示（issue #149）：点「测试」后
+          在此显示成功图片 / 失败原因，不再无声无息 */}
+      {!editing && <TestResult result={testResult} />}
+
       {editing && (
         <div className="provider-form">
           <h3>{editing.index === null ? '添加生图模型' : `编辑生图模型：${models[editing.index].name}`}</h3>
@@ -251,9 +277,7 @@ export default function ImageModelsCard() {
             <button className="btn" disabled={testBusy} onClick={testCurrentForm}>
               {testBusy ? '测试中…' : '测试配置'}
             </button>
-            {testResult && (
-              <span className={testResult.ok ? 'saved-hint' : 'err-hint'}>{testResult.text}</span>
-            )}
+            <TestResult result={testResult} />
             <button className="btn" onClick={() => { setEditing(null); setApiKeyInput(''); setTestResult(null) }}>取消</button>
           </div>
         </div>

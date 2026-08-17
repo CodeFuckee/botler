@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -379,8 +380,10 @@ def test_image_model(request: Request, body: dict):
         return {"ok": False, "error": f"生图测试失败: {e}"}
     if not results:
         return {"ok": False, "error": "生图接口未返回图片数据"}
+    # 成功：回传首张图片 base64 + mime（前端拼 data URL 展示生成图片）
     return {"ok": True, "images": len(results),
-            "mime_type": results[0].mime_type}
+            "mime_type": results[0].mime_type,
+            "image_base64": base64.b64encode(results[0].data).decode("ascii")}
 
 
 @router.post("/reconcile-now")

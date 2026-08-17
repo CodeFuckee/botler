@@ -6,6 +6,32 @@
 
 ### Fixed
 
+- **生图模型「测试」无提示、OpenAI 404 无法定位且成功不返回图片（issue
+  #149）**：用户配置生图模型后点「测试」没有任何提示，接口返回
+  `{"ok":false,"error":"OpenAI 请求失败: HTTP 404 404 page not found"}`。
+  根因与改动：
+  - 前端 `ImageModelsCard.jsx`：列表行「测试」按钮的结果此前只在编辑表单内
+    渲染，列表模式下 `testResult` 无展示位，点击后无任何提示——新增共用
+    `TestResult` 组件，列表模式（非编辑）与编辑表单内均展示成功/失败结果；
+  - 后端 `plugins/models.py`：OpenAI `images/generations` / `images/edits`
+    请求未携带 `response_format=b64_json`，OpenAI 默认只返回 url 字段，
+    即使接口成功也解析不到图片数据（会报「响应未包含图像数据」）——请求体
+    与 multipart 表单显式补上 `b64_json`；
+  - 后端 `plugins/models.py`：Gemini / OpenAI 非 2xx 错误信息补充实际请求
+    地址（`请求地址: …`），OpenAI 404 时附加 Base URL 检查提示（官方地址
+    通常以 `/v1` 结尾）——帮助定位「404 page not found」根因（Base URL 缺
+    `/v1` 路径段或域名不对）；
+  - 后端 `api/settings.py`：`POST /api/settings/image-model-test` 成功时
+    回传首张图片 `image_base64` + `mime_type`，前端拼 data URL 用 `<img>`
+    展示生成的图片；
+  - **测试**：`test_image_models.py` 新增 4 用例（OpenAI generations /
+    edits 请求含 `response_format=b64_json`、Gemini / OpenAI 错误信息含
+    请求地址、OpenAI 404 含 Base URL 提示），`test_api_settings.py` 新增
+    成功返回 `image_base64` 用例，`settings-image-models-card.test.mjs` 新增
+    列表模式展示结果、成功展示生成图片断言；修复前用例可稳定复现（列表无
+    提示、payload 无 response_format、错误信息无请求地址、响应无
+    image_base64），修复后全部通过。
+
 - **远端默认主分支跟踪引用缺失时工作区准备失败（issue #148）**：任务 #249
   （graph2plan，125#38）执行报 `[executor] git checkout 失败 (exit 128):
   fatal: 'origin/main' is not a commit and a branch 'main' cannot be created

@@ -571,10 +571,32 @@ class TestImageModelTestEndpoint:
         assert data["ok"] is True
         assert data["images"] == 1
         assert data["mime_type"] == "image/png"
+        assert data["image_base64"] == "iVBORy10ZXN0"  # b"\x89PNG-test" 的 base64
         assert captured["provider"] == "gemini_nano_banana"
         assert captured["api_key"] == "AIza-test"
         assert captured["base_url"] == "https://generativelanguage.googleapis.com/v1beta"
         assert captured["model"] == "gemini-3-pro-image"
+
+    def test_test_ok_returns_image_base64(self, client, monkeypatch):
+        """生图成功：返回首张图片 base64 + mime，前端可展示生成图片。"""
+        tc, _ = client
+
+        def fake_client(**kwargs):
+            return SimpleNamespace(
+                generate=lambda prompt: [SimpleNamespace(
+                    mime_type="image/png", data=b"\x89PNG-test")])
+
+        self._patch_client(monkeypatch, fake_client)
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "Gemini 生产", "provider": "gemini_nano_banana",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta",
+            "api_key": "AIza-test", "model": "gemini-3-pro-image",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["image_base64"] == "iVBORy10ZXN0"
+        assert data["mime_type"] == "image/png"
 
     def test_test_masked_key_falls_back_to_saved(self, client, monkeypatch):
         """掩码/留空的 api_key、url、model 按 name 回退已保存配置。"""

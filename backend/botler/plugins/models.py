@@ -89,9 +89,11 @@ class GeminiNanoBananaProvider(ImageProviderPlugin):
             json=payload,
         )
         if resp.status_code >= 400:
+            # 带上实际请求地址，便于用户诊断 Base URL 路径段缺失
+            # （如官方域名少了 /v1beta）导致的 404 page not found
             raise ImageModelError(
                 f"Gemini 请求失败: HTTP {resp.status_code} "
-                f"{resp.text[:200]}")
+                f"{resp.text[:200]}（请求地址: {url}）")
         data = resp.json()
         try:
             parts_out = data["candidates"][0]["content"]["parts"]
@@ -145,6 +147,8 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
                 "prompt": prompt,
                 "n": max(1, int(n)),
                 "size": size,
+                # 默认只返回 url，显式要求 base64 才能回传图片给前端展示
+                "response_format": "b64_json",
             }
             resp = client._http.post(url, headers=headers, json=payload)
         else:
@@ -155,11 +159,18 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
                 "model": (None, client.model),
                 "n": (None, str(max(1, int(n)))),
                 "size": (None, size),
+                "response_format": (None, "b64_json"),
             }
             resp = client._http.post(url, headers=headers, files=files)
         if resp.status_code >= 400:
+            # 带上实际请求地址便于诊断；404（page not found）多为
+            # Base URL 缺 /v1 路径段或域名不对，给出针对性提示
+            hint = ("；若为 404 page not found，请检查 Base URL 是否完整"
+                    "（OpenAI 官方地址通常以 /v1 结尾，例如 "
+                    "https://api.openai.com/v1）" if resp.status_code == 404 else "")
             raise ImageModelError(
-                f"OpenAI 请求失败: HTTP {resp.status_code} {resp.text[:200]}")
+                f"OpenAI 请求失败: HTTP {resp.status_code} {resp.text[:200]}"
+                f"（请求地址: {url}）{hint}")
         data = resp.json()
         items = data.get("data") or []
         results: list[ImageResult] = []
