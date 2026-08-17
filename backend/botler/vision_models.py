@@ -38,6 +38,7 @@ from .plugins import (
     VisionProviderPlugin,
     PluginKind,
     PluginNotFoundError,
+    format_request_info,
     get_plugin,
     list_plugins,
 )
@@ -127,23 +128,32 @@ class VisionModelClient:
         except VisionModelError:
             raise
         except httpx.TimeoutException as exc:
-            # issue #156：失败提示带上「post 给上游 API」的实际请求地址，
-            # 超时前拿不到响应体，请求地址是唯一可诊断线索
+            # issue #156：失败提示带上「后端 POST 给上游 API 的信息」——
+            # 请求地址 + 请求头（API Key 掩码）+ 请求体（base64 图片截断）。
+            # 超时前拿不到响应体，POST 出去的载荷是唯一可诊断线索；请求头/
+            # 请求体由供应商 _post_json 附加到异常对象上
             req = getattr(exc, "request", None)
-            url_hint = f"（请求地址: {req.url}）" if req is not None else ""
+            hint = format_request_info(
+                str(req.url) if req is not None else "",
+                getattr(exc, "request_headers", None),
+                getattr(exc, "request_payload", None))
             raise VisionModelError(
-                f"识图模型「{self.name}」请求超时（>{self.timeout}s）{url_hint}"
+                f"识图模型「{self.name}」请求超时（>{self.timeout}s）（{hint}）"
             ) from exc
         except httpx.HTTPError as exc:
-            # issue #156：网络层失败（连接/DNS/SSL 等）同样带请求地址；
-            # 若异常携带响应（如 HTTPStatusError）则附接口返回状态码与内容
+            # issue #156：网络层失败（连接/DNS/SSL 等）同样带「后端 POST
+            # 给上游 API 的信息」（地址 + 请求头 + 请求体）；若异常携带
+            # 响应（如 HTTPStatusError）则附接口返回状态码与内容
             req = getattr(exc, "request", None)
-            url_hint = f"（请求地址: {req.url}）" if req is not None else ""
+            hint = format_request_info(
+                str(req.url) if req is not None else "",
+                getattr(exc, "request_headers", None),
+                getattr(exc, "request_payload", None))
             resp = getattr(exc, "response", None)
             resp_hint = (f"，接口返回: HTTP {resp.status_code} {resp.text[:200]}"
                          if resp is not None else "")
             raise VisionModelError(
-                f"识图模型「{self.name}」网络请求失败: {exc}{url_hint}{resp_hint}"
+                f"识图模型「{self.name}」网络请求失败: {exc}（{hint}）{resp_hint}"
             ) from exc
 
 

@@ -43,6 +43,7 @@ from .vision_models import (
     DEFAULT_TIMEOUT as VISION_DEFAULT_TIMEOUT,
     DEFAULT_VISION_PROMPT,
     VisionModelError,
+    format_request_info,
 )
 
 # 导入内置插件子模块触发注册（导入顺序即注册顺序，也即列表展示顺序）
@@ -56,6 +57,7 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "VISION_DEFAULT_TIMEOUT",
     "DEFAULT_VISION_PROMPT",
+    "format_request_info",
     "ImageModelError",
     "VisionModelError",
     "ImageProviderPlugin",

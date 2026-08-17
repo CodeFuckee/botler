@@ -12,6 +12,7 @@ import json
 import pytest
 import httpx
 
+from botler.plugins.vision_models import format_request_info
 from botler.vision_models import (
     VISION_MODEL_PRESETS,
     VisionModelClient,
@@ -87,13 +88,21 @@ class TestClientCommon:
         transport = httpx.MockTransport(handler)
         client = VisionModelClient(
             name="Gemini 视觉", provider="gemini_vision",
-            api_key="k", timeout=5)
+            api_key="AIza-timeout-key", timeout=5)
         client._http = httpx.Client(transport=transport)
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x")
-        assert "请求超时" in str(exc.value)
-        assert "请求地址" in str(exc.value)
-        assert captured["url"] in str(exc.value)
+        msg = str(exc.value)
+        assert "请求超时" in msg
+        assert "请求地址" in msg
+        assert captured["url"] in msg
+        # 超时前拿不到响应体：POST 出去的请求头（密钥掩码）与请求体
+        # 是唯一可诊断线索，必须带进错误提示（issue #156）
+        assert "请求头" in msg
+        assert "请求体" in msg
+        assert "已掩码" in msg
+        # API Key 明文不泄漏（只展示掩码）
+        assert "AIza-timeout-key" not in msg
 
     def test_connect_error_includes_request_url(self):
         """网络连接失败（DNS / 拒绝连接 / SSL 等，issue #156）：错误信息
@@ -112,9 +121,69 @@ class TestClientCommon:
         client._http = httpx.Client(transport=transport)
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x")
-        assert "网络请求失败" in str(exc.value)
-        assert "请求地址" in str(exc.value)
-        assert captured["url"] in str(exc.value)
+        msg = str(exc.value)
+        assert "网络请求失败" in msg
+        assert "请求地址" in msg
+        assert captured["url"] in msg
+        # 网络层失败同样带 POST 请求头（密钥掩码）与请求体（issue #156）
+        assert "请求头" in msg
+        assert "请求体" in msg
+        assert "已掩码" in msg
+
+    def test_timeout_error_includes_request_body(self):
+        """请求超时（issue #156）：错误信息除请求地址外，还带「后端 POST
+        给上游 API 的请求体」（含描述指令文本，base64 图片数据截断展示），
+        超时前拿不到响应体时这是唯一可诊断线索。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.read().decode())
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        transport = httpx.MockTransport(handler)
+        client = VisionModelClient(
+            name="Gemini 视觉", provider="gemini_vision",
+            api_key="AIza-secret-key", timeout=5)
+        client._http = httpx.Client(transport=transport)
+        big = b"\x89PNG" + b"0" * 300  # 超长图片：base64 超过截断阈值
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(big)
+        msg = str(exc.value)
+        assert "请求超时" in msg
+        assert "请求体" in msg
+        # 实际 POST 的载荷内容带进错误：描述指令文本可见
+        text = captured["body"]["contents"][0]["parts"][1]["text"]
+        assert text in msg
+        # base64 图片数据截断展示，不刷屏
+        assert "已截断" in msg
+        assert "已掩码" in msg
+        assert "AIza-secret-key" not in msg  # API Key 明文不泄漏
+
+    def test_connect_error_includes_request_body(self):
+        """网络连接失败（issue #156）：错误信息同样带 POST 请求体（含
+        data URL 前缀），用户可确认图片编码与载荷结构是否正确。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.read().decode())
+            raise httpx.ConnectError("connection refused", request=request)
+
+        transport = httpx.MockTransport(handler)
+        client = VisionModelClient(
+            name="OpenAI 视觉", provider="openai_vision",
+            api_key="sk-secret-key", timeout=5)
+        client._http = httpx.Client(transport=transport)
+        big = b"\x89PNG" + b"0" * 300
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(big)
+        msg = str(exc.value)
+        assert "网络请求失败" in msg
+        assert "请求体" in msg
+        assert "已截断" in msg
+        # data URL 前缀可见，说明图片以 base64 data URL 编码进载荷
+        assert "data:image/png;base64," in msg
+        assert "sk-secret-key" not in msg
+
 
 class TestGeminiVisionClient:
     def _client(self, handler, api_key="AIza-test", **kw):
@@ -214,6 +283,36 @@ class TestGeminiVisionClient:
         assert "请求地址" in str(exc.value)
         assert captured["url"] in str(exc.value)
 
+    def test_error_response_includes_request_body(self):
+        """非 2xx 响应（issue #156）：错误信息带「后端 POST 给上游 API
+        的信息」——请求地址 + 请求头（API Key 掩码）+ 请求体（图片 base64
+        截断），用户可对照网关返回内容确认配置是否正确。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["key"] = request.headers.get("X-goog-api-key")
+            captured["body"] = json.loads(request.read().decode())
+            return httpx.Response(401, text='{"error": "invalid key"}')
+
+        client = self._client(handler)
+        big = b"\x89PNG" + b"0" * 300
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(big)
+        msg = str(exc.value)
+        assert "401" in msg
+        assert "请求地址" in msg and captured["url"] in msg
+        assert "请求头" in msg
+        assert "请求体" in msg
+        # 实际 POST 的载荷内容带进错误（用户可见）
+        text = captured["body"]["contents"][0]["parts"][1]["text"]
+        assert text in msg
+        # API Key 掩码展示，明文不泄漏
+        assert "已掩码" in msg
+        assert captured["key"] not in msg
+        # base64 图片数据截断展示
+        assert "已截断" in msg
+
     def test_missing_content_error_includes_request_url(self):
         """响应缺少内容（issue #156）：错误信息应同时带响应片段与实际
         请求地址，方便用户对照网关返回内容定位问题。"""
@@ -226,9 +325,13 @@ class TestGeminiVisionClient:
         client = self._client(handler)
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x")
-        assert "缺少内容" in str(exc.value)
-        assert "请求地址" in str(exc.value)
-        assert captured["url"] in str(exc.value)
+        msg = str(exc.value)
+        assert "缺少内容" in msg
+        assert "请求地址" in msg
+        assert captured["url"] in msg
+        # issue #156：同时带 POST 请求体（用户可确认载荷结构）
+        assert "请求体" in msg
+        assert "请详细描述这张图片的内容" in msg
 
 class TestOpenAIVisionClient:
     def _client(self, handler, api_key="sk-test", provider="openai_vision", **kw):
@@ -304,6 +407,32 @@ class TestOpenAIVisionClient:
         with pytest.raises(VisionModelError, match="未包含文本"):
             client.describe(b"\x89PNG-x")
 
+    def test_error_429_includes_request_body(self):
+        """非 2xx 响应（issue #156，429 限流）：错误信息带「后端 POST 给
+        上游 API 的信息」，请求头 Bearer 密钥掩码展示、请求体可见。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["auth"] = request.headers.get("Authorization")
+            captured["body"] = json.loads(request.read().decode())
+            return httpx.Response(429, text="rate limit exceeded")
+
+        client = self._client(handler)
+        big = b"\x89PNG" + b"0" * 300
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(big)
+        msg = str(exc.value)
+        assert "429" in msg
+        assert "请求头" in msg
+        assert "请求体" in msg
+        # Bearer 认证方式保留、密钥掩码：明文不泄漏
+        assert "Bearer ***" in msg
+        assert "已掩码" in msg
+        assert captured["auth"] not in msg
+        # 请求体可见：模型名 + 描述指令
+        assert captured["body"]["model"] in msg
+        assert "请详细描述这张图片的内容" in msg
+
     def test_error_404_includes_request_url(self):
         """404（如 Base URL 缺 /v1 路径段的 page not found）错误信息
         应包含实际请求地址，帮助用户定位配置问题。"""
@@ -332,9 +461,13 @@ class TestOpenAIVisionClient:
         client = self._client(handler)
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x")
-        assert "未包含文本" in str(exc.value)
-        assert "请求地址" in str(exc.value)
-        assert captured["url"] in str(exc.value)
+        msg = str(exc.value)
+        assert "未包含文本" in msg
+        assert "请求地址" in msg
+        assert captured["url"] in msg
+        # issue #156：同时带 POST 请求体（用户可确认载荷结构）
+        assert "请求体" in msg
+        assert "gpt-4o" in msg
 
 class TestCustomVisionProvider:
     """自定义 provider：走 OpenAI 兼容 chat/completions 接口（issue #152）。
@@ -384,9 +517,100 @@ class TestCustomVisionProvider:
         client = self._client(handler)
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x")
-        assert "未包含文本" in str(exc.value)
-        assert "请求地址" in str(exc.value)
-        assert captured["url"] in str(exc.value)
+        msg = str(exc.value)
+        assert "未包含文本" in msg
+        assert "请求地址" in msg
+        assert captured["url"] in msg
+        # issue #156：同时带 POST 请求体（自定义网关同样可见载荷）
+        assert "请求体" in msg
+        assert "Qwen/Qwen2.5-VL-7B-Instruct" in msg
+
+    def test_invalid_json_error_includes_request_body(self):
+        """接口返回非 JSON（issue #156）：错误信息带响应片段 + POST 请求
+        信息（地址 + 请求头掩码 + 请求体截断），用户可对照网关返回定位
+        Base URL 指向错误的场景。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.read().decode())
+            return httpx.Response(200, text="<html>gateway error page</html>")
+
+        client = self._client(handler)
+        big = b"\x89PNG" + b"0" * 300
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(big)
+        msg = str(exc.value)
+        assert "不是有效 JSON" in msg
+        assert "gateway error page" in msg
+        assert "请求地址" in msg and self.CUSTOM_URL in msg
+        assert "请求头" in msg
+        assert "请求体" in msg
+        assert "已掩码" in msg
+        assert "已截断" in msg
+        assert captured["body"]["model"] in msg
+        assert "sk-custom" not in msg  # API Key 明文不泄漏
+
+class TestRequestInfo:
+    """format_request_info 脱敏摘要单元测试（issue #156）。
+
+    错误提示要展示「后端 POST 给上游 API 的信息」，但必须脱敏：认证头
+    密钥掩码（Authorization 保留 Bearer 前缀）、请求体超长字符串（base64
+    图片数据）截断、key/token 类字段整体掩码。
+    """
+
+    def test_formats_url_headers_body(self):
+        """正常路径：地址 + 掩码请求头 + 请求体 JSON 摘要。"""
+        info = format_request_info(
+            "https://api.example.com/v1/chat/completions",
+            headers={"Authorization": "Bearer sk-real-123",
+                     "Content-Type": "application/json"},
+            payload={"model": "gpt-4o", "messages": [{"role": "user"}]})
+        assert "请求地址: https://api.example.com" in info
+        assert '"Authorization": "Bearer ***（已掩码）"' in info
+        assert '"Content-Type": "application/json"' in info
+        assert '"model": "gpt-4o"' in info
+        assert "sk-real-123" not in info  # 密钥不泄漏
+
+    def test_masks_api_key_header_values(self):
+        """X-goog-api-key 与 api-key 头整体掩码（无 Bearer 前缀）。"""
+        info = format_request_info(
+            "https://generativelanguage.googleapis.com/v1beta",
+            headers={"X-goog-api-key": "AIza-secret", "api-key": "k2"},
+            payload={})
+        assert "AIza-secret" not in info
+        assert "k2" not in info
+        assert '"X-goog-api-key": "***（已掩码）"' in info
+        assert '"api-key": "***（已掩码）"' in info
+
+    def test_truncates_long_image_base64(self):
+        """超长字符串（base64 图片数据）截断展示并标注总长度。"""
+        big = "b" * 5000
+        info = format_request_info(
+            "https://api.example.com/v1",
+            headers={"Authorization": "Bearer k"},
+            payload={"data": big})
+        assert "已截断" in info
+        assert "共 5000 字符" in info
+        assert "b" * 200 not in info  # 未完整展示
+        assert info.count("b") <= 80  # 只保留预览前缀（请求头无小写 b）
+
+    def test_masks_sensitive_payload_fields(self):
+        """请求体中的 api_key / token 类字段整体掩码。"""
+        info = format_request_info(
+            "https://api.example.com/v1",
+            headers={},
+            payload={"model": "m", "api_key": "sk-x", "token": "t1"})
+        assert "sk-x" not in info
+        assert "t1" not in info
+        assert '"api_key": "***（已掩码）"' in info
+        assert '"token": "***（已掩码）"' in info
+        assert '"model": "m"' in info
+
+    def test_payload_none_omits_body(self):
+        """payload 为 None（无请求体可展示）时不输出请求体段。"""
+        info = format_request_info("https://api.example.com/v1")
+        assert info == "请求地址: https://api.example.com/v1"
+        assert "请求体" not in info
 
 class TestHelpers:
     def test_find_enabled_returns_matching(self):

@@ -1938,8 +1938,8 @@ class TestVisionModelTestEndpoint:
 
     def test_test_network_error_passes_through_request_url(self, client, monkeypatch):
         """网络层失败（超时/连接失败，issue #156）：describe 抛出的错误
-        信息带「请求地址」，端点应完整透传给前端展示（ok=false + 错误
-        原文，不截断、不吞掉 URL 线索）。"""
+        信息带「请求地址 + 请求头 + 请求体」，端点应完整透传给前端展示
+        （ok=false + 错误原文，不截断、不吞掉诊断线索）。"""
         tc, _ = client
 
         class FakeClient:
@@ -1950,7 +1950,10 @@ class TestVisionModelTestEndpoint:
                 raise VisionModelError(
                     "识图模型「Gemini 视觉」请求超时（>60s）（请求地址: "
                     "https://api.example.com/v1beta/models/gemini-2.5-flash"
-                    ":generateContent）")
+                    ":generateContent，请求头: {\"X-goog-api-key\": "
+                    "\"***（已掩码）\"}，请求体: {\"contents\": "
+                    "[{\"parts\": [{\"inline_data\": {\"data\": "
+                    "\"base64…（已截断）\"}}]}]}）")
 
         self._patch_client(monkeypatch, FakeClient)
         resp = self._post(tc)
@@ -1960,4 +1963,9 @@ class TestVisionModelTestEndpoint:
         assert "请求地址" in data["error"]
         assert "api.example.com" in data["error"]
         assert "generateContent" in data["error"]
+        # issue #156：POST 请求头（密钥掩码）与请求体原文一并透传前端
+        assert "请求头" in data["error"]
+        assert "请求体" in data["error"]
+        assert "已掩码" in data["error"]
+        assert "已截断" in data["error"]
 
