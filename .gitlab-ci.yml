@@ -756,6 +756,10 @@ backend:test:
     - linux
     - code01
   timeout: 30m
+  # 覆盖率提取正则（issue #210）：解析 pytest-cov term-missing 日志的
+  # TOTAL 行，驱动项目覆盖率徽章与流水线页面覆盖率展示（GitLab 17+ 由
+  # job 级 coverage 关键字替代旧项目设置 test_coverage_regex）
+  coverage: '/TOTAL\s+\d+\s+\d+\s+(\d+\.?\d*)%/'
   cache:
     key: uv-cache-${CI_COMMIT_REF_SLUG}
     paths:
