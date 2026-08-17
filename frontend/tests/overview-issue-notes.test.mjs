@@ -331,3 +331,91 @@ test('评论正文为空：渲染占位不崩', async () => {
     mock.restoreAll()
   }
 })
+
+// ---- issue #181：回复/活动中的 Git 提交 SHA 可点击跳转提交页 ----
+
+test('projectUrlFromIssueWebUrl：work_items / issues 两种 URL 均能推导项目基地址', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
+  const { projectUrlFromIssueWebUrl } = mod
+  assert.equal(
+    projectUrlFromIssueWebUrl(
+      'https://home.chenkaidi.top:509/chenkaidi/botler/-/work_items/181'),
+    'https://home.chenkaidi.top:509/chenkaidi/botler')
+  assert.equal(
+    projectUrlFromIssueWebUrl(
+      'https://gitlab.example.com/chenkaidi/botler/-/issues/97'),
+    'https://gitlab.example.com/chenkaidi/botler')
+})
+
+test('projectUrlFromIssueWebUrl：无法识别 / 空值返回空串', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
+  const { projectUrlFromIssueWebUrl } = mod
+  assert.equal(projectUrlFromIssueWebUrl(''), '')
+  assert.equal(projectUrlFromIssueWebUrl(null), '')
+  assert.equal(projectUrlFromIssueWebUrl('https://example.com'), '')
+  assert.equal(
+    projectUrlFromIssueWebUrl('https://example.com/ns/repo/-/issues/abc'),
+    '')
+})
+
+test('评论中的提交短 SHA：渲染为跳转 GitLab 提交页的链接', async () => {
+  const note = {
+    id: 205,
+    body: '提交Commit：d6adbde（feat: xx（issue #180））',
+    system: false,
+    author: { name: 'bot', username: 'bot' },
+    created_at: '2026-08-15 10:00:00',
+  }
+  const { renderer, root } = await renderDrawer(OPEN_ISSUE, [note])
+  try {
+    const links = root.findAll(
+      (n) => String(n.props.className || '').includes('commit-link'))
+    assert.equal(links.length, 1, '评论中的短 SHA 应渲染为提交链接')
+    assert.equal(links[0].props.href,
+      'https://gitlab.example.com/chenkaidi/botler/-/commit/d6adbde')
+    assert.equal(links[0].props.target, '_blank')
+    assert.ok(drawerText(root).includes('d6adbde'), '链接文案保留 SHA')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('活动中的完整提交 SHA：渲染为跳转 GitLab 提交页的链接', async () => {
+  const full = 'd6adbde9d2c4074ee7634f56010a3ccb088cdd24'
+  const note = {
+    id: 206, body: `mentioned in commit ${full}`, system: true,
+    author: { name: 'bot', username: 'bot' },
+    created_at: '2026-08-15 09:00:00',
+  }
+  const { renderer, root } = await renderDrawer(OPEN_ISSUE, [note])
+  try {
+    const links = root.findAll(
+      (n) => String(n.props.className || '').includes('commit-link'))
+    assert.equal(links.length, 1, '活动中的完整 SHA 应渲染为提交链接')
+    assert.equal(links[0].props.href,
+      `https://gitlab.example.com/chenkaidi/botler/-/commit/${full}`)
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('issue 无 web_url：评论/活动中的 SHA 保持纯文本不渲染链接', async () => {
+  const note = {
+    id: 207, body: '提交Commit：d6adbde', system: false,
+    author: { name: 'bot', username: 'bot' },
+    created_at: '2026-08-15 10:00:00',
+  }
+  const issue = { ...OPEN_ISSUE, web_url: null }
+  const { renderer, root } = await renderDrawer(issue, [note])
+  try {
+    const links = root.findAll(
+      (n) => String(n.props.className || '').includes('commit-link'))
+    assert.equal(links.length, 0, '无 web_url 不应渲染提交链接')
+    assert.ok(drawerText(root).includes('d6adbde'), 'SHA 应保留为纯文本')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})

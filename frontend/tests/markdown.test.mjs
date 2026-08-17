@@ -19,15 +19,30 @@ const { default: Markdown } = await vite.ssrLoadModule('/src/components/Markdown
 
 after(() => vite.close())
 
-/** 渲染组件为 React 元素并返回 JSON 树序列化（便于断言结构） */
-function renderTree(content) {
+/** 渲染组件为 React 元素并返回 JSON 树序列化（便于断言结构）；
+ *  projectUrl 可选（issue #181：提交 SHA 链接化） */
+function renderTree(content, projectUrl = '') {
   let renderer = null
   TestRenderer.act(() => {
-    renderer = TestRenderer.create(React.createElement(Markdown, { content }))
+    renderer = TestRenderer.create(
+      React.createElement(Markdown, { content, projectUrl }))
   })
   const json = JSON.stringify(renderer.toJSON())
   TestRenderer.act(() => renderer.unmount())
   return json
+}
+
+/** 渲染树 → 纯文本（与 overview-issue-notes.test.mjs 的 toText 一致） */
+function toText(node) {
+  if (node == null) return ''
+  if (typeof node === 'string') return node
+  if (typeof node === 'number' || typeof node === 'boolean') return String(node)
+  if (Array.isArray(node)) return node.map(toText).join('')
+  if (typeof node === 'object') {
+    const children = node.children ?? node.props?.children
+    return toText(children)
+  }
+  return ''
 }
 
 test('标题：# / ## / ### 渲染为 h1 / h2 / h3', () => {
@@ -142,4 +157,125 @@ test('混合长文档：指南类文档整体渲染不崩溃且关键小节齐�
   assert.match(tree, /"pre"/)
   assert.match(tree, /"strong"/)
   assert.match(tree, /"Synology SSO 登录配置指南"/)
+})
+
+// ---- issue #181：Git 提交 SHA 可点击跳转 GitLab 提交页 ----
+
+test('提交链接化：短 SHA 渲染为跳转 GitLab 提交页的链接', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/Markdown.jsx')
+  const { linkifyCommits } = mod
+  const parts = linkifyCommits('提交Commit：d6adbde（feat: xx）',
+                               'https://gitlab.example.com/chenkaidi/botler')
+  const a = parts.find((p) => typeof p === 'object' && p.type === 'a')
+  assert.ok(a, '短 SHA 应渲染为 <a> 链接')
+  assert.equal(a.props.href,
+    'https://gitlab.example.com/chenkaidi/botler/-/commit/d6adbde')
+  assert.equal(a.props.className, 'commit-link')
+  assert.equal(a.props.target, '_blank')
+  assert.ok(toText(a.props.children).includes('d6adbde'), '链接文案保留 SHA 原文')
+})
+
+test('提交链接化：完整 40 位 SHA 与多处 SHA 均渲染链接', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/Markdown.jsx')
+  const { linkifyCommits } = mod
+  const full = 'd6adbde9d2c4074ee7634f56010a3ccb088cdd24'
+  const parts = linkifyCommits(`mentioned in commit ${full} 与 a1b2c3d`,
+                               'https://gitlab.example.com/chenkaidi/botler')
+  const links = parts.filter((p) => typeof p === 'object' && p.type === 'a')
+  assert.equal(links.length, 2, '应渲染两处提交链接')
+  assert.equal(links[0].props.href,
+    `https://gitlab.example.com/chenkaidi/botler/-/commit/${full}`)
+  assert.equal(links[1].props.href,
+    'https://gitlab.example.com/chenkaidi/botler/-/commit/a1b2c3d')
+})
+
+test('提交链接化：大写 hex 归一化为小写提交页 URL', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/Markdown.jsx')
+  const { linkifyCommits } = mod
+  const parts = linkifyCommits('D6ADBDE 提交',
+                               'https://gitlab.example.com/chenkaidi/botler')
+  const a = parts.find((p) => typeof p === 'object' && p.type === 'a')
+  assert.ok(a, '大写 hex 应渲染链接')
+  assert.equal(a.props.href,
+    'https://gitlab.example.com/chenkaidi/botler/-/commit/d6adbde',
+    'URL 应用小写 sha')
+})
+
+test('提交链接化：无 projectUrl 时不渲染链接（原样文本）', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/Markdown.jsx')
+  const { linkifyCommits } = mod
+  const parts = linkifyCommits('提交Commit：d6adbde', '')
+  assert.equal(parts.length, 1, '应原样返回文本')
+  assert.equal(typeof parts[0], 'string')
+  assert.equal(parts[0], '提交Commit：d6adbde')
+  assert.ok(!parts.some((p) => typeof p === 'object'), '不应出现 <a> 元素')
+})
+
+test('提交链接化：非 hex 词 / 混入非 hex 字母 / 不足 7 位 / 超长不误判', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/Markdown.jsx')
+  const { linkifyCommits } = mod
+  const url = 'https://gitlab.example.com/chenkaidi/botler'
+  // commit 含非 hex 字母 o/m/t → 不匹配；abc1234x 末尾 x 非 hex → 不匹配；
+  // feed 仅 4 位 → 不匹配；41 位超长 hex 不截断匹配（>40 无词边界）→ 不匹配；
+  // 完全中文 → 不匹配
+  const long41 = 'a'.repeat(41)
+  const parts = linkifyCommits(`commit 记录 abc1234x feed ${long41} 提交完成`,
+                               url)
+  assert.ok(!parts.some((p) => typeof p === 'object'),
+            '非提交 SHA 文本不应渲染链接')
+})
+
+test('提交链接化：空文本 / null 安全返回', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/Markdown.jsx')
+  const { linkifyCommits } = mod
+  const url = 'https://gitlab.example.com/chenkaidi/botler'
+  assert.deepEqual(linkifyCommits('', url), [''])
+  assert.deepEqual(linkifyCommits(null, url), [null])
+})
+
+// Markdown 组件集成：projectUrl 传入时提交 SHA 转链接
+test('Markdown：projectUrl 传入时段落内提交 SHA 渲染为链接', () => {
+  const tree = renderTree(
+    '提交Commit：d6adbde（feat: xx）',
+    'https://gitlab.example.com/chenkaidi/botler')
+  assert.match(tree, /commit-link/)
+  assert.match(tree, /https:\/\/gitlab\.example\.com\/chenkaidi\/botler\/-\/commit\/d6adbde/)
+  assert.match(tree, /d6adbde/)
+})
+
+test('Markdown：未传 projectUrl 时提交 SHA 保持纯文本', () => {
+  const tree = renderTree('提交Commit：d6adbde')
+  assert.doesNotMatch(tree, /commit-link/)
+  assert.doesNotMatch(tree, /\/-\/commit\//)
+  assert.match(tree, /d6adbde/)
+})
+
+test('Markdown：代码块/行内 code 内的 SHA 不链接化', () => {
+  // 行内 code：`` `d6adbde` `` 不应出现链接
+  const treeCode = renderTree('SHA 为 `d6adbde`',
+                              'https://gitlab.example.com/chenkaidi/botler')
+  assert.match(treeCode, /"code"/)
+  assert.doesNotMatch(treeCode, /commit-link/, 'code 内 SHA 不应转链接')
+  // 围栏代码块内 SHA 同样不链接化
+  const treeFence = renderTree('```\nd6adbde\n```',
+                               'https://gitlab.example.com/chenkaidi/botler')
+  assert.doesNotMatch(treeFence, /commit-link/, '围栏代码块内 SHA 不应转链接')
+})
+
+test('Markdown：既有 [链接] 内 SHA 不重复链接化', () => {
+  const tree = renderTree(
+    '查看 [d6adbde](https://gitlab.example.com/other/-/commit/d6adbde)',
+    'https://gitlab.example.com/chenkaidi/botler')
+  assert.match(tree, /"a"/)
+  assert.equal((tree.match(/commit-link/g) || []).length, 0,
+               '既有链接标签内的 SHA 不应再套一层链接')
+})
+
+test('Markdown：列表/引用块中的 SHA 同样渲染提交链接', () => {
+  const treeList = renderTree('- 提交 d6adbde 完成',
+                              'https://gitlab.example.com/chenkaidi/botler')
+  assert.match(treeList, /commit-link/)
+  const treeQuote = renderTree('> 提到 d6adbde9d2c4074ee7634f56010a3ccb088cdd24',
+                               'https://gitlab.example.com/chenkaidi/botler')
+  assert.match(treeQuote, /commit-link/)
 })

@@ -2585,6 +2585,17 @@ code {
 }
 .guide-content blockquote p { margin: 2px 0; }
 .guide-content a { color: var(--primary); }
+
+/* issue #181：issue 详情页评论/活动中的 Git 提交 SHA 链接——等宽字体 +
+   主色无下划线（与 GitLab 提交引用渲染风格一致），hover 显示下划线 */
+.commit-link {
+  font-family: var(--mono);
+  color: var(--primary);
+  text-decoration: none;
+}
+.commit-link:hover {
+  text-decoration: underline;
+}
 .guide-content table { font-size: 12.5px; }
 
 /* ---- AI API 供应商卡片（issue #46）---- */

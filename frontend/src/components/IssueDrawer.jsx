@@ -39,7 +39,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Icon } from './Icon.jsx'
 import { api, fmtTime } from '../api.js'
 import { confirmDialog } from '../dialog.js'
-import Markdown from './Markdown.jsx'
+import Markdown, { linkifyCommits } from './Markdown.jsx'
 import TaskDetailDrawer from './TaskDetailDrawer.jsx'  // issue #167：任务执行详情第二层右边栏
 
 // issue 状态 → 徽章映射（聚合只返回开放 issue，closed 为兜底映射）
@@ -92,12 +92,25 @@ export function isEscapeKey(e) {
   return !!e && e.key === 'Escape'
 }
 
+// issue #181：issue web_url → 项目 web 基地址（纯函数导出，便于测试）。
+// GitLab issue web_url 形如 https://host/ns/repo/-/work_items/181（工作
+// 项）或 .../-/issues/181（传统 issue），去掉 /-/xxx/<iid> 后缀即项目
+// 基地址，提交链接在此基础上拼 /-/commit/<sha>；无法识别返回 ''（提交
+// 链接不渲染，纯文本兜底）。
 // note 作者名：name 优先回退 username，全无显示「—」（issue #97，
 // 与列表头像/作者展示的兜底逻辑一致）
 export function noteAuthorName(note) {
   const a = note && typeof note === 'object' ? note.author : null
   if (!a || typeof a !== 'object') return '—'
   return a.name || a.username || '—'
+}
+
+/** issue web_url → 项目 web 基地址（issue #181）：去掉 /-/work_items/<iid>
+ *  或 /-/issues/<iid> 后缀；无法识别时返回 ''（调用方不渲染提交链接）。 */
+export function projectUrlFromIssueWebUrl(webUrl) {
+  if (!webUrl || typeof webUrl !== 'string') return ''
+  const m = webUrl.match(/^(.+)\/-\/(?:work_items|issues)\/\d+$/)
+  return m ? m[1] : ''
 }
 
 // note 作者头像：avatar_url 渲染 img，缺失回退首字母兜底块
@@ -181,6 +194,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   }, [onClose, detailOpen])
 
   const i = issue || {}
+  // issue #181：项目 web 基地址（由 issue web_url 推导），提交 SHA
+  // 链接在此基础上拼 /-/commit/<sha>；识别失败为空串时评论/活动
+  // 中的提交引用保持纯文本不渲染链接
+  const projectUrl = projectUrlFromIssueWebUrl(i.web_url)
   // 有效状态：本次点击关闭成功后本地立即标记 closed（后端已确认），
   // 状态徽章与按钮即时反映，无需等待下一轮轮询
   const effectiveState = closed ? 'closed' : i.state
@@ -582,7 +599,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
         <div className="issue-drawer-desc">
           <h3>描述</h3>
           {i.description && String(i.description).trim() ? (
-            <Markdown content={i.description} />
+            <Markdown content={i.description} projectUrl={projectUrl} />
           ) : (
             <p className="muted">暂无描述</p>
           )}
@@ -609,7 +626,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                 </div>
                 <div className="comment-body">
                   {n.body && String(n.body).trim() ? (
-                    <Markdown content={n.body} />
+                    <Markdown content={n.body} projectUrl={projectUrl} />
                   ) : (
                     <p className="muted">（无内容）</p>
                   )}
@@ -672,7 +689,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             {renderNotesBody(activities, '暂无活动', (n) => (
               <li key={n.id} className="activity-item">
                 <span className="activity-dot" title="系统活动">•</span>
-                <span className="activity-text">{n.body || '（无内容）'}</span>
+                <span className="activity-text">
+                  {n.body ? linkifyCommits(n.body, projectUrl, `act${n.id}-`)
+                          : '（无内容）'}
+                </span>
                 {n.created_at && (
                   <span className="activity-time">{fmtTime(n.created_at)}</span>
                 )}

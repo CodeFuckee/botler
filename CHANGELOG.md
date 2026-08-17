@@ -56,6 +56,27 @@
 
 ### Added
 
+- **issue 详情页评论/活动中的 Git 提交 SHA 支持点击跳转 GitLab 提交页（issue #181）**：
+  需求「issue详情页面，如果回复有git提交，则实现可以点击提交，跳转到gitlab对应的提交页面」。
+  此前机器人完成评论中的提交短 SHA（如「提交Commit：d6adbde（feat: …）」）与系统活动
+  「mentioned in commit …」均为纯文本，无法直接跳转查看提交内容；本次在 issue 详情右边栏
+  将评论 / 活动 / 描述中的 Git 提交引用（7-40 位十六进制、词边界）渲染为可点击链接，点击
+  跳转到对应 GitLab 提交页面（短 SHA 提交页 GitLab 302 跳转到完整提交）：
+  - **实现**：`frontend/src/components/Markdown.jsx` 新增可选 `projectUrl` prop 与导出的
+    纯函数 `linkifyCommits`（无 projectUrl 时行为完全不变，设置页文档等场景不受影响；行内
+    code 与既有 [链接](url) 内的 SHA 不重复链接化）；`frontend/src/components/IssueDrawer.jsx`
+    新增导出的 `projectUrlFromIssueWebUrl`（由 issue `web_url` 推导项目 web 基地址，
+    work_items / issues 两种 URL 形态均支持，无法识别返回空串不渲染链接），描述与评论
+    Markdown 传入 projectUrl，活动纯文本经 `linkifyCommits` 渲染；
+    `frontend/src/styles.css` 新增 `.commit-link` 样式（等宽字体 + 主色无下划线，与 GitLab
+    提交引用渲染风格一致）；
+  - **测试**：`frontend/tests/markdown.test.mjs` 新增提交链接用例（短 SHA / 完整 40 位 SHA /
+    多处 SHA / 大写 hex URL 归一化小写 / 无 projectUrl 纯文本 / 非 hex 词、混入非 hex 字母、
+    不足 7 位、41 位超长不误判 / 行内 code 与围栏代码块内不链接化 / 既有链接内不重复链接化 /
+    列表与引用块内同样生效 / 空值安全）；`frontend/tests/overview-issue-notes.test.mjs` 新增
+    `projectUrlFromIssueWebUrl` 推导与评论、活动提交链接渲染及无 web_url 兜底用例；前端全量
+    测试通过，无 regression。
+
 - **概览页最下方新增「Issue 完成耗时」板块——平均每个 issue 完成所需时间与逐日走势图（issue #180）**：
   需求「概览页面增加显示，平均每个issue完成所需要的时间，以及这个这个时间的走势图，放在概览页面最下方」。
   在概览页 CI/CD 流水线板块之后（页面最下方）新增统计板块，展示已完成 issue 的平均完成耗时与
