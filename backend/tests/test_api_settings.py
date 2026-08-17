@@ -1684,6 +1684,54 @@ class TestVisionModelTestEndpoint:
             files={"image": ("test.png", self.PNG, "image/png")},
             data=data)
 
+    def test_slow_model_call_does_not_block_event_loop(self, client, monkeypatch):
+        """慢速识图模型调用不冻结事件循环（issue #164 回归防护）。
+
+        旧实现：async 端点内直接同步调用模型（最长 60s），会冻结 uvicorn
+        事件循环——期间所有其它请求（含浏览器后续 fetch）无法被处理，
+        连接级失败表现为「✗ Failed to fetch」。修复后模型调用在线程池
+        执行，并发请求不受影响。
+        """
+        import threading
+        import time
+        tc, _ = client
+
+        class SlowClient:
+            def __init__(self, **kwargs):
+                pass
+
+            def describe(self, image, *, mime_type, prompt):
+                time.sleep(3.0)  # 模拟慢速/挂起的模型调用（同步阻塞）
+                return "ok"
+
+        self._patch_client(monkeypatch, SlowClient)
+        results = {}
+
+        def slow_call():
+            results["slow"] = self._post(tc).status_code
+
+        def fast_call():
+            t0 = time.monotonic()
+            r = tc.get("/api/settings")
+            results["fast"] = (r.status_code, time.monotonic() - t0)
+
+        # 进入上下文管理器：所有请求共享同一事件循环（等价 uvicorn 单
+        # 进程），慢请求阻塞时并发请求应仍能及时返回
+        with tc:
+            t1 = threading.Thread(target=slow_call)
+            t2 = threading.Thread(target=fast_call)
+            t1.start()
+            time.sleep(0.5)  # 确保慢请求先进入模型调用
+            t2.start()
+            t2.join(timeout=6)
+            t1.join(timeout=8)
+        assert results["slow"] == 200
+        status, elapsed = results["fast"]
+        assert status == 200
+        # 并发 GET 不应被 3s 慢调用拖住（旧实现会阻塞约 3s）
+        assert elapsed < 1.5, (
+            f"识图测试的模型调用阻塞了事件循环，并发请求耗时 {elapsed:.2f}s")
+
     def test_test_missing_image(self, client):
         """未上传图片直接 ok=false，不发请求。"""
         tc, _ = client

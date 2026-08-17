@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 from pathlib import Path
@@ -505,8 +506,14 @@ async def test_vision_model(
         return {"ok": False, "error": str(e)}
     try:
         mime_type = image.content_type or "image/png"
-        description = client.describe(
-            image_bytes, mime_type=mime_type, prompt=prompt)
+        # issue #164：识图模型调用是同步阻塞的 httpx 请求（最长
+        # IMAGE_TEST_TIMEOUT=60s），async 端点内直接调用会冻结整个
+        # uvicorn 事件循环——期间浏览器并发请求连接级失败，表现为
+        # 「✗ Failed to fetch」（请求甚至不会被处理/记录）。模型调用
+        # 移入线程池执行，避免阻塞事件循环（与 test_image_model 的
+        # 同步 def 由 FastAPI 自动线程池化保持一致）。
+        description = await asyncio.to_thread(
+            client.describe, image_bytes, mime_type=mime_type, prompt=prompt)
     except VisionModelError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001 识图测试异常统一降级提示

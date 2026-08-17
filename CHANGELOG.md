@@ -102,6 +102,34 @@
 
 ### Fixed
 
+- **识图模型「测试」点击报错「✗ Failed to fetch」——async 端点内同步调用模型冻结事件循环 + 网关拒绝 base64 data URL 图片时给出可操作诊断（issue #164）**：
+  设置页「识图模型」卡片点「测试」上传图片后，浏览器报「✗ Failed to fetch」、
+  后端访问日志无该请求记录；即使有响应，对阿里云百炼等 OpenAI 兼容网关
+  （如 `qwen3.6-flash`）也会必现「HTTP 400 url error, please check url」。
+  两个根因：
+  - **事件循环被冻结**：`POST /api/settings/vision-model-test` 是 `async def`
+    端点，内部却直接同步调用 `VisionModelClient.describe`（同步 httpx 请求，
+    最长 60s）——整个 uvicorn 事件循环被阻塞期间，浏览器并发请求连接级失败
+    （连接不被 accept/处理，表现为「✗ Failed to fetch」，且访问日志无记录），
+    全站轮询 / SSE 任务流同步卡死。修复：模型调用移入线程池
+    （`asyncio.to_thread`），事件循环不再被模型请求阻塞（与 `test_image_model`
+    的同步 `def` 由 FastAPI 自动线程池化保持一致）。
+  - **base64 data URL 被网关拒绝且提示晦涩**：未启用 MinIO 图片上传时图片以
+    base64 data URL 内联进请求体，部分 OpenAI 兼容网关（阿里云百炼 qwen）不接受
+    data: URL，返回「url error, please check url」；错误文案只堆叠请求信息、
+    无解决方向。修复：`openai_vision` / `custom` 供应商在图片为 base64 内联
+    模式、网关返回图片 URL 类错误（`url error` / `invalid url` / `image_url`
+    / `data:image`）时，错误信息自动追加诊断提示——引导启用 MinIO 图片上传
+    （识图请求改传 http URL，issue #163 的 `minio.enabled` + `public_base_url`）
+    或更换支持 base64 内联的网关；http URL 模式下不加该提示（避免误导）。
+  改动：`backend/botler/api/settings.py`（线程池化）、
+  `backend/botler/plugins/vision_models.py`（诊断提示）。
+  **测试**：`test_api_settings.py` 新增「慢速模型调用不阻塞事件循环」回归用例
+  （共享事件循环下并发 GET 必须及时返回——修复前被阻塞约 2.5s、修复后不受影响），
+  `test_vision_models.py` 新增 3 个用例（base64 data URL 被拒时带 MinIO/base64
+  提示、http URL 模式不加提示、无关 400 错误不加提示）；
+  实现前可复现失败、实现后全部通过；后端全量测试无 regression。
+
 - **灵感页面「添加 Issue」未自动设置 git 仓库用户为负责人：提交时存储值缺失则按 remote url 运行时读取兜底并写回仓库表（issue #159）**：
   概览页灵感板块「添加 Issue」一键提交为 GitLab issue 时，分配人应默认取该仓库 remote url
   中的用户名（如 `https://user:token@host/...` 的 user，issue #153 引入的「仓库用户」）。

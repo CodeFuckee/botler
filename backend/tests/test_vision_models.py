@@ -549,6 +549,65 @@ class TestOpenAIVisionClient:
         assert "请求体" in msg
         assert "gpt-4o" in msg
 
+    def test_url_error_hint_for_base64_data_url(self):
+        """OpenAI 兼容网关拒绝 base64 data URL 图片（如阿里云百炼 qwen
+        返回 "url error, please check url"）时，错误信息带可操作的诊断
+        提示（issue #164）：引导启用 MinIO 图片上传（http URL 模式）或
+        更换支持 base64 的网关。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(400, json={
+                "code": "InvalidParameter",
+                "message": "url error, please check url！",
+            })
+
+        client = self._client(handler)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x", mime_type="image/png", prompt="描述")
+        msg = str(exc.value)
+        assert "400" in msg
+        assert "url error" in msg
+        # 诊断提示：base64 内联模式 + MinIO http URL 方案
+        assert "base64" in msg
+        assert "MinIO" in msg
+        assert "http URL" in msg
+
+    def test_url_error_no_hint_when_http_url_mode(self):
+        """MinIO http URL 模式（图片已是 http URL 字符串）下网关报 url
+        错误时，不加 base64 提示（避免误导——此时与图片编码无关）。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={
+                "code": "InvalidParameter",
+                "message": "url error, please check url！",
+            })
+
+        client = self._client(handler)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(
+                "http://img.example.com:9000/botler-images/abc",
+                mime_type="image/png", prompt="描述")
+        msg = str(exc.value)
+        assert "url error" in msg
+        assert "base64" not in msg
+        assert "MinIO" not in msg
+
+    def test_url_error_hint_not_added_for_unrelated_errors(self):
+        """非图片 URL 类 400 错误（如限流）不加 base64/MinIO 提示。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={
+                "code": "Throttling",
+                "message": "rate limit exceeded, retry later",
+            })
+
+        client = self._client(handler)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x", mime_type="image/png")
+        msg = str(exc.value)
+        assert "rate limit" in msg
+        assert "MinIO" not in msg
+
 class TestCustomVisionProvider:
     """自定义 provider：走 OpenAI 兼容 chat/completions 接口（issue #152）。
 

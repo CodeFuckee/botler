@@ -59,6 +59,33 @@ def _image_url_value(image: bytes | str, mime_type: str) -> str:
     return (f"data:{mime_type};base64,"
             f"{base64.b64encode(image).decode('ascii')}")
 
+
+def _data_url_rejected_hint(image: bytes | str, resp_text: str) -> str:
+    """OpenAI 兼容网关拒绝 base64 data URL 图片时的诊断提示（issue #164）。
+
+    部分 OpenAI 兼容网关（如阿里云百炼 qwen）不接受 base64 内联图片
+    （data: URL），会返回图片 URL 相关错误（典型如 "url error, please
+    check url"）。此时给用户可操作的提示：启用 MinIO 图片上传让识图
+    请求改传 http URL（issue #163），或更换支持 base64 内联的网关。
+
+    :param image: describe 收到的图片（bytes = base64 内联模式；str =
+        MinIO http URL 模式，错误与图片编码无关，不加提示）
+    :param resp_text: 网关返回的响应文本
+    :return: 命中的提示文案；未命中返回空串
+    """
+    if isinstance(image, str):
+        return ""
+    text = (resp_text or "").lower()
+    if any(k in text for k in ("url error", "invalid url", "image_url",
+                               "data:image", "图片 url")):
+        return ("；提示：网关返回图片 URL 相关错误——当前请求以 base64 内联"
+                "（data: URL）发送图片，该网关可能不支持。可启用 MinIO 图片"
+                "上传让识图请求改传 http URL（设置页/配置 minio.enabled + "
+                "public_base_url，见 README「识图模型」说明），或更换支持"
+                "base64 内联图片的网关")
+    return ""
+
+
 # ---- 请求信息脱敏 / 摘要（issue #156） ----
 # 错误提示要展示「后端 POST 给上游 API 的信息」，但请求体里包含 base64
 # 图片数据（可长达数十万字符）与认证头里的 API Key：展示前必须脱敏，
@@ -308,7 +335,8 @@ class OpenAIVisionProvider(VisionProviderPlugin):
                     "不能只填域名" if resp.status_code == 404 else "")
             raise VisionModelError(
                 f"OpenAI 请求失败: HTTP {resp.status_code} {resp.text[:200]}"
-                f"（{format_request_info(url, headers, payload)}）{hint}")
+                f"（{format_request_info(url, headers, payload)}）{hint}"
+                f"{_data_url_rejected_hint(image, resp.text)}")
         data = _parse_json_response(resp, url, "OpenAI", headers, payload)
         try:
             content_out = data["choices"][0]["message"]["content"]
@@ -386,7 +414,8 @@ class CustomVisionProvider(VisionProviderPlugin):
             raise VisionModelError(
                 f"自定义识图模型请求失败: HTTP {resp.status_code} "
                 f"{resp.text[:200]}（"
-                f"{format_request_info(url, headers, payload)}）{hint}")
+                f"{format_request_info(url, headers, payload)}）{hint}"
+                f"{_data_url_rejected_hint(image, resp.text)}")
         data = _parse_json_response(resp, url, "自定义识图模型",
                                     headers, payload)
         try:
