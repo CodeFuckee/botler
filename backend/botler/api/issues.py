@@ -238,6 +238,44 @@ def issues_overview(request: Request):
     return result
 
 
+# ---- issue #180：概览页「Issue 完成耗时」统计 ----
+# 统计本地 tasks 表中成功终态（succeeded）任务，不依赖 GitLab API：
+# 任务成功时系统会给 issue 打 bot-done 标签（executor issue #49），
+# 完成耗时 = finished_at - created_at（系统接收时间 → bot-done 打标时间，
+# 与任务详情「处理用时」语义一致，见 frontend fmtDuration issue #49）。
+# 本地 SQLite 数据量小，直接实时计算，不做缓存。
+@router.get("/completion-stats")
+def issues_completion_stats(request: Request):
+    """概览页「Issue 完成耗时」板块数据（issue #180）。
+
+    返回已完成 issue 的平均完成耗时与按完成日（UTC）分组的逐日平均
+    走势：
+    - completed_count：已完成（succeeded）issue 数量；
+    - avg_seconds：全部已完成 issue 的平均完成耗时（秒，保留 3 位小数）；
+    - trend：按完成日分组 [{date, count, avg_seconds}]，按日期升序，
+      供概览页最下方走势图绘制；无数据时 trend 为空数组。
+    完成耗时为负/字段缺失/解析失败的任务行不计入统计（数据层过滤）。
+    """
+    pairs = request.app.state.ctx.db.succeeded_durations()
+    total = len(pairs)
+    if total == 0:
+        return {"completed_count": 0, "avg_seconds": None, "trend": []}
+    avg_all = sum(sec for _, sec in pairs) / total
+    by_day: dict[str, list[float]] = {}
+    for day, sec in pairs:
+        by_day.setdefault(day, []).append(sec)
+    trend = [
+        {"date": day, "count": len(secs),
+         "avg_seconds": round(sum(secs) / len(secs), 3)}
+        for day, secs in sorted(by_day.items())
+    ]
+    return {
+        "completed_count": total,
+        "avg_seconds": round(avg_all, 3),
+        "trend": trend,
+    }
+
+
 
 # ---- issue #130：概览页 issue 编辑操作优先 owner token ----
 # owner gitlab token 只允许在概览页面上编辑 issue、添加 issue、关闭 issue、

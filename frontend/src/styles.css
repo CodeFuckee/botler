@@ -2772,3 +2772,56 @@ code {
 .weekday-row .weekday-check input {
   margin: 0;
 }
+
+/* ---- Issue 完成耗时板块（issue #180）----
+   概览页最下方：平均完成耗时 + 逐日平均耗时走势图（SVG 折线）。
+   布局与既有板块一致（margin-top: space-5），数字醒目、图表随容器
+   宽度自适应（viewBox 等比例缩放）。 */
+.completion-stats-section {
+  margin-top: var(--space-5);
+}
+.completion-stats-section h2 {
+  font-size: 16px;
+  margin: 0 0 var(--space-1);
+}
+.completion-stats-summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  flex-wrap: wrap;
+}
+.completion-stats-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+.completion-trend-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 720px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+}
+.completion-trend-line {
+  stroke: var(--primary);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.completion-trend-dot {
+  fill: var(--primary);
+  stroke: var(--bg-card);
+  stroke-width: 1.5;
+}
+.completion-trend-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.completion-trend-label {
+  fill: var(--muted);
+  font-size: 11px;
+}

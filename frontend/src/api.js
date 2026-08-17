@@ -142,20 +142,15 @@ export function fmtTime(ts, tz = displayTz) {
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
 }
 
-// 时长人类可读（issue #23）：start → end 的时长换算为 秒/分钟/小时/天。
-// 任务「用时」（issue #49）以此动态计算完整处理周期——系统接收时间
-// created_at → bot-done 打标时间 finished_at（不落库时长字段）。
-// 与 fmtTime 同规则解析后端 UTC 时间串；缺字段、解析失败或结束早于开始
-// （时钟异常）返回 null（页面显示占位符）。
-export function fmtDuration(startTs, endTs) {
-  if (!startTs || !endTs) return null
-  const start = new Date(String(startTs).replace(' ', 'T') + 'Z')
-  const end = new Date(String(endTs).replace(' ', 'T') + 'Z')
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null
-  const totalSec = Math.floor((end - start) / 1000)
-  if (totalSec < 0) return null
-  if (totalSec < 60) return `${totalSec} 秒`
-  const totalMin = Math.floor(totalSec / 60)
+// 秒数人类可读（issue #180）：平均完成耗时等以秒为单位的时长换算为
+// 秒/分钟/小时/天（与 fmtDuration 输出格式一致）。非法输入（null /
+// 非有限数 / 负数）返回 null（页面显示占位符）。
+export function fmtSeconds(totalSec) {
+  if (totalSec == null || !Number.isFinite(totalSec)) return null
+  const sec = Math.floor(totalSec)
+  if (sec < 0) return null
+  if (sec < 60) return `${sec} 秒`
+  const totalMin = Math.floor(sec / 60)
   if (totalMin < 60) return `${totalMin} 分钟`
   const hours = Math.floor(totalMin / 60)
   if (hours < 24) {
@@ -165,6 +160,19 @@ export function fmtDuration(startTs, endTs) {
   const days = Math.floor(hours / 24)
   const restHours = hours % 24
   return restHours ? `${days} 天 ${restHours} 小时` : `${days} 天`
+}
+
+// 时长人类可读（issue #23）：start → end 的时长换算为 秒/分钟/小时/天。
+// 任务「用时」（issue #49）以此动态计算完整处理周期——系统接收时间
+// created_at → bot-done 打标时间 finished_at（不落库时长字段）。
+// 与 fmtTime 同规则解析后端 UTC 时间串；缺字段、解析失败或结束早于开始
+// （时钟异常）返回 null（页面显示占位符）；换算复用 fmtSeconds。
+export function fmtDuration(startTs, endTs) {
+  if (!startTs || !endTs) return null
+  const start = new Date(String(startTs).replace(' ', 'T') + 'Z')
+  const end = new Date(String(endTs).replace(' ', 'T') + 'Z')
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null
+  return fmtSeconds((end - start) / 1000)
 }
 
 // commit sha 短显示（issue #19）：完整 sha 截断为前 8 位，空值返回占位符

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, STATUS_META, shortSha, fmtTime, fmtAgo, summarizeToolInput } from '../api.js'
+import { api, STATUS_META, shortSha, fmtTime, fmtAgo, fmtSeconds, summarizeToolInput } from '../api.js'
 import IssueDrawer, { ENGINE_META } from '../components/IssueDrawer.jsx'
 import { Icon } from '../components/Icon.jsx'
 import AddIssueModal from '../components/AddIssueModal.jsx'
@@ -33,6 +33,11 @@ export const DEEPSEEK_BALANCE_POLL_MS = 60000
 // DeepSeek 开放平台充值页（issue #178）：余额卡片「去充值」链接按钮的跳转
 // 目标，点击后在新标签页打开官方充值页，方便用户直接在 DeepSeek 页面充值
 export const DEEPSEEK_TOPUP_URL = 'https://platform.deepseek.com/top_up'
+
+// Issue 完成耗时统计轮询间隔（issue #180）：平均完成耗时与走势图数据
+// 来自本地 tasks 表成功终态任务（GET /api/issues/completion-stats），
+// 无 GitLab 请求压力，低频轮询即可（任务完成后再等下一轮刷新）
+export const COMPLETION_STATS_POLL_MS = 60000
 
 // 流水线整体状态 → 徽章映射（issue #39）。样式类复用任务状态徽章
 // status-*（视觉语义一致：成功绿 / 失败红 / 运行蓝 / 其余灰）
@@ -227,6 +232,10 @@ export default function Overview() {
   const [dsBalance, setDsBalance] = useState(null)
   // 余额接口请求失败（网络/后端异常）时的错误文案
   const [dsBalanceError, setDsBalanceError] = useState('')
+  // Issue 完成耗时统计（issue #180）：null=加载中；{completed_count,
+  // avg_seconds, trend} 为 /api/issues/completion-stats 返回
+  const [completionStats, setCompletionStats] = useState(null)
+  const [completionStatsError, setCompletionStatsError] = useState('')
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
@@ -360,6 +369,25 @@ export default function Overview() {
     const t = setInterval(loadDeepSeekBalance, DEEPSEEK_BALANCE_POLL_MS)
     return () => clearInterval(t)
   }, [loadDeepSeekBalance])
+
+  // 已完成 issue 平均耗时与逐日走势（issue #180，独立低频轮询）：数据
+  // 来自本地 tasks 表成功终态任务，无 GitLab 请求压力；接口失败保留
+  // 上次数据并展示错误提示，不影响页面其他板块
+  const loadCompletionStats = useCallback(async () => {
+    try {
+      const d = await api.get('/api/issues/completion-stats')
+      setCompletionStats(d || { completed_count: 0, avg_seconds: null, trend: [] })
+      setCompletionStatsError('')
+    } catch (e) {
+      setCompletionStatsError(e.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadCompletionStats()
+    const t = setInterval(loadCompletionStats, COMPLETION_STATS_POLL_MS)
+    return () => clearInterval(t)
+  }, [loadCompletionStats])
 
   // ---- 灵感增删改（issue #131）：仅写 Botler 本地数据库 ----
 
@@ -1025,6 +1053,36 @@ export default function Overview() {
         )}
       </section>
 
+      {/* issue #180：Issue 完成耗时——平均每个 issue 完成所需的时间
+          （成功任务的处理用时：系统接收时间 → bot-done 打标时间，与任务
+          详情「处理用时」issue #49 语义一致）与逐日平均走势图，置于
+          概览页最下方。数据来自本地 tasks 表成功终态任务
+          （GET /api/issues/completion-stats），无 GitLab 请求压力 */}
+      <section className="completion-stats-section">
+        <h2>Issue 完成耗时</h2>
+        <p className="muted">平均每个 issue 完成所需时间（处理用时：系统接收 → bot-done 打标）与逐日走势（每 {COMPLETION_STATS_POLL_MS / 1000} 秒自动刷新）</p>
+        {completionStatsError && (
+          <div className="alert alert-error" onClick={() => setCompletionStatsError('')}>{completionStatsError}</div>
+        )}
+        {completionStats && completionStats.completed_count === 0 ? (
+          <div className="empty-state">
+            <span className="empty-icon" aria-hidden="true"><Icon name="hourglass" /></span>
+            <p className="muted">暂无已完成 issue</p>
+          </div>
+        ) : completionStats ? (
+          <>
+            <div className="completion-stats-summary">
+              <span className="completion-stats-value"
+                    title="全部已完成 issue 的平均完成耗时">
+                {fmtSeconds(completionStats.avg_seconds) || <span className="muted">—</span>}
+              </span>
+              <span className="muted">平均完成耗时（{completionStats.completed_count} 个已完成 issue）</span>
+            </div>
+            <CompletionTrendChart trend={completionStats.trend} />
+          </>
+        ) : null}
+      </section>
+
       {/* issue #85：issue 详情右边栏——点击列表项打开，显示具体信息与正文。
           issue #94：关闭 issue 成功后刷新列表（后端已清缓存，该 issue
           从开放列表消失）；抽屉保持打开，状态徽章由抽屉内部更新。
@@ -1064,5 +1122,50 @@ function ReconcileResult({ result }) {
         : <span className="test-chip ok"><Icon name="check" /> 无需处理</span>}
       {result.scanned > 0 && <span className="muted">扫描 {result.scanned} 个 issue</span>}
     </div>
+  )
+}
+
+// 走势图（issue #180）：轻量 SVG 折线图，无第三方图表库依赖——
+// 横轴为完成日（数据本身是逐日序列，等距排布即可），纵轴为当日平均
+// 完成耗时（秒），范围 0 → 最大值留 10% 余量；折线 + 数据点，每个点
+// 带 <title> 悬浮提示（日期 / 平均耗时 / 当日完成数）。trend 非数组
+// 或为空时返回 null（不渲染）。
+export function CompletionTrendChart({ trend }) {
+  if (!Array.isArray(trend) || trend.length === 0) return null
+  const W = 640
+  const H = 180
+  const PAD_L = 8
+  const PAD_R = 8
+  const PAD_T = 14
+  const PAD_B = 24
+  const n = trend.length
+  const maxSec = Math.max(...trend.map((t) => Number(t.avg_seconds) || 0))
+  const yMax = maxSec > 0 ? maxSec * 1.1 : 1
+  const innerW = W - PAD_L - PAD_R
+  const innerH = H - PAD_T - PAD_B
+  const px = (i) => (n === 1 ? PAD_L + innerW / 2 : PAD_L + (innerW * i) / (n - 1))
+  const py = (v) => H - PAD_B - (innerH * (Number(v) || 0)) / yMax
+  const points = trend
+    .map((t, i) => `${px(i).toFixed(2)},${py(t.avg_seconds).toFixed(2)}`)
+    .join(' ')
+  const first = trend[0]
+  const last = trend[n - 1]
+  return (
+    <svg className="completion-trend-chart" viewBox={`0 0 ${W} ${H}`}
+         role="img" aria-label="平均完成耗时走势图">
+      <line className="completion-trend-axis" x1={PAD_L} y1={H - PAD_B}
+            x2={W - PAD_R} y2={H - PAD_B} />
+      <polyline className="completion-trend-line" points={points} fill="none" />
+      {trend.map((t, i) => (
+        <circle key={t.date || i} className="completion-trend-dot"
+                cx={px(i).toFixed(2)} cy={py(t.avg_seconds).toFixed(2)} r="3">
+          <title>{`${t.date}：平均 ${fmtSeconds(t.avg_seconds) || '—'}（${t.count} 个 issue）`}</title>
+        </circle>
+      ))}
+      <text className="completion-trend-label" x={PAD_L} y={H - PAD_B + 16}>{first.date}</text>
+      <text className="completion-trend-label" x={W - PAD_R} y={H - PAD_B + 16}
+            textAnchor="end">{last.date}</text>
+      <text className="completion-trend-label" x={PAD_L} y={PAD_T - 4}>{fmtSeconds(yMax) || ''}</text>
+    </svg>
   )
 }

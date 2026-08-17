@@ -2565,3 +2565,101 @@ class TestIssueEditOwnerToken:
         assert "owner token" in resp.json()["detail"]
         assert "api scope" not in resp.json()["detail"], \
             "通用 403 不应臆测为缺 api scope"
+
+
+# ---- issue #180：概览页「Issue 完成耗时」统计 ----
+
+class TestCompletionStats:
+    """GET /api/issues/completion-stats：平均完成耗时 + 逐日走势。
+
+    数据源为本地 tasks 表成功终态（succeeded）任务，完成耗时 =
+    finished_at - created_at（与任务详情「处理用时」issue #49 语义
+    一致：系统接收时间 → bot-done 打标时间）。
+    """
+
+    @staticmethod
+    def _mk_succeeded(db, repo_id, issue_iid, created_at, finished_at,
+                      status="succeeded"):
+        """创建任务并写入受控的 created_at / finished_at（UTC 无后缀串）。"""
+        task_id = db.create_task(repo_id, 42, issue_iid, f"issue #{issue_iid}",
+                                 triggered_by="webhook")
+        db.set_task_status(task_id, status, finished_at=finished_at)
+        with db._conn() as conn:
+            conn.execute("UPDATE tasks SET created_at=? WHERE id=?",
+                         (created_at, task_id))
+        return task_id
+
+    def test_empty(self, client):
+        """无任何任务 → completed_count=0、avg_seconds=None、trend=[]。"""
+        tc, stub, db, tmp_path = client
+        resp = tc.get("/api/issues/completion-stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {"completed_count": 0, "avg_seconds": None, "trend": []}
+
+    def test_only_succeeded_counted(self, client):
+        """只有 succeeded 任务计入统计，其他终态（failed/interrupted/
+        queued/running）一律排除。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db)
+        self._mk_succeeded(db, repo_id, 1, "2026-08-12 02:00:00",
+                           "2026-08-12 03:00:00")  # 3600 秒
+        self._mk_succeeded(db, repo_id, 2, "2026-08-12 02:00:00",
+                           "2026-08-12 02:30:00", status="failed")
+        self._mk_succeeded(db, repo_id, 3, "2026-08-12 02:00:00",
+                           "2026-08-12 02:30:00", status="interrupted")
+        self._mk_succeeded(db, repo_id, 4, "2026-08-12 02:00:00",
+                           "2026-08-12 02:30:00", status="queued")
+        body = tc.get("/api/issues/completion-stats").json()
+        assert body["completed_count"] == 1
+        assert body["avg_seconds"] == 3600.0
+        assert body["trend"] == [{"date": "2026-08-12", "count": 1,
+                                  "avg_seconds": 3600.0}]
+
+    def test_overall_average_and_daily_trend(self, client):
+        """多条 succeeded：overall 平均 = 全部用时均值；trend 按完成日
+        分组求日平均，按日期升序。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db)
+        # 08-12 完成两条：3600s + 1800s → 日平均 2700s
+        self._mk_succeeded(db, repo_id, 1, "2026-08-12 02:00:00",
+                           "2026-08-12 03:00:00")
+        self._mk_succeeded(db, repo_id, 2, "2026-08-12 10:00:00",
+                           "2026-08-12 10:30:00")
+        # 08-13 完成一条：7200s
+        self._mk_succeeded(db, repo_id, 3, "2026-08-13 02:00:00",
+                           "2026-08-13 04:00:00")
+        body = tc.get("/api/issues/completion-stats").json()
+        assert body["completed_count"] == 3
+        # 总体平均 = (3600 + 1800 + 7200) / 3 = 4200
+        assert body["avg_seconds"] == 4200.0
+        assert body["trend"] == [
+            {"date": "2026-08-12", "count": 2, "avg_seconds": 2700.0},
+            {"date": "2026-08-13", "count": 1, "avg_seconds": 7200.0},
+        ]
+
+    def test_invalid_and_negative_durations_skipped(self, client):
+        """缺时间字段 / 解析失败 / 用时为负（时钟异常）的行不计入统计，
+        有效行仍正常聚合。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db)
+        # 有效行：120 秒
+        self._mk_succeeded(db, repo_id, 1, "2026-08-12 02:00:00",
+                           "2026-08-12 02:02:00")
+        # finished_at 为空 → 跳过
+        t2 = db.create_task(repo_id, 42, 2, "issue #2", triggered_by="webhook")
+        db.set_task_status(t2, "succeeded", finished_at="")
+        # 用时为负（finished_at 早于 created_at）→ 跳过
+        self._mk_succeeded(db, repo_id, 3, "2026-08-12 10:00:00",
+                           "2026-08-12 09:00:00")
+        # created_at 非法格式 → 跳过
+        t4 = db.create_task(repo_id, 42, 4, "issue #4", triggered_by="webhook")
+        db.set_task_status(t4, "succeeded", finished_at="2026-08-12 03:00:00")
+        with db._conn() as conn:
+            conn.execute("UPDATE tasks SET created_at='not-a-time' WHERE id=?",
+                         (t4,))
+        body = tc.get("/api/issues/completion-stats").json()
+        assert body["completed_count"] == 1
+        assert body["avg_seconds"] == 120.0
+        assert body["trend"] == [{"date": "2026-08-12", "count": 1,
+                                  "avg_seconds": 120.0}]

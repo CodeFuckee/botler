@@ -56,6 +56,28 @@
 
 ### Added
 
+- **概览页最下方新增「Issue 完成耗时」板块——平均每个 issue 完成所需时间与逐日走势图（issue #180）**：
+  需求「概览页面增加显示，平均每个issue完成所需要的时间，以及这个这个时间的走势图，放在概览页面最下方」。
+  在概览页 CI/CD 流水线板块之后（页面最下方）新增统计板块，展示已完成 issue 的平均完成耗时与
+  逐日平均耗时走势图：
+  - **数据源**：本地 `tasks` 表成功终态（succeeded）任务，不依赖 GitLab API——任务成功时系统会给
+    issue 打 bot-done 标签（executor issue #49），完成耗时 = `finished_at - created_at`（系统接收
+    时间 → bot-done 打标时间，与任务详情/任务列表「处理用时」语义一致）；缺时间字段、解析失败或
+    用时为负（时钟异常）的任务行不计入统计；
+  - **后端**：新增 `GET /api/issues/completion-stats`（`backend/botler/api/issues.py` + 数据层
+    `Database.succeeded_durations`）——返回 `completed_count`（已完成数量）、`avg_seconds`（全部
+    平均耗时秒数）、`trend`（按完成日 UTC 分组逐日平均耗时，日期升序）；本地数据量小直接实时计算，
+    不做缓存；
+  - **前端**：概览页新增 `completion-stats-section` 板块（标题/平均耗时数字/完成数量 + 轻量 SVG
+    折线走势图 `CompletionTrendChart`，无第三方图表库依赖——折线 + 数据点 + 日期/数值标注，每点
+    带悬浮提示，viewBox 等比例自适应宽度）；60 秒低频轮询（数据来自本地库，无 GitLab 请求压力）；
+    `api.js` 新增 `fmtSeconds` 秒数人类可读格式化（与 `fmtDuration` 输出格式一致，后者改为复用
+    该函数），供平均耗时/走势图数值展示；
+  - **测试**：后端 `tests/test_api_issues.py` 新增 `TestCompletionStats`（4 例：空库 / 仅 succeeded
+    计入 / 总体平均与逐日分组 / 非法与负耗时跳过）；前端新增 `tests/overview-completion-stats.test.mjs`
+    （11 例：接口与轮询源码断言、板块位于页面最下方、平均耗时与走势图渲染、空状态、接口失败兜底、
+    `fmtSeconds` 边界、走势图空/单点渲染）；后端全量 pytest 与前端全量 `node --test` 通过，无 regression。
+
 - **概览页 DeepSeek 账户余额卡片新增「去充值」链接按钮，点击跳转 DeepSeek 开放平台充值页（issue #178）**：
   需求「deepseek账户余额页面可以增加一个链接按钮，点击之后跳转到deepseek页面，方便充值」。
   此前余额卡片仅展示余额数据与「刷新」按钮，用户需要自行打开 DeepSeek 平台寻找充值入口；

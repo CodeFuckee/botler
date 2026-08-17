@@ -710,6 +710,34 @@ class Database:
                    ORDER BY id DESC LIMIT ?""",
                 (project_id, issue_iid, limit)).fetchall()
 
+    def succeeded_durations(self) -> list[tuple[str, float]]:
+        """已完成（succeeded）任务的 (完成日, 用时秒数) 列表（issue #180）。
+
+        概览页「Issue 完成耗时」统计的数据源：只取成功终态（succeeded）
+        任务——成功时系统会给 issue 打 bot-done 标签（executor issue #49），
+        用时 = finished_at - created_at（系统接收时间 → bot-done 打标时间，
+        与任务详情/任务列表「处理用时」的语义一致，两字段均为 UTC 无后缀串）。
+        完成日取 finished_at 的 UTC 日期（'YYYY-MM-DD'），供前端按日分组
+        绘制走势图。缺时间字段、解析失败（_parse_db_ts 返回 None）或用时
+        为负（时钟异常）的行跳过，不影响整体统计。
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT created_at, finished_at FROM tasks
+                   WHERE status=? AND created_at <> '' AND finished_at <> ''""",
+                (STATUS_SUCCEEDED,)).fetchall()
+        out: list[tuple[str, float]] = []
+        for row in rows:
+            c = _parse_db_ts(row["created_at"])
+            f = _parse_db_ts(row["finished_at"])
+            if c is None or f is None:
+                continue
+            sec = (f - c).total_seconds()
+            if sec < 0:
+                continue
+            out.append((f.strftime("%Y-%m-%d"), round(sec, 3)))
+        return out
+
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:
         """更新任务状态及附加字段（attempt_count / exit_code / error_message /
         error_detail / log_path / started_at / finished_at / claude_session_id /
