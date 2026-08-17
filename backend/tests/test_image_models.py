@@ -579,3 +579,195 @@ class TestJsonDecodeErrorDiagnosis:
         assert "不是有效 JSON" in msg
         assert html in msg
         assert "Expecting value" not in msg
+
+
+class TestOpenAISseResponse:
+    """OpenAI 接口返回 SSE（text/event-stream）流式响应（issue #151 用户反馈）。
+
+    用户配置的生图接口（如 aitohumanize 类聚合网关）真实返回为 SSE 流：
+    多行 ``data: {json}`` 事件逐步上报进度（progress/status），最终事件
+    ``status: "succeeded"`` 且 ``results[0].url`` 为生成图片地址。修复前
+    该内容被当作普通 JSON 解析失败，错误信息只能展示原始流内容，无法
+    拿到图片；修复后应解析 data 事件、下载 results 中的图片 URL 并返回
+    图片结果。
+    """
+
+    IMG_URL = "https://file7.aitohumanize.com/file/0c593022c7fe4ec2a43515a91cade7a6.png"
+    PNG = b"\x89PNG-sse-downloaded"
+
+    SSE_SUCCEEDED = (
+        'data: {"id":"16-18ce737e-9692-455d-89a9-be79f437c549","task_id":"",'
+        '"url":"","width":0,"height":0,"progress":1,"status":"running",'
+        '"failure_reason":"","error":"","results":null,"callback_url":"",'
+        '"start_time":1786947802,"end_time":0}\n'
+        'data: {"id":"16-18ce737e-9692-455d-89a9-be79f437c549","task_id":"",'
+        '"url":"","width":0,"height":0,"progress":50,"status":"running",'
+        '"failure_reason":"","error":"","results":null,"callback_url":"",'
+        '"start_time":1786947802,"end_time":0}\n'
+        'data: {"id":"16-18ce737e-9692-455d-89a9-be79f437c549","task_id":"",'
+        '"url":"","width":0,"height":0,"progress":100,"status":"succeeded",'
+        '"failure_reason":"","error":"","results":[{"url":"'
+        + IMG_URL + '","width":0,"height":0}],"callback_url":"",'
+        '"start_time":1786947802,"end_time":0}\n'
+    )
+
+    SSE_FAILED = (
+        'data: {"id":"t1","progress":10,"status":"running","error":"",'
+        '"failure_reason":"","results":null}\n'
+        'data: {"id":"t1","progress":100,"status":"failed",'
+        '"failure_reason":"图片包含违规内容","error":"bad prompt",'
+        '"results":null}\n'
+    )
+
+    def _client(self, handler, api_key="sk-test"):
+        transport = httpx.MockTransport(handler)
+        client = ImageModelClient(
+            name="GPT Image", provider="openai_gpt_image",
+            api_key=api_key, timeout=5)
+        client._http = httpx.Client(transport=transport)
+        return client
+
+    def test_sse_succeeded_downloads_image_from_results_url(self):
+        """SSE 流最终 status=succeeded：解析 data 事件，下载 results 中
+        图片 URL 并返回 ImageResult（Content-Type 作为 mime）。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                captured["url"] = str(request.url)
+                return httpx.Response(
+                    200, text=self.SSE_SUCCEEDED,
+                    headers={"Content-Type": "text/event-stream"})
+            # GET：下载生成图片
+            captured["download_url"] = str(request.url)
+            return httpx.Response(
+                200, content=self.PNG,
+                headers={"Content-Type": "image/png"})
+
+        client = self._client(handler)
+        results = client.generate("画一只猫")
+        assert captured["url"].endswith("/images/generations")
+        assert captured["download_url"] == self.IMG_URL
+        assert len(results) == 1
+        assert results[0].data == self.PNG
+        assert results[0].mime_type == "image/png"
+
+    def test_sse_failed_raises_error_with_reason(self):
+        """SSE 流最终 status=failed：错误信息包含 failure_reason / error，
+        不再把原始流内容当普通 JSON 报「不是有效 JSON」。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, text=self.SSE_FAILED,
+                headers={"Content-Type": "text/event-stream"})
+
+        client = self._client(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        # 结构化错误：明确「任务失败」+ failure_reason / error 字段，
+        # 而不是把整段 SSE 原始流当普通 JSON 解析失败的原始内容展示
+        assert "生图任务失败" in msg
+        assert "图片包含违规内容" in msg  # failure_reason 展示
+        assert "bad prompt" in msg         # error 展示
+        assert "data: {" not in msg        # 不再整体倾倒原始 SSE 流
+
+    def test_sse_no_succeeded_result_raises_diagnostic(self):
+        """SSE 流只有 running 事件、没有 succeeded 结果：报可诊断错误，
+        错误信息包含事件状态说明（而非「Expecting value」）。"""
+        running_only = (
+            'data: {"id":"t1","progress":1,"status":"running",'
+            '"results":null,"error":"","failure_reason":""}\n'
+            'data: {"id":"t1","progress":50,"status":"running",'
+            '"results":null,"error":"","failure_reason":""}\n'
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, text=running_only,
+                headers={"Content-Type": "text/event-stream"})
+
+        client = self._client(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        assert "Expecting value" not in msg
+        assert "succeeded" in msg  # 说明流中没有成功事件
+
+    def test_sse_download_failure_raises(self):
+        """SSE 成功事件给出图片 URL，但下载失败（如 404）：报错指明
+        下载失败与地址，不静默返回空结果。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                return httpx.Response(
+                    200, text=self.SSE_SUCCEEDED,
+                    headers={"Content-Type": "text/event-stream"})
+            return httpx.Response(404, text="not found")
+
+        client = self._client(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        assert "下载失败" in msg
+        assert self.IMG_URL in msg
+
+    def test_sse_multiline_data_event_parsed(self):
+        """SSE 单事件多行 data（JSON 跨行）按规范以换行拼接解析（兼容
+        标准 SSE 实现，而非仅单行 data）。"""
+        # 事件1: 单行 running；事件2: 多行 JSON（results 跨行）
+        sse = (
+            'data: {"id":"t1","progress":10,"status":"running",'
+            '"results":null,"error":"","failure_reason":""}\n'
+            "\n"
+            'data: {"id":"t1","progress":100,"status":"succeeded",\n'
+            'data: "results":[{"url":"' + self.IMG_URL + '","width":0,"height":0}],\n'
+            'data: "error":"","failure_reason":""}\n'
+            "\n"
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                return httpx.Response(
+                    200, text=sse,
+                    headers={"Content-Type": "text/event-stream"})
+            return httpx.Response(
+                200, content=self.PNG,
+                headers={"Content-Type": "image/png"})
+
+        client = self._client(handler)
+        results = client.generate("画一只猫")
+        assert len(results) == 1
+        assert results[0].data == self.PNG
+
+    def test_sse_with_done_marker_ignored(self):
+        """SSE 流结束标记 ``data: [DONE]`` 应被忽略，不影响结果解析。"""
+        sse = self.SSE_SUCCEEDED + "data: [DONE]\n\n"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                return httpx.Response(
+                    200, text=sse,
+                    headers={"Content-Type": "text/event-stream"})
+            return httpx.Response(
+                200, content=self.PNG,
+                headers={"Content-Type": "image/png"})
+
+        client = self._client(handler)
+        results = client.generate("画一只猫")
+        assert len(results) == 1
+        assert results[0].data == self.PNG
+
+    def test_sse_detected_by_body_when_content_type_missing(self):
+        """网关未返回 text/event-stream Content-Type（或类型缺失）但
+        body 是 data: 行时，同样按 SSE 解析（避免退化为「不是有效
+        JSON」的原始内容展示）。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                return httpx.Response(200, text=self.SSE_SUCCEEDED)
+            return httpx.Response(
+                200, content=self.PNG,
+                headers={"Content-Type": "image/png"})
+
+        client = self._client(handler)
+        results = client.generate("画一只猫")
+        assert len(results) == 1
+        assert results[0].data == self.PNG

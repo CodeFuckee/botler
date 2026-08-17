@@ -87,6 +87,66 @@ def _parse_json_response(
         ) from exc
 
 
+def _parse_sse_events(text: str) -> list[dict[str, Any]]:
+    """解析 SSE（text/event-stream）响应文本，返回全部 data 事件 JSON 载荷。
+
+    issue #151 用户反馈：配置的生图接口（聚合网关类）真实返回为 SSE 流——
+    多行 ``data: {json}`` 事件逐步上报进度（progress/status），最终事件
+    ``status: "succeeded"`` 且 ``results[0].url`` 为生成图片地址。解析策略：
+
+    - 每条 ``data:`` 行先单独尝试 JSON 解析（部分网关省略事件间空行，
+      逐行即可拆出独立事件）；
+    - 单行无法解析时按 SSE 规范累积连续多行 data，以换行拼接后再解析
+      （兼容标准 SSE 的多行 JSON 字段）；
+    - ``data: [DONE]`` 流结束标记与空 payload 跳过；
+    - 解析失败的 data 内容直接丢弃（调用方无事件可解析时会报错展示原始
+      内容兜底，用户仍能看到接口到底返回了什么）。
+    """
+    events: list[dict[str, Any]] = []
+    pending: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("data:"):
+            # 空行 / 其它字段 = 事件结束，清空未拼完的多行缓冲
+            if pending:
+                _flush_sse_pending(pending, events)
+                pending = []
+            continue
+        payload = stripped[len("data:"):].lstrip()
+        if not payload or payload == "[DONE]":
+            continue
+        if pending:
+            # 已有未解析完的多行 JSON：继续累积，能拼出完整 JSON 即落地
+            pending.append(payload)
+            if _flush_sse_pending(pending, events):
+                pending = []
+            continue
+        try:
+            events.append(json.loads(payload))
+        except json.JSONDecodeError:
+            pending.append(payload)  # 多行 JSON 事件的起始行
+    if pending:
+        _flush_sse_pending(pending, events)
+    return events
+
+
+def _flush_sse_pending(pending: list[str],
+                       events: list[dict[str, Any]]) -> bool:
+    """尝试把累积的多行 data 拼接解析为一个 SSE 事件。
+
+    成功追加到 events 并返回 True；拼接后仍不是有效 JSON 返回 False
+    （调用方保留缓冲继续累积后续行）。
+    """
+    payload = "\n".join(pending).strip()
+    if not payload:
+        return True
+    try:
+        events.append(json.loads(payload))
+        return True
+    except json.JSONDecodeError:
+        return False
+
+
 class GeminiNanoBananaProvider(ImageProviderPlugin):
     """Gemini Nano Banana Pro：POST /models/{model}:generateContent。
 
@@ -223,6 +283,13 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
             raise ImageModelError(
                 f"OpenAI 请求失败: HTTP {resp.status_code} {resp.text[:200]}"
                 f"（请求地址: {url}）{hint}")
+        # 兼容网关/聚合服务返回 SSE 流式响应（issue #151 用户反馈）：
+        # Content-Type 为 text/event-stream 或 body 以 data: 开头即按
+        # SSE 解析（部分网关不返回标准 Content-Type，用 body 形态兜底），
+        # 成功事件里的 results[].url 下载为图片返回；失败/无结果走诊断错误
+        if ("text/event-stream" in (resp.headers.get("content-type") or "").lower()
+                or resp.text.lstrip().startswith("data:")):
+            return self._generate_from_sse(client, resp, url)
         # OpenAI 非 JSON 响应直接把原始返回内容完整展示给用户（issue #151 后续反馈）
         data = _parse_json_response(resp, url, "OpenAI", show_raw=True)
         items = data.get("data") or []
@@ -237,6 +304,68 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
             raise ImageModelError(
                 f"OpenAI 响应未包含图像数据: {resp.text[:200]}")
         return results
+
+    def _generate_from_sse(self, client: Any, resp: httpx.Response,
+                           url: str) -> list[ImageResult]:
+        """处理 OpenAI 兼容接口返回的 SSE（text/event-stream）流式响应。
+
+        issue #151 用户反馈：配置的生图接口真实返回为 SSE 流（多行
+        ``data: {json}`` 事件逐步上报进度），最终事件 ``status:
+        "succeeded"`` 且 ``results[0].url`` 为生成图片地址。解析
+        data 事件后下载图片返回；任务失败（status=failed）给出
+        failure_reason / error；流未完成或无结果给出可诊断错误。
+        """
+        events = _parse_sse_events(resp.text)
+        if not events:
+            raw = (resp.text or "").strip() or "（空响应体）"
+            raise ImageModelError(
+                f"OpenAI 接口返回内容不是有效 JSON（HTTP {resp.status_code}，"
+                f"Content-Type: {resp.headers.get('content-type') or '未知'}），"
+                f"接口原始返回内容如下：\n{raw}")
+        # 最终状态：向上回溯找最后一个 succeeded 事件（部分网关末尾
+        # 可能补发心跳/空事件，取最近一个成功结果）
+        final = next(
+            (e for e in reversed(events)
+             if str(e.get("status") or "").strip().lower() == "succeeded"),
+            None)
+        if final is not None:
+            results = final.get("results") or []
+            image_results: list[ImageResult] = []
+            for item in results:
+                img_url = (str(item.get("url") or "").strip()
+                           if isinstance(item, dict) else "")
+                if not img_url:
+                    continue
+                # 用同一 http 客户端下载图片（继承 verify_ssl / 超时配置）；
+                # CDN 常做 302 跳转，显式允许跟随
+                img_resp = client._http.get(img_url, follow_redirects=True)
+                if img_resp.status_code >= 400:
+                    raise ImageModelError(
+                        f"OpenAI 生图结果图片下载失败: HTTP "
+                        f"{img_resp.status_code}（{img_url}）")
+                mime = ((img_resp.headers.get("content-type") or "image/png")
+                        .split(";")[0].strip() or "image/png")
+                image_results.append(ImageResult(mime_type=mime,
+                                                 data=img_resp.content))
+            if image_results:
+                return image_results
+        # 失败事件：优先展示任务失败原因（failure_reason / error）
+        last_failed = next(
+            (e for e in reversed(events)
+             if str(e.get("status") or "").strip().lower() == "failed"),
+            None)
+        if last_failed is not None:
+            reason = str(last_failed.get("failure_reason") or "").strip()
+            err = str(last_failed.get("error") or "").strip()
+            detail = "；".join(x for x in (reason, err) if x) or "未知原因"
+            raise ImageModelError(f"OpenAI 生图任务失败: {detail}")
+        # 无 succeeded / failed：流未完成（仍 running）或事件缺结果字段
+        last_status = str((events[-1].get("status") or "")).strip() or "未知"
+        raise ImageModelError(
+            f"OpenAI 接口 SSE 流中未找到 succeeded 事件（最终事件 "
+            f"status: {last_status}，共 {len(events)} 个事件，请求地址: "
+            f"{url}）。若自定义 Base URL 请确认其指向正确的接口端点；"
+            "若经网关/代理转发请检查网关返回内容")
 
 
 # 模块导入即注册内置供应商插件（注册顺序 = 设置页预设展示顺序）

@@ -6,7 +6,28 @@
 
 ### Fixed
 
+- **生图模型测试：OpenAI 接口返回 SSE 流（text/event-stream）时按事件解析并下载生成图片，不再报「不是有效 JSON」（issue #151 用户反馈）**：
+  用户配置的生图接口（聚合网关类）真实返回为 SSE 流——多行 `data: {json}` 事件逐步上报
+  进度（progress/status），最终事件 `status: "succeeded"` 且 `results[0].url` 为生成图片
+  地址。此前 OpenAI provider 只按普通 JSON 解析，SSE 内容解析失败仅能展示原始流内容，
+  用户拿不到图片。改动：
+  - 后端 `plugins/models.py`：新增 `_parse_sse_events()` / `_flush_sse_pending()`——解析
+    SSE `data:` 事件（单行 JSON 逐行解析优先，多行 JSON 字段按规范以换行拼接；跳过
+    `data: [DONE]` 流结束标记）；OpenAI `images/generations` / `images/edits` 响应检测到
+    `text/event-stream` Content-Type（或 body 以 `data:` 开头，兼容网关缺 Content-Type）
+    时走 `_generate_from_sse()`——取最终 `succeeded` 事件的 `results[].url`，用同一 http
+    客户端（继承 verify_ssl / 超时配置，显式跟随 CDN 302 跳转）下载图片返回；任务
+    `failed` 时给出 `failure_reason` / `error` 原因；流未完成 / 无结果给出可诊断错误
+    （含最终事件状态、事件数与请求地址）；
+  - **测试**：`test_image_models.py` 新增 `TestOpenAISseResponse` 7 用例（成功事件下载
+    图片、failed 报失败原因、仅 running 无结果报诊断错误、图片 URL 下载失败、多行 data
+    事件、`[DONE]` 标记跳过、缺 Content-Type 时按 body 形态识别）；`test_api_settings.py`
+    新增 2 端到端用例（POST /api/settings/image-model-test 模拟 SSE 成功回传图片 base64 /
+    失败展示原因）；修复前用例可稳定复现（SSE 被当普通 JSON 报「不是有效 JSON」并整体
+    倾倒原始流内容），修复后全部通过。
+
 - **生图模型测试：OpenAI 接口返回非 JSON 内容时直接展示接口原始返回内容（issue #151 后续反馈）**：
+
   首次修复后用户反馈「如果 OpenAI 接口返回内容不是有效 JSON，则直接将接口返回的内容
   显示出来」——旧实现统一走「带状态码 / 截断 200 字符片段 / 请求地址 + 冗长排查提示」
   的诊断文案，接口实际返回了什么（如网关错误页、纯文本提示）被截断隐藏，不利于直接

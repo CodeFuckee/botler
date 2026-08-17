@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+import base64
 import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -773,6 +774,96 @@ class TestImageModelTestEndpoint:
         assert "不是有效 JSON" in data["error"]
         assert raw in data["error"]  # 完整原始内容直接展示
         assert "Expecting value" not in data["error"]
+
+    def test_test_sse_openai_returns_image_base64(self, client, monkeypatch):
+        """OpenAI 接口返回 SSE（text/event-stream）流式响应（issue #151
+        用户反馈）：POST /api/settings/image-model-test 应解析 data 事件、
+        下载 results 中的图片 URL，ok=true 并回传图片 base64（不再把
+        SSE 流当普通 JSON 解析失败展示原始内容）。"""
+        from botler import image_models as im_mod
+
+        img_url = "https://file7.aitohumanize.com/file/0c593022c7fe4ec2a43515a91cade7a6.png"
+        sse_text = (
+            'data: {"id":"t1","progress":1,"status":"running","results":null,'
+            '"error":"","failure_reason":""}\n'
+            'data: {"id":"t1","progress":100,"status":"succeeded","results":'
+            '[{"url":"' + img_url + '","width":0,"height":0}],'
+            '"error":"","failure_reason":""}\n'
+        )
+
+        class FakeClient(im_mod.ImageModelClient):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "POST":
+                        return httpx.Response(
+                            200, text=sse_text,
+                            headers={"Content-Type": "text/event-stream"})
+                    # GET：下载生成图片
+                    assert str(request.url) == img_url
+                    return httpx.Response(
+                        200, content=b"\x89PNG-sse-api",
+                        headers={"Content-Type": "image/png"})
+
+                self._http = httpx.Client(
+                    transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr(im_mod, "ImageModelClient", FakeClient)
+        tc, _ = client
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "x", "provider": "openai_gpt_image",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-test", "model": "gpt-image-2",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["images"] == 1
+        assert data["mime_type"] == "image/png"
+        assert data["image_base64"] == base64.b64encode(
+            b"\x89PNG-sse-api").decode("ascii")
+
+    def test_test_sse_openai_failed_reports_reason(self, client, monkeypatch):
+        """OpenAI SSE 流最终 status=failed：POST /api/settings/
+        image-model-test 错误信息包含失败原因（failure_reason / error），
+        而非整段原始流内容。"""
+        from botler import image_models as im_mod
+
+        sse_text = (
+            'data: {"id":"t1","progress":10,"status":"running","results":null,'
+            '"error":"","failure_reason":""}\n'
+            'data: {"id":"t1","progress":100,"status":"failed",'
+            '"failure_reason":"违规内容拦截","error":"blocked",'
+            '"results":null}\n'
+        )
+
+        class FakeClient(im_mod.ImageModelClient):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(
+                        200, text=sse_text,
+                        headers={"Content-Type": "text/event-stream"})
+
+                self._http = httpx.Client(
+                    transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr(im_mod, "ImageModelClient", FakeClient)
+        tc, _ = client
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "x", "provider": "openai_gpt_image",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-test", "model": "gpt-image-2",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "生图任务失败" in data["error"]
+        assert "违规内容拦截" in data["error"]
+        assert "Expecting value" not in data["error"]
+
 
 
 class TestDshSettings:
