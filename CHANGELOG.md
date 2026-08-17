@@ -515,7 +515,7 @@
     容错）；`test_api_tasks.py` 新增 3 用例（dsh_transcript 返回 prompt/transcript/
     session_id、非 JSON 脏数据空列表、truncated 标记透传）；`test_database_migrate.py`
     新增 3 用例（旧库迁移补列、新库建表含列、set_task_status 白名单写入）；同步更新
-    `test_user_version_marker`（v8→v9）与 inspirations 迁移断言；后端 1301 全量测试通过。
+    `test_user_version_marker`（v8→v9）与 inspirations 迁移断言；后端 1294 全量测试通过（pytest 全量收集 1294 项全部通过）。
 
 - **配置 Owner GitLab Token 后概览页评论/回复仍报「owner token 失效（403）」（issue #133）**：
   需求「我配置了gitlab owner token，但是回复评论、添加评论的时候报错，概览页 issue 编辑
