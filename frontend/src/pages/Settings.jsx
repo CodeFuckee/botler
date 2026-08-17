@@ -438,10 +438,15 @@ export default function Settings() {
       {/* 生图模型（issue #135）：AI 供应商卡片之后，同为外部服务接入类配置 */}
       <section id="settings-image-models" className="settings-section">
       <ImageModelsCard />
+      </section>
+
+      {/* 识图模型（issue #152）：独立区块（issue #155）——导航栏通过读取设置页
+          区块动态生成，自动出现「识图模型」子选项，不再需要手工同步 */}
+      <section id="settings-vision-models" className="settings-section">
       <VisionModelsCard />
       </section>
 
-      <h1>系统设置</h1>
+      <h2 className="settings-group-title">系统设置</h2>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {saved && <div className="alert alert-ok">✓ 已保存（已写回 config.yaml）</div>}
 
@@ -844,10 +849,10 @@ export default function Settings() {
           )}
         </div>
       </div>
+      </section>
 
       <section id="settings-backup" className="settings-section">
       <BackupManager />
-      </section>
       </section>
 
       {/* Owner GitLab Token（issue #87）：专用于编辑 issue（评论/标签）的
@@ -856,7 +861,7 @@ export default function Settings() {
           在概览页面编辑 issue、添加 issue、关闭 issue、添加评论与回复
           评论时由平台使用；Agent 只能使用自己仓库的认证 token 编辑 issue */}
       <h2 className="settings-group-title">账号与安全</h2>
-      <section id="settings-owner-token" className="settings-section">
+      <section id="settings-owner-token" className="settings-section" data-nav-label="Owner GitLab Token">
       <div className="card">
         <h2>
           Owner GitLab Token（issue 编辑专用）

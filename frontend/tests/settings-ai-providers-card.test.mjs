@@ -27,9 +27,10 @@ test('设置页挂载「AI API 供应商」卡片组件', () => {
 
 test('「AI API 供应商」卡片位于「系统设置」标题之前（与 SSO 同为外部服务接入类配置）', () => {
   const cardPos = settings.search(/<AiProvidersCard \/>/)
-  const h1Pos = settings.search(/<h1>系统设置<\/h1>/)
+  // 「系统设置」分组标题（issue #155：统一为 h2.settings-group-title 约定）
+  const sysPos = settings.search(/<h2 className="settings-group-title">系统设置<\/h2>/)
   assert.ok(cardPos > 0, '应有 AiProvidersCard 挂载点')
-  assert.ok(h1Pos > cardPos, '卡片应在「系统设置」区块之前')
+  assert.ok(sysPos > cardPos, '卡片应在「系统设置」区块之前')
 })
 
 test('卡片提供供应商列表表格与增删改操作', () => {

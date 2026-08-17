@@ -3,6 +3,30 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+### Fixed
+
+- **设置页左侧导航栏缺「识图模型」子选项：导航栏改为读取设置页设置区块动态生成，不再硬编码（issue #155）**：
+  设置页左边导航栏没有「识图模型」的子选项——issue #152 新增「识图模型」卡片时挂在了生图模型
+  同一个区块内，而导航栏结构是硬编码的 `SETTINGS_GROUPS`，只给该区块配了「生图模型」一个子项，
+  左边导航栏与右边设置页设置选项对不上。按需求重构导航栏架构：**通过读取设置页中实际渲染的
+  设置项来生成导航，而不是硬编码**，彻底解决两边对不上的 bug。改动：
+  - 前端 `SettingsNav.jsx`：移除硬编码的 `SETTINGS_GROUPS`，新增并导出 `collectSettingsGroups()`——
+    运行时扫描设置页 `.settings-content` 内容区中实际渲染的分组标题（`h2.settings-group-title`）
+    与设置区块（`section.settings-section`，锚点 id 即区块 id）生成导航结构；label 默认取区块内
+    首个 `<h2>` 文本，需要短导航名时用 `data-nav-label` 属性覆盖；未归属任何分组的区块进
+    「其他设置」兜底分组（不会悄悄丢失）；`SETTING_KEYWORDS` 仅作搜索关键词辅助映射，不参与
+    结构生成——任何新设置卡片挂载到设置页后导航栏自动出现对应子选项，天然一一对应；
+  - 前端 `Settings.jsx`：生图 / 识图两张卡片拆分为两个独立区块（`settings-image-models` /
+    `settings-vision-models`），「识图模型」成为独立设置项；「系统设置」分组标题统一为
+    `h2.settings-group-title` 约定（原为 `<h1>`，导航读取的固定约定）；owner-token 区块加
+    `data-nav-label="Owner GitLab Token"` 提供短导航名；顺手修正 `settings-environment` /
+    `settings-backup` 区块的嵌套结构（environment 未闭合就开 backup）；
+  - **测试**：`settings-nav.test.mjs` 重构为架构断言——导航从设置页 DOM 生成（6 组 15 项，
+    含「识图模型」子选项）、全量覆盖不变式（设置页每个区块都出现在导航中、导航每项都能在
+    设置页找到对应区块，双向对得上）、未分组区块进兜底组、搜索/折叠/滚动等交互行为保持可用；
+    `settings-ai-providers-card.test.mjs` 同步「系统设置」标题断言（h1 → h2 约定）。修复前新
+    用例可复现失败（导航无「识图模型」子选项、无 `collectSettingsGroups`），修复后全部通过。
+
 
 ### Added
 

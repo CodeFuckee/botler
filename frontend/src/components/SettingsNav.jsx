@@ -1,72 +1,109 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useState } from 'react'
 
-// 设置页左侧导航配置（issue #139）：
-// 设置项按功能分组，导航栏分组可折叠/展开；items 的 id 为页面内
-// 各设置区块的锚点（Settings.jsx 中对应 <section id=...>），
-// label 为导航显示名，keywords 参与搜索命中（含中英文别名与配置键）。
-export const SETTINGS_GROUPS = [
-  {
-    id: 'external',
-    title: '外部服务接入',
-    items: [
-      { id: 'settings-sso', label: 'Synology SSO 登录', keywords: ['sso', 'oidc', '登录', '群晖', 'client_id'] },
-      { id: 'settings-ai-providers', label: 'AI API 供应商', keywords: ['ai', 'deepseek', 'openai', 'api', '供应商'] },
-      { id: 'settings-image-models', label: '生图模型', keywords: ['生图', 'gemini', 'gpt', '图像', '模型'] },
-    ],
-  },
-  {
-    id: 'system',
-    title: '系统设置',
-    items: [
-      { id: 'settings-tasks', label: '任务调度', keywords: ['worker', '并行', '重试', '超时', '对账', 'priority'] },
-      { id: 'settings-ui', label: '界面显示', keywords: ['ui', '时区', 'timezone', '显示'] },
-      { id: 'settings-notifications', label: '网页通知', keywords: ['notification', '通知', '浏览器'] },
-      { id: 'settings-webhook', label: '消息推送 Webhook', keywords: ['webhook', '推送', '消息'] },
-    ],
-  },
-  {
-    id: 'engines',
-    title: '执行引擎',
-    items: [
-      { id: 'settings-claude', label: 'Claude Code', keywords: ['claude', '命令', '参数', 'anthropic', 'command'] },
-      { id: 'settings-dsh', label: 'dsh 引擎', keywords: ['dsh', 'deepseek', 'reasoning', '推理', 'effort'] },
-    ],
-  },
-  {
-    id: 'ops',
-    title: '运维与数据',
-    items: [
-      { id: 'settings-environment', label: '本地环境检测', keywords: ['环境', '工具', '版本', '检测', 'env'] },
-      { id: 'settings-backup', label: '数据备份', keywords: ['backup', '备份', '恢复', 'restore', '数据'] },
-    ],
-  },
-  {
-    id: 'account',
-    title: '账号与安全',
-    items: [
-      { id: 'settings-owner-token', label: 'Owner GitLab Token', keywords: ['token', 'owner', 'gitlab', '令牌'] },
-      { id: 'settings-gitlab-cred', label: 'GitLab 凭据（只读）', keywords: ['凭据', 'gitlab', 'bot', 'secret', '凭据'] },
-    ],
-  },
-  {
-    id: 'about',
-    title: '关于',
-    items: [
-      { id: 'settings-version', label: '版本信息', keywords: ['version', '版本', '构建', 'build'] },
-    ],
-  },
-]
-
-// 设置页左侧导航栏（issue #139）：分组展示全部设置项，支持
-// 1) 顶部搜索框按名称/关键字过滤设置项（搜索时自动展开命中分组）；
-// 2) 每个分组可折叠/展开其子项；
+// 设置页左侧导航栏（issue #139 架构重构 / issue #155）：
+//
+// 【架构约定（issue #155）】导航栏结构**不再硬编码**，而是通过
+// collectSettingsGroups() 在运行时读取设置页（Settings.jsx 的
+// .settings-content 内容区）中**实际渲染**的设置区块：
+//   - 分组标题：`<h2 className="settings-group-title">…</h2>`
+//     （每个分组的显示名即标题文本，组 id 取标题文本）；
+//   - 设置区块：`<section id="…" className="settings-section">…</section>`
+//     （id 为锚点，label 默认取区块内首个 `<h2>` 的文本，
+//     需要短导航名时用 `data-nav-label` 属性覆盖，
+//     搜索关键词走下方 SETTING_KEYWORDS 辅助映射，仅用于搜索不参与结构）。
+// 这样左侧导航栏与右侧设置页设置选项**天然一一对应**：任何新设置卡片挂载到
+// 设置页后导航栏自动出现对应子选项（如 issue #152 新增「识图模型」卡片后
+// 导航栏自动生成「识图模型」子选项），彻底消除两边对不上的 bug；
+// 未归属任何分组的区块会进「其他设置」兜底分组，不会悄悄丢失。
+//
+// 交互能力（issue #139，保持）：1) 顶部搜索框按名称/关键字过滤设置项
+// （搜索时自动展开命中分组）；2) 每个分组可折叠/展开其子项；
 // 3) 点击子项平滑滚动到页面对应设置区块并高亮。
-export default function SettingsNav({ groups = SETTINGS_GROUPS }) {
+
+// 搜索关键词辅助映射（仅用于搜索命中，**不参与导航结构生成**；
+// 结构一律来自设置页 DOM，保证两边永远对得上）
+export const SETTING_KEYWORDS = {
+  'settings-sso': ['sso', 'oidc', '登录', '群晖', 'client_id'],
+  'settings-ai-providers': ['ai', 'deepseek', 'openai', 'api', '供应商'],
+  'settings-image-models': ['生图', 'gemini', 'gpt', '图像', '模型'],
+  'settings-vision-models': ['识图', '视觉', 'vision', 'gemini', 'gpt', '模型', '图片'],
+  'settings-tasks': ['worker', '并行', '重试', '超时', '对账', 'priority'],
+  'settings-ui': ['ui', '时区', 'timezone', '显示'],
+  'settings-notifications': ['notification', '通知', '浏览器'],
+  'settings-webhook': ['webhook', '推送', '消息'],
+  'settings-claude': ['claude', '命令', '参数', 'anthropic', 'command'],
+  'settings-dsh': ['dsh', 'deepseek', 'reasoning', '推理', 'effort'],
+  'settings-environment': ['环境', '工具', '版本', '检测', 'env'],
+  'settings-backup': ['backup', '备份', '恢复', 'restore', '数据'],
+  'settings-owner-token': ['token', 'owner', 'gitlab', '令牌'],
+  'settings-gitlab-cred': ['凭据', 'gitlab', 'bot', 'secret', '凭据'],
+  'settings-version': ['version', '版本', '构建', 'build'],
+}
+
+// 未归属任何分组标题的设置区块的兜底分组名（保证每个区块都进导航）
+const FALLBACK_GROUP_TITLE = '其他设置'
+
+/** 读取设置页内容区，按渲染顺序生成导航分组结构。
+ *  contentEl：.settings-content 元素（或测试中结构等价的最小对象）。
+ *  返回 [{ id, title, items: [{ id, label, keywords }] }] */
+export function collectSettingsGroups(contentEl) {
+  const groups = []
+  let current = null
+  const ensureGroup = () => {
+    if (!current) {
+      current = { id: FALLBACK_GROUP_TITLE, title: FALLBACK_GROUP_TITLE, items: [] }
+      groups.push(current)
+    }
+    return current
+  }
+
+  // 按文档顺序取分组标题与设置区块（querySelectorAll 天然保序；
+  // 测试环境可传入结构等价对象，提供 querySelectorAll 或 children）
+  const nodes = contentEl?.querySelectorAll
+    ? Array.from(contentEl.querySelectorAll('h2.settings-group-title, section.settings-section'))
+    : (Array.isArray(contentEl?.children) ? contentEl.children : [])
+
+  for (const el of nodes) {
+    // 分组标题：h2.settings-group-title，标题文本即分组名
+    const cls = typeof el.className === 'string' ? el.className : ''
+    if (el.tagName === 'H2' && cls.split(/\s+/).includes('settings-group-title')) {
+      const title = (el.textContent || '').trim()
+      current = { id: title, title, items: [] }
+      groups.push(current)
+      continue
+    }
+    // 设置区块：section.settings-section；无锚点 id 的区块不进导航
+    if (!el.id) continue
+    // label：优先 data-nav-label（区块自带短导航名），否则取区块内首个 h2
+    const override = typeof el.getAttribute === 'function' ? el.getAttribute('data-nav-label') : null
+    const label = (override && override.trim())
+      ? override.trim()
+      : ((typeof el.querySelector === 'function' && el.querySelector('h2'))?.textContent || '').trim() || el.id
+    ensureGroup().items.push({
+      id: el.id,
+      label,
+      keywords: SETTING_KEYWORDS[el.id] || [],
+    })
+  }
+  return groups
+}
+
+export default function SettingsNav() {
+  // 导航结构从设置页 DOM 读取（issue #155）：组件挂载后扫描
+  // .settings-content 内容区生成；useLayoutEffect 在绘制前完成，
+  // 避免首帧空导航闪烁
+  const [groups, setGroups] = useState([])
   const [query, setQuery] = useState('')
   // 折叠的分组 id 集合（空 = 全部展开）；搜索时强制展开命中分组
   const [collapsed, setCollapsed] = useState(() => new Set())
   // 当前高亮的设置区块 id（点击导航项后高亮，滚动离开由页面自然接管）
   const [activeId, setActiveId] = useState(null)
+
+  useLayoutEffect(() => {
+    if (typeof document === 'undefined') return
+    const content = document.querySelector('.settings-content')
+    if (content) setGroups(collectSettingsGroups(content))
+  }, [])
 
   const q = query.trim().toLowerCase()
   const searching = q.length > 0
@@ -101,7 +138,7 @@ export default function SettingsNav({ groups = SETTINGS_GROUPS }) {
   }
 
   // 全部展开 / 全部收起（搜索时隐藏，避免与自动展开逻辑打架）
-  const allCollapsed = !searching && groups.every((g) => collapsed.has(g.id))
+  const allCollapsed = !searching && groups.length > 0 && groups.every((g) => collapsed.has(g.id))
   const toggleAll = () => {
     setCollapsed(allCollapsed ? new Set() : new Set(groups.map((g) => g.id)))
   }
@@ -118,7 +155,7 @@ export default function SettingsNav({ groups = SETTINGS_GROUPS }) {
       <div className="settings-nav">
         <div className="settings-nav-head">
           <span className="settings-nav-title">设置导航</span>
-          {!searching && (
+          {!searching && groups.length > 0 && (
             <button className="settings-nav-toggle-all" onClick={toggleAll}>
               {allCollapsed ? '全部展开' : '全部收起'}
             </button>
