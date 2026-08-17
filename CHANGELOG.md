@@ -93,7 +93,6 @@
     用例——提交 base_url / api_key / model 均为 "undefined" 时断言回退已保存配置（修复前用例
     复现失败：captured 值就是 "undefined"，与用户反馈错误一致），修复后全部通过。
 
-
 - **生图模型测试：OpenAI 接口返回 SSE 流（text/event-stream）时按事件解析并下载生成图片，不再报「不是有效 JSON」（issue #151 用户反馈）**：
   用户配置的生图接口（聚合网关类）真实返回为 SSE 流——多行 `data: {json}` 事件逐步上报
   进度（progress/status），最终事件 `status: "succeeded"` 且 `results[0].url` 为生成图片
