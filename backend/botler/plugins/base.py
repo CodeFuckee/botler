@@ -24,11 +24,12 @@ logger = logging.getLogger("botler.plugins")
 
 
 class PluginKind(str, Enum):
-    """插件分类：executor 任务执行引擎 / model_provider 大模型 API 供应商 /
-    notifier 任务消息发送通道。"""
+    """插件分类：executor 任务执行引擎 / model_provider 生图 API 供应商 /
+    vision_model_provider 识图 API 供应商 / notifier 任务消息发送通道。"""
 
     EXECUTOR = "executor"
     MODEL_PROVIDER = "model_provider"
+    VISION_MODEL_PROVIDER = "vision_model_provider"
     NOTIFIER = "notifier"
 
 
@@ -110,6 +111,46 @@ class ImageProviderPlugin(Plugin):
           作为请求地址使用，不再拼接操作路径；
         - 未配置 / 等于预设默认（含尾斜杠归一）→ 按官方接口在默认
           base_url 后拼接操作路径（如 /images/generations、
+          /models/{model}:generateContent）。
+        """
+        if base_url and base_url != self.default_base_url:
+            return base_url
+        return f"{self.default_base_url}{api_path}"
+
+
+class VisionProviderPlugin(Plugin):
+    """识图（视觉理解）API 供应商插件：实现 :meth:`describe` 调用供应商接口。
+
+    ``client`` 参数为 VisionModelClient 实例（提供 base_url / api_key /
+    model / http 客户端等）；``default_base_url`` 与 ``default_model`` 作为
+    设置页内置预设的默认值（均可被用户配置覆盖）。
+
+    ``describe()`` 入参：图片字节 + MIME 类型 + 描述指令 prompt，返回
+    模型对图片内容的文本描述。自定义 Base URL 语义与生图插件一致
+    （issue #150）：非空且不等于预设默认 → 作为完整请求地址直接使用，
+    不再拼接操作路径；未配置 / 等于预设默认 → 按官方接口拼接。
+    """
+
+    kind = PluginKind.VISION_MODEL_PROVIDER
+    display_name: str = ""       # 设置页展示名（预设名称）
+    default_base_url: str = ""   # 内置预设默认接口地址
+    default_model: str = ""      # 内置预设默认模型
+
+    def describe(self, client: Any, image: bytes, *,
+                 mime_type: str = "image/png",
+                 prompt: str = "") -> str:
+        """描述图片内容，返回文本描述。"""
+        raise NotImplementedError(f"识图供应商插件 {self.name} 未实现 describe()")
+
+    def resolve_request_url(self, base_url: str, api_path: str) -> str:
+        """解析识图请求地址（issue #150 语义，与生图插件一致）。
+
+        用户配置的 base_url 分两种情况：
+        - 自定义完整端点（非空且不等于预设默认，如代理网关直接给出
+          https://api.example.com/v1/chat/completions）→ 直接原样
+          作为请求地址使用，不再拼接操作路径；
+        - 未配置 / 等于预设默认（含尾斜杠归一）→ 按官方接口在默认
+          base_url 后拼接操作路径（如 /chat/completions、
           /models/{model}:generateContent）。
         """
         if base_url and base_url != self.default_base_url:

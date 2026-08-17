@@ -57,6 +57,7 @@ backend/
     dsh_runner.py    dsh 引擎 runner（deepseek-harness SDK 进程内调用，线程运行 + 停止/超时关闭运行时）
     reconciler.py    对账兜底（APScheduler 定时扫描补漏）
     image_models.py  生图模型调用接口封装（Gemini Nano Banana Pro / GPT Image 2，统一 ImageModelClient，issue #135/#137，含配置可用性测试端点）
+    vision_models.py 识图模型调用接口封装（Gemini 视觉 / OpenAI 视觉 / 自定义 OpenAI 兼容视觉，统一 VisionModelClient，issue #152，含测试端点：上传图片调用模型描述图片）
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
     api/             REST API（repos / tasks / settings / auth）
   config.example.yaml

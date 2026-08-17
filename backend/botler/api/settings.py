@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from ..config import KNOWN_FIELDS
@@ -165,6 +165,18 @@ def get_settings(request: Request):
             }
             for p in s.image_models
         ],
+        "vision_models": [
+            # 识图模型（issue #152）：api_key 只返回掩码，明文不流转到界面
+            {
+                "name": p["name"],
+                "provider": p["provider"],
+                "base_url": p["base_url"],
+                "api_key_masked": _mask(p["api_key"]),
+                "model": p["model"],
+                "enabled": p["enabled"],
+            }
+            for p in s.vision_models
+        ],
         "webhook": {
             # Webhook 消息推送（issue #136）：任务完成时推送；authorization
             # 只返回掩码，明文不流转到界面（与 sso.client_secret 同模式）
@@ -280,6 +292,12 @@ def update_settings(request: Request, body: dict):
             image_models, current=c.config.get().image_models)
         c.config.update_image_models(cleaned)
 
+    vision_models = body.get("vision_models")
+    if vision_models is not None:
+        cleaned = _validate_vision_models(
+            vision_models, current=c.config.get().vision_models)
+        c.config.update_vision_models(cleaned)
+
     webhook = body.get("webhook")
     if webhook is not None:
         _validate_webhook(webhook)
@@ -384,6 +402,77 @@ def test_image_model(request: Request, body: dict):
     return {"ok": True, "images": len(results),
             "mime_type": results[0].mime_type,
             "image_base64": base64.b64encode(results[0].data).decode("ascii")}
+
+
+@router.post("/vision-model-test")
+async def test_vision_model(
+    request: Request,
+    image: UploadFile | None = File(None),
+    name: str = Form(""),
+    provider: str = Form(""),
+    base_url: str = Form(""),
+    api_key: str = Form(""),
+    model: str = Form(""),
+    prompt: str = Form(""),
+):
+    """测试识图模型配置（issue #152）：上传图片后调用识图模型描述图片。
+
+    设置页「识图模型」卡片「测试」按钮调用：用户上传一张图片
+    （multipart），后端读取图片字节 + 表单中的 provider / base_url /
+    api_key / model / prompt，构造 VisionModelClient 发一次真实识图
+    请求（不落盘），返回模型对图片的描述文本。
+
+    - api_key 留空/掩码值（含 *）= 按 name 回退已保存配置（与
+      _validate_vision_models 同模式）；base_url / model 留空同理；
+    - 只提交 name + provider（列表行「测试」按钮）= 完全按已保存配置测试；
+    - 识别成功返回 ok=true + 描述文本；缺图片/缺配置/接口报错/网络异常
+      均返回 ok=false + 原因，不抛 500（与 image-model-test 同容错策略）。
+    """
+    from ..vision_models import VisionModelClient, VisionModelError
+    c = ctx_of(request)
+    settings = c.config.get()
+    name = name.strip()
+    provider = provider.strip()
+    base_url = base_url.strip()
+    model = model.strip()
+    api_key = api_key.strip()
+    prompt = prompt.strip()
+    if not provider:
+        return {"ok": False, "error": "请先选择识图模型（模型类型）"}
+    # 读取上传图片（未上传 / 空文件由后端按缺少图片处理）
+    image_bytes = await image.read() if image is not None else b""
+    if not image_bytes:
+        return {"ok": False, "error": "请先上传一张图片（支持 png / jpg 等常见格式）"}
+    # api_key 掩码/留空、url/model 留空 → 按 name 回退已保存配置
+    saved = next(
+        (m for m in settings.vision_models if str(m.get("name") or "").strip() == name),
+        None) or {}
+    if not api_key or "*" in api_key:
+        api_key = str(saved.get("api_key") or "").strip()
+    if not base_url:
+        base_url = str(saved.get("base_url") or "").strip()
+    if not model:
+        model = str(saved.get("model") or "").strip()
+    try:
+        client = VisionModelClient(
+            name=name, provider=provider, base_url=base_url,
+            api_key=api_key, model=model,
+            timeout=IMAGE_TEST_TIMEOUT,  # 识图与生图同量级耗时，复用 60s 超时
+            verify_ssl=settings.verify_ssl)
+    except VisionModelError as e:
+        return {"ok": False, "error": str(e)}
+    try:
+        mime_type = image.content_type or "image/png"
+        description = client.describe(
+            image_bytes, mime_type=mime_type, prompt=prompt)
+    except VisionModelError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:  # noqa: BLE001 识图测试异常统一降级提示
+        return {"ok": False, "error": f"识图测试失败: {e}"}
+    if not description:
+        return {"ok": False, "error": "识图接口未返回描述内容"}
+    # 成功：返回模型对图片的文本描述（前端展示）
+    return {"ok": True, "description": description}
 
 
 @router.post("/reconcile-now")
@@ -702,6 +791,54 @@ def _validate_ai_providers(patch, current: list[dict]) -> list[dict]:
             raise HTTPException(400, "ai_providers.name 必填非空")
         if name in seen:
             raise HTTPException(400, f"供应商名称重复: {name}")
+        seen.add(name)
+        provider = str(item.get("provider") or "").strip() or "custom"
+        base_url = str(item.get("base_url") or "").strip()
+        if base_url and not base_url.startswith(("http://", "https://")):
+            raise HTTPException(400, f"{name}.base_url 必须以 http(s):// 开头")
+        api_key = item.get("api_key")
+        if api_key is None:
+            api_key = ""
+        if not isinstance(api_key, str):
+            raise HTTPException(400, f"{name}.api_key 必须是字符串")
+        model = str(item.get("model") or "").strip()
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise HTTPException(400, f"{name}.enabled 必须是布尔值")
+        if not api_key.strip() or "*" in api_key:
+            api_key = by_name[name]["api_key"] if name in by_name else ""
+        cleaned.append({
+            "name": name,
+            "provider": provider,
+            "base_url": base_url,
+            "api_key": api_key,
+            "model": model,
+            "enabled": enabled,
+        })
+    return cleaned
+
+
+def _validate_vision_models(patch, current: list[dict]) -> list[dict]:
+    """校验 vision_models 段（issue #152）：整体替换列表。
+
+    与 _validate_image_models（issue #135）同模式：
+    - name 必填非空且不重复；base_url 非空时须以 http(s):// 开头
+    - api_key 回传掩码值（含 *）或留空 = 保持现有（按 name 匹配旧配置）
+    - provider 缺省归一为 custom；enabled 必须是布尔值
+    """
+    if not isinstance(patch, list):
+        raise HTTPException(400, "vision_models 必须是数组")
+    by_name = {m["name"]: m for m in current if m.get("name")}
+    cleaned: list[dict] = []
+    seen: set[str] = set()
+    for item in patch:
+        if not isinstance(item, dict):
+            raise HTTPException(400, "vision_models 每项必须是对象")
+        name = str(item.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "vision_models.name 必填非空")
+        if name in seen:
+            raise HTTPException(400, f"模型名称重复: {name}")
         seen.add(name)
         provider = str(item.get("provider") or "").strip() or "custom"
         base_url = str(item.get("base_url") or "").strip()

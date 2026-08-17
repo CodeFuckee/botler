@@ -3,6 +3,7 @@ import { api, setDisplayTz, fmtTime } from '../api.js'
 import { sendTestNotification } from '../notify.js'
 import AiProvidersCard from '../components/AiProvidersCard.jsx'
 import ImageModelsCard from '../components/ImageModelsCard.jsx'
+import VisionModelsCard from '../components/VisionModelsCard.jsx'
 import BackupManager from '../components/BackupManager.jsx'
 import SettingsNav from '../components/SettingsNav.jsx'
 import Markdown from '../components/Markdown.jsx'
@@ -437,6 +438,7 @@ export default function Settings() {
       {/* 生图模型（issue #135）：AI 供应商卡片之后，同为外部服务接入类配置 */}
       <section id="settings-image-models" className="settings-section">
       <ImageModelsCard />
+      <VisionModelsCard />
       </section>
 
       <h1>系统设置</h1>

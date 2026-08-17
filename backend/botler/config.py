@@ -189,6 +189,12 @@ class Settings:
     # model, enabled}；api_key 落盘 config.yaml（与 ai_providers 同模式），
     # API 只返回掩码。内置预设见前端 providers.jsx 的 IMAGE_MODEL_PRESETS。
     image_models: list[dict] = field(default_factory=list)
+    # 识图模型（issue #152）：设置页「识图模型」卡片增删改查的视觉理解
+    # 模型列表，配置后可通过测试按钮上传图片调用模型描述图片。每项
+    # {name, provider, base_url, api_key, model, enabled}；api_key 落盘
+    # config.yaml（与 image_models 同模式），API 只返回掩码。内置预设见
+    # 前端 providers.jsx 的 VISION_MODEL_PRESETS。
+    vision_models: list[dict] = field(default_factory=list)
 
     # Webhook 消息推送（issue #136）：任务完成（成功收尾）时调用 webhook
     # 进行消息推送。设置页可配置：
@@ -354,6 +360,7 @@ class ConfigManager:
         labels_raw = (data.get("labels", {}) or {}).get("custom", []) or []
         providers_raw = data.get("ai_providers", []) or []
         image_models_raw = data.get("image_models", []) or []
+        vision_models_raw = data.get("vision_models", []) or []
 
         repos = []
         for r in repos_raw:
@@ -454,6 +461,19 @@ class ConfigManager:
                     "enabled": bool(m.get("enabled", True)),
                 }
                 for m in image_models_raw
+                if isinstance(m, dict) and m.get("name")
+            ],
+            vision_models=[
+                {
+                    "name": str(m.get("name", "")).strip(),
+                    "provider": str(m.get("provider", "")).strip() or "custom",
+                    "base_url": str(m.get("base_url", "")).strip(),
+                    # api_key 支持 ${ENV} 引用（load 时已展开为明文）
+                    "api_key": str(m.get("api_key") or ""),
+                    "model": str(m.get("model", "")).strip(),
+                    "enabled": bool(m.get("enabled", True)),
+                }
+                for m in vision_models_raw
                 if isinstance(m, dict) and m.get("name")
             ],
             webhook_enabled=bool(webhook.get("enabled", False)),
@@ -680,6 +700,14 @@ class ConfigManager:
         """整体替换生图模型列表（设置页增删改后落盘，issue #135）。"""
         self._reload_from_disk()
         self._data["image_models"] = models
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_vision_models(self, models: list[dict[str, Any]]) -> Settings:
+        """整体替换识图模型列表（设置页增删改后落盘，issue #152）。"""
+        self._reload_from_disk()
+        self._data["vision_models"] = models
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

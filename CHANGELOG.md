@@ -4,6 +4,44 @@
 
 ## [Unreleased]
 
+### Added
+
+- **设置页新增「识图模型」卡片：可配置具有视觉理解的模型，并支持上传图片调用模型描述图片（issue #152）**：
+  设置页面新增识图模型配置能力，复用生图模型（issue #135/#137）的成熟模式——内置
+  Gemini 视觉（默认模型 `gemini-2.5-flash`）与 OpenAI 视觉（默认模型 `gpt-4o`）两个
+  预设 + 自定义类型（OpenAI 兼容 chat/completions 接口，可配硅基流动 / DeepSeek-VL /
+  qwen-vl 等网关），每个模型可配置名称 / 识图模型类型 / Base URL / API Key / 默认模型 /
+  启用开关，并有「测试」按钮：点击后用户上传一张图片，后端调用配置的模型描述图片
+  内容，前端展示模型返回的描述文本。改动：
+  - 后端插件体系 `plugins/base.py`：`PluginKind` 新增 `vision_model_provider` 分类 +
+    `VisionProviderPlugin`（`describe()`：图片字节 + MIME + 描述指令 → 文本描述），
+    `resolve_request_url()` 复用自定义 Base URL 完整直用语义（issue #150）；
+  - 后端 `plugins/vision_models.py`（新）：内置识图供应商插件 `gemini_vision`
+    （generateContent 接口，图片 inline_data 输入 + 文本输出）、`openai_vision`
+    （chat/completions 接口，image_url data URL 输入 + 文本输出）、`custom`（OpenAI
+    兼容 chat/completions，无默认端点/模型，Base URL 完整直用），统一
+    `VisionModelError` 诊断（非 2xx / 非 JSON / 无文本结果均带请求地址与排查提示）；
+  - 后端 `vision_models.py`（新）：`VisionModelClient.describe()` 统一调用入口 +
+    `VISION_MODEL_PRESETS`（插件注册表派生）+ `find_enabled` / `client_from_config`；
+  - 后端 `config.py` / `api/settings.py`：`Settings.vision_models` 配置段读写（api_key
+    落盘 config.yaml、API 只返回掩码、掩码/留空 = 保持现有，与 image_models 同模式）；
+    新增 `POST /api/settings/vision-model-test`（multipart 上传图片 + 表单配置，成功
+    返回 ok=true + 描述文本，失败 ok=false + 原因，不抛 500）；
+  - 前端 `providers.jsx` 新增 `VISION_MODEL_PRESETS`（gemini_vision / openai_vision /
+    custom），`VisionModelsCard.jsx`（新）设置页「识图模型」卡片（列表增删改 + 测试
+    按钮：点击弹图片选择框 → 自动提交识别 → 展示描述文本），`api.js` `request()` 支持
+    FormData body（multipart），`Settings.jsx` 挂载卡片（生图模型卡片之后），
+    `Plugins.jsx` 插件管理页新增「识图模型供应商」分组；
+  - **测试**：`test_vision_models.py`（新）21 用例（预设 / 缺图片 / 缺 API Key / 缺
+    Base URL / Gemini 请求构造与文本解析 / OpenAI 请求构造与解析 / custom 完整直用 /
+    find_enabled / client_from_config）；`test_api_settings.py` 新增 `TestVisionModels
+    Settings` 14 用例（读写 / 掩码 / 整体替换 / 校验）+ `TestVisionModelTestEndpoint`
+    9 用例（缺图片 / 缺 provider / 成功回传描述 / 掩码回退 / 列表行测试 / 错误降级 /
+    verify_ssl 跟随）；`test_api_plugins.py` 更新插件列表断言（新增 vision_model_provider
+    分组）；`settings-vision-models-card.test.mjs`（新）13 用例（卡片挂载位置 / 表单
+    字段 / 保存段 / 测试按钮上传流程 / 描述展示 / 预设清单 / logo 复用）。修复前新用例
+    全部可复现失败（模块/组件不存在），实现后全部通过。
+
 ### Fixed
 
 - **生图模型测试：OpenAI 接口返回 SSE 流（text/event-stream）时按事件解析并下载生成图片，不再报「不是有效 JSON」（issue #151 用户反馈）**：

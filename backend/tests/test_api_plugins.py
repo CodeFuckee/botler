@@ -85,7 +85,8 @@ class TestListPlugins:
     """GET /api/plugins：插件列表视图。"""
 
     def test_list_includes_three_kinds_with_builtins(self, client):
-        """默认返回三类分组，内置插件齐全且 builtin=true。"""
+        """默认返回四类分组（含识图模型供应商，issue #152），内置插件
+        齐全且 builtin=true。"""
         tc, _ = client
         resp = tc.get("/api/plugins")
         assert resp.status_code == 200
@@ -93,12 +94,16 @@ class TestListPlugins:
         assert set(data["plugins"].keys()) == {
             PluginKind.EXECUTOR.value,
             PluginKind.MODEL_PROVIDER.value,
+            PluginKind.VISION_MODEL_PROVIDER.value,
             PluginKind.NOTIFIER.value,
         }
         executors = data["plugins"]["executor"]
         assert [p["name"] for p in executors] == ["claude", "hermes", "dsh"]
         assert all(p["builtin"] is True and p["path"] is None for p in executors)
         assert data["plugins"]["model_provider"][0]["name"] == "gemini_nano_banana"
+        # 识图模型供应商（issue #152）：内置 gemini_vision / openai_vision / custom
+        assert [p["name"] for p in data["plugins"]["vision_model_provider"]] == [
+            "gemini_vision", "openai_vision", "custom"]
         assert data["plugins"]["notifier"][0]["name"] == "webhook"
         # 上下文：默认引擎与外部插件路径列表
         assert data["engine"] == "claude"

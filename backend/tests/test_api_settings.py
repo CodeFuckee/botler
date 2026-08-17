@@ -13,6 +13,7 @@ from botler.config import ConfigManager
 from botler.database import Database
 from botler.gitlab_client import GitLabError
 from botler.image_models import ImageModelError
+from botler.vision_models import VisionModelError
 
 CONFIG_TEXT = """\
 gitlab:
@@ -1480,3 +1481,353 @@ class TestWebhookSettings:
         assert data["ok"] is False
         assert "connect error" in data["error"]
 
+
+
+class TestVisionModelsSettings:
+    """vision_models 段：识图模型配置（issue #152，设置页「识图模型」卡片）。
+
+    与 image_models（issue #135）同模式：api_key 落盘 config.yaml、API 只
+    返回掩码、编辑时留空或回传掩码值 = 保持现有；列表整体替换。
+    """
+
+    MODEL = {
+        "name": "Gemini 视觉",
+        "provider": "gemini_vision",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "api_key": "AIza-vision-test-123",
+        "model": "gemini-2.5-flash",
+        "enabled": True,
+    }
+
+    def test_get_settings_includes_vision_models_empty(self, client):
+        """未配置时 vision_models 返回空列表。"""
+        tc, tmp_path = client
+        data = tc.get("/api/settings").json()["vision_models"]
+        assert data == []
+
+    def test_put_vision_models_persists(self, client):
+        """PUT vision_models 写回 config.yaml 并可读回（api_key 只返回掩码）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"vision_models": [self.MODEL]})
+        assert resp.status_code == 200
+        models = resp.json()["vision_models"]
+        assert len(models) == 1
+        assert models[0]["name"] == "Gemini 视觉"
+        assert models[0]["provider"] == "gemini_vision"
+        assert models[0]["base_url"] == "https://generativelanguage.googleapis.com/v1beta"
+        assert models[0]["model"] == "gemini-2.5-flash"
+        assert models[0]["enabled"] is True
+        masked = models[0]["api_key_masked"]
+        assert "AIza-vision-test-123" not in masked  # 明文不回传
+        assert "*" in masked  # 有掩码占位
+        # config.yaml 是唯一事实来源，明文落盘
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: AIza-vision-test-123" in config_text
+
+    def test_put_masked_api_key_not_overwritten(self, client):
+        """前端回传掩码值（含 *）不覆盖真实 key。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"vision_models": [self.MODEL]})
+        masked = tc.get("/api/settings").json()["vision_models"][0]["api_key_masked"]
+        resp = tc.put("/api/settings", json={"vision_models": [
+            {**self.MODEL, "api_key": masked},
+        ]})
+        assert resp.status_code == 200
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: AIza-vision-test-123" in config_text
+
+    def test_put_blank_api_key_keeps_existing(self, client):
+        """api_key 留空 = 保持现有（新增条目则存空串）。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"vision_models": [self.MODEL]})
+        resp = tc.put("/api/settings", json={"vision_models": [
+            {**self.MODEL, "api_key": ""},
+        ]})
+        assert resp.status_code == 200
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "api_key: AIza-vision-test-123" in config_text
+
+    def test_put_replaces_whole_list(self, client):
+        """整体替换语义：新列表覆盖旧列表。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"vision_models": [self.MODEL]})
+        resp = tc.put("/api/settings", json={"vision_models": [
+            {"name": "OpenAI 视觉", "provider": "openai_vision",
+             "base_url": "https://api.openai.com/v1",
+             "api_key": "sk-vision-789", "model": "gpt-4o",
+             "enabled": False},
+        ]})
+        assert resp.status_code == 200
+        models = resp.json()["vision_models"]
+        assert len(models) == 1
+        assert models[0]["name"] == "OpenAI 视觉"
+        assert models[0]["enabled"] is False
+
+    def test_put_empty_list_clears(self, client):
+        """空列表清空配置。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"vision_models": [self.MODEL]})
+        resp = tc.put("/api/settings", json={"vision_models": []})
+        assert resp.status_code == 200
+        assert resp.json()["vision_models"] == []
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "vision_models" in config_text
+
+    def test_put_rejects_blank_name(self, client):
+        """name 必填非空。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"vision_models": [
+            {**self.MODEL, "name": "   "},
+        ]})
+        assert resp.status_code == 400
+        assert "name" in resp.json()["detail"]
+
+    def test_put_rejects_duplicate_name(self, client):
+        """name 唯一（掩码回传按 name 匹配旧值，重复会歧义）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"vision_models": [
+            self.MODEL,
+            {**self.MODEL, "model": "gemini-2.5-pro"},
+        ]})
+        assert resp.status_code == 400
+        assert "重复" in resp.json()["detail"]
+
+    def test_put_rejects_invalid_base_url(self, client):
+        """base_url 必须以 http(s):// 开头。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"vision_models": [
+            {**self.MODEL, "base_url": "not-a-url"},
+        ]})
+        assert resp.status_code == 400
+
+    def test_put_rejects_non_list(self, client):
+        """vision_models 必须是数组。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"vision_models": {"name": "x"}})
+        assert resp.status_code == 400
+
+    def test_put_provider_defaults_to_custom(self, client):
+        """provider 缺省归一为 custom。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"vision_models": [
+            {**self.MODEL, "provider": "  "},
+        ]})
+        assert resp.status_code == 200
+        assert resp.json()["vision_models"][0]["provider"] == "custom"
+
+    def test_put_rejects_non_bool_enabled(self, client):
+        """enabled 必须是布尔值。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"vision_models": [
+            {**self.MODEL, "enabled": "yes"},
+        ]})
+        assert resp.status_code == 400
+
+    def test_env_ref_api_key_expanded_on_read(self, client):
+        """config.yaml 中 api_key 支持 ${ENV} 引用（凭据不落明文）。"""
+        tc, tmp_path = client
+        config_path = tmp_path / "config.yaml"
+        config_text = config_path.read_text(encoding="utf-8")
+        config_path.write_text(
+            config_text + "vision_models:\n"
+            "  - name: Gemini 视觉\n"
+            "    provider: gemini_vision\n"
+            "    base_url: https://generativelanguage.googleapis.com/v1beta\n"
+            "    api_key: ${BOTLER_TEST_VISION_KEY}\n"
+            "    model: gemini-2.5-flash\n"
+            "    enabled: true\n",
+            encoding="utf-8")
+        import os
+        os.environ["BOTLER_TEST_VISION_KEY"] = "sk-vision-from-env"
+        try:
+            data = tc.get("/api/settings").json()["vision_models"]
+            assert data[0]["api_key_masked"].endswith("-env")
+        finally:
+            os.environ.pop("BOTLER_TEST_VISION_KEY", None)
+
+
+class TestVisionModelTestEndpoint:
+    """POST /api/settings/vision-model-test：识图模型测试按钮（issue #152）。
+
+    用户上传一张图片（multipart）后调用配置的识图模型描述图片内容。
+    用提交的表单值（provider / base_url / api_key / model / prompt）真实
+    调用一次识图接口验证配置可用；api_key 掩码/留空、url/model 留空按
+    name 回退已保存配置。成功 ok=true + 描述文本，失败 ok=false + 原因
+    （不抛 500，与 image-model-test 同容错策略）。
+    """
+
+    MODEL = TestVisionModelsSettings.MODEL
+    PNG = b"\x89PNG-test-image"
+
+    def _save(self, tc):
+        tc.put("/api/settings", json={"vision_models": [self.MODEL]})
+
+    def _patch_client(self, monkeypatch, fake):
+        """monkeypatch botler.vision_models.VisionModelClient（端点函数内
+        from ..vision_models import 会在调用时取模块属性，patch 生效）。"""
+        from botler import vision_models as vm_mod
+        monkeypatch.setattr(vm_mod, "VisionModelClient", fake)
+
+    def _post(self, tc, **overrides):
+        """multipart 上传：图片文件 + 表单字段。"""
+        data = {
+            "name": "Gemini 视觉",
+            "provider": "gemini_vision",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta",
+            "api_key": "AIza-test",
+            "model": "gemini-2.5-flash",
+            "prompt": "请描述这张图片的内容",
+        }
+        data.update(overrides)
+        return tc.post(
+            "/api/settings/vision-model-test",
+            files={"image": ("test.png", self.PNG, "image/png")},
+            data=data)
+
+    def test_test_missing_image(self, client):
+        """未上传图片直接 ok=false，不发请求。"""
+        tc, _ = client
+        resp = tc.post("/api/settings/vision-model-test", data={
+            "name": "x", "provider": "gemini_vision",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "图片" in data["error"]
+
+    def test_test_missing_provider(self, client):
+        """未选择识图模型（provider）直接 ok=false，不发请求。"""
+        tc, _ = client
+        resp = tc.post(
+            "/api/settings/vision-model-test",
+            files={"image": ("test.png", self.PNG, "image/png")},
+            data={"name": "x"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "识图模型" in data["error"]
+
+    def test_test_ok_with_full_config(self, client, monkeypatch):
+        """提交完整配置：ok=true + 描述文本，客户端收到正确入参与图片。"""
+        tc, _ = client
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def describe(self, image, *, mime_type, prompt):
+                captured["image"] = image
+                captured["mime_type"] = mime_type
+                captured["prompt"] = prompt
+                return "图片里有一只橘色的猫"
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = self._post(tc)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["description"] == "图片里有一只橘色的猫"
+        assert captured["provider"] == "gemini_vision"
+        assert captured["api_key"] == "AIza-test"
+        assert captured["base_url"] == "https://generativelanguage.googleapis.com/v1beta"
+        assert captured["model"] == "gemini-2.5-flash"
+        assert captured["image"] == self.PNG
+        assert captured["mime_type"] == "image/png"
+        assert captured["prompt"] == "请描述这张图片的内容"
+
+    def test_test_masked_key_falls_back_to_saved(self, client, monkeypatch):
+        """掩码/留空的 api_key、url、model 按 name 回退已保存配置。"""
+        tc, _ = client
+        self._save(tc)
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def describe(self, image, *, mime_type, prompt):
+                return "ok"
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = self._post(tc, api_key="AIza-****", base_url="", model="")
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        # 回退到已保存的明文 key / url / model
+        assert captured["api_key"] == "AIza-vision-test-123"
+        assert captured["base_url"] == self.MODEL["base_url"]
+        assert captured["model"] == "gemini-2.5-flash"
+
+    def test_test_row_button_uses_saved_only(self, client, monkeypatch):
+        """列表行「测试」只提交 name+provider：完全按已保存配置测试。"""
+        tc, _ = client
+        self._save(tc)
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def describe(self, image, *, mime_type, prompt):
+                return "ok"
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = tc.post(
+            "/api/settings/vision-model-test",
+            files={"image": ("test.png", self.PNG, "image/png")},
+            data={"name": "Gemini 视觉", "provider": "gemini_vision"})
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert captured["api_key"] == "AIza-vision-test-123"
+        assert captured["base_url"] == self.MODEL["base_url"]
+        assert captured["model"] == "gemini-2.5-flash"
+
+    def test_test_describe_error_ok_false(self, client, monkeypatch):
+        """识图接口报错（如 401）：ok=false + 错误信息，不抛 500。"""
+        tc, _ = client
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                pass
+
+            def describe(self, image, *, mime_type, prompt):
+                raise VisionModelError("Gemini 请求失败: HTTP 401 invalid key")
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = self._post(tc)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "401" in data["error"]
+
+    def test_test_unknown_provider_ok_false(self, client, monkeypatch):
+        """未知 provider 构造客户端失败：ok=false + 原因。"""
+        tc, _ = client
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                raise VisionModelError("不支持的识图模型类型: nope")
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = self._post(tc, provider="nope")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "nope" in data["error"]
+
+    def test_test_verify_ssl_follows_settings(self, client, monkeypatch):
+        """verify_ssl 跟随全局设置（测试配置 verify_ssl: false）。"""
+        tc, _ = client
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def describe(self, image, *, mime_type, prompt):
+                return "ok"
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = self._post(tc)
+        assert resp.status_code == 200
+        assert captured["verify_ssl"] is False

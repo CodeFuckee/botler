@@ -21,6 +21,10 @@ const KIND_META = {
     label: '大模型供应商',
     desc: '生图 API 供应商：决定设置页「生图模型」的预设选项与调用接口',
   },
+  vision_model_provider: {
+    label: '识图模型供应商',
+    desc: '识图 API 供应商：决定设置页「识图模型」的预设选项与调用接口（issue #152）',
+  },
   notifier: {
     label: '消息通知通道',
     desc: '任务成功 / 失败时发送消息的通道',
@@ -121,7 +125,7 @@ export default function Plugins() {
       <h1>插件管理</h1>
       <p className="muted">
         集中管理平台插件：安装外部插件模块、卸载外部插件、设置默认执行引擎。
-        插件分为执行引擎 / 大模型供应商 / 消息通知通道三类（插件体系 issue #140）。
+        插件分为执行引擎 / 大模型供应商 / 识图模型供应商 / 消息通知通道四类（插件体系 issue #140）。
       </p>
 
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}

@@ -135,6 +135,26 @@ browse:
 #     model: gemini-3-pro-image
 #     enabled: true
 
+# 识图模型（issue #152）：设置页「识图模型」卡片增删改查的视觉理解模型列表，
+# 可配置具有视觉理解的模型，并有测试按钮——上传一张图片后调用模型描述图片。
+# 每项 {name, provider, base_url, api_key, model, enabled}；api_key 落盘
+# config.yaml（支持 ${ENV} 引用，与 image_models 同模式）。内置预设：
+# gemini_vision（Gemini 视觉，默认模型 gemini-2.5-flash，generateContent
+# 接口）/ openai_vision（OpenAI 视觉，默认模型 gpt-4o，chat/completions
+# 接口）/ custom（自定义 OpenAI 兼容视觉模型，chat/completions 接口，需自填
+# Base URL / 模型 / API Key），设置页选择预设自动填充默认 base_url 与 model
+# （均可修改）。base_url 语义：留空 / 等于预设默认 → 按官方接口拼接操作路径
+# （/chat/completions、:generateContent）；自定义（不等于预设默认）→ 视为
+# 完整请求地址直接使用，不再拼接（如 https://api.example.com/v1/chat/completions）。
+# 后端 vision_models.py 提供统一调用接口（VisionModelClient.describe）。
+# vision_models:
+#   - name: Gemini 视觉生产环境
+#     provider: gemini_vision
+#     base_url: https://generativelanguage.googleapis.com/v1beta
+#     api_key: ${GEMINI_VISION_API_KEY}
+#     model: gemini-2.5-flash
+#     enabled: true
+
 backup:
   # 备份与恢复（config.yaml + botler.db → <数据目录>/backups/botler-backup-*.tar.gz）
   enabled: true            # 定时备份开关（每天 03:00 Asia/Shanghai 自动备份）

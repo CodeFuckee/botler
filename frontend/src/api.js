@@ -12,8 +12,14 @@ export function setSsoEnabled(v) {
 async function request(method, path, body) {
   const opts = { method, headers: {} }
   if (body !== undefined) {
-    opts.headers['Content-Type'] = 'application/json'
-    opts.body = JSON.stringify(body)
+    if (body instanceof FormData) {
+      // multipart（如识图模型测试上传图片，issue #152）：不手动设置
+      // Content-Type，由浏览器自动带 boundary
+      opts.body = body
+    } else {
+      opts.headers['Content-Type'] = 'application/json'
+      opts.body = JSON.stringify(body)
+    }
   }
   const resp = await fetch(path, opts)
   let data = null

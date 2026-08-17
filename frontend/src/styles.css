@@ -709,6 +709,18 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   border: 1px solid var(--border);
 }
 
+/* 识图模型测试（issue #152）：隐藏文件选择框 + 模型描述文本 */
+.hidden-file-input {
+  display: none; /* 隐藏原生文件选择框，由「测试」按钮触发 */
+}
+.vision-desc {
+  margin: var(--space-1) 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap; /* 保留模型返回的换行 */
+  word-break: break-word; /* 长内容自动折行 */
+}
+
 /* ---- 仓库列表 ---- */
 .repo-item {
   display: flex;
