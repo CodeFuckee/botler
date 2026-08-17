@@ -72,7 +72,7 @@ export function isFailedTask(issue) {
 // 「任务调度」卡片下拉选项一致。
 export const ENGINE_META = {
   claude: { label: 'Claude Code CLI' },
-  hermes: { label: 'hermes-agent' },
+  hermes: { label: 'hermes-agent SDK' },
   dsh: { label: 'deepseek-harness SDK' },
 }
 

@@ -38,6 +38,7 @@ from .database import (
     STATUS_INTERRUPTED,
 )
 from .dsh_runner import DshRunner, DshSdkNotInstalledError
+from .hermes_sdk_runner import HermesSdkRunner, HermesSdkNotInstalledError
 from .events import EventBus, parse_claude_stream_line, parse_hermes_event_line
 from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
 from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
@@ -1430,17 +1431,19 @@ class ClaudeExecutor:
     def _run_hermes_once(self, task_id: int, repo: dict, issue: dict,
                          resume_history: list | None,
                          resume_session_id: str | None = None) -> tuple[int, str]:
-        """执行一次 hermes runner。返回 (exit_code, output)。
+        """执行一次 hermes 引擎（hermes agent SDK 进程内调用）。返回 (exit_code, output)。
 
-        runner 协议：stdin 写 JSON 请求（prompt/history/session_id），
-        stdout 输出单行 JSON 结果（final_response/messages/session_id/error）。
-        terminal 工具经 TERMINAL_CWD 在 botler 仓库工作区执行，git 凭据
-        继承 _build_env 的 GIT_ASKPASS 注入（与 claude 引擎一致）。
+        issue #171：集成方式从「子进程 + 部署机独立 hermes venv
+        （hermes.command/hermes.args）」改为「hermes agent SDK 进程内
+        集成」（对齐 dsh 引擎的 SDK 方式，issue #84）：worker 线程跑
+        HermesSdkRunner（run_agent.AIAgent），主循环轮询停止请求与超时；
+        停止/超时通过 runner.stop()（AIAgent.interrupt()，跨线程安全）
+        请求中断并通知进行中的工具提前终止，语义等价旧模式的 SIGKILL
+        进程组。输出协议不变（事件行 + 结果行），SSE 解析
+        （parse_hermes_event_line）与结果判定（_hermes_result）、会话
+        落库（hermes_history）直接复用。
         """
         cfg = self.config.get()
-        if not cfg.hermes_command:
-            raise ExecutorError(
-                "hermes 引擎未配置 hermes.command（部署机 hermes venv 的 python 路径）")
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_history))
         if resume_history:
             prompt = self._resume_prompt(repo, issue)
@@ -1451,74 +1454,68 @@ class ClaudeExecutor:
         else:
             prompt = self._build_prompt(repo, issue)
             self.db.add_log(task_id, "info",
-                            f"执行 hermes runner（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
+                            f"执行 hermes 引擎（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
         env = self._build_env(repo, issue)
-        # hermes 的 terminal 工具按 TERMINAL_CWD 在 botler 仓库工作区执行命令
-        env["TERMINAL_CWD"] = str(workdir)
 
         log_path = self._log_file(task_id)
-        cmd = [cfg.hermes_command, *cfg.hermes_args]
-        request: dict = {"prompt": prompt}
-        if resume_history:
-            request["history"] = resume_history
-            if resume_session_id:
-                request["session_id"] = resume_session_id
-        try:
-            proc = subprocess.Popen(
-                cmd, cwd=workdir, env=env,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, start_new_session=True,
-            )
-        except FileNotFoundError:
-            raise ExecutorError(
-                f"找不到 hermes 命令: {cfg.hermes_command}"
-                f"（请确认部署机 hermes venv 的 python 路径）")
+        lines: list[str] = []
+        log_f = open(log_path, "w", encoding="utf-8", errors="replace")
 
-        with self._proc_lock:
-            self._procs[task_id] = proc
+        def _on_line(line: str) -> None:
+            """worker 线程回调：写日志 + 收行 + 发布 SSE（单线程顺序调用）。"""
+            log_f.write(line + "\n")
+            log_f.flush()
+            lines.append(line)
+            self._publish_stream_line(task_id, line, parse_hermes_event_line)
+
         try:
             try:
-                proc.stdin.write(json.dumps(request, ensure_ascii=False))
-                proc.stdin.close()
-            except (BrokenPipeError, OSError) as e:
-                self.db.add_log(task_id, "warn", f"hermes runner stdin 写入失败: {e}")
+                runner = HermesSdkRunner(
+                    prompt=prompt,
+                    session_id=resume_session_id,
+                    history=resume_history,
+                    task_id=str(task_id),
+                    cwd=str(workdir),
+                    env=env,
+                    on_line=_on_line,
+                )
+                runner.start()
+            except HermesSdkNotInstalledError as e:
+                raise ExecutorError(str(e))
 
             deadline = time.time() + cfg.task_timeout_seconds
-            stopped = self._stop_requested(task_id)
-            # 实时事件流（SSE）：runner 流式协议的事件行发布到总线；
-            # 结果行（parse 返回 None）不发布，由收尾判定
-            def _on_chunk(chunk: str) -> None:
-                self._publish_stream_line(task_id, chunk, parse_hermes_event_line)
-
-            if not stopped:
-                timed_out, stopped, chunks = self._drain_process_output(
-                    proc, task_id, log_path, deadline, _on_chunk)
-            else:
-                timed_out, chunks = False, []
+            timed_out = False
+            stopped = False
+            while not runner.done():
+                if self._stop_requested(task_id):
+                    stopped = True
+                    runner.stop()
+                    break
+                if time.time() >= deadline:
+                    timed_out = True
+                    runner.stop()
+                    break
+                time.sleep(0.05)
+            exit_code = runner.finish()
+            # 事件行拼接必须保留换行分隔（与日志落盘 line + "\n" 一致）：
+            # _last_json_object 按行扫描解析结果行，缺换行会误判 failed
+            # （issue #119 dsh 同类问题）
+            output = "\n".join(lines)
 
             if stopped:
-                self._kill_process_group(proc)
-                proc.wait(timeout=10)
-                output = "".join(chunks)
                 self.db.add_log(task_id, "warn",
-                                "任务被用户停止，已强制终止 hermes 进程组")
+                                "任务被用户停止，已请求 hermes 中断")
                 return STOP_EXIT_CODE, output
 
             if timed_out:
-                self._kill_process_group(proc)
-                proc.wait(timeout=10)
-                output = "".join(chunks)
                 self.db.add_log(task_id, "error",
-                                f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止进程组")
+                                f"任务超时（>{cfg.task_timeout_seconds}s），已请求 hermes 中断")
                 return 124, output  # 124 = timeout 约定退出码
 
-            exit_code = proc.wait(timeout=30)
-            output = "".join(chunks)
-            self.db.add_log(task_id, "info", f"hermes runner 退出码: {exit_code}")
+            self.db.add_log(task_id, "info", f"hermes 引擎退出码: {exit_code}")
             return exit_code, output
         finally:
-            with self._proc_lock:
-                self._procs.pop(task_id, None)
+            log_f.close()
 
     # ---- dsh 引擎（issue #84）----
 

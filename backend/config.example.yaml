@@ -31,8 +31,9 @@ worker:
                                       #   「任务调度」卡片可修改
   engine: claude                      # 任务执行引擎（插件体系，issue #140）：
                                       #   claude（Claude Code CLI，默认）/
-                                      #   hermes（部署机已装好的 hermes-agent，
-                                      #   经 hermes_runner.py 调用）/ dsh
+                                      #   hermes（hermes-agent SDK，经
+                                      #   hermes_sdk_runner.py 进程内调用，
+                                      #   issue #171）/ dsh
                                       #   （deepseek-harness SDK，经 dsh_runner.py
                                       #   进程内调用，issue #84）。引擎名对应执行
                                       #   引擎插件（botler.plugins.executors），
@@ -64,14 +65,14 @@ claude:
   args: ["-p", "--output-format", "stream-json", "--verbose"]
   # Claude Code 认证继承自服务器环境变量（见 .env.example 注释）
 
-hermes:
-  # hermes 引擎（worker.engine: hermes 时生效）：部署机已装好的
-  # hermes-agent（源码 + venv，LLM 配置在 hermes 侧 ~/.hermes 已配好，
-  # botler 不管理）。command 填 hermes venv 的 python 绝对路径，
-  # args 填 botler 自带的 runner 脚本路径（容器内挂载后路径）。
+hermes: {}
+  # hermes 引擎（worker.engine: hermes 时生效，issue #171 起为
+  # hermes agent SDK 进程内集成）：hermes-agent 以源码 editable 安装进
+  # botler 自身 venv（pm2 部署经 deploy/install-hermes-agent.sh 自动
+  # 安装；Docker 部署由 docker-entrypoint.sh 在容器启动时对挂载源码
+  # 安装），进程内调用 run_agent.AIAgent（对齐 dsh 引擎的 SDK 方式）。
+  # LLM 配置仍在 hermes 侧 ~/.hermes 已配好，botler 不管理、无配置项。
   # 部署细节见 docs/hermes-engine-deployment.md。
-  command: ""                         # 如 /opt/hermes/hermes-agent/venv/bin/python
-  args: ["/app/backend/hermes_runner.py"]
 
 dsh:
   # dsh 引擎（worker.engine: dsh 时生效，issue #84）：deepseek-harness

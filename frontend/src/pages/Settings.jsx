@@ -753,7 +753,7 @@ export default function Settings() {
                   onChange={(e) => setWorkerField('engine', e.target.value)}
                 >
                   <option value="claude">claude — Claude Code CLI（默认）</option>
-                  <option value="hermes">hermes — 部署机 hermes-agent</option>
+                  <option value="hermes">hermes — hermes-agent SDK</option>
                   <option value="dsh">dsh — deepseek-harness SDK</option>
                 </select>
               </td>
@@ -774,9 +774,11 @@ export default function Settings() {
         </p>
         <p className="muted small">
           任务执行引擎：切换后端编写代码的 agent，默认 claude（Claude Code CLI）；
-          hermes 为部署机 hermes-agent，dsh 为 deepseek-harness SDK（DeepSeek API Key
-          走部署机环境变量或「dsh 引擎」配置段）。切换后点击「保存」立即生效，
-          对新领取的任务使用新引擎，运行中任务不受影响。
+          hermes 为 hermes-agent SDK（进程内调用，源码经
+          deploy/install-hermes-agent.sh editable 安装进 botler venv），dsh 为
+          deepseek-harness SDK（DeepSeek API Key 走部署机环境变量或「dsh 引擎」
+          配置段）。切换后点击「保存」立即生效，对新领取的任务使用新引擎，
+          运行中任务不受影响。
         </p>
         <div className="form-row">
           <button className="btn btn-primary" disabled={busy} onClick={save}>

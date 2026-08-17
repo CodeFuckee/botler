@@ -49,6 +49,14 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: credential.helper
       GIT_CONFIG_VALUE_0: store --file=/root/.git-credentials
+      # hermes 引擎 SDK（issue #171 起进程内集成）：hermes-agent 源码
+      # 挂载路径（docker-entrypoint.sh 启动时 editable 安装到 /opt/venv，
+      # 幂等）。未挂载源码时 hermes 引擎按 SDK 未安装处理（提示安装指引）。
+      HERMES_SOURCE_DIR: ${HERMES_SOURCE_DIR:-/opt/hermes/hermes-agent}
+      # hermes 数据目录（LLM 配置 / 会话状态，runner 进程内读写）：默认
+      # 走 hermes 平台默认 ~/.hermes（容器内为 /root/.hermes），部署时
+      # 挂载宿主 ~/.hermes 或设置 HERMES_HOME 指向挂载的数据目录（详见
+      # docs/hermes-engine-deployment.md §4）。
     volumes:
       # 配置与凭据（挂载文件，改动即生效；.env 只读）
       # 默认挂载源为 ./data/（部署目录下 data/ 文件夹，如
@@ -73,6 +81,11 @@ services:
       # 部署脚本 / verify 脚本 export GIT_CREDENTIALS_FILE 指向真实凭据
       # 文件（优先宿主 ~/.git-credentials 或 CI 生成的 .git-credentials）
       - ${GIT_CREDENTIALS_FILE:-/dev/null}:/root/.git-credentials:ro
+      # hermes-agent 源码（issue #171 SDK 进程内集成）：宿主机 hermes-agent
+      # 源码目录只读挂载，entrypoint 启动时 editable 安装进 /opt/venv。
+      # 非 hermes 引擎部署可删掉这两条（hermes 引擎会提示 SDK 未安装）。
+      # - ${HERMES_DIR:-~/.hermes/hermes-agent}:/opt/hermes/hermes-agent:ro
+      # - ${HERMES_DATA_DIR:-~/.hermes}:/root/.hermes
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
       interval: 30s

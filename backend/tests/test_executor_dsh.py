@@ -437,14 +437,23 @@ class TestRunDshOnce:
 
     def test_hermes_engine_untouched(self, monkeypatch, tmp_path, fake_runner):
         """engine=hermes 时 dsh runner 不被调用（回归保护）。"""
+        class _FakeHermesRunner:
+            def __init__(self, **kwargs):
+                pass
+            def start(self):
+                pass
+            def done(self):
+                return True
+            def finish(self):
+                return 0
+            def stop(self):
+                pass
+
+        monkeypatch.setattr("botler.executor.HermesSdkRunner", _FakeHermesRunner)
         config = _mk_config(
-            tmp_path, worker_extra="\n  engine: hermes",
-            hermes_extra="\n  command: /opt/hermes/venv/bin/python"
-                         "\n  args: [\"/app/backend/hermes_runner.py\"]")
+            tmp_path, worker_extra="\n  engine: hermes")
         ex = _mk_executor(tmp_path, config)
         _patch_workspace(monkeypatch, ex, tmp_path)
-        monkeypatch.setattr("botler.executor.subprocess.Popen",
-                            lambda cmd, **kw: _fake_drain_proc())
         code, _ = ex._run_once(1, _REPO, _ISSUE)
         assert code == 0
         assert fake_runner.instances == []  # 未走 dsh 路径

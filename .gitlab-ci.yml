@@ -179,7 +179,7 @@ variables:
 # ================================================================
 
 # --- 后端：bandit 安全扫描（流水线最前置阻断门禁）---
-# 扫描 backend 生产代码（botler 包 + hermes_runner.py），存在高危/
+# 扫描 backend 生产代码（botler 包），存在高危/
 # 中危（--severity-level medium）漏洞时 bandit 退出码非 0，job 失败
 # 阻断整个流水线（后续 build/deploy/sync 全部不运行）；低危漏洞仅
 # 记录不阻断。allow_failure: false 显式声明阻断语义。
@@ -250,7 +250,7 @@ security:bandit:
 
       echo "=== 4. bandit 安全扫描（severity ≥ medium 即阻断，SARIF 报告上传 Security 页面）==="
       set +e
-      .venv/bin/python -m bandit -r botler hermes_runner.py --severity-level medium \
+      .venv/bin/python -m bandit -r botler --severity-level medium \
         -f sarif -o bandit-report.sarif
       BANDIT_EXIT=$?
       set -e
@@ -547,7 +547,7 @@ security:semgrep:
         --severity ERROR --severity WARNING \
         --error \
         --json -o semgrep-result.json \
-        backend/botler backend/hermes_runner.py \
+        backend/botler \
         frontend/src frontend/scripts frontend/vite.config.js 2>semgrep-scan.log
       SEMGREP_EXIT=$?
       set -e
@@ -582,7 +582,7 @@ security:semgrep:
         --config ci/semgrep-rules.yaml \
         --severity ERROR --severity WARNING \
         --sarif -o backend/semgrep-report.sarif \
-        backend/botler backend/hermes_runner.py \
+        backend/botler \
         frontend/src frontend/scripts frontend/vite.config.js 2>/dev/null || true
 
       echo "=== 6. 阻断判定（semgrep 自身退出码）==="
@@ -1025,6 +1025,18 @@ deploy_to_code01:
       echo "=== 2b. 安装 deepseek-harness SDK（dsh 引擎依赖）==="
       bash deploy/install-dsh-sdk.sh backend/.venv || { dbg STEP2b "FAIL: dsh SDK 安装失败"; echo "错误：deepseek-harness SDK 安装失败"; exit 1; }
       dbg STEP2b "OK"
+
+      # ================================================================
+      # 第 2b2 步：hermes 引擎 SDK（issue #171：hermes agent SDK 进程内集成）
+      # hermes-agent 以源码分发（PyPI 无 wheel），由 deploy/install-hermes-agent.sh
+      # editable 安装进同一 backend/.venv（默认源码 ~/.hermes/hermes-agent，
+      # HERMES_SOURCE_DIR 可覆盖）+ 幂等 + 安装后 import 校验（装不上即部署
+      # 失败）。未安装 hermes-agent 源码时脚本报错退出（hermes 引擎部署前置）。
+      # ================================================================
+      dbg STEP2b2 "安装 hermes-agent SDK"
+      echo "=== 2b2. 安装 hermes-agent SDK（hermes 引擎依赖，issue #171）==="
+      bash deploy/install-hermes-agent.sh backend/.venv || { dbg STEP2b2 "FAIL: hermes SDK 安装失败"; echo "错误：hermes-agent SDK 安装失败"; exit 1; }
+      dbg STEP2b2 "OK"
 
       # ================================================================
       # 第 2c 步：安装 MinIO Server 二进制（issue #160，pm2 部署形态）

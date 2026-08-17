@@ -94,7 +94,7 @@ jobs:
           # --python 显式指定本 job 的 venv（同 backend-test 说明：setup-uv
           # 的 python-version 参数会激活 workspace/.venv，不显式指定会装错环境）
           uv pip install --python .venv/bin/python bandit
-          .venv/bin/python -m bandit -r botler hermes_runner.py --severity-level medium
+          .venv/bin/python -m bandit -r botler --severity-level medium
           echo "✓ 未发现高危/中危漏洞（低危漏洞仅记录不阻断）"
 
   # ================================================================

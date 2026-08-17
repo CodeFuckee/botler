@@ -39,10 +39,12 @@ TOOLS = [
     {"key": "aider", "name": "Aider", "command": "aider",
      "version_args": ["--version"], "latest_source": "npm",
      "latest_pkg": "aider-chat"},
-    # hermes 为 git 安装的内部 agent（issue #48），无 npm/GitHub 公开发布源，
-    # 只检测安装与版本，不查最新版本（前端显示 "—"）
-    {"key": "hermes", "name": "Hermes Agent", "command": "hermes",
-     "version_args": ["--version"], "latest_source": None},
+    # hermes 为 hermes-agent SDK（issue #171 起进程内集成：源码 editable
+    # 安装进 botler venv，进程内调用 run_agent.AIAgent），不走 which/
+    # --version，按 module 检测；无 npm/GitHub 公开发布源，不查最新版本
+    # （前端显示 "—"，与 dsh 的 latest_source: None 同模式）
+    {"key": "hermes", "name": "Hermes Agent SDK", "module": "run_agent",
+     "pkg": "hermes-agent", "latest_source": None},
     # dsh 为 pip 包（issue #84：deepseek-harness-sdk，可选依赖），不走
     # which/--version，按 module 检测 + PyPI 查最新版本
     {"key": "dsh", "name": "DeepSeek Harness SDK", "module": "deepseek_harness",

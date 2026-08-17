@@ -107,7 +107,7 @@ function mockFetch({ engine = 'claude', pluginPaths = [] } = {}) {
     plugins: {
       executor: [
         { kind: 'executor', name: 'claude', description: 'Claude Code CLI 无头模式（默认执行引擎）', version: '1.0', builtin: true, path: null, display_name: '', default_base_url: '', default_model: '' },
-        { kind: 'executor', name: 'hermes', description: 'hermes-agent 引擎', version: '1.0', builtin: true, path: null, display_name: '', default_base_url: '', default_model: '' },
+        { kind: 'executor', name: 'hermes', description: 'hermes-agent SDK 引擎（进程内调用，issue #171）', version: '1.0', builtin: true, path: null, display_name: '', default_base_url: '', default_model: '' },
         { kind: 'executor', name: 'dsh', description: 'deepseek-harness SDK 引擎', version: '1.0', builtin: true, path: null, display_name: '', default_base_url: '', default_model: '' },
       ],
       model_provider: [

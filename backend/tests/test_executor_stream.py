@@ -240,8 +240,48 @@ class TestClaudeStreamEvents:
         assert '"result"' not in output
 
 
+class _FakeHermesRunner:
+    """假 HermesSdkRunner：start 时同步回放 preset_lines（模拟 SDK worker 输出）。"""
+
+    instances: list["_FakeHermesRunner"] = []
+    preset_lines: list[str] = []
+    preset_done: bool = True
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self._done = _FakeHermesRunner.preset_done
+        self.stop_calls = 0
+        self.result_lines = list(_FakeHermesRunner.preset_lines)
+        _FakeHermesRunner.instances.append(self)
+
+    def start(self):
+        for line in self.result_lines:
+            self.kwargs["on_line"](line)
+
+    def done(self):
+        return self._done
+
+    def finish(self):
+        return 0
+
+    def stop(self):
+        self.stop_calls += 1
+
+
+@pytest.fixture
+def fake_hermes_runner(monkeypatch):
+    """注入假 HermesSdkRunner 到 executor 模块命名空间并重置 preset。"""
+    _FakeHermesRunner.instances.clear()
+    _FakeHermesRunner.preset_lines = []
+    _FakeHermesRunner.preset_done = True
+    monkeypatch.setattr("botler.executor.HermesSdkRunner", _FakeHermesRunner)
+    monkeypatch.setattr("botler.executor.HermesSdkNotInstalledError",
+                        type("HermesSdkNotInstalledError", (Exception,), {}))
+    return _FakeHermesRunner
+
+
 class TestHermesStreamEvents:
-    """hermes 引擎：runner 流式输出（事件行 + 最后结果行）→ 总线 + 判定。"""
+    """hermes 引擎（SDK 进程内模式）：SDK 事件行 + 最后结果行 → 总线 + 判定。"""
 
     def _hermes_lines(self) -> list[str]:
         return [
@@ -258,24 +298,23 @@ class TestHermesStreamEvents:
                        ensure_ascii=False),
         ]
 
-    def test_hermes_events_pushed_to_bus(self, executor, monkeypatch, tmp_path):
+    def _patch_hermes(self, monkeypatch, executor, tmp_path, lines):
+        """配置 engine=hermes + 假 SDK runner 回放输出。"""
+        _FakeHermesRunner.preset_lines = lines
+        monkeypatch.setattr(executor, "prepare_workspace",
+                            lambda repo, resume=False: (tmp_path / "ws", {}))
+        monkeypatch.setattr(executor, "_log_file",
+                            lambda tid: tmp_path / f"task_{tid}.log")
+        cfg = executor.config.get()
+        cfg.engine = "hermes"
+        monkeypatch.setattr(executor.config, "get", lambda: cfg)
+
+    def test_hermes_events_pushed_to_bus(
+            self, executor, monkeypatch, tmp_path, fake_hermes_runner):
         sub = executor.event_bus.subscribe(1)
         try:
-            lines = self._hermes_lines()
-
-            def fake_popen(cmd, **kwargs):
-                return _FakeProc(lines, 0)
-
-            monkeypatch.setattr("botler.executor.subprocess.Popen", fake_popen)
-            monkeypatch.setattr(executor, "prepare_workspace",
-                                lambda repo, resume=False: (tmp_path / "ws", {}))
-            monkeypatch.setattr(executor, "_log_file",
-                                lambda tid: tmp_path / f"task_{tid}.log")
-
-            cfg = executor.config.get()
-            cfg.engine = "hermes"
-            cfg.hermes_command = "python"
-            monkeypatch.setattr(executor.config, "get", lambda: cfg)
+            self._patch_hermes(monkeypatch, executor, tmp_path,
+                               self._hermes_lines())
             exit_code, output = executor._run_once(1, _repo(), _issue())
 
             assert exit_code == 0
@@ -286,46 +325,25 @@ class TestHermesStreamEvents:
         finally:
             sub.close()
 
-    def test_hermes_result_judged_from_last_line(self, executor, monkeypatch, tmp_path):
+    def test_hermes_result_judged_from_last_line(
+            self, executor, monkeypatch, tmp_path, fake_hermes_runner):
         """结果判定取最后一行（事件行在前，结果 JSON 收尾）。"""
-        lines = self._hermes_lines()
-
-        def fake_popen(cmd, **kwargs):
-            return _FakeProc(lines, 0)
-
-        monkeypatch.setattr("botler.executor.subprocess.Popen", fake_popen)
-        monkeypatch.setattr(executor, "prepare_workspace",
-                            lambda repo, resume=False: (tmp_path / "ws", {}))
-        monkeypatch.setattr(executor, "_log_file",
-                            lambda tid: tmp_path / f"task_{tid}.log")
-
-        cfg = executor.config.get()
-        cfg.engine = "hermes"
-        cfg.hermes_command = "python"
+        self._patch_hermes(monkeypatch, executor, tmp_path,
+                           self._hermes_lines())
         exit_code, output = executor._run_once(1, _repo(), _issue())
 
         # _hermes_result 取最后一行 final_response
+        assert exit_code == 0
         assert executor._hermes_result(output) == "success"
         history = executor._hermes_history_from_output(output)
         assert history == [{"role": "assistant", "content": "完成"}]
 
-    def test_single_line_old_runner_still_works(self, executor, monkeypatch, tmp_path):
-        """旧 runner（单行结果）向后兼容：唯一行即结果，无事件。"""
+    def test_single_result_line_still_works(
+            self, executor, monkeypatch, tmp_path, fake_hermes_runner):
+        """无回调（安静执行）时只输出结果行：唯一行即结果，无事件。"""
         line = json.dumps({"final_response": "完成", "messages": [],
                            "session_id": "hsess-0", "error": None})
-
-        def fake_popen(cmd, **kwargs):
-            return _FakeProc([line], 0)
-
-        monkeypatch.setattr("botler.executor.subprocess.Popen", fake_popen)
-        monkeypatch.setattr(executor, "prepare_workspace",
-                            lambda repo, resume=False: (tmp_path / "ws", {}))
-        monkeypatch.setattr(executor, "_log_file",
-                            lambda tid: tmp_path / f"task_{tid}.log")
-
-        cfg = executor.config.get()
-        cfg.engine = "hermes"
-        cfg.hermes_command = "python"
+        self._patch_hermes(monkeypatch, executor, tmp_path, [line])
         exit_code, output = executor._run_once(1, _repo(), _issue())
 
         assert exit_code == 0

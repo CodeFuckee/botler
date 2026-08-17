@@ -4,6 +4,48 @@
 
 ## [Unreleased]
 ### Added
+- **hermes 引擎集成方式改为 hermes agent SDK 进程内集成（issue #171）**：
+  需求「帮我把hermes的集成方式改成hermes agent sdk的集成方式」。此前 hermes
+  引擎（issue #47）经「子进程 + 部署机独立 hermes venv」运行
+  `backend/hermes_runner.py`（`hermes.command`/`hermes.args` 配置 + Docker
+  挂载 hermes venv，botler 不打包不管理）；本次改为与 dsh 引擎（issue #84）
+  对齐的 **SDK 进程内集成**——hermes-agent（`run_agent.AIAgent`）以源码
+  editable 安装进 botler 自身 venv，`HermesSdkRunner`
+  （`backend/botler/hermes_sdk_runner.py`）在 botler 进程内 worker 线程
+  调用，停止/超时经 `AIAgent.interrupt()` 跨线程中断（语义等价旧模式
+  SIGKILL 进程组）：
+  - **执行器**：`executor._run_hermes_once` 从子进程 Popen 改为 SDK runner
+    worker 线程模型（与 `_run_dsh_once` 同构），输出协议不变（事件行 +
+    结果行 NDJSON），SSE 实时输出 / 结果判定（`_hermes_result`）/ 断点续跑
+    （`tasks.hermes_history` 落库）全部复用；`HermesSdkRunner` 经
+    `register_task_env_overrides(task_id, {"cwd": 工作区})` 注册会话级工作区
+    cwd 覆盖 + worker 内临时注入 `TERMINAL_CWD`/git 凭据（`GIT_ASKPASS` 等）
+    并还原（进程内模式替代旧模式的子进程 env 注入）；
+  - **配置**：移除 `hermes.command` / `hermes.args`（`hermes:` 段现为空），
+    设置页引擎选项文案更新为「hermes — hermes-agent SDK」；本地环境检测
+    （environment.py）从 hermes CLI `which/--version` 改为 `run_agent` 模块
+    检测（与 dsh 同模式，`pkg: hermes-agent` 读版本）；
+  - **部署**：新增 `deploy/install-hermes-agent.sh` 一键安装（默认源码
+    `~/.hermes/hermes-agent`、`HERMES_SOURCE_DIR` 可覆盖；pip
+    `--ignore-requires-python` 适配 pm2 Python 3.14——上游 pyproject
+    requires-python `<3.14` 封顶已过时、cp314 wheel 实测可用；uv 回退；
+    幂等 + import 校验 fail fast）；CI `deploy_to_code01` 主依赖安装后自动
+    调用；Docker 部署新增 `docker-entrypoint.sh`（容器启动时对挂载源码
+    幂等 editable 安装，未挂载跳过并告警），`docker-compose.yml` 补充
+    hermes 挂载说明与 `HERMES_SOURCE_DIR`；
+  - **清理**：删除旧 `backend/hermes_runner.py` 及其测试（
+    `test_hermes_runner.py` / `test_hermes_runner_stream.py`），CI bandit /
+    semgrep 路径同步移除该文件；`docs/hermes-engine-deployment.md` 重写为
+    SDK 模式，README 同步；
+  - **测试**：新增 `test_hermes_sdk_runner.py`（16 例：SDK 探测 / 成功结果行 /
+    prompt/history/session/task_id 透传 / 事件行 / 停止中断 / 异常容错 /
+    env 与 cwd 注入还原）、`test_executor_hermes.py` 重写为假 SDK runner
+    模式（27 例：构造参数 / 停止超时 125/124 / SDK 未装报错 / SSE / 日志 /
+    resume / 结果判定）、`test_executor_stream.py` hermes 用例迁移、
+    `test_environment.py` hermes 检测改 module 模式、`test_executor_dsh.py`
+    hermes 回归用例适配、新增 `test_deploy_hermes_sdk.py`（13 例）与
+    `test_dockerfile_hermes.py`（12 例）部署产物防回退；后端全量 1596 +
+    新增用例 + 前端全量无 regression。
 - **设置页新增「MinIO 对象存储」配置卡片并启用识图图片上传（issue #170）**：
   issue #163/#164 已完成 MinIO 后端链路（图片 SHA-256 哈希上传 public 桶 +
   识图请求传 http URL + nginx 代理访问），但设置页暂未提供配置卡片（issue #163

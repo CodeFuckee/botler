@@ -153,19 +153,18 @@ class Settings:
     # claude 2.1.x 要求 stream-json 配 --verbose，executor 会自动补齐
     claude_args: list[str] = field(
         default_factory=lambda: ["-p", "--output-format", "stream-json", "--verbose"])
-    # 任务执行引擎（issue #47/#84，插件化 issue #140）：claude = Claude
-    # Code CLI（默认，现网行为不变）；hermes = 部署机已装好的 hermes-agent
-    # （经 hermes_runner.py 进程内调用）；dsh = deepseek-harness SDK（经
-    # dsh_runner.py 进程内调用）。引擎名对应执行引擎插件（botler.plugins
-    # .executors），未注册的引擎名回退 claude（executor._engine 校验）。
+    # 任务执行引擎（issue #47/#84/#171，插件化 issue #140）：claude =
+    # Claude Code CLI（默认，现网行为不变）；hermes = hermes-agent SDK
+    # （issue #171 起改为进程内集成，经 hermes_sdk_runner.py 调用
+    # run_agent.AIAgent）；dsh = deepseek-harness SDK（经 dsh_runner.py
+    # 进程内调用）。引擎名对应执行引擎插件（botler.plugins.executors），
+    # 未注册的引擎名回退 claude（executor._engine 校验）。
     engine: str = "claude"
     # 外部插件加载（issue #140）：Python 模块路径列表，应用启动时逐个加载
     # 并注册进插件体系（新增执行引擎 / 大模型供应商 / 消息发送通道）。
     # 模块内调用 botler.plugins.register_plugin 完成登记；加载失败仅记
     # 日志告警，不阻塞应用启动。
     plugin_paths: list[str] = field(default_factory=list)
-    hermes_command: str = ""
-    hermes_args: list[str] = field(default_factory=list)
     # dsh 引擎（issue #84，worker.engine: dsh 时生效）：deepseek-harness
     # Python SDK 运行参数。DeepSeek API Key 走部署机环境变量 DEEPSEEK_API_KEY
     # （或 dsh.base_url/dsh.api_key 显式配置），与 hermes 同模式。
@@ -269,7 +268,6 @@ KNOWN_FIELDS = {
                "engine", "plugin_paths", "issue_priority",
                "pause_windows", "pause_weekdays", "pause_timezone"},
     "claude": {"command", "args"},
-    "hermes": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
             "session_root", "cordis", "runtime_bin", "base_url", "api_key"},
     "templates": {"default", "resume"},
@@ -400,7 +398,6 @@ class ConfigManager:
         gitlab = data.get("gitlab", {})
         worker = data.get("worker", {})
         claude = data.get("claude", {})
-        hermes = data.get("hermes", {})
         dsh = data.get("dsh", {})
         tpl = data.get("templates", {})
         browse = data.get("browse", {})
@@ -455,8 +452,6 @@ class ConfigManager:
             engine=str(worker.get("engine", "claude")).strip() or "claude",
             plugin_paths=[str(p).strip() for p in (worker.get("plugin_paths") or [])
                           if str(p).strip()],
-            hermes_command=str(hermes.get("command", "")).strip(),
-            hermes_args=hermes.get("args", []),
             dsh_provider=str(dsh.get("provider", "deepseek-official")).strip() or "deepseek-official",
             dsh_model=str(dsh.get("model", "deepseek-v4-flash")).strip() or "deepseek-v4-flash",
             dsh_max_tokens=dsh.get("max_tokens") if isinstance(dsh.get("max_tokens"), int) else None,

@@ -4,7 +4,7 @@
 
 运行在服务器上的自动化平台：统一配置多个 GitLab 仓库，通过 webhook 实时监控 issue，
 当 issue 被指派给 bot 账号时，自动调用 **Claude Code CLI（无头模式）** 处理并推送修复到 main，最后关闭 issue。
-执行引擎可切换为 **hermes-agent**（部署机已装好时，见 [docs/hermes-engine-deployment.md](docs/hermes-engine-deployment.md)）
+执行引擎可切换为 **hermes-agent**（hermes agent SDK 进程内集成，见 [docs/hermes-engine-deployment.md](docs/hermes-engine-deployment.md)）
 或 **deepseek-harness**（Python SDK 进程内调用，见 [docs/dsh-engine-deployment.md](docs/dsh-engine-deployment.md)）；
 切换入口在 Web 设置页「任务调度」卡片的 `worker.engine` 设置项（issue #113）。
 
@@ -39,7 +39,7 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 > 💡 **断点续跑**（issue #8）：CI/CD 频繁重新部署时，执行中的任务被进程重启打断后
 > 不会从头重跑——executor 持久化 claude 会话 id，重启恢复时用 `claude --resume`
 > 接续上次会话且保留工作区改动，从上次中断处继续（会话文件丢失时自动降级全新会话）。
-> hermes 引擎（issue #47）等价支持：会话消息历史落库 `tasks.hermes_history`，
+> hermes 引擎（issue #47/#171：hermes agent SDK 进程内集成）等价支持：会话消息历史落库 `tasks.hermes_history`，
 > 恢复时作为 `conversation_history` 传入接续对话。
 > dsh 引擎（issue #84）等价支持：SDK 在 session_root 持久化会话，会话 id
 > 落库 `tasks.dsh_session_id`，恢复时以同一 id 接续对话。
@@ -60,7 +60,7 @@ backend/
                      executors（执行引擎插件 claude / hermes / dsh）/ models（大模型供应商
                      插件 gemini / openai）/ notifiers（任务消息通道插件 webhook / in_app）；
                      支持 worker.plugin_paths 外部加载新插件
-    hermes_runner.py hermes 引擎 runner 脚本（hermes venv 进程内调用 AIAgent，stdin/stdout JSON 协议）
+    hermes_sdk_runner.py hermes 引擎 SDK runner（进程内调用 run_agent.AIAgent，issue #171，原 hermes_runner.py 子进程方式已移除）
     dsh_runner.py    dsh 引擎 runner（deepseek-harness SDK 进程内调用，线程运行 + 停止/超时关闭运行时）
     reconciler.py    对账兜底（APScheduler 定时扫描补漏）
     image_models.py  生图模型调用接口封装（Gemini Nano Banana Pro / GPT Image 2，统一 ImageModelClient，issue #135/#137，含配置可用性测试端点）
@@ -262,7 +262,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 
 | 插件分类 | 能力 | 内置插件 |
 |---|---|---|
-| `executor` | 任务执行引擎（`worker.engine` 选择） | `claude`（Claude Code CLI）/ `hermes`（hermes-agent）/ `dsh`（deepseek-harness SDK） |
+| `executor` | 任务执行引擎（`worker.engine` 选择） | `claude`（Claude Code CLI）/ `hermes`（hermes-agent SDK）/ `dsh`（deepseek-harness SDK） |
 | `model_provider` | 大模型 API 供应商（生图模型 provider 选择） | `gemini_nano_banana`（Gemini generateContent）/ `openai_gpt_image`（OpenAI images API） |
 | `notifier` | 任务消息发送通道（任务收尾自动分发） | `webhook`（外部 HTTP 推送，issue #136）/ `in_app`（网页通知，issue #21） |
 
@@ -301,13 +301,13 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟） |
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
-| `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（部署机已装好的 hermes-agent）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84）；设置页「任务调度」卡片可切换（issue #113） |
+| `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（hermes-agent SDK，进程内调用，issue #171）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84/#171）；设置页「任务调度」卡片可切换（issue #113） |
 | `worker.pause_windows` | `[]` | 定时暂停窗口（issue #169）：窗口串数组（`HH:MM-HH:MM`，24 小时制，支持跨天如 `22:00-02:00`）。窗口内停止开始新任务，已经开始执行的任务可以继续执行，未开始执行的任务等到窗口结束后自动开始执行；空数组 = 不启用（默认）。设置页「任务调度」卡片可编辑 |
 | `worker.pause_weekdays` | `[]` | 定时暂停窗口生效星期（0=周一 … 6=周日）；空 = 每天都生效（issue #169） |
 | `worker.pause_timezone` | 空 | 定时暂停窗口判断所用时区（IANA 名，如 `Asia/Shanghai`）；空 = 服务器本地时区（issue #169） |
 | `worker.plugin_paths` | `[]` | 外部插件加载（issue #140）：Python 模块路径列表，应用启动时逐个加载注册进插件体系（新增执行引擎 / 大模型供应商 / 消息发送通道）；模块内调用 `botler.plugins.register_plugin` 完成登记，加载失败仅记日志不阻塞启动 |
 | `claude.command` / `args` | `claude -p --output-format stream-json --verbose` | claude 引擎执行命令（stream-json 逐行实时输出，任务页面逐事件查看执行过程） |
-| `hermes.command` / `args` | — | hermes 引擎执行命令（部署机 hermes venv 的 python + `backend/hermes_runner.py`），部署见 `docs/hermes-engine-deployment.md` |
+| `hermes`（段） | `{}` | hermes 引擎无配置项（issue #171 起 SDK 进程内集成，LLM 配置在 hermes 侧 `~/.hermes`）；SDK 安装见 `docs/hermes-engine-deployment.md` |
 | `dsh.provider` / `model` | `deepseek-official` / `deepseek-v4-flash` | dsh 引擎运行参数（provider 路由 / 模型 id），Key 走环境变量 `DEEPSEEK_API_KEY` |
 | `dsh.max_tokens` / `session_root` / `cordis` / `runtime_bin` / `base_url` / `api_key` | — | dsh 引擎可选参数（输出上限 / 会话持久化目录 / 自定义 Cordis 配置 / 自定义 runtime / 兼容端点），部署见 `docs/dsh-engine-deployment.md` |
 | `dsh.reasoning_effort` | 空（SDK 默认 high） | dsh 引擎推理等级（issue #123）：`off` / `high` / `max`，设置页「dsh 引擎」卡片可选；设置后自动派生 Cordis 注入 SDK 运行时 |

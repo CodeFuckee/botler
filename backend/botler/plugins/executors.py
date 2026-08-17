@@ -47,15 +47,17 @@ class ClaudeEnginePlugin(ExecutorPlugin):
 
 
 class HermesEnginePlugin(ExecutorPlugin):
-    """hermes-agent 引擎（issue #47）：runner 脚本子进程调用。
+    """hermes-agent SDK 引擎（issue #171：SDK 进程内集成，原 issue #47）。
 
+    进程内调用 run_agent.AIAgent（经 botler/hermes_sdk_runner.py，worker
+    线程 + AIAgent.interrupt() 停止/超时，对齐 dsh 引擎的 SDK 方式）。
     断点续跑：resume_history 为上次会话历史（工作区保留），显式传入优先；
     未传入时从任务落库的 hermes_history 解析（含会话 id），等价
     Q3-B conversation_history 落库断点续跑。
     """
 
     name = "hermes"
-    description = "hermes-agent 引擎（经 hermes_runner.py 进程内调用，issue #47）"
+    description = "hermes-agent SDK 引擎（进程内调用，issue #171）"
 
     def run(self, executor: Any, task_id: int, repo: dict, issue: dict,
             resume_session: str | None = None,

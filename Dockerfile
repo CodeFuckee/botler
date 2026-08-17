@@ -78,9 +78,19 @@ COPY --from=frontend-builder /build/dist/ ./frontend/dist/
 # 运行时目录：默认挂载卷覆盖，先创建保证裸启动可用
 RUN mkdir -p /app/workspace /app/logs
 
+# hermes 引擎 SDK（issue #171：hermes agent SDK 进程内集成）。
+# hermes-agent 以源码分发（PyPI 无 wheel），Docker 构建期无法访问宿主机
+# 源码（NAS 上经 docker-compose 只读挂载 /opt/hermes/hermes-agent），因此
+# editable 安装放在容器启动时由 docker-entrypoint.sh 幂等执行（挂载了
+# 源码才装，未挂载跳过并告警——与 dsh SDK 未装同语义，启动不失败）。
+# 源码路径可用 HERMES_SOURCE_DIR 环境变量覆盖。
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
 
-# 与 pm2/systemd 部署相同的启动命令
+# 与 pm2/systemd 部署相同的启动命令（经 entrypoint 先处理 hermes SDK）
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/opt/venv/bin/uvicorn", "botler.main:app", "--host", "0.0.0.0", "--port", "8000"]
