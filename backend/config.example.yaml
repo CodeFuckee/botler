@@ -155,6 +155,30 @@ browse:
 #     model: gemini-2.5-flash
 #     enabled: true
 
+# MinIO 对象存储（issue #163）：识图模型调用时，用户上传的图片先计算
+# SHA-256 哈希、以哈希值为对象名上传 MinIO（同内容图片自动去重复用），
+# 识图请求传 http(s) URL（OpenAI 兼容 image_url），替代直接把 base64
+# 塞进请求体的做法（图片 base64 可达数十万字符，网关/模型对请求体大小
+# 敏感）。未配置 / 未启用 = 识图图片沿用 base64 内联输入（原行为）。
+# 注意：Gemini 官方 generateContent 接口不支持任意 http URL 图片输入
+# （仅支持 base64 inline_data），MinIO URL 上传模式仅对 OpenAI 兼容
+# 识图模型（openai_vision / custom）生效；endpoint / 凭据可经 ${ENV}
+# 引用（与部署写入 data/backend/.env 的 MINIO_ROOT_USER /
+# MINIO_ROOT_PASSWORD 同源），识图模型必须能访问 public_base_url
+# （自建网关走内网地址；外部模型供应商需公网可达，且桶需允许匿名读或
+# 使用预签名 URL）。
+# minio:
+#   enabled: true                    # 识图图片上传开关
+#   endpoint: "127.0.0.1:9000"       # MinIO API 地址（host:port）
+#   secure: false                    # endpoint 是否 https
+#   access_key: ${MINIO_ROOT_USER}   # 访问凭据（留空回退环境变量）
+#   secret_key: ${MINIO_ROOT_PASSWORD}
+#   bucket: botler-images            # 图片对象桶（不存在自动创建）
+#   public_base_url: ""              # 识图模型取图的 http(s) 前缀，
+#                                    #   对象 URL =
+#                                    #   public_base_url/bucket/<sha256 哈希>
+#   verify_ssl: true                 # endpoint 证书校验（自签证书设 false）
+
 backup:
   # 备份与恢复（config.yaml + botler.db → <数据目录>/backups/botler-backup-*.tar.gz）
   enabled: true            # 定时备份开关（每天 03:00 Asia/Shanghai 自动备份）

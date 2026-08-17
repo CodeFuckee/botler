@@ -196,6 +196,19 @@ class Settings:
     # config.yaml（与 image_models 同模式），API 只返回掩码。内置预设见
     # 前端 providers.jsx 的 VISION_MODEL_PRESETS。
     vision_models: list[dict] = field(default_factory=list)
+    # MinIO 对象存储（issue #163）：识图模型调用时用户上传的图片先计算
+    # SHA-256 哈希、以哈希值为对象名上传 MinIO，识图请求传 http URL
+    # （替代 base64 内联）。配置见 config.example.yaml 的 minio 段；
+    # access_key / secret_key 留空时回退环境变量 MINIO_ROOT_USER /
+    # MINIO_ROOT_PASSWORD（与部署写入 data/backend/.env 的凭据同源）。
+    minio_enabled: bool = False
+    minio_endpoint: str = "127.0.0.1:9000"
+    minio_secure: bool = False
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = "botler-images"
+    minio_public_base_url: str = ""
+    minio_verify_ssl: bool = True
 
     # Webhook 消息推送（issue #136）：任务完成（成功收尾）时调用 webhook
     # 进行消息推送。设置页可配置：
@@ -234,6 +247,10 @@ KNOWN_FIELDS = {
                "body_template"},
     "sso": {"enabled", "well_known_url", "client_id", "client_secret", "scope",
             "session_days", "redirect_uri", "verify_ssl"},
+    # MinIO 对象存储（issue #163）：识图图片上传配置。凭据掩码/空串 =
+    # 保持现有值（update_minio 处理），与 webhook.authorization 同模式。
+    "minio": {"enabled", "endpoint", "secure", "access_key", "secret_key",
+              "bucket", "public_base_url", "verify_ssl"},
 }
 
 # 网页通知开关 → Settings 字段映射（issue #21）
@@ -362,6 +379,7 @@ class ConfigManager:
         providers_raw = data.get("ai_providers", []) or []
         image_models_raw = data.get("image_models", []) or []
         vision_models_raw = data.get("vision_models", []) or []
+        minio = data.get("minio", {}) or {}
 
         repos = []
         for r in repos_raw:
@@ -478,6 +496,14 @@ class ConfigManager:
                 for m in vision_models_raw
                 if isinstance(m, dict) and m.get("name")
             ],
+            minio_enabled=bool(minio.get("enabled", False)),
+            minio_endpoint=str(minio.get("endpoint") or "").strip(),
+            minio_secure=bool(minio.get("secure", False)),
+            minio_access_key=str(minio.get("access_key") or "").strip(),
+            minio_secret_key=str(minio.get("secret_key") or "").strip(),
+            minio_bucket=str(minio.get("bucket") or "botler-images").strip(),
+            minio_public_base_url=str(minio.get("public_base_url") or "").strip(),
+            minio_verify_ssl=bool(minio.get("verify_ssl", True)),
             webhook_enabled=bool(webhook.get("enabled", False)),
             webhook_url=str(webhook.get("url", "")).strip(),
             webhook_content_type=str(webhook.get("content_type", "")).strip()
@@ -710,6 +736,31 @@ class ConfigManager:
         """整体替换识图模型列表（设置页增删改后落盘，issue #152）。"""
         self._reload_from_disk()
         self._data["vision_models"] = models
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_minio(self, patch: dict[str, Any]) -> Settings:
+        """更新 MinIO 对象存储配置并写回（issue #163）。
+
+        access_key / secret_key 的掩码值（含 *）或空串视为「未修改」，
+        不覆盖真实凭据（与 webhook.authorization / sso.client_secret
+        同模式）；endpoint / public_base_url 空白归一为空串（由
+        minio_client 回退默认/环境变量）。
+        """
+        self._reload_from_disk()
+        minio = self._data.setdefault("minio", {})
+        for key in KNOWN_FIELDS["minio"]:
+            if key not in patch:
+                continue
+            val = patch[key]
+            if key in ("access_key", "secret_key") and (
+                    val is None or "*" in str(val) or not str(val).strip()):
+                continue  # 掩码占位符/空串：保持现有凭据
+            if key in ("endpoint", "public_base_url"):
+                minio[key] = str(val or "").strip()
+                continue
+            minio[key] = val
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

@@ -1969,3 +1969,172 @@ class TestVisionModelTestEndpoint:
         assert "已掩码" in data["error"]
         assert "已截断" in data["error"]
 
+
+class TestMinioSettings:
+    """minio 段：识图图片上传 MinIO 配置（issue #163）。"""
+
+    def test_get_settings_minio_defaults(self, client):
+        """未配置 minio 段时返回默认值（关闭、凭据掩码为空串）。"""
+        tc, _ = client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        data = resp.json()["minio"]
+        assert data["enabled"] is False
+        assert data["endpoint"] == ""
+        assert data["access_key_masked"] == ""
+        assert data["secret_key_masked"] == ""
+        assert data["bucket"] == "botler-images"
+        assert data["public_base_url"] == ""
+
+    def test_put_minio_persists(self, client):
+        """PUT minio 段写回 config.yaml 并可读回（凭据只返回掩码）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"minio": {
+            "enabled": True,
+            "endpoint": "127.0.0.1:9000",
+            "secure": False,
+            "access_key": "minioadmin",
+            "secret_key": "minioadmin",
+            "bucket": "botler-images",
+            "public_base_url": "http://img.example.com:9000",
+            "verify_ssl": False,
+        }})
+        assert resp.status_code == 200
+        data = resp.json()["minio"]
+        assert data["enabled"] is True
+        assert data["endpoint"] == "127.0.0.1:9000"
+        assert data["bucket"] == "botler-images"
+        assert data["public_base_url"] == "http://img.example.com:9000"
+        assert "*" in data["access_key_masked"]  # 掩码而非明文
+        assert data["access_key_masked"] != "minioadmin"
+        assert "*" in data["secret_key_masked"]
+        assert data["secret_key_masked"] != "minioadmin"  # 明文不流转
+        # config.yaml 是唯一事实来源，应已落盘
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "minio:" in config_text and "minioadmin" in config_text
+
+    def test_put_minio_masked_key_keeps_existing(self, client):
+        """掩码/空串凭据 = 保持现有值，不覆盖真实凭据。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"minio": {
+            "enabled": True, "access_key": "real-key-123",
+            "secret_key": "real-secret-456", "endpoint": "h:9000",
+            "public_base_url": "http://img.example.com"}})
+        resp = tc.put("/api/settings", json={"minio": {
+            "access_key": "real-****", "secret_key": ""}})
+        assert resp.status_code == 200
+        data = resp.json()["minio"]
+        assert "123" in data["access_key_masked"]  # 真实值仍在（掩码展示）
+        assert "456" in data["secret_key_masked"]
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "real-key-123" in config_text
+        assert "real-secret-456" in config_text
+
+    def test_put_minio_rejects_non_bool(self, client):
+        """enabled / secure / verify_ssl 必须是布尔值。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"minio": {"enabled": "yes"}})
+        assert resp.status_code == 400
+        assert "布尔值" in resp.json()["detail"]
+
+    def test_put_minio_rejects_non_string(self, client):
+        """endpoint / 凭据 / 桶 / 公网前缀必须是字符串。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"minio": {"bucket": 123}})
+        assert resp.status_code == 400
+        assert "必须是字符串" in resp.json()["detail"]
+
+    def test_put_minio_rejects_bad_public_base_url(self, client):
+        """public_base_url 非空时必须以 http(s):// 开头。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"minio": {
+            "public_base_url": "img.example.com:9000"}})
+        assert resp.status_code == 400
+        assert "http:// 或 https://" in resp.json()["detail"]
+
+
+class TestVisionModelTestEndpointMinio:
+    """vision-model-test 端点 MinIO 接线（issue #163）。
+
+    启用并配置完整 MinIO 时，端点把 MinIO 图片存储注入 VisionModelClient
+    （describe 内先哈希上传，识图请求传 http URL）；未配置时为 None
+    （保持 base64 内联输入，原行为）。
+    """
+
+    MODEL = TestVisionModelsSettings.MODEL
+    PNG = b"\x89PNG-test-image"
+
+    def _patch_client(self, monkeypatch, fake):
+        from botler import vision_models as vm_mod
+        monkeypatch.setattr(vm_mod, "VisionModelClient", fake)
+
+    def _post(self, tc, **overrides):
+        data = {
+            "name": "Gemini 视觉",
+            "provider": "gemini_vision",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta",
+            "api_key": "AIza-test",
+            "model": "gemini-2.5-flash",
+            "prompt": "请描述这张图片的内容",
+        }
+        data.update(overrides)
+        return tc.post(
+            "/api/settings/vision-model-test",
+            files={"image": ("test.png", self.PNG, "image/png")},
+            data=data)
+
+    def _enable_minio(self, client):
+        """在临时 config.yaml 写入 minio 段（ConfigManager 按 mtime 自动
+        重载），返回配置路径。"""
+        tc, tmp_path = client
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "\n"
+            "minio:\n"
+            "  enabled: true\n"
+            "  endpoint: 127.0.0.1:9000\n"
+            "  access_key: minioadmin\n"
+            "  secret_key: minioadmin\n"
+            "  bucket: botler-images\n"
+            "  public_base_url: http://img.example.com:9000\n",
+            encoding="utf-8")
+        return config_path
+
+    def test_minio_disabled_passes_no_store(self, client, monkeypatch):
+        """未配置 minio：image_store 为 None（原行为，base64 内联）。"""
+        tc, _ = client
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def describe(self, image, *, mime_type, prompt):
+                return "ok"
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = self._post(tc)
+        assert resp.status_code == 200
+        assert captured["image_store"] is None
+
+    def test_minio_enabled_passes_image_store(self, client, monkeypatch):
+        """启用并配置完整 minio：image_store 注入客户端（describe 内图片
+        哈希上传 MinIO 后传 http URL）。"""
+        tc, _ = client
+        self._enable_minio(client)
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def describe(self, image, *, mime_type, prompt):
+                return "ok"
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = self._post(tc)
+        assert resp.status_code == 200
+        store = captured["image_store"]
+        assert store is not None
+        assert store.cfg.bucket == "botler-images"
+        assert store.cfg.public_base_url == "http://img.example.com:9000"

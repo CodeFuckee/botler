@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 ### Added
+- **识图模型调用时用户上传的图片计算哈希值上传 MinIO，识图请求传 http URL 而非 base64（issue #163）**：
+  调用识图模型时，用户上传的图片此前直接以 base64 内联进请求体（OpenAI 兼容
+  data URL / Gemini inline_data），图片 base64 可达数十万字符，网关/模型对
+  请求体大小敏感、且会撑爆错误提示（issue #156 的截断展示也是为此）。本次实现
+  「图片先哈希上传 MinIO、识图请求传 http URL」：
+  - 新增 `backend/botler/minio_client.py`：识图图片对象存储——图片字节计算
+    SHA-256 哈希，**对象名 = 哈希值**（同内容图片天然幂等去重，对象已存在不
+    重复上传），桶不存在自动创建，返回 `public_base_url/bucket/<哈希>` 形式的
+    http URL（上传时携带 MIME 类型，模型经 URL 拉图时 Content-Type 正确）；
+  - 新增 `minio` 配置段（`config.yaml`，`enabled` / `endpoint` / `secure` /
+    `access_key` / `secret_key` / `bucket` / `public_base_url` / `verify_ssl`，
+    凭据支持 `${ENV}` 引用、缺省回退环境变量 `MINIO_ROOT_USER` /
+    `MINIO_ROOT_PASSWORD` 与部署（issue #160）同源）；设置 API GET 返回
+    （凭据掩码）、PUT 支持写入（掩码/空串凭据保持现有值），设置页暂未提供
+    卡片、可编辑 config.yaml 或经 API 配置；
+  - `VisionModelClient.describe` 增加 `image_store` 注入：MinIO 启用且配置
+    完整时，OpenAI 兼容识图模型（`openai_vision` / `custom`）的
+    `image_url.url` 改传 http URL（不再是 base64 data URL）；Gemini 官方
+    generateContent 接口不支持任意 http URL 图片输入（仅支持 base64
+    inline_data / file_data），保持 base64 内联并记 warning 日志；
+    未配置 / 配置不完整回退 base64 原行为（原部署零影响）；
+  - 依赖新增 `minio>=7.2`（部署 job `uv pip install -r requirements.txt`
+    自动安装）；`config.example.yaml` / `.env.example` / README 同步说明
+    （含「识图模型必须能访问 public_base_url、桶需允许匿名读或使用预签名
+    URL」的部署提示）；
+  - **测试**：新增 `test_minio_client.py` 12 用例（SHA-256 哈希命名 / http
+    URL 构造 / 桶自动创建 / 幂等去重 / 空图片与上传失败错误 / 配置构造与
+    env 回退 / settings 接线），`test_vision_models.py` 扩展 OpenAI /
+    custom URL 模式、Gemini 降级（仍 base64）、上传失败转识图错误用例，
+    `test_api_settings.py` 扩展 minio 段 GET / PUT 校验（类型、URL 格式、
+    掩码凭据保持）与 vision-model-test 端点 image_store 注入用例；
+    实现前可复现失败、实现后全部通过；后端全量测试无 regression。
+
+
 - **灵感「添加 Issue」创建成功后自动从灵感列表删除（issue #162）**：
   概览页灵感板块「添加 Issue」一键提交为 GitLab issue 成功后，该灵感
   仅保留在本地数据库中、且不会自动移除——灵感内容已转为 GitLab issue，

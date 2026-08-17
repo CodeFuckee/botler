@@ -57,7 +57,8 @@ backend/
     dsh_runner.py    dsh 引擎 runner（deepseek-harness SDK 进程内调用，线程运行 + 停止/超时关闭运行时）
     reconciler.py    对账兜底（APScheduler 定时扫描补漏）
     image_models.py  生图模型调用接口封装（Gemini Nano Banana Pro / GPT Image 2，统一 ImageModelClient，issue #135/#137，含配置可用性测试端点）
-    vision_models.py 识图模型调用接口封装（Gemini 视觉 / OpenAI 视觉 / 自定义 OpenAI 兼容视觉，统一 VisionModelClient，issue #152，含测试端点：上传图片调用模型描述图片）
+    vision_models.py 识图模型调用接口封装（Gemini 视觉 / OpenAI 视觉 / 自定义 OpenAI 兼容视觉，统一 VisionModelClient，issue #152，含测试端点：上传图片调用模型描述图片；issue #163 起支持图片先哈希上传 MinIO、识图请求传 http URL）
+    minio_client.py  MinIO 对象存储客户端（issue #163：识图图片 SHA-256 哈希命名上传，返回 http URL，配合 vision_models 使用）
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
     api/             REST API（repos / tasks / settings / auth）
   config.example.yaml
@@ -252,6 +253,11 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `sso.session_days` | 7 | 登录有效期（天，1~365） |
 | `sso.redirect_uri` | 空（自动生成） | 回调地址，须与群晖侧注册一致 |
 | `sso.verify_ssl` | true | 群晖为自签名证书时设 false |
+| `minio.enabled` | false | MinIO 对象存储开关（issue #163）：启用后识图模型调用时用户上传的图片先计算 SHA-256 哈希、以哈希值为对象名上传 MinIO，识图请求传 http URL 而非 base64（图片 base64 可达数十万字符，网关/模型对请求体大小敏感） |
+| `minio.endpoint` / `secure` / `verify_ssl` | `127.0.0.1:9000` / false / true | MinIO API 地址（host:port）/ 是否 https / 证书校验（自签证书设 false） |
+| `minio.access_key` / `secret_key` | 回退环境变量 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | MinIO 访问凭据（与部署写入 `data/backend/.env` 的凭据同源；支持 `${ENV}` 引用） |
+| `minio.bucket` | `botler-images` | 识图图片对象桶（不存在自动创建） |
+| `minio.public_base_url` | 空 | 识图模型取图的 http(s) 前缀，对象 URL = `public_base_url/bucket/<sha256 哈希>`；**识图模型必须能访问该地址**（自建网关走内网地址即可；外部模型供应商需公网可达，且桶需允许匿名读或改用预签名 URL）；未配置/配置不完整时识图图片回退 base64 内联输入 |
 
 提示词模版支持变量占位符：`{repo_name}` `{issue_title}` `{issue_body}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}`。
 全局默认模版 + 仓库级覆盖可在 Web UI「模版」页编辑。

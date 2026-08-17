@@ -83,6 +83,7 @@ class VisionModelClient:
         model: str = "",
         timeout: float = VISION_DEFAULT_TIMEOUT,
         verify_ssl: bool = True,
+        image_store: Any | None = None,
     ) -> None:
         try:
             self._plugin = get_plugin(PluginKind.VISION_MODEL_PROVIDER, provider)
@@ -98,6 +99,10 @@ class VisionModelClient:
         self.model = model or self._plugin.default_model
         self.timeout = timeout
         self.verify_ssl = verify_ssl
+        # issue #163：识图图片对象存储（MinIO）。非 None 且供应商支持
+        # http URL 时，describe() 先把图片哈希上传 MinIO，识图请求改传
+        # http URL；未配置 / 供应商不支持时保持 base64 内联输入。
+        self.image_store = image_store
         # 实例级客户端：超时/SSL 统一管理，测试可注入 mock 传输
         self._http = httpx.Client(timeout=timeout, verify=verify_ssl)
 
@@ -121,6 +126,19 @@ class VisionModelClient:
             raise VisionModelError("识图模型调用缺少图片（请上传一张图片）")
         if not self.api_key:
             raise VisionModelError(f"识图模型「{self.name}」未配置 API Key")
+        # issue #163：MinIO 图片上传模式——图片先计算哈希上传 MinIO，
+        # 识图请求传 http(s) URL（OpenAI 兼容 image_url），替代 base64。
+        # 供应商不支持 http URL（Gemini 官方接口）时保持 base64 内联。
+        if self.image_store is not None and self._plugin.supports_image_url:
+            try:
+                image = self.image_store.put_image(image, mime_type=mime_type)
+            except Exception as exc:  # noqa: BLE001 上传失败统一转识图错误
+                raise VisionModelError(f"图片上传 MinIO 失败: {exc}") from exc
+        elif self.image_store is not None:
+            logger.warning(
+                "识图模型「%s」（%s）供应商不支持 http 图片 URL（Gemini 官方"
+                "接口仅支持 base64 inline_data），本次图片仍以 base64 内联"
+                "输入", self.name, self.provider)
         try:
             # 按 provider 插件委托：供应商实现见 botler.plugins.vision_models
             return self._plugin.describe(

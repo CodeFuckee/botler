@@ -22,6 +22,25 @@ from botler.vision_models import (
 )
 
 
+class FakeImageStore:
+    """MinIO 图片存储替身（issue #163）：put_image 返回固定 http URL。"""
+
+    def __init__(self, url="http://img.example.com:9000/botler-images/abc"):
+        self.url = url
+        self.calls: list[tuple] = []
+
+    def put_image(self, data, mime_type="image/png"):
+        self.calls.append((data, mime_type))
+        return self.url
+
+
+class FailingImageStore:
+    """上传失败的存储替身（模拟 MinIO 不可用）。"""
+
+    def put_image(self, data, mime_type="image/png"):
+        raise RuntimeError("connection refused")
+
+
 class TestPresets:
     def test_builtin_providers(self):
         """内置预设包含 gemini_vision / openai_vision / custom。"""
@@ -226,6 +245,26 @@ class TestGeminiVisionClient:
         assert parts[1]["text"] == "请描述这张图片的内容"
         assert desc == "图片里有一只橘色的猫坐在窗台上"
 
+    def test_describe_with_image_store_keeps_inline_data(self):
+        """issue #163：Gemini 官方接口不支持 http URL 图片输入——
+        即使配置 MinIO 图片存储，仍以 base64 inline_data 内联输入，
+        且不触发上传。"""
+        png = b"\x89PNG-gemini-minio"
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["json"] = json.loads(request.read().decode())
+            return httpx.Response(200, json={
+                "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+            })
+
+        client = self._client(handler)
+        client.image_store = FakeImageStore()
+        desc = client.describe(png, mime_type="image/png")
+        assert desc == "ok"
+        inline = captured["json"]["contents"][0]["parts"][0]["inline_data"]
+        assert base64.b64decode(inline["data"]) == png
+
     def test_describe_default_prompt(self):
         """prompt 缺省时使用内置默认描述指令。"""
         captured = {}
@@ -373,6 +412,47 @@ class TestOpenAIVisionClient:
             img["image_url"]["url"].split(",", 1)[1]) == png
         assert desc == "这是一张夕阳下的海滩照片"
 
+    def test_describe_with_image_store_uses_http_url(self):
+        """issue #163：配置 MinIO 图片存储后，OpenAI 兼容请求的
+        image_url.url 使用 http URL（而非 base64 data URL），图片先
+        经 put_image 上传（对象名 = 哈希值）。"""
+        png = b"\x89PNG-openai-minio"
+        store = FakeImageStore(url="http://img.example.com:9000/botler-images/"
+                                    "abc123")
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.read().decode())
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "http 图片描述"}}],
+            })
+
+        client = self._client(handler)
+        client.image_store = store
+        desc = client.describe(png, mime_type="image/png",
+                               prompt="描述")
+        assert desc == "http 图片描述"
+        img = captured["body"]["messages"][0]["content"][1]
+        assert img["type"] == "image_url"
+        assert img["image_url"]["url"] == store.url
+        assert img["image_url"]["url"].startswith("http://")
+        assert "data:image" not in img["image_url"]["url"]
+        # 上传入参：图片字节 + MIME 类型
+        assert store.calls == [(png, "image/png")]
+
+    def test_describe_image_store_upload_failure_raises(self):
+        """issue #163：MinIO 上传失败统一转 VisionModelError，错误信息
+        可诊断（不抛底层异常）。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "ok"}}],
+            })
+
+        client = self._client(handler)
+        client.image_store = FailingImageStore()
+        with pytest.raises(VisionModelError, match="上传 MinIO 失败"):
+            client.describe(b"\x89PNG-x")
+
     def test_describe_no_image_url_in_second_part(self):
         """不带图片时只发文本内容（虽然本功能始终要求图片，防御性校验）。"""
         captured = {}
@@ -504,6 +584,29 @@ class TestCustomVisionProvider:
         assert captured["url"] == self.CUSTOM_URL
         assert captured["body"]["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
         assert desc == "图中有高楼与蓝天"
+
+    def test_custom_with_image_store_uses_http_url(self):
+        """issue #163：自定义 OpenAI 兼容网关同样走 http URL 图片模式
+        （Base URL 完整地址直用，图片不塞 base64）。"""
+        store = FakeImageStore(url="http://img.example.com:9000/botler-images/"
+                                    "def456")
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["body"] = json.loads(request.read().decode())
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "自定义网关描述"}}],
+            })
+
+        client = self._client(handler)
+        client.image_store = store
+        desc = client.describe(b"\x89PNG-custom-minio")
+        assert captured["url"] == self.CUSTOM_URL
+        img = captured["body"]["messages"][0]["content"][1]
+        assert img["image_url"]["url"] == store.url
+        assert "data:image" not in img["image_url"]["url"]
+        assert desc == "自定义网关描述"
 
     def test_missing_content_error_includes_request_url(self):
         """自定义网关响应 choices 为空（issue #156）：错误信息应带实际

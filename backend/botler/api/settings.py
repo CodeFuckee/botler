@@ -177,6 +177,18 @@ def get_settings(request: Request):
             }
             for p in s.vision_models
         ],
+        "minio": {
+            # MinIO 对象存储（issue #163）：识图图片上传配置；凭据只返回
+            # 掩码，明文不流转到界面（与 sso.client_secret 同模式）
+            "enabled": s.minio_enabled,
+            "endpoint": s.minio_endpoint,
+            "secure": s.minio_secure,
+            "access_key_masked": _mask(s.minio_access_key),
+            "secret_key_masked": _mask(s.minio_secret_key),
+            "bucket": s.minio_bucket,
+            "public_base_url": s.minio_public_base_url,
+            "verify_ssl": s.minio_verify_ssl,
+        },
         "webhook": {
             # Webhook 消息推送（issue #136）：任务完成时推送；authorization
             # 只返回掩码，明文不流转到界面（与 sso.client_secret 同模式）
@@ -297,6 +309,11 @@ def update_settings(request: Request, body: dict):
         cleaned = _validate_vision_models(
             vision_models, current=c.config.get().vision_models)
         c.config.update_vision_models(cleaned)
+
+    minio_patch = body.get("minio")
+    if minio_patch is not None:
+        _validate_minio(minio_patch)
+        c.config.update_minio(minio_patch)
 
     webhook = body.get("webhook")
     if webhook is not None:
@@ -441,6 +458,7 @@ async def test_vision_model(
     - 识别成功返回 ok=true + 描述文本；缺图片/缺配置/接口报错/网络异常
       均返回 ok=false + 原因，不抛 500（与 image-model-test 同容错策略）。
     """
+    from ..minio_client import image_store_from_settings
     from ..vision_models import VisionModelClient, VisionModelError
     c = ctx_of(request)
     settings = c.config.get()
@@ -473,11 +491,16 @@ async def test_vision_model(
     if base_url and not base_url.startswith(("http://", "https://")):
         return {"ok": False, "error": f"{name}.Base URL 必须以 http:// 或 https:// 开头"}
     try:
+        # issue #163：MinIO 图片上传模式——启用且配置完整时，图片先哈希
+        # 上传 MinIO（对象名 = 哈希值），识图请求传 http URL 而非 base64。
+        # 未配置/配置不完整时 image_store=None，保持 base64 内联输入。
+        image_store = image_store_from_settings(settings)
         client = VisionModelClient(
             name=name, provider=provider, base_url=base_url,
             api_key=api_key, model=model,
             timeout=IMAGE_TEST_TIMEOUT,  # 识图与生图同量级耗时，复用 60s 超时
-            verify_ssl=settings.verify_ssl)
+            verify_ssl=settings.verify_ssl,
+            image_store=image_store)
     except VisionModelError as e:
         return {"ok": False, "error": str(e)}
     try:
@@ -717,6 +740,32 @@ def _validate_gitlab(patch: dict) -> None:
     if "owner_token" in patch and patch["owner_token"] is not None \
             and not isinstance(patch["owner_token"], str):
         raise HTTPException(400, "gitlab.owner_token 必须是字符串")
+
+
+def _validate_minio(patch: dict) -> None:
+    """校验 minio 段（issue #163）：类型与格式。
+
+    - enabled / secure / verify_ssl 必须是布尔值；
+    - endpoint / access_key / secret_key / bucket / public_base_url 必须
+      是字符串（None 允许 = 后端归一默认/保持现有凭据）；
+    - public_base_url 非空时须以 http(s):// 开头（识图模型取图访问前缀）；
+    - 掩码/空串的凭据（access_key / secret_key）由 update_minio 保持
+      现有值，此处只查类型。
+    """
+    for key in ("enabled", "secure", "verify_ssl"):
+        if key in patch and not isinstance(patch[key], bool):
+            raise HTTPException(400, f"minio.{key} 必须是布尔值")
+    for key in ("endpoint", "access_key", "secret_key", "bucket",
+                "public_base_url"):
+        if key in patch and patch[key] is not None \
+                and not isinstance(patch[key], str):
+            raise HTTPException(400, f"minio.{key} 必须是字符串")
+    if "public_base_url" in patch:
+        val = (patch["public_base_url"] or "").strip()
+        if val and not val.startswith(("http://", "https://")):
+            raise HTTPException(
+                400, "minio.public_base_url 必须以 http:// 或 https:// 开头")
+        patch["public_base_url"] = val
 
 
 def _validate_webhook(patch: dict) -> None:

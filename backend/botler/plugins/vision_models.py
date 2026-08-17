@@ -46,6 +46,19 @@ DEFAULT_TIMEOUT = 60.0
 # 默认描述指令（测试按钮 / 调用方未传 prompt 时使用）
 DEFAULT_VISION_PROMPT = "请详细描述这张图片的内容"
 
+
+def _image_url_value(image: bytes | str, mime_type: str) -> str:
+    """构造 OpenAI 兼容 image_url 的 url 字段（issue #163）。
+
+    图片为 http(s) URL 字符串（MinIO 上传模式）时原样使用——识图请求
+    传 http URL 而非 base64 data URL；为字节时回退 data URL（base64）
+    内联输入（未配置 MinIO 的部署保持原行为）。
+    """
+    if isinstance(image, str):
+        return image
+    return (f"data:{mime_type};base64,"
+            f"{base64.b64encode(image).decode('ascii')}")
+
 # ---- 请求信息脱敏 / 摘要（issue #156） ----
 # 错误提示要展示「后端 POST 给上游 API 的信息」，但请求体里包含 base64
 # 图片数据（可长达数十万字符）与认证头里的 API Key：展示前必须脱敏，
@@ -192,10 +205,21 @@ class GeminiVisionProvider(VisionProviderPlugin):
     default_model = "gemini-2.5-flash"
     description = ("Google Gemini（generateContent 接口，默认模型 "
                    "gemini-2.5-flash，支持图片输入 + 文本描述输出）")
+    # issue #163：Gemini 官方 generateContent 接口只接受 inline_data
+    # （base64）与 file_data（Files API / GCS），不支持任意 http(s) 公网
+    # URL 图片输入 → 不参与 MinIO URL 上传模式，图片仍以 base64 内联
+    supports_image_url: bool = False
 
     def describe(self, client: Any, image: bytes, *,
                  mime_type: str = "image/png",
                  prompt: str = "") -> str:
+        if isinstance(image, str):
+            # issue #163：官方接口不支持 http URL 图片输入，明确报错
+            # 而不是把 URL 当字节 base64 编码
+            raise VisionModelError(
+                "Gemini 官方 generateContent 接口不支持 http 图片 URL 输入"
+                "（仅支持 base64 inline_data / file_data），请改用 OpenAI "
+                "兼容识图模型（openai_vision / custom）或关闭 MinIO 图片上传")
         parts: list[dict[str, Any]] = [{
             "inline_data": {
                 "mime_type": mime_type,
@@ -261,10 +285,7 @@ class OpenAIVisionProvider(VisionProviderPlugin):
             {"type": "text", "text": text},
             {
                 "type": "image_url",
-                "image_url": {
-                    "url": f"data:{mime_type};base64,"
-                           f"{base64.b64encode(image).decode('ascii')}",
-                },
+                "image_url": {"url": _image_url_value(image, mime_type)},
             },
         ]
         payload = {
@@ -343,10 +364,7 @@ class CustomVisionProvider(VisionProviderPlugin):
             {"type": "text", "text": text},
             {
                 "type": "image_url",
-                "image_url": {
-                    "url": f"data:{mime_type};base64,"
-                           f"{base64.b64encode(image).decode('ascii')}",
-                },
+                "image_url": {"url": _image_url_value(image, mime_type)},
             },
         ]
         payload = {
