@@ -138,7 +138,7 @@ test('渲染：开放 Issue 板块位于 CI/CD 流水线板块之前（issue #11
     assert.ok(issueTitle < pipeTitle, '「开放 Issue」板块应位于「CI/CD 流水线」板块之前')
     // issue #114：任务板块删除，任务信息进入开放 issue 列表项内
     assert.ok(!r.text.includes('正在执行的任务'), '不应渲染独立任务板块标题')
-    assert.ok(r.text.includes('⚙️ 运行中'), '运行中任务应在开放 issue 板块内展示')
+    assert.ok(r.text.includes('运行中'), '运行中任务应在开放 issue 板块内展示')
   } finally {
     await r.unmount()
   }
@@ -193,7 +193,7 @@ test('渲染：无流水线时开放 Issue 板块正常展示运行中任务（�
   try {
     assert.equal(r.renderError, null)
     const issueTitle = r.pos('开放 Issue')
-    const runningGroup = r.pos('⚙️ 运行中')
+    const runningGroup = r.pos('issue-group-title')
     const pipeEmpty = r.pos('暂无流水线')
     assert.ok(issueTitle >= 0 && runningGroup >= 0 && pipeEmpty >= 0,
               '开放 Issue 板块、运行中组与流水线空状态都应存在')

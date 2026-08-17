@@ -138,7 +138,7 @@ test('默认隐藏思考过程：thinking 事件不渲染，其他事件正常�
       })
       const tree = JSON.stringify(renderer.toJSON())
       assert.doesNotMatch(tree, /先定位报错位置/, '默认应隐藏思考过程内容')
-      assert.doesNotMatch(tree, /💭 思考过程/, '默认不应渲染思考过程摘要')
+      assert.doesNotMatch(tree, / 思考过程/, '默认不应渲染思考过程摘要（仅勾选项「显示思考过程」常驻）')
       assert.match(tree, /我来修复登录问题。/, '文本事件不受影响')
       assert.match(tree, /Bash/, '工具事件不受影响')
       // 开关默认处于未勾选状态
@@ -167,7 +167,7 @@ test('勾选「显示思考过程」后 thinking 事件展开显示，取消勾�
       await toggleThinking(renderer, true)
       let tree = JSON.stringify(renderer.toJSON())
       assert.match(tree, /先定位报错位置/, '勾选后思考过程内容应显示')
-      assert.match(tree, /💭 思考过程/, '勾选后思考过程摘要应显示')
+      assert.match(tree, / 思考过程/, '勾选后思考过程摘要应显示')
       assert.equal(findThinkingCheckbox(renderer).props.checked, true, '勾选后 checkbox 应为选中态')
 
       // 取消勾选 → 再次隐藏

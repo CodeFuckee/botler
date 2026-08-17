@@ -139,7 +139,7 @@ test('渲染：长仓库名（深路径）完整渲染进 issue-repo-name，字�
     assert.equal(renderError, null, '渲染不应抛错')
     const nodes = repoNameNodes(renderer)
     assert.equal(nodes.length, 1, '应渲染 1 个 issue-repo-name 节点')
-    // JSX：<span>📁 {r.repo_name}</span> → children 为 ['📁 ', repo_name]
+    // JSX：<span><Icon name="folder" /> {r.repo_name}</span> → 文本应含完整仓库名
     const text = nodes[0].children.join('')
     assert.ok(
       text.includes(deep),

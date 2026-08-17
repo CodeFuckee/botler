@@ -12,6 +12,7 @@ import Login from './pages/Login.jsx'
 import DialogHost from './components/DialogHost.jsx'
 import { api, setDisplayTz, setSsoEnabled } from './api.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
+import { Icon } from './components/Icon.jsx'
 
 export default function App() {
   // SSO 登录状态（issue #27）：null = 检测中；{enabled, user} = 结果。
@@ -73,7 +74,7 @@ export default function App() {
       {/* HIG 灵活：导航提供 aria-label 语义（屏幕阅读器可跳过） */}
       <nav className="topnav" aria-label="主导航">
         <div className="brand">
-          <span className="brand-dot">🤖</span> Botler
+          <span className="brand-dot"><Icon name="bot" /></span> Botler
         </div>
         <NavLink to="/overview" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           概览
@@ -102,7 +103,7 @@ export default function App() {
             .user-chip 的 margin-left:auto 承接原版本徽标的"推到最右"职责 */}
         {auth.user && (
           <span className="navlink user-chip" title="当前登录的群晖账号">
-            👤 {auth.user.username || auth.user.name || auth.user.sub}
+            <Icon name="user" /> {auth.user.username || auth.user.name || auth.user.sub}
             <button className="btn btn-sm" onClick={logout}>退出</button>
           </span>
         )}

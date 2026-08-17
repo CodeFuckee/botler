@@ -208,7 +208,12 @@ test('confirm：× 按钮与 Esc 键均视为取消 resolve(false)', async () =>
     installDocumentMock()
     renderer = renderHost()
     const p1 = open(() => dialog.confirmDialog({ message: '第一次确认' }))
-    TestRenderer.act(() => { findButtons(renderer, '×')[0].props.onClick() })
+    TestRenderer.act(() => {
+      const closeBtn = renderer.root.findAll((n) => n.type === 'button'
+        && String(n.props.className || '').includes('modal-close'))
+      assert.equal(closeBtn.length, 1, '对话框应有 × 关闭按钮')
+      closeBtn[0].props.onClick()
+    })
     assert.equal(await p1, false, '点 × 应 resolve false')
 
     const p2 = open(() => dialog.confirmDialog({ message: '第二次确认' }))

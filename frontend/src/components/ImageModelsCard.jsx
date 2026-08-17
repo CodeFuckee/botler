@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { api } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { IMAGE_MODEL_PRESETS, imageModelPresetOf, imageModelName, ProviderLogo } from '../providers.jsx'
@@ -22,7 +23,7 @@ function TestResult({ result }) {
   if (!result) return null
   return (
     <div className={`test-result ${result.ok ? 'ok' : 'err'}`}>
-      <span className={result.ok ? 'saved-hint' : 'err-hint'}>{result.text}</span>
+      <span className={result.ok ? 'saved-hint' : 'err-hint'}><Icon name={result.ok ? 'check' : 'x'} /> {result.text}</span>
       {result.image && (
         <img className="test-image" src={result.image} alt="生图测试结果" />
       )}
@@ -96,14 +97,14 @@ export default function ImageModelsCard() {
       setTestResult(res.ok
         ? {
             ok: true,
-            text: `✓ 生图测试成功，已生成 ${res.images} 张图片`,
+            text: `生图测试成功，已生成 ${res.images} 张图片`,
             // 后端回传首张图片 base64，拼 data URL 展示（issue #149）
             image: res.image_base64
               ? `data:${res.mime_type || 'image/png'};base64,${res.image_base64}`
               : null,
           }
-        : { ok: false, text: '✗ ' + (res.error || '生图测试失败') })
-    } catch (e) { setTestResult({ ok: false, text: '✗ ' + e.message }) }
+        : { ok: false, text: (res.error || '生图测试失败') })
+    } catch (e) { setTestResult({ ok: false, text: e.message }) }
     finally { setTestBusy(false) }
   }
 
@@ -170,7 +171,7 @@ export default function ImageModelsCard() {
     <div className="card">
       <h2>生图模型</h2>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
-      {saved && <div className="alert alert-ok">✓ 已保存（已写回 config.yaml）</div>}
+      {saved && <div className="alert alert-ok"><Icon name="check" /> 已保存（已写回 config.yaml）</div>}
 
       <table className="table provider-table">
         <thead>
@@ -191,7 +192,7 @@ export default function ImageModelsCard() {
               <td className="muted small">{imageModelName(m.provider)}</td>
               <td><code>{m.model || '—'}</code></td>
               <td>{m.enabled
-                ? <span className="ok-text">✓ 启用</span>
+                ? <span className="ok-text"><Icon name="check" /> 启用</span>
                 : <span className="muted">停用</span>}</td>
               <td>
                 <button className="btn btn-sm" disabled={testBusy}
@@ -305,7 +306,7 @@ export default function ImageModelsCard() {
         <button className="btn btn-primary" disabled={busy} onClick={save}>
           {busy ? '保存中…' : '保存生图模型配置'}
         </button>
-        {saved && <span className="saved-hint">✓ 已保存</span>}
+        {saved && <span className="saved-hint"><Icon name="check" /> 已保存</span>}
       </div>
       <p className="muted small">
         配置可供图片生成的生图模型（为后续 AI 功能消费做准备，本期仅存储配置并提供

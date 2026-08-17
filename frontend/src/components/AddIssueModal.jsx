@@ -20,6 +20,7 @@
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键；
 // - 提交成功回调 onCreated（关闭弹窗并立即刷新 issue 列表）。
 import { useEffect, useRef, useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { api } from '../api.js'
 
 export default function AddIssueModal({ repo, onClose, onCreated }) {
@@ -201,7 +202,7 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
         <div className="modal-header">
           <strong>添加 Issue「{repo.repo_name}」</strong>
           <button className="btn modal-close" onClick={onClose} title="关闭"
-                  aria-label="关闭弹窗">×</button>
+                  aria-label="关闭弹窗"><Icon name="x" /></button>
         </div>
 
         {loading ? (
@@ -230,7 +231,7 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
                   title={listening ? '点击停止语音输入' : '语音输入标题'}
                   aria-label={listening ? '停止语音输入' : '语音输入标题'}
                 >
-                  🎤
+                  <Icon name="mic" />
                 </button>
               </span>
               {speechError && (

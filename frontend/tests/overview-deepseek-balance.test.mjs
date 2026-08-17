@@ -51,7 +51,7 @@ test('未配置（configured=false）时卡片不渲染，已配置才展示', (
   assert.match(overview, /dsBalance\s*&&\s*dsBalance\.configured/,
                '应按 configured 控制卡片渲染')
   assert.match(overview, /DeepSeek 账户余额/, '卡片应有标题')
-  assert.match(overview, /↻ 刷新/, '卡片应提供手动刷新按钮')
+  assert.match(overview, /name="refresh" \/> 刷新/, '卡片应提供手动刷新按钮（Lucide RefreshCw）')
 })
 
 test('styles.css 提供余额卡片样式', () => {
@@ -147,7 +147,7 @@ test('渲染：已配置 deepseek api 时展示余额卡片（币种/总余额/�
     assert.ok(text.includes('100.00'), '应渲染充值余额数值')
     assert.ok(text.includes('账户可用'), '应渲染账户可用状态')
     assert.ok(text.includes('更新于'), '应渲染更新时间')
-    assert.ok(text.includes('↻ 刷新'), '应渲染刷新按钮')
+    assert.ok(text.includes('lucide-refresh-cw'), '应渲染刷新按钮（Lucide RefreshCw）')
     // 余额接口被调用过
     assert.ok(r.getCalls.includes('/api/settings/deepseek-balance'),
               '应轮询余额接口')
@@ -162,7 +162,7 @@ test('渲染：未配置 deepseek api（configured=false）时不渲染余额卡
     assert.equal(r.renderError, null, '渲染不应崩溃')
     const text = treeText(r.renderer)
     assert.ok(!text.includes('DeepSeek 账户余额'), '未配置时不应渲染余额卡片')
-    assert.ok(!text.includes('↻ 刷新'), '未配置时不应渲染刷新按钮')
+    assert.ok(!text.includes('lucide-refresh-cw'), '未配置时不应渲染刷新按钮')
     // 页面其他板块不受影响
     assert.ok(text.includes('开放 Issue'), '开放 Issue 板块仍应渲染')
     assert.ok(text.includes('CI/CD 流水线'), 'CI/CD 流水线板块仍应渲染')
@@ -184,7 +184,7 @@ test('渲染：已配置但余额接口报错 → 显示错误提示与刷新按
     const text = treeText(r.renderer)
     assert.ok(text.includes('DeepSeek 账户余额'), '卡片标题仍应渲染')
     assert.ok(text.includes('HTTP 401'), '应显示余额接口错误信息')
-    assert.ok(text.includes('↻ 刷新'), '错误态下仍应提供刷新按钮')
+    assert.ok(text.includes('lucide-refresh-cw'), '错误态下仍应提供刷新按钮')
   } finally {
     await r.unmount()
   }

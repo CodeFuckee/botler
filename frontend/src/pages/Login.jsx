@@ -1,4 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
+import { Icon } from '../components/Icon.jsx'
 
 // Synology SSO 登录页（issue #27）：SSO 启用后未登录访问 → 跳此页，
 // 点击按钮跳转群晖 SSO Server 认证，回调成功后由后端 302 回首页。
@@ -20,7 +21,7 @@ export default function Login() {
     <div className="login-page">
       <div className="card login-card">
         {/* HIG 目标感：品牌标识让首屏 3 秒内明白「这是什么」 */}
-        <div className="login-brand" aria-hidden="true">🤖</div>
+        <div className="login-brand" aria-hidden="true"><Icon name="bot" /></div>
         <h2>登录 Botler</h2>
         <p className="muted small">
           此实例启用了 Synology SSO 登录，请使用群晖账号认证后使用管理界面。

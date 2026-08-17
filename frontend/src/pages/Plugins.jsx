@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { confirmDialog } from '../dialog.js'
+import { Icon } from '../components/Icon.jsx'
 
 // 插件管理页面（issue #145）：所有插件的安装、卸载和设置都在这个界面。
 // 数据来自 /api/plugins（插件体系 issue #140 的注册表视图）：
@@ -64,7 +65,7 @@ export default function Plugins() {
   const install = async () => {
     const paths = installPath.split('\n').map((x) => x.trim()).filter(Boolean)
     if (!paths.length) {
-      setNote({ ok: false, text: '✗ 请先输入插件模块路径（每行一个）' })
+      setNote({ ok: false, text: '请先输入插件模块路径（每行一个）' })
       return
     }
     setBusy(true); setNote(null); setError('')
@@ -75,9 +76,9 @@ export default function Plugins() {
       }
       setData(latest)
       setInstallPath('')
-      setNote({ ok: true, text: `✓ 已安装 ${paths.length} 个外部插件模块（已写入 worker.plugin_paths 并生效）` })
+      setNote({ ok: true, text: `已安装 ${paths.length} 个外部插件模块（已写入 worker.plugin_paths 并生效）` })
     } catch (e) {
-      setNote({ ok: false, text: `✗ ${e.message}` })
+      setNote({ ok: false, text: e.message })
     } finally { setBusy(false) }
   }
 
@@ -90,9 +91,9 @@ export default function Plugins() {
     setNote(null)
     try {
       setData(await api.post('/api/plugins/uninstall', { path: plugin.path }))
-      setNote({ ok: true, text: `✓ 已卸载外部插件「${plugin.name}」` })
+      setNote({ ok: true, text: `已卸载外部插件「${plugin.name}」` })
     } catch (e) {
-      setNote({ ok: false, text: `✗ ${e.message}` })
+      setNote({ ok: false, text: e.message })
     }
   }
 
@@ -101,9 +102,9 @@ export default function Plugins() {
     setBusy(true); setNote(null)
     try {
       setData(await api.post('/api/plugins/reload'))
-      setNote({ ok: true, text: '✓ 外部插件已按 worker.plugin_paths 重新加载' })
+      setNote({ ok: true, text: '外部插件已按 worker.plugin_paths 重新加载' })
     } catch (e) {
-      setNote({ ok: false, text: `✗ ${e.message}` })
+      setNote({ ok: false, text: e.message })
     } finally { setBusy(false) }
   }
 
@@ -112,9 +113,9 @@ export default function Plugins() {
     setBusy(true); setNote(null); setError('')
     try {
       setData(await api.put('/api/plugins/settings', { engine }))
-      setNote({ ok: true, text: `✓ 默认执行引擎已切换为 ${engine}（对新领取的任务生效）` })
+      setNote({ ok: true, text: `默认执行引擎已切换为 ${engine}（对新领取的任务生效）` })
     } catch (e) {
-      setNote({ ok: false, text: `✗ ${e.message}` })
+      setNote({ ok: false, text: e.message })
     } finally { setBusy(false) }
   }
 
@@ -131,7 +132,7 @@ export default function Plugins() {
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {note && (
         <div className={'alert ' + (note.ok ? 'alert-ok' : 'alert-error')} onClick={() => setNote(null)}>
-          {note.text}
+          <Icon name={note.ok ? 'check' : 'x'} /> {note.text}
         </div>
       )}
 

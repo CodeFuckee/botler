@@ -79,7 +79,7 @@ export async function sendTestNotification() {
   }
   try {
     new Notification('Botler 测试通知', {
-      body: '这是一条测试通知，网页通知功能正常 ✅',
+      body: '这是一条测试通知，网页通知功能正常',
       tag: `botler-test-${++testNotifySeq}`, // 唯一 tag：每次点击独立弹出
     })
     return { ok: true }

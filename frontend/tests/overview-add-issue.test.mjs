@@ -12,6 +12,15 @@
 //    overview（缓存失效后立即刷新）；失败时弹窗保持并显示错误；
 // 5. 边界：仓库无标签显示空状态、元数据加载失败显示错误、点遮罩关闭。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -115,7 +124,7 @@ function findSubmit(renderer) {
 function errorText(renderer) {
   const alerts = renderer.root.findAll(
     (n) => String(n.props.className || '').includes('alert-error'))
-  return alerts.map((a) => JSON.stringify(a.props.children)).join('|')
+  return alerts.map((a) => textOf(a.props.children)).join('|')
 }
 // 输入标题并（可选）勾选第一个标签
 async function fillForm(renderer, title, withLabel = true) {

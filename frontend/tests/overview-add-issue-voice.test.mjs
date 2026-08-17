@@ -15,6 +15,15 @@
 //    错误提示；
 // 6. 卸载：识别中关闭弹窗 → rec.abort() 被调用（清理识别实例）。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -158,7 +167,7 @@ function titleRow(renderer) {
 function voiceError(renderer) {
   const el = renderer.root.findAll(
     (n) => String(n.props.className || '').includes('add-issue-voice-error'))
-  return el.map((a) => JSON.stringify(a.props.children)).join('|')
+  return el.map((a) => textOf(a.props.children)).join('|')
 }
 
 async function cleanup(renderer) {

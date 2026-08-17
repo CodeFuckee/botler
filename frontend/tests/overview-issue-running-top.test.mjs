@@ -40,6 +40,15 @@ const { api } = await vite.ssrLoadModule('/src/api.js')
 
 after(() => vite.close())
 
+// 渲染树节点 → 纯文本（递归；Lucide 图标组件无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
+
 // ---- 数据流源码断言 ----
 
 test('Overview.jsx 分组函数支持 runningKeys/repoId 参数，running 组置顶', () => {
@@ -50,7 +59,7 @@ test('Overview.jsx 分组函数支持 runningKeys/repoId 参数，running 组置
   assert.deepEqual(ISSUE_GROUPS.map((g) => g.key),
                    ['running', 'failed', 'done', 'other'],
                    '组顺序应为 running → failed → done → other（运行中置顶）')
-  assert.equal(ISSUE_GROUPS[0].title, '⚙️ 运行中', 'running 组标题应为「⚙️ 运行中」')
+  assert.equal(ISSUE_GROUPS[0].title, '运行中', 'running 组标题应为「运行中」')
 })
 
 // ---- groupIssuesByBotLabel 纯函数测试 ----
@@ -221,8 +230,8 @@ test('渲染：运行中的 issue 置顶为「⚙️ 运行中」组，其余组
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['⚙️ 运行中', '❌ bot-failed', '✅ bot-done', '📋 其他'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['运行中', 'bot-failed', 'bot-done', '其他'],
                      'running 组应置顶，其后为 failed → done → other')
     const counts = root.findAll((n) => n.props.className === 'issue-group-count')
     assert.deepEqual(counts.map((c) => c.props.children),
@@ -252,8 +261,8 @@ test('渲染：多个运行中 issue 同归 running 组且保持原始相对顺�
     assert.equal(renderError, null)
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['⚙️ 运行中', '❌ bot-failed', '✅ bot-done'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['运行中', 'bot-failed', 'bot-done'],
                      '102 与 104 均置顶后 other 组为空不渲染')
     const counts = root.findAll((n) => n.props.className === 'issue-group-count')
     assert.deepEqual(counts.map((c) => c.props.children),
@@ -283,8 +292,8 @@ test('渲染：无活跃任务时不渲染 running 组（与 issue #80 分组一
     assert.equal(renderError, null)
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['❌ bot-failed', '✅ bot-done', '📋 其他'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['bot-failed', 'bot-done', '其他'],
                      '无任务时不得渲染 running 组标题')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
@@ -319,8 +328,8 @@ test('渲染：跨仓库同 iid 不误置顶（repo_id 参与分组键）', asyn
     assert.equal(renderError, null)
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['📋 其他', '⚙️ 运行中'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['其他', '运行中'],
                      'repo 1 无 running 组，repo 2 的 101 置顶')
     const runningItems = root.findAll((n) => n.type === 'li'
       && String(n.props.className || '').includes('issue-item-running'))
@@ -346,8 +355,8 @@ test('渲染：任务结束后（任务列表清空）issue 回落原分组', as
     assert.equal(first.renderError, null)
     const titles = first.renderer.root.findAll(
       (n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['⚙️ 运行中', '❌ bot-failed', '✅ bot-done', '📋 其他'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['运行中', 'bot-failed', 'bot-done', '其他'],
                      '任务活跃时 102 应置顶')
   } finally {
     await TestRenderer.act(() => first.renderer.unmount())
@@ -359,8 +368,8 @@ test('渲染：任务结束后（任务列表清空）issue 回落原分组', as
     assert.equal(second.renderError, null)
     const root = second.renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['❌ bot-failed', '✅ bot-done', '📋 其他'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['bot-failed', 'bot-done', '其他'],
                      '任务结束后 running 组消失，issue 回落原分组')
     const runningItems = root.findAll((n) => n.type === 'li'
       && String(n.props.className || '').includes('issue-item-running'))
@@ -395,8 +404,8 @@ test('渲染：任务与 issue 全不匹配时不影响任何分组', async () =
     assert.equal(renderError, null)
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['❌ bot-failed', '✅ bot-done', '📋 其他'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['bot-failed', 'bot-done', '其他'],
                      '不匹配的任务不得产生 running 组')
     const badges = root.findAll(
       (n) => n.props.className === 'issue-status issue-status-running')

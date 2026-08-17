@@ -13,6 +13,15 @@
 // 7. contentWidthAt 与 styles.css 的 --content-width 媒体查询断点一致；
 // 8. styles.css 含 col-hidden 与 drawer 样式规则。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -267,7 +276,7 @@ function colHiddenCount(renderer) {
 function findDotsButtons(renderer) {
   return renderer.root
     .findAllByType('button')
-    .filter((b) => JSON.stringify(b.props.children).includes('⋯'))
+    .filter((b) => textOf(b.props.children).includes('⋯'))
 }
 
 function tableMinWidth(renderer) {

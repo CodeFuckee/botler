@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { api } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { VISION_MODEL_PRESETS, visionModelPresetOf, visionModelName, ProviderLogo } from '../providers.jsx'
@@ -21,7 +22,7 @@ function TestResult({ result }) {
   if (!result) return null
   return (
     <div className={`test-result ${result.ok ? 'ok' : 'err'}`}>
-      <span className={result.ok ? 'saved-hint' : 'err-hint'}>{result.text}</span>
+      <span className={result.ok ? 'saved-hint' : 'err-hint'}><Icon name={result.ok ? 'check' : 'x'} /> {result.text}</span>
       {result.image && (
         <div className="vision-test-image">
           <img className="test-image" src={result.image} alt="测试图片" />
@@ -125,12 +126,12 @@ export default function VisionModelsCard() {
       setTestResult(res.ok
         ? {
             ok: true,
-            text: '✓ 识别成功，模型描述：',
+            text: '识别成功，模型描述：',
             description: res.description,
             image: URL.createObjectURL(file),
           }
-        : { ok: false, text: '✗ ' + (res.error || '识图测试失败') })
-    } catch (err) { setTestResult({ ok: false, text: '✗ ' + err.message }) }
+        : { ok: false, text: (res.error || '识图测试失败') })
+    } catch (err) { setTestResult({ ok: false, text: err.message }) }
     finally {
       setTestBusy(false)
       setTestPayload(null)
@@ -201,7 +202,7 @@ export default function VisionModelsCard() {
     <div className="card">
       <h2>识图模型</h2>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
-      {saved && <div className="alert alert-ok">✓ 已保存（已写回 config.yaml）</div>}
+      {saved && <div className="alert alert-ok"><Icon name="check" /> 已保存（已写回 config.yaml）</div>}
 
       {/* 隐藏文件选择框：点「测试」→ 选图 → 自动提交识别 */}
       <input
@@ -231,7 +232,7 @@ export default function VisionModelsCard() {
               <td className="muted small">{visionModelName(m.provider)}</td>
               <td><code>{m.model || '—'}</code></td>
               <td>{m.enabled
-                ? <span className="ok-text">✓ 启用</span>
+                ? <span className="ok-text"><Icon name="check" /> 启用</span>
                 : <span className="muted">停用</span>}</td>
               <td>
                 <button className="btn btn-sm" disabled={testBusy}
@@ -344,7 +345,7 @@ export default function VisionModelsCard() {
         <button className="btn btn-primary" disabled={busy} onClick={save}>
           {busy ? '保存中…' : '保存识图模型配置'}
         </button>
-        {saved && <span className="saved-hint">✓ 已保存</span>}
+        {saved && <span className="saved-hint"><Icon name="check" /> 已保存</span>}
       </div>
       <p className="muted small">
         配置具有视觉理解能力的识图模型（本期仅存储配置并提供测试能力：

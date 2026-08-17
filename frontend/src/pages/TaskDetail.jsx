@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Icon } from '../components/Icon.jsx'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { api, openTaskEventStream, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 
@@ -11,7 +12,7 @@ function LiveMsg({ m }) {
   if (m.role === 'tool') {
     return (
       <div className="chat-msg chat-tool">
-        <span className="chat-tool-name">🔧 {m.tool}</span>
+        <span className="chat-tool-name"><Icon name="wrench" /> {m.tool}</span>
         <code>{summarizeToolInput(m.input, m.tool)}</code>
       </div>
     )
@@ -45,7 +46,7 @@ function EventRow({ e, showThinking }) {
     if (!showThinking) return null
     return (
       <details open className="event-row event-thinking">
-        <summary>💭 思考过程</summary>
+        <summary><Icon name="brain" /> 思考过程</summary>
         <span className="pre-wrap">{e.text}</span>
       </details>
     )
@@ -53,7 +54,7 @@ function EventRow({ e, showThinking }) {
   if (e.kind === 'tool') {
     return (
       <div className="event-row chat-msg chat-tool">
-        <span className="chat-tool-name">🔧 {e.tool}</span>
+        <span className="chat-tool-name"><Icon name="wrench" /> {e.tool}</span>
         <code>{summarizeToolInput(e.input, e.tool)}</code>
       </div>
     )
@@ -75,7 +76,7 @@ function EventRow({ e, showThinking }) {
     return <div className="event-row event-status muted small">{parts.join(' · ')}</div>
   }
   if (e.kind === 'result') {
-    return <div className="event-row event-result pre-wrap">🏁 {e.result}</div>
+    return <div className="event-row event-result pre-wrap"><Icon name="flag" /> {e.result}</div>
   }
   return <div className="event-row pre-wrap">{e.text}</div>
 }
@@ -98,7 +99,7 @@ function SectionToggle({ open, onClick, level, children }) {
   return (
     <button type="button" className={'section-toggle section-toggle-' + level}
             aria-expanded={open} onClick={onClick}>
-      <span className="chevron">{open ? '▾' : '▸'}</span>
+      <span className="chevron">{open ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />}</span>
       {children}
     </button>
   )
@@ -113,7 +114,7 @@ function EnvSnapshot({ env }) {
     return <p className="muted">暂无环境快照（任务执行前未采集到环境信息）</p>
   }
   if (env.error) {
-    return <p className="muted">⚠️ {env.error}（采集失败不影响任务执行）</p>
+    return <p className="muted"><Icon name="warning" /> {env.error}（采集失败不影响任务执行）</p>
   }
   const rows = []
   if (env.engine) {
@@ -256,7 +257,7 @@ export default function TaskDetail() {
         <span className={'badge ' + meta.cls}>{meta.label}</span>
       </h1>
       <p className="muted">
-        <Link to="/tasks">← 返回任务列表</Link>
+        <Link to="/tasks"><Icon name="arrowLeft" /> 返回任务列表</Link>
       </p>
 
       <div className="card">
@@ -279,7 +280,7 @@ export default function TaskDetail() {
                 {task.commit_url ? (
                   <a href={task.commit_url} target="_blank" rel="noreferrer"
                      title={`完整 sha: ${task.commit_sha}`}>
-                    {shortSha(task.commit_sha)} ↗
+                    {shortSha(task.commit_sha)} <Icon name="externalLink" />
                   </a>
                 ) : (
                   <span className="muted">—</span>
@@ -354,7 +355,7 @@ export default function TaskDetail() {
               )}
               {live.transcriptTruncated && (
                 // issue #90：消息数量超上限时后端只保留首条提示词与最近消息
-                <p className="muted small">⚠️ 聊天记录过多，仅显示首条提示词与最近消息</p>
+                <p className="muted small"><Icon name="warning" /> 聊天记录过多，仅显示首条提示词与最近消息</p>
               )}
               {live.transcript.map((m, i) => <LiveMsg key={i} m={m} />)}
             </div>
@@ -385,7 +386,7 @@ export default function TaskDetail() {
         <div className="card">
           <button className="btn" aria-expanded={showFileLog}
                   onClick={() => setShowFileLog(!showFileLog)}>
-            {showFileLog ? '▾ 收起' : '▸ 展开'} claude 输出尾部
+            {showFileLog ? <><Icon name="chevronDown" /> 收起</> : <><Icon name="chevronRight" /> 展开</>} claude 输出尾部
           </button>
           {showFileLog && <pre className="log-view log-view-flat">{task.log_file_tail}</pre>}
         </div>

@@ -9,6 +9,15 @@
 // 3. 请求中禁用防重复点击（disabled={refreshing}），完成后恢复可用；
 // 4. 接口失败显示错误提示而不崩溃。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -42,13 +51,13 @@ after(() => vite.close())
 // ---- 源码断言 ----
 
 test('任务页源码含「刷新」按钮与防重复点击禁用逻辑', () => {
-  assert.match(tasksSrc, /↻ 刷新/, '应有刷新按钮文案')
+  assert.match(tasksSrc, /name="refresh" \/> 刷新/, '应有刷新按钮文案（Lucide RefreshCw）')
   assert.match(tasksSrc, /disabled=\{refreshing\}/, '请求中应禁用按钮防重复点击')
 })
 
 test('刷新为低危操作：无需确认对话框', () => {
-  assert.ok(tasksSrc.includes('↻ 刷新'), '源码应先含刷新按钮（前置条件）')
-  const tail = tasksSrc.slice(tasksSrc.indexOf('↻ 刷新'))
+  assert.ok(tasksSrc.includes('name="refresh" /> 刷新'), '源码应先含刷新按钮（前置条件）')
+  const tail = tasksSrc.slice(tasksSrc.indexOf('name="refresh" /> 刷新'))
   assert.ok(
     !tail.split('\n').slice(0, 25).some(
       (l) => l.includes('window.confirm') || l.includes('confirmDialog'),
@@ -90,7 +99,7 @@ async function renderAndSettle(stats, getImpl) {
 function findRefreshButton(renderer) {
   return renderer.root
     .findAllByType('button')
-    .find((b) => JSON.stringify(b.props.children).includes('刷新'))
+    .find((b) => textOf(b.props.children).includes('刷新'))
 }
 
 test('刷新按钮渲染且无活跃任务时也可用', async () => {

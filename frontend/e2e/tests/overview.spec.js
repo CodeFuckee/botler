@@ -36,7 +36,7 @@ test.describe('概览页加载与 issue 展示', () => {
     ).toBeVisible()
 
     // 4. bot-done 分组展示（fixture 中 iid 101 带 bot-done 标签）
-    const doneGroup = page.locator('.issue-group', { hasText: '✅ bot-done' })
+    const doneGroup = page.locator('.issue-group', { hasText: 'bot-done' })
     await expect(doneGroup).toBeVisible()
     await expect(
       doneGroup.locator('.issue-link', { hasText: 'E2E 示例任务：修复概览页按钮样式' }),

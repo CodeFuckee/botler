@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { api } from '../api.js'
 
 /**
@@ -73,7 +74,7 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
         <div className="modal-header">
           <strong>编辑仓库「{repo.name}」</strong>
           <button className="btn modal-close" onClick={onClose} title="关闭"
-                  aria-label="关闭弹窗">×</button>
+                  aria-label="关闭弹窗"><Icon name="x" /></button>
         </div>
 
         <label className="edit-field">

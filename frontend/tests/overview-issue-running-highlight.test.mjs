@@ -38,6 +38,15 @@ const { api } = await vite.ssrLoadModule('/src/api.js')
 
 after(() => vite.close())
 
+// 渲染树节点 → 纯文本（递归；Lucide 图标组件无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
+
 // ---- 数据流源码断言 ----
 
 test('Overview.jsx 导出 runningIssueKeys 函数，渲染使用该匹配逻辑', () => {
@@ -228,7 +237,7 @@ test('渲染：正在运行的任务对应 issue 高亮并显示「运行中」�
     const badges = root.findAll(
       (n) => n.props.className === 'issue-status issue-status-running')
     assert.equal(badges.length, 1, '仅一条「运行中」徽章')
-    assert.deepEqual(badges.map((b) => b.props.children), ['⚙️ 运行中'])
+    assert.deepEqual(badges.map((b) => textOf(b.props.children).trim()), ['运行中'])
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
@@ -350,8 +359,8 @@ test('渲染：高亮与置顶分组并存，不破坏标签胶囊与终态分�
     const root = renderer.root
     // 分组：运行中组置顶 + bot-done 组（issue #101 置顶分组）
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['⚙️ 运行中', '✅ bot-done'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['运行中', 'bot-done'],
                      '运行中的 issue 置顶为运行中组，bot-done 组照常')
     // 运行徽章与 in-progress 标签胶囊并存
     const pills = root.findAll((n) => n.props.className === 'label-pill')

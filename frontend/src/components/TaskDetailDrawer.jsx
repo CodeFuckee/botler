@@ -16,6 +16,7 @@
 //   下层 issue 抽屉——IssueDrawer 检测到本层打开时不再响应 Esc）；
 // - 底部「查看完整任务页」跳转既有任务详情路由（/tasks/{id}）。
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 
@@ -34,7 +35,7 @@ export function renderEvent(e) {
   if (e.kind === 'thinking') {
     return (
       <details className="event-row event-thinking">
-        <summary>💭 思考过程</summary>
+        <summary><Icon name="brain" /> 思考过程</summary>
         <span className="pre-wrap">{e.text}</span>
       </details>
     )
@@ -42,7 +43,7 @@ export function renderEvent(e) {
   if (e.kind === 'tool') {
     return (
       <div className="event-row chat-msg chat-tool">
-        <span className="chat-tool-name">🔧 {e.tool}</span>
+        <span className="chat-tool-name"><Icon name="wrench" /> {e.tool}</span>
         <code>{summarizeToolInput(e.input, e.tool)}</code>
       </div>
     )
@@ -64,7 +65,7 @@ export function renderEvent(e) {
     return <div className="event-row event-status muted small">{parts.join(' · ')}</div>
   }
   if (e.kind === 'result') {
-    return <div className="event-row event-result pre-wrap">🏁 {e.result}</div>
+    return <div className="event-row event-result pre-wrap"><Icon name="flag" /> {e.result}</div>
   }
   return <div className="event-row pre-wrap">{e.text}</div>
 }
@@ -76,7 +77,7 @@ export function renderChatMessage(m) {
   if (m.role === 'tool') {
     return (
       <div className="chat-msg chat-tool">
-        <span className="chat-tool-name">🔧 {m.tool}</span>
+        <span className="chat-tool-name"><Icon name="wrench" /> {m.tool}</span>
         <code>{summarizeToolInput(m.input, m.tool)}</code>
       </div>
     )
@@ -231,7 +232,7 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
           </strong>
           <span className="issue-drawer-actions">
             <button className="btn modal-close" onClick={onClose} title="关闭"
-                    aria-label="关闭任务执行详情右边栏">×</button>
+                    aria-label="关闭任务执行详情右边栏"><Icon name="x" /></button>
           </span>
         </div>
 
@@ -315,7 +316,7 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
                       {task.commit_url ? (
                         <a href={task.commit_url} target="_blank" rel="noreferrer"
                            title={`完整 sha: ${task.commit_sha}`}>
-                          {shortSha(task.commit_sha)} ↗
+                          {shortSha(task.commit_sha)} <Icon name="externalLink" />
                         </a>
                       ) : (
                         <span className="muted">—</span>
@@ -377,7 +378,7 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
                   )}
                   {task.log_file_tail && (
                     <details className="task-detail-file-tail">
-                      <summary>▸ 展开执行日志文件尾部</summary>
+                      <summary><Icon name="chevronRight" /> 展开执行日志文件尾部</summary>
                       <pre className="log-view log-view-flat">{task.log_file_tail}</pre>
                     </details>
                   )}

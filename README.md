@@ -113,12 +113,12 @@ cp .env.example .env          # 填入 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHR
 cd frontend
 npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 ```
-> 前端「添加 Issue」弹窗的标题输入框右侧提供语音输入按钮（🎤，issue #165）：
+> 前端「添加 Issue」弹窗的标题输入框右侧提供语音输入按钮（麦克风图标，issue #165）：
 > 使用浏览器原生 Web Speech API（`SpeechRecognition`）将语音实时转文字填入
 > 标题，无需后端接口；支持 Chrome / Edge / Safari，Firefox 等不支持时会给出
 > 中文提示，识别中再次点击按钮可停止。
 
-> 概览页「灵感」板块每条灵感提供「💬 对话」按钮（issue #166）：打开面板即可
+> 概览页「灵感」板块每条灵感提供「对话」按钮（issue #166）：打开面板即可
 > 围绕该灵感与 AI agent 多轮探讨（完善想法、补充边界场景、评估可行性、给出
 > 分步落地建议），对话历史保存到本地数据库。对话模型复用设置页「AI API
 > 供应商」（ai_providers）配置的文本对话模型——取列表第一个启用且 API Key

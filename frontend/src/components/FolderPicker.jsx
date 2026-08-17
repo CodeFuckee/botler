@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { api } from '../api.js'
 
 /**
@@ -56,12 +57,12 @@ export default function FolderPicker({ open, initialPath, onSelect, onClose }) {
         <div className="modal-header">
           <strong>选择服务器上的文件夹</strong>
           <button className="btn modal-close" onClick={onClose} title="关闭"
-                  aria-label="关闭弹窗">×</button>
+                  aria-label="关闭弹窗"><Icon name="x" /></button>
         </div>
 
         <div className="folder-nav">
           <button className="btn" disabled={!parent} onClick={() => load(parent)} title="返回上级">
-            ↑ 上级
+            <Icon name="arrowUp" /> 上级
           </button>
           <code className="folder-path" title={currentPath}>{currentPath}</code>
         </div>
@@ -94,7 +95,7 @@ export default function FolderPicker({ open, initialPath, onSelect, onClose }) {
           )}
           {!loading && visible.length === 0 && (
             <div className="folder-empty">
-              <span className="empty-icon" aria-hidden="true">📁</span>
+              <span className="empty-icon" aria-hidden="true"><Icon name="folder" /></span>
               <div className="muted">{showHidden ? '此文件夹没有子目录' : '此文件夹没有子目录（可勾选“显示隐藏”查看隐藏目录）'}</div>
             </div>
           )}
@@ -106,7 +107,7 @@ export default function FolderPicker({ open, initialPath, onSelect, onClose }) {
               title={d.readable ? d.path : `${d.path}（无权限，无法进入）`}
               onClick={() => load(d.path)}
             >
-              <span className="folder-icon">📁</span>
+              <span className="folder-icon"><Icon name="folder" /></span>
               <span className="folder-name">{d.name}</span>
               {d.is_git && <span className="badge badge-git">git</span>}
               {!d.readable && <span className="muted small">（无权限）</span>}

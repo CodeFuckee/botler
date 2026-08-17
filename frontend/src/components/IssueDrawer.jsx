@@ -36,6 +36,7 @@
 //   「在 GitLab 中打开」按钮（web_url 新窗口）；
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键。
 import { useCallback, useEffect, useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { api, fmtTime } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import Markdown from './Markdown.jsx'
@@ -516,7 +517,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             <a className="btn" href={i.web_url} target="_blank" rel="noreferrer"
                title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
             <button className="btn modal-close" onClick={onClose} title="关闭"
-                    aria-label="关闭右边栏">×</button>
+                    aria-label="关闭右边栏"><Icon name="x" /></button>
           </span>
         </div>
         {closeErr && <div className="issue-drawer-error" role="alert">{closeErr}</div>}

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { Icon } from './Icon.jsx'
 
 // 设置页左侧导航栏（issue #139 架构重构 / issue #155）：
 //
@@ -233,7 +234,7 @@ export default function SettingsNav() {
           </div>
         </div>
         <div className="settings-nav-search">
-          <span className="settings-nav-search-icon" aria-hidden="true">🔍</span>
+          <span className="settings-nav-search-icon" aria-hidden="true"><Icon name="search" /></span>
           <input
             className="input settings-nav-input"
             type="search"
@@ -248,7 +249,7 @@ export default function SettingsNav() {
               onClick={() => setQuery('')}
               aria-label="清空搜索"
               title="清空搜索"
-            >×</button>
+            ><Icon name="x" /></button>
           )}
         </div>
         {searching && matchCount > 0 && (
@@ -266,7 +267,7 @@ export default function SettingsNav() {
                   onClick={() => toggleGroup(g.id)}
                   aria-expanded={!closed}
                 >
-                  <span className={'settings-nav-chevron' + (closed ? '' : ' open')} aria-hidden="true">▸</span>
+                  <span className={'settings-nav-chevron' + (closed ? '' : ' open')} aria-hidden="true"><Icon name="chevronRight" /></span>
                   <span className="settings-nav-group-title">{g.title}</span>
                   <span className="settings-nav-count">{g.items.length}</span>
                 </button>

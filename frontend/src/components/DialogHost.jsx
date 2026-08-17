@@ -10,6 +10,7 @@
 // - 消息多行时用 .dialog-message 的 white-space: pre-line 保留换行
 //   （如恢复备份警告的 \n\n 分段文案）。
 import { useEffect, useReducer } from 'react'
+import { Icon } from './Icon.jsx'
 import { currentDialog, settleDialog, subscribeDialogHost } from '../dialog.js'
 
 export default function DialogHost() {
@@ -50,7 +51,7 @@ export default function DialogHost() {
             title="关闭"
             aria-label="关闭对话框"
           >
-            ×
+            <Icon name="x" />
           </button>
         </div>
         <div className="dialog-message">{d.message}</div>

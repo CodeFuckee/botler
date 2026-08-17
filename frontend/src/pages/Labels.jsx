@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { confirmDialog } from '../dialog.js'
+import { Icon } from '../components/Icon.jsx'
 
 // 标记库页面（issue #29）：默认清单（内置，不可删除）+ 用户自定义标签（可增删）。
 // 数据来自 /api/labels：{default: [...], custom: [...]}，增删走 POST/DELETE。
@@ -24,10 +25,10 @@ export default function Labels() {
     try {
       const res = await api.post('/api/labels', { name, color, description })
       setData(res)
-      setNote({ ok: true, text: `✓ 已添加自定义标签「${name}」` })
+      setNote({ ok: true, text: `已添加自定义标签「${name}」` })
       setName(''); setColor(''); setDescription('')
     } catch (e) {
-      setNote({ ok: false, text: `✗ ${e.message}` })
+      setNote({ ok: false, text: e.message })
     } finally { setBusy(false) }
   }
 
@@ -37,9 +38,9 @@ export default function Labels() {
     try {
       const res = await api.del(`/api/labels/${encodeURIComponent(label.name)}`)
       setData(res)
-      setNote({ ok: true, text: `✓ 已删除自定义标签「${label.name}」` })
+      setNote({ ok: true, text: `已删除自定义标签「${label.name}」` })
     } catch (e) {
-      setNote({ ok: false, text: `✗ ${e.message}` })
+      setNote({ ok: false, text: e.message })
     }
   }
 
@@ -64,7 +65,7 @@ export default function Labels() {
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {note && (
         <div className={'alert ' + (note.ok ? 'alert-ok' : 'alert-error')} onClick={() => setNote(null)}>
-          {note.text}
+          <Icon name={note.ok ? 'check' : 'x'} /> {note.text}
         </div>
       )}
 
@@ -110,7 +111,7 @@ export default function Labels() {
         {data?.custom?.length === 0
           ? (
             <div className="empty-state">
-              <span className="empty-icon" aria-hidden="true">🏷️</span>
+              <span className="empty-icon" aria-hidden="true"><Icon name="tag" /></span>
               <p className="muted">还没有自定义标签，用上方表单添加。</p>
             </div>
           )

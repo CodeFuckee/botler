@@ -11,6 +11,15 @@
 //    解析约定一致），卡片源码使用 fmtTime + fmtAgo 展示；
 // 5. styles.css 提供 pipeline-commit-time 样式。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -145,7 +154,7 @@ test('渲染：commit_time 存在时卡片显示绝对时间与相对时间', as
       (n) => n.props?.className && String(n.props.className).split(' ').includes('pipeline-commit-time'),
     )
     assert.equal(timeNodes.length, 1, 'commit_time 存在时应渲染一个时间节点')
-    const nodeText = JSON.stringify(timeNodes[0].children)
+    const nodeText = textOf(timeNodes[0].children)
     assert.match(nodeText, /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/, '应显示绝对时间（YYYY-MM-DD HH:MM:SS 格式）')
     assert.match(nodeText, /前/, '应显示相对时间（X 秒/分钟/小时/天/月/年前）')
   } finally {

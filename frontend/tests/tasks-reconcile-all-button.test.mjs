@@ -9,6 +9,15 @@
 //    并刷新列表；部分仓库失败（errors 非空）显示错误明细；接口失败显示错误；
 // 4. 请求中禁用防重复点击（disabled={reconciling}）。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -93,7 +102,7 @@ async function renderAndSettle(stats) {
 function findReconcileButton(renderer) {
   return renderer.root
     .findAllByType('button')
-    .find((b) => JSON.stringify(b.props.children).includes('对账所有仓库'))
+    .find((b) => textOf(b.props.children).includes('对账所有仓库'))
 }
 
 test('对账按钮渲染且默认可用', async () => {

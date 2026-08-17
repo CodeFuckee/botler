@@ -38,6 +38,15 @@ const { api } = await vite.ssrLoadModule('/src/api.js')
 
 after(() => vite.close())
 
+// 渲染树节点 → 纯文本（递归；Lucide 图标组件无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
+
 // ---- 数据流源码断言 ----
 
 test('Overview.jsx 导出分组函数与组定义，渲染使用分组逻辑', () => {
@@ -205,8 +214,8 @@ test('渲染：混合数据按 failed→done→other 顺序渲染组标题与计
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
     assert.equal(titles.length, 3, '三种状态均应渲染组标题')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['❌ bot-failed', '✅ bot-done', '📋 其他'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['bot-failed', 'bot-done', '其他'],
                      '组标题顺序应为 failed → done → other')
     const counts = root.findAll((n) => n.props.className === 'issue-group-count')
     // JSX 中 `{items.length} 个` 产生 [数字, ' 个'] 两个子节点
@@ -231,8 +240,8 @@ test('渲染：bot 状态徽章显示在 issue-link 按钮内，类名区分状�
       (n) => n.props.className === 'issue-status issue-status-failed')
     assert.equal(done.length, 2, '两条 bot-done 应渲染完成徽章')
     assert.equal(failed.length, 1, '一条 bot-failed 应渲染失败徽章')
-    assert.deepEqual(done.map((n) => n.props.children), ['✅ bot-done', '✅ bot-done'])
-    assert.deepEqual(failed.map((n) => n.props.children), ['❌ bot-failed'])
+    assert.deepEqual(done.map((n) => textOf(n.props.children).trim()), ['bot-done', 'bot-done'])
+    assert.deepEqual(failed.map((n) => textOf(n.props.children).trim()), ['bot-failed'])
     // 徽章位于 issue-link 按钮内（标题旁），不破坏点击打开右边栏
     const linkBtns = root.findAll(
       (n) => n.type === 'button' && String(n.props.className || '').includes('issue-link'))
@@ -281,7 +290,7 @@ test('渲染：全普通 issue 仓库仅渲染「其他」组，无状态徽章'
     assert.equal(renderError, null)
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children), ['📋 其他'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()), ['其他'],
                      '无终态标签时仅渲染「其他」组')
     const statuses = root.findAll(
       (n) => String(n.props.className || '').includes('issue-status'))
@@ -313,8 +322,8 @@ test('渲染：空组不渲染组标题（无 bot-failed 时无对应标题）',
     assert.equal(renderError, null)
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children),
-                     ['✅ bot-done', '📋 其他'],
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()),
+                     ['bot-done', '其他'],
                      '无 bot-failed 的仓库不应渲染该空组标题')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
@@ -381,7 +390,7 @@ test('渲染：issue 缺失 labels 字段时照常归「其他」组渲染', asy
     assert.equal(renderError, null, 'labels 缺失渲染不应崩溃')
     const root = renderer.root
     const titles = root.findAll((n) => n.props.className === 'issue-group-title')
-    assert.deepEqual(titles.map((t) => t.props.children), ['📋 其他'])
+    assert.deepEqual(titles.map((t) => textOf(t.props.children).trim()), ['其他'])
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

@@ -7,6 +7,15 @@
 // 3. 成功后显示「已停止 N 个任务」提示（alert-ok）并刷新列表；失败显示错误；
 // 4. 活跃数 = stats.queued + running + retrying，展示在按钮文案上。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -107,7 +116,7 @@ async function renderAndSettle(stats) {
 function findStopButton(renderer) {
   return renderer.root
     .findAllByType('button')
-    .find((b) => JSON.stringify(b.props.children).includes('停止所有任务'))
+    .find((b) => textOf(b.props.children).includes('停止所有任务'))
 }
 
 // 注入对话框自动应答（无 DialogHost 挂载时 confirmDialog 由 autoAnswer
@@ -130,7 +139,7 @@ test('有活跃任务时按钮可用并显示数量', async () => {
     assert.ok(btn, '应有停止按钮')
     assert.notEqual(btn.props.disabled, true, '有活跃任务时按钮应可用')
     assert.ok(
-      JSON.stringify(btn.props.children).includes('（4）'),
+      textOf(btn.props.children).includes('（4）'),
       '按钮应显示活跃任务数 4（queued 1 + running 2 + retrying 1）',
     )
   } finally {

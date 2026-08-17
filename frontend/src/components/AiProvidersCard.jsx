@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { api } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { AI_PROVIDER_PRESETS, presetOf, providerName, ProviderLogo } from '../providers.jsx'
@@ -106,7 +107,7 @@ export default function AiProvidersCard() {
     <div className="card">
       <h2>AI API 供应商</h2>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
-      {saved && <div className="alert alert-ok">✓ 已保存（已写回 config.yaml）</div>}
+      {saved && <div className="alert alert-ok"><Icon name="check" /> 已保存（已写回 config.yaml）</div>}
 
       <table className="table provider-table">
         <thead>
@@ -127,7 +128,7 @@ export default function AiProvidersCard() {
               <td className="muted small">{providerName(p.provider)}</td>
               <td><code>{p.model || '—'}</code></td>
               <td>{p.enabled
-                ? <span className="ok-text">✓ 启用</span>
+                ? <span className="ok-text"><Icon name="check" /> 启用</span>
                 : <span className="muted">停用</span>}</td>
               <td>
                 <button className="btn btn-sm" onClick={() => startEdit(i)}>编辑</button>{' '}
@@ -229,7 +230,7 @@ export default function AiProvidersCard() {
         <button className="btn btn-primary" disabled={busy} onClick={save}>
           {busy ? '保存中…' : '保存 AI 供应商配置'}
         </button>
-        {saved && <span className="saved-hint">✓ 已保存</span>}
+        {saved && <span className="saved-hint"><Icon name="check" /> 已保存</span>}
       </div>
       <p className="muted small">
         为后续 AI 功能配置可用的 API 供应商（本期仅存储配置，不接入实际调用）。

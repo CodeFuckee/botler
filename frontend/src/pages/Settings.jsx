@@ -8,6 +8,7 @@ import BackupManager from '../components/BackupManager.jsx'
 import SettingsNav from '../components/SettingsNav.jsx'
 import Markdown from '../components/Markdown.jsx'
 import VersionBadge from '../components/VersionBadge.jsx'
+import { Icon } from '../components/Icon.jsx'
 
 const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
@@ -103,12 +104,12 @@ export default function Settings() {
     const res = await sendTestNotification()
     setTestNote(
       res.ok
-        ? { ok: true, text: '✓ 已弹出测试通知，请查看系统通知' }
+        ? { ok: true, text: '已弹出测试通知，请查看系统通知' }
         : res.reason === 'insecure-context'
-          ? { ok: false, text: '✗ 当前页面非安全上下文（需 HTTPS 且证书受信任），浏览器通知不可用' }
+          ? { ok: false, text: '当前页面非安全上下文（需 HTTPS 且证书受信任），浏览器通知不可用' }
           : res.reason === 'denied'
-            ? { ok: false, text: '✗ 浏览器已拒绝通知授权：点击地址栏左侧图标将通知权限改为「允许」后再试' }
-            : { ok: false, text: '✗ 当前浏览器不支持系统通知' }
+            ? { ok: false, text: '浏览器已拒绝通知授权：点击地址栏左侧图标将通知权限改为「允许」后再试' }
+            : { ok: false, text: '当前浏览器不支持系统通知' }
     )
   }
 
@@ -125,8 +126,8 @@ export default function Settings() {
     if (!t.installed) return <span className="muted">未安装</span>
     if (!t.latest) return <span className="muted">无法获取最新版本</span>
     return t.up_to_date
-      ? <span className="ok-text">✓ 已是最新</span>
-      : <span className="err-hint">⚠ 可升级</span>
+      ? <span className="ok-text"><Icon name="check" /> 已是最新</span>
+      : <span className="err-hint"><Icon name="warning" /> 可升级</span>
   }
 
   useEffect(() => {
@@ -239,9 +240,9 @@ export default function Settings() {
     try {
       const res = await api.post('/api/settings/webhook-test')
       setWebhookTestNote(res.ok
-        ? { ok: true, text: `✓ 测试推送成功（HTTP ${res.status_code}），请检查目标服务是否收到` }
-        : { ok: false, text: '✗ ' + (res.error || '发送失败') })
-    } catch (e) { setWebhookTestNote({ ok: false, text: '✗ ' + e.message }) }
+        ? { ok: true, text: `测试推送成功（HTTP ${res.status_code}），请检查目标服务是否收到` }
+        : { ok: false, text: (res.error || '发送失败') })
+    } catch (e) { setWebhookTestNote({ ok: false, text: e.message }) }
     finally { setWebhookBusy(false) }
   }
 
@@ -363,8 +364,8 @@ export default function Settings() {
     setReconcileNote('')
     try {
       await api.post('/api/settings/reconcile-now')
-      setReconcileNote('✓ 对账已在后台触发，可稍后查看任务列表')
-    } catch (e) { setReconcileNote('✗ ' + e.message) }
+      setReconcileNote({ ok: true, text: '对账已在后台触发，可稍后查看任务列表' })
+    } catch (e) { setReconcileNote({ ok: false, text: e.message }) }
   }
 
   return (
@@ -483,7 +484,7 @@ export default function Settings() {
           <button className="btn btn-primary" disabled={ssoBusy} onClick={saveSso}>
             {ssoBusy ? '保存中…' : '保存 SSO 配置'}
           </button>
-          {ssoSaved && <span className="saved-hint">✓ SSO 配置已保存（已写回 config.yaml）</span>}
+          {ssoSaved && <span className="saved-hint"><Icon name="check" /> SSO 配置已保存（已写回 config.yaml）</span>}
         </div>
         <p className="muted small">
           接入群晖 SSO Server（OIDC 协议）：先在群晖「SSO Server → 应用程序」新增 OIDC 应用，
@@ -649,7 +650,7 @@ export default function Settings() {
           <button className="btn btn-primary" disabled={minioSaveBusy} onClick={saveMinio}>
             {minioSaveBusy ? '保存中…' : '保存 MinIO 配置'}
           </button>
-          {minioSaved && <span className="saved-hint">✓ MinIO 配置已保存（已写回 config.yaml）</span>}
+          {minioSaved && <span className="saved-hint"><Icon name="check" /> MinIO 配置已保存（已写回 config.yaml）</span>}
         </div>
         <p className="muted small">
           识图模型图片上传（issue #163/#164）：启用后图片先计算 SHA-256 哈希、
@@ -663,7 +664,7 @@ export default function Settings() {
 
       <h2 className="settings-group-title">系统设置</h2>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
-      {saved && <div className="alert alert-ok">✓ 已保存（已写回 config.yaml）</div>}
+      {saved && <div className="alert alert-ok"><Icon name="check" /> 已保存（已写回 config.yaml）</div>}
 
       <section id="settings-tasks" className="settings-section">
       <div className="card">
@@ -703,7 +704,7 @@ export default function Settings() {
               <td>
                 {settings.worker?.pause_active && (
                   <div className="alert alert-warning small">
-                    ⚠ 当前处于暂停窗口：新任务暂缓开始，运行中任务不受影响，
+                    <Icon name="warning" /> 当前处于暂停窗口：新任务暂缓开始，运行中任务不受影响，
                     未开始任务将在窗口结束后自动执行。
                   </div>
                 )}
@@ -785,7 +786,7 @@ export default function Settings() {
             {busy ? '保存中…' : '保存'}
           </button>
           <button className="btn" onClick={reconcileNow}>立即对账一次</button>
-          {reconcileNote && <span className="saved-hint">{reconcileNote}</span>}
+          {reconcileNote && <span className={reconcileNote.ok ? 'saved-hint' : 'err-hint'}><Icon name={reconcileNote.ok ? 'check' : 'x'} /> {reconcileNote.text}</span>}
         </div>
       </div>
 
@@ -830,7 +831,7 @@ export default function Settings() {
           <button className="btn btn-primary" disabled={uiSaveBusy} onClick={saveUi}>
             {uiSaveBusy ? '保存中…' : '保存界面显示配置'}
           </button>
-          {uiSaved && <span className="saved-hint">✓ 界面显示配置已保存（已写回 config.yaml）</span>}
+          {uiSaved && <span className="saved-hint"><Icon name="check" /> 界面显示配置已保存（已写回 config.yaml）</span>}
         </div>
         <p className="muted small">
           灵感板块与 CI/CD 流水线板块是否显示未启用项目：勾选 = 显示（未启用仓库带
@@ -878,7 +879,7 @@ export default function Settings() {
                 ) : window.isSecureContext === false ? (
                   <span className="muted">当前页面非安全上下文（需 HTTPS 且证书受信任），通知不可用</span>
                 ) : Notification.permission === 'granted' ? (
-                  <span className="ok-text">✓ 已授权</span>
+                  <span className="ok-text"><Icon name="check" /> 已授权</span>
                 ) : Notification.permission === 'denied' ? (
                   <span className="muted">已拒绝（点击地址栏左侧图标将通知权限改为「允许」）</span>
                 ) : (
@@ -893,7 +894,7 @@ export default function Settings() {
               <td>
                 <button className="btn" onClick={handleTestNotify}>弹出测试通知</button>
                 {testNote && (
-                  <span className={testNote.ok ? 'saved-hint' : 'err-hint'}>{testNote.text}</span>
+                  <span className={testNote.ok ? 'saved-hint' : 'err-hint'}><Icon name={testNote.ok ? 'check' : 'x'} /> {testNote.text}</span>
                 )}
               </td>
             </tr>
@@ -986,7 +987,7 @@ export default function Settings() {
                   {webhookBusy ? '发送中…' : '发送测试推送'}
                 </button>
                 {webhookTestNote && (
-                  <span className={webhookTestNote.ok ? 'saved-hint' : 'err-hint'}>{webhookTestNote.text}</span>
+                  <span className={webhookTestNote.ok ? 'saved-hint' : 'err-hint'}><Icon name={webhookTestNote.ok ? 'check' : 'x'} /> {webhookTestNote.text}</span>
                 )}
               </td>
             </tr>
@@ -996,7 +997,7 @@ export default function Settings() {
           <button className="btn btn-primary" disabled={webhookSaveBusy} onClick={saveWebhook}>
             {webhookSaveBusy ? '保存中…' : '保存 Webhook 配置'}
           </button>
-          {webhookSaved && <span className="saved-hint">✓ Webhook 配置已保存（已写回 config.yaml）</span>}
+          {webhookSaved && <span className="saved-hint"><Icon name="check" /> Webhook 配置已保存（已写回 config.yaml）</span>}
         </div>
         <p className="muted small">
           任务完成（成功收尾）时调用 webhook 进行消息推送。修改后点击下方「保存 Webhook 配置」立即生效；
@@ -1101,7 +1102,7 @@ export default function Settings() {
                 <tr key={t.key}>
                   <td>{t.name} <code>{t.key}</code></td>
                   <td>{t.installed
-                    ? <span className="ok-text">✓ 已安装</span>
+                    ? <span className="ok-text"><Icon name="check" /> 已安装</span>
                     : <span className="muted">未安装</span>}</td>
                   <td>{t.version || <span className="muted">未知</span>}</td>
                   <td>{t.latest || <span className="muted">—</span>}</td>
@@ -1163,11 +1164,11 @@ export default function Settings() {
             {ownerBusy ? '保存中…' : '保存 Owner Token'}
           </button>
           {ownerSaved && (
-            <span className="saved-hint">✓ Owner token 已保存（已写回 config.yaml）</span>
+            <span className="saved-hint"><Icon name="check" /> Owner token 已保存（已写回 config.yaml）</span>
           )}
         </div>
         <p className="muted small">
-          🔒 <strong>隔离状态</strong>：该 token 已由系统架构隔离，<strong>所有 Agent
+          <Icon name="lock" /> <strong>隔离状态</strong>：该 token 已由系统架构隔离，<strong>所有 Agent
           均不可使用</strong>——Agent 处理 issue 时只能使用自己仓库的认证 token 进行
           issue 编辑，会话环境中绝不会注入此 token。
         </p>

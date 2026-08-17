@@ -7,6 +7,15 @@
 // 3. 点击需自定义确认对话框（confirmDialog）确认，确认后才调接口；取消不调用；
 // 4. 成功后显示提示（alert-ok）并刷新列表；失败显示错误；请求中按钮禁用。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -104,7 +113,7 @@ async function renderAndSettle(tasks, stats = {}) {
 function findRetryButtons(renderer) {
   return renderer.root
     .findAllByType('button')
-    .filter((b) => JSON.stringify(b.props.children).includes('重试'))
+    .filter((b) => textOf(b.props.children).includes('重试'))
 }
 
 // 注入对话框自动应答（无 DialogHost 挂载时 confirmDialog 由 autoAnswer

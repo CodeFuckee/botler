@@ -11,6 +11,15 @@
 //    标题与描述都输入 → POST description = 用户输入的描述；
 // 4. 回归：标题为空仍被「标题不能为空」校验拦截，不发起 POST。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -101,7 +110,7 @@ function findSubmit(renderer) {
 function errorText(renderer) {
   const alerts = renderer.root.findAll(
     (n) => String(n.props.className || '').includes('alert-error'))
-  return alerts.map((a) => JSON.stringify(a.props.children)).join('|')
+  return alerts.map((a) => textOf(a.props.children)).join('|')
 }
 // 输入标题 / 描述（触发受控组件 onChange）
 async function setTitle(renderer, value) {

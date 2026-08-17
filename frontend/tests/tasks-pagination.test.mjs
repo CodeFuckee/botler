@@ -10,6 +10,15 @@
 // 6. 单页（total <= 50）与空列表不渲染翻页组件；
 // 7. pageNumbers 页码窗口函数边界（少页全显示、多页首尾+当前±1+省略号）。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -125,7 +134,7 @@ async function renderAndSettle(total, tasksByPage, extra = {}) {
 function findButtons(renderer, text) {
   return renderer.root
     .findAllByType('button')
-    .filter((b) => JSON.stringify(b.props.children).includes(text))
+    .filter((b) => textOf(b.props.children).includes(text))
 }
 
 // 点击按钮后等待 useEffect 重新拉取
@@ -194,8 +203,8 @@ test('点击页码数字跳转到对应页', async () => {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
     // 页码按钮：文案恰为数字（不含「上一页/下一页」）
     const page3 = renderer.root.findAllByType('button').filter((b) => {
-      const s = JSON.stringify(b.props.children)
-      return s === '"3"'
+      const s = textOf(b.props.children)
+      return s === '3'
     })
     assert.equal(page3.length, 1, '应渲染页码数字 3 按钮')
     await click(renderer, page3[0])

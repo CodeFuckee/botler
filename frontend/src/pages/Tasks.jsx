@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 import { confirmDialog } from '../dialog.js'
+import { Icon } from '../components/Icon.jsx'
 
 // 每页条数（与后端 limit 一致，issue #50 翻页）
 const PAGE_SIZE = 50
@@ -77,7 +78,7 @@ function TaskDrawer({ task, onClose }) {
         <div className="modal-header">
           <strong>任务 #{task.id} 全部数据 — #{task.issue_iid} {task.issue_title}</strong>
           <button className="btn modal-close" onClick={onClose} title="关闭"
-                  aria-label="关闭抽屉">×</button>
+                  aria-label="关闭抽屉"><Icon name="x" /></button>
         </div>
         <table className="table kv">
           <tbody>
@@ -324,7 +325,7 @@ export default function Tasks() {
             disabled={activeCount === 0 || stopping}
             title={activeCount === 0 ? '当前没有正在执行的任务' : '停止所有排队中、执行中、重试中的任务'}
           >
-            ⏹ 停止所有任务{activeCount > 0 ? `（${activeCount}）` : ''}
+            <><Icon name="square" /> 停止所有任务{activeCount > 0 ? `（${activeCount}）` : ''}</>
           </button>
           {/* 一键对账所有启用仓库（issue #38）：低危操作无需确认；请求中禁用 */}
           <button
@@ -333,7 +334,7 @@ export default function Tasks() {
             disabled={reconciling}
             title="立即扫描所有启用仓库，把漏掉的 issue 补入任务队列"
           >
-            ↻ 对账所有仓库{reconciling ? '…' : ''}
+            <><Icon name="refresh" /> 对账所有仓库{reconciling ? '…' : ''}</>
           </button>
           {/* 手动刷新任务列表（issue #59）：无活跃任务时页面无自动轮询，
               点此重新拉取更新所有任务状态；请求中禁用防重复点击 */}
@@ -343,7 +344,7 @@ export default function Tasks() {
             disabled={refreshing}
             title="重新加载任务列表，更新所有任务的显示状态"
           >
-            ↻ 刷新{refreshing ? '…' : ''}
+            <><Icon name="refresh" /> 刷新{refreshing ? '…' : ''}</>
           </button>
         </div>
 
@@ -369,7 +370,7 @@ export default function Tasks() {
             {data.tasks.length === 0 && (
               <tr><td colSpan={12}>
                 <div className="empty-state">
-                  <span className="empty-icon" aria-hidden="true">🗂️</span>
+                  <span className="empty-icon" aria-hidden="true"><Icon name="folderOpen" /></span>
                   <p className="muted">暂无任务</p>
                 </div>
               </td></tr>
@@ -497,7 +498,7 @@ export default function Tasks() {
             <div className="modal-header">
               <strong>失败详细原因 — #{detailTask.issue_iid} {detailTask.issue_title}</strong>
               <button className="btn modal-close" onClick={() => setDetailTask(null)}
-                      title="关闭" aria-label="关闭弹窗">×</button>
+                      title="关闭" aria-label="关闭弹窗"><Icon name="x" /></button>
             </div>
             {detailTask.error_message && (
               <div className="error-summary">

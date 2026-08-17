@@ -276,7 +276,7 @@ test('渲染里程碑胶囊与评论数', async () => {
     const root = renderer.root
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('v1.0'), '应显示里程碑标题')
-    assert.ok(text.includes('💬'), '应显示评论数图标')
+    assert.ok(text.includes('lucide-message'), '应显示评论数图标（Lucide MessageCircle）')
     const milestone = root.findAll((n) => n.props.className === 'milestone-chip')
     assert.equal(milestone.length, 1, '仅一条 issue 有里程碑时应只渲染一个里程碑胶囊')
   } finally {

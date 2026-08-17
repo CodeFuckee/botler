@@ -3,6 +3,38 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+### Changed
+
+- **项目内所有 UI 图标统一改为 Lucide 系列图标（issue #177）**：
+  需求「将项目中所有的图标都改成Lucide 系列的icon」。此前前端界面图标为 emoji /
+  Unicode 符号混合（🤖、💭、🔧、🏁、📁、💬、↻、✓/✗、▸/▾、× 等），风格不一且随
+  系统字体渲染差异大。本次全量替换为 **Lucide 系列图标**（`lucide-react`）：
+  - **统一入口**：新增 `frontend/src/components/Icon.jsx`——`Icon` 组件按语义名
+    （`ICONS` 映射）渲染对应 Lucide 图标，未知名回退 × 图标；装饰性图标默认
+    `aria-hidden`，`size` / `aria-label` 等 props 透传；
+  - **全局尺寸**：`styles.css` 新增 `.lucide { width:1em; height:1em; ... }` 规则，
+    图标随字号缩放并与文字基线对齐，替代 emoji 依赖 `font-size` 控制尺寸的方式；
+  - **替换范围**：概览页（issue 分组标题 / bot 状态徽章 / 事件行 / 灵感板块 /
+    流水线 / 对账 / 刷新 / 余额 / 空状态等）、任务列表与详情（停止 / 对账 / 刷新 /
+    思考过程 / 工具调用 / 结果 / 返回 / 外链等）、设置页（保存成功 / 测试结果 /
+    警告 / 锁定等）、仓库页、标签库、模版页、登录页、顶部导航（品牌 / 用户 /
+    搜索 / 折叠）、全部弹窗与抽屉的关闭按钮（× → Lucide X）等；
+  - **保留范围**：AI 供应商品牌 logo（`providers.jsx` 内联 SVG 圆底图形）属品牌
+    标识，Lucide 无对应图形，不在图标替换范围内；后端通知/日志纯文本中的 emoji
+    属文案内容，不适用 SVG 图标库；
+  - **测试**：新增 `frontend/tests/icons.test.mjs`（4 例：ICONS 语义映射完整且均渲染
+    svg、未知名回退 ×、size / aria-label 透传、默认尺寸）；同步更新
+    `overview-issue-groups` / `overview-issue-running-top` / `overview-issue-running-highlight` /
+    `overview-issue-task` / `overview-inspirations` / `overview-deepseek-balance` /
+    `overview-issues` / `overview-section-order` / `tasks-refresh-button` /
+    `stop-all-button` / `tasks-pagination` / `tasks-reconcile-all-button` /
+    `tasks-responsive-cols` / `tasks-retry-button` / `backup-manager` /
+    `templates-collapsible-editor` / `task-detail-thinking-toggle` / `dialog` /
+    `pipeline-commit-time` / `overview-add-issue*` 等既有用例（按钮 / 组标题 / 徽章 /
+    提示文本改为 textOf 提取或 Lucide 类名断言）；E2E `overview.spec.js` /
+    `task-detail.spec.js` 同步适配。前端全量测试（781 例）、覆盖率门禁与 E2E 均通过，
+    无 regression。
+
 ### Added
 
 - **任务详情页事件流默认隐藏思考过程，事件流右侧新增「显示思考过程」开关（issue #176）**：

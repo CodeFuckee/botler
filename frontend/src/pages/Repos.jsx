@@ -4,6 +4,7 @@ import { api } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import FolderPicker from '../components/FolderPicker.jsx'
 import RepoEditModal from '../components/RepoEditModal.jsx'
+import { Icon } from '../components/Icon.jsx'
 
 export default function Repos() {
   const [repos, setRepos] = useState([])
@@ -238,7 +239,7 @@ export default function Repos() {
         <h2>仓库列表（{repos.length}）</h2>
         {repos.length === 0 && (
           <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true">📦</span>
+            <span className="empty-icon" aria-hidden="true"><Icon name="package" /></span>
             <p className="muted">还没有仓库。添加后平台会自动注册 webhook。</p>
           </div>
         )}
@@ -303,7 +304,7 @@ function TestResult({ result }) {
     const ok = v.ok === true
     return (
       <span key={k} className={`test-chip ${ok ? 'ok' : 'bad'}`}>
-        {k}: {ok ? '✓' : (v.error || v.message || '✗')}
+        {k}: {ok ? <Icon name="check" /> : (v.error || v.message || <Icon name="x" />)}
       </span>
     )
   })
@@ -317,8 +318,8 @@ function ReconcileResult({ result }) {
   return (
     <div className="small">
       {result.enqueued > 0
-        ? <span className="test-chip ok">✓ {result.enqueued} 个待处理 issue 已入队</span>
-        : <span className="test-chip ok">✓ 无需处理</span>}
+        ? <span className="test-chip ok"><Icon name="check" /> {result.enqueued} 个待处理 issue 已入队</span>
+        : <span className="test-chip ok"><Icon name="check" /> 无需处理</span>}
       {result.scanned > 0 && <span className="muted">扫描 {result.scanned} 个 issue</span>}
     </div>
   )

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Icon } from './Icon.jsx'
 import { api, fmtSize } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 
@@ -31,7 +32,7 @@ export default function BackupManager() {
           retention_days: Number(data.config.retention_days),
         },
       })
-      setNote('✓ 备份配置已保存（写回 config.yaml）')
+      setNote('备份配置已保存（写回 config.yaml）')
       await load()
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
@@ -40,7 +41,7 @@ export default function BackupManager() {
     setBusy(true); setError(''); setNote('')
     try {
       const info = await api.post('/api/backups')
-      setNote(`✓ 备份完成：${info.name}`)
+      setNote(`备份完成：${info.name}`)
       await load()
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
@@ -66,7 +67,7 @@ export default function BackupManager() {
     setBusy(true); setError(''); setNote('')
     try {
       await api.post('/api/backups/restore', { name })
-      setNote('✓ 恢复完成，服务正在自动重启，稍后请刷新页面')
+      setNote('恢复完成，服务正在自动重启，稍后请刷新页面')
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
@@ -79,7 +80,7 @@ export default function BackupManager() {
     setBusy(true); setError(''); setNote('')
     try {
       await api.upload('/api/backups/restore/upload', picked)
-      setNote('✓ 上传恢复完成，服务正在自动重启，稍后请刷新页面')
+      setNote('上传恢复完成，服务正在自动重启，稍后请刷新页面')
       if (fileInput.current) fileInput.current.value = ''
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
@@ -101,7 +102,7 @@ export default function BackupManager() {
     <div className="card">
       <h2>数据备份</h2>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
-      {note && <div className="alert alert-ok" onClick={() => setNote('')}>{note}</div>}
+      {note && <div className="alert alert-ok" onClick={() => setNote('')}><Icon name="check" /> {note}</div>}
 
       <table className="table kv">
         <tbody>

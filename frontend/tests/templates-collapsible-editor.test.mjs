@@ -133,9 +133,9 @@ test('模版编辑器默认全部展开：rows 自适应完整内容行数，无
       assert.equal(toggles.length, 1, '应有且仅有一个折叠标题行')
       assert.equal(toggles[0].props['aria-expanded'], true, '默认 aria-expanded 应为 true')
       assert.match(
-        textOf(toggles[0].props.children),
-        /▾/,
-        '展开态标题行 chevron 应为 ▾',
+        JSON.stringify(renderer.toJSON()),
+        /lucide-chevron-down/,
+        '展开态标题行 chevron 应为 Lucide ChevronDown',
       )
       assert.match(
         textOf(toggles[0].props.children),
@@ -169,7 +169,7 @@ test('标题行点击折叠/展开切换（聊天记录式）：折叠时编辑�
         '折叠态不应渲染保存按钮（操作区随编辑器一起隐藏）',
       )
       assert.equal(toggle.props['aria-expanded'], false, '折叠态 aria-expanded 应为 false')
-      assert.match(textOf(toggle.props.children), /▸/, '折叠态标题行 chevron 应为 ▸')
+      assert.match(JSON.stringify(renderer.toJSON()), /lucide-chevron-right/, '折叠态标题行 chevron 应为 Lucide ChevronRight')
       assert.match(textOf(toggle.props.children), /40 行/, '折叠态标题行仍提示行数')
 
       // 再次展开：编辑器恢复、内容不丢失、行数提示不变

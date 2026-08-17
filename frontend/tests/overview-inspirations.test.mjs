@@ -13,6 +13,15 @@
 //    文本域回填、保存调 PUT、取消退出编辑态；删除 → DELETE 并刷新；
 // 4. 边界：空白内容不发请求；接口失败显示错误且不崩溃。
 import { after, mock, test } from 'node:test'
+
+// 渲染树节点 → 纯文本（递归；Lucide 图标等元素无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -183,7 +192,7 @@ function findEditButton(renderer) {
   const hit = btns.find((b) =>
     String(b.props.className || '').includes('inspiration-action-btn')
     && !String(b.props.className || '').includes('inspiration-add-issue-btn')
-    && JSON.stringify(b.props.children).includes('编辑'))
+    && textOf(b.props.children).includes('编辑'))
   assert.ok(hit, '找不到编辑按钮')
   return hit
 }
@@ -196,12 +205,12 @@ test('渲染：灵感板块位于「开放 Issue」与「CI/CD 流水线」之�
     assert.equal(r.renderError, null, `渲染抛错：${r.renderError?.message || r.renderError}`)
     const text = treeText(r.renderer)
     const issueTitle = text.indexOf('开放 Issue')
-    const inspTitle = text.indexOf('💡 灵感')
+    const inspTitle = text.indexOf('灵感')
     const pipeTitle = text.indexOf('CI/CD 流水线')
     assert.ok(issueTitle >= 0 && inspTitle >= 0 && pipeTitle >= 0,
               `三板块标题都应存在（issue=${issueTitle} insp=${inspTitle} pipe=${pipeTitle}）`)
-    assert.ok(issueTitle < inspTitle, '「开放 Issue」应位于「💡 灵感」之前')
-    assert.ok(inspTitle < pipeTitle, '「💡 灵感」应位于「CI/CD 流水线」之前')
+    assert.ok(issueTitle < inspTitle, '「开放 Issue」应位于「灵感」之前')
+    assert.ok(inspTitle < pipeTitle, '「灵感」应位于「CI/CD 流水线」之前')
     // 轮询到了灵感接口
     assert.ok(r.getCalls.includes('/api/inspirations/overview'),
               '应轮询 /api/inspirations/overview')
@@ -245,7 +254,7 @@ test('渲染：无任何仓库时显示板块空状态', async () => {
   try {
     const text = treeText(r.renderer)
     assert.ok(text.includes('暂无灵感（未配置仓库）'), '无仓库应显示板块空状态')
-    assert.ok(text.includes('💡 灵感'), '板块标题仍应渲染')
+    assert.ok(text.includes('灵感'), '板块标题仍应渲染')
   } finally {
     await r.unmount()
   }
@@ -257,7 +266,7 @@ test('渲染：接口失败显示错误且不崩溃', async () => {
     assert.equal(r.renderError, null, '渲染不应崩溃')
     const text = treeText(r.renderer)
     assert.ok(text.includes('数据库不可用'), '应显示灵感接口错误')
-    assert.ok(text.includes('💡 灵感'), '板块骨架仍应渲染')
+    assert.ok(text.includes('灵感'), '板块骨架仍应渲染')
   } finally {
     await r.unmount()
   }
@@ -343,7 +352,7 @@ test('交互：编辑 → 保存调 PUT，取消退出编辑态', async () => {
 // 按文本内容找按钮（取消按钮无专属类名）
 function rendererRootFindByText(renderer, text) {
   const btns = renderer.root.findAll((n) => n.type === 'button')
-  const hit = btns.find((b) => JSON.stringify(b.props.children).includes(text))
+  const hit = btns.find((b) => textOf(b.props.children).includes(text))
   assert.ok(hit, `找不到文本为 ${text} 的按钮`)
   return hit
 }
@@ -379,9 +388,9 @@ async function clickAddIssue(renderer, index = 0) {
 }
 
 test('源码：「添加 Issue」按钮位于「编辑」按钮左侧', () => {
-  const add = overview.indexOf('📌 添加 Issue')
-  const edit = overview.indexOf('✏️ 编辑')
-  const del = overview.indexOf('🗑️ 删除')
+  const add = overview.indexOf('name="pin" /> 添加 Issue')
+  const edit = overview.indexOf('name="pencil" /> 编辑')
+  const del = overview.indexOf('name="trash" /> 删除')
   assert.ok(add >= 0 && edit >= 0 && del >= 0, '三个操作按钮文案都应存在')
   assert.ok(add < edit, '「添加 Issue」应位于「编辑」左侧')
   assert.ok(edit < del, '「编辑」应位于「删除」左侧')
@@ -410,7 +419,7 @@ test('渲染：每条灵感都有「添加 Issue」按钮且位于编辑按钮�
       (n) => String(n.props.className || '').includes('inspiration-item'))
     assert.ok(items.length >= 1, '应有灵感条目')
     const buttons = items[0].findAll((n) => n.type === 'button')
-    const texts = buttons.map((b) => JSON.stringify(b.props.children || ''))
+    const texts = buttons.map((b) => textOf(b.props.children || ''))
     const addIdx = texts.findIndex((t) => t.includes('添加 Issue'))
     const editIdx = texts.findIndex((t) => t.includes('编辑'))
     const delIdx = texts.findIndex((t) => t.includes('删除'))
@@ -484,7 +493,7 @@ test('交互：提交失败显示错误且不刷新灵感列表', async () => {
     await clickAddIssue(r.renderer, 0)
     const text = treeText(r.renderer)
     assert.ok(text.includes('owner token 未配置'), '应显示提交错误')
-    assert.ok(text.includes('💡 灵感'), '板块骨架仍应渲染')
+    assert.ok(text.includes('灵感'), '板块骨架仍应渲染')
     // issue #162：未成功推送不删除灵感，失败后不应刷新灵感列表
     // （条目保留可重试，避免界面闪烁）
     const inspAfter = r.getCalls.filter((p) => p === '/api/inspirations/overview').length
@@ -507,7 +516,7 @@ async function openInspirationChat(renderer, index = 0) {
 }
 
 test('源码：灵感条目有「对话」按钮，调用 GET/POST /api/inspirations/{id}/messages', () => {
-  assert.match(overview, /💬 对话/, '灵感条目操作区应有「对话」按钮')
+  assert.match(overview, /name="message" \/> 对话/, '灵感条目操作区应有「对话」按钮')
   assert.match(overview, /api\.get\(`\/api\/inspirations\/\$\{ins\.id\}\/messages`\)/,
                '打开面板应 GET /api/inspirations/{id}/messages 加载历史')
   assert.match(overview, /api\.post\(`\/api\/inspirations\/\$\{chatInspiration\.id\}\/messages`/,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, STATUS_META, shortSha, fmtTime, fmtAgo, summarizeToolInput } from '../api.js'
 import IssueDrawer, { ENGINE_META } from '../components/IssueDrawer.jsx'
+import { Icon } from '../components/Icon.jsx'
 import AddIssueModal from '../components/AddIssueModal.jsx'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
@@ -62,9 +63,9 @@ export const BOT_STATUS_NAMES = new Set(['bot-done', 'bot-failed'])
 
 // bot 状态 → 标题旁徽章文案与样式类（复用任务状态徽章的弱底语义色风格）
 export const BOT_STATUS_META = {
-  done: { label: '✅ bot-done', cls: 'issue-status-done',
+  done: { label: 'bot-done', icon: 'checkCircle', cls: 'issue-status-done',
           hint: 'bot 已完成开发，待人工确认关闭' },
-  failed: { label: '❌ bot-failed', cls: 'issue-status-failed',
+  failed: { label: 'bot-failed', icon: 'xCircle', cls: 'issue-status-failed',
             hint: 'bot 处理失败，需人工介入' },
 }
 
@@ -72,10 +73,10 @@ export const BOT_STATUS_META = {
 // （issue #101）；其后沿用用户指定 bot-failed → bot-done → 其他
 // （issue #80 评论区）
 export const ISSUE_GROUPS = [
-  { key: 'running', title: '⚙️ 运行中', hint: '正在被 bot 执行的 issue，置顶展示' },
-  { key: 'failed', title: '❌ bot-failed', hint: 'bot 处理失败，需人工介入' },
-  { key: 'done', title: '✅ bot-done', hint: 'bot 已完成开发，待人工确认关闭' },
-  { key: 'other', title: '📋 其他', hint: '尚未处理或处理中的 issue' },
+  { key: 'running', title: '运行中', icon: 'settings', hint: '正在被 bot 执行的 issue，置顶展示' },
+  { key: 'failed', title: 'bot-failed', icon: 'xCircle', hint: 'bot 处理失败，需人工介入' },
+  { key: 'done', title: 'bot-done', icon: 'checkCircle', hint: 'bot 已完成开发，待人工确认关闭' },
+  { key: 'other', title: '其他', icon: 'clipboard', hint: '尚未处理或处理中的 issue' },
 ]
 
 // ---- issue #99：正在运行的 issue 高亮 ----
@@ -164,10 +165,10 @@ export function trimLogTail(lines, max) {
 // 事件 → 卡片单行文本（实时输出 SSE 事件流；status 事件跳过，卡片空间有限）
 export function eventToLine(e) {
   if (!e || typeof e !== 'object') return ''
-  if (e.kind === 'thinking') return `💭 ${e.text || ''}`
-  if (e.kind === 'tool') return `🔧 ${e.tool} ${summarizeToolInput(e.input, e.tool)}`
+  if (e.kind === 'thinking') return <><Icon name="brain" /> {e.text || ''}</>
+  if (e.kind === 'tool') return <><Icon name="wrench" /> {e.tool} {summarizeToolInput(e.input, e.tool)}</>
   if (e.kind === 'tool_result') return e.text || '（无输出）'
-  if (e.kind === 'result') return `🏁 ${e.result || ''}`
+  if (e.kind === 'result') return <><Icon name="flag" /> {e.result || ''}</>
   if (e.kind === 'status') return ''
   return e.text || ''
 }
@@ -519,7 +520,7 @@ export default function Overview() {
             <div className="deepseek-balance-body">
               <div className="deepseek-balance-head">
                 {dsBalance.balance.is_available ? (
-                  <span className="ok-text">✓ 账户可用</span>
+                  <span className="ok-text"><Icon name="check" /> 账户可用</span>
                 ) : (
                   <span className="muted">账户不可用</span>
                 )}
@@ -531,7 +532,7 @@ export default function Overview() {
               </div>
               {(dsBalance.balance.balance_infos || []).length === 0 ? (
                 <div className="empty-state small">
-                  <span className="empty-icon" aria-hidden="true">💰</span>
+                  <span className="empty-icon" aria-hidden="true"><Icon name="wallet" /></span>
                   <p className="muted">暂无余额信息</p>
                 </div>
               ) : (
@@ -558,7 +559,7 @@ export default function Overview() {
           )}
           <div className="form-row">
             <button type="button" className="btn btn-small"
-                    onClick={loadDeepSeekBalance}>↻ 刷新</button>
+                    onClick={loadDeepSeekBalance}><Icon name="refresh" /> 刷新</button>
           </div>
         </section>
       )}
@@ -573,7 +574,7 @@ export default function Overview() {
         <p className="muted">已启用仓库的开放 issue，按仓库优先级排序，正在运行的 issue 置顶展示任务执行详情（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
         {ownerTokenOk === false && (
           <div className="alert alert-warning" role="alert">
-            ⚠️ <strong>Owner GitLab Token 未配置</strong>：概览页的 issue 编辑
+            <Icon name="warning" /> <strong>Owner GitLab Token 未配置</strong>：概览页的 issue 编辑
             （关闭 issue / 编辑标签 / 添加评论 / 回复评论 / 添加 issue）必须使用
             owner token，未配置时操作会被拦截（不会以 code01 身份发布）。
             请先在「设置」页配置 <code>gitlab.owner_token</code> 后再操作。
@@ -592,7 +593,7 @@ export default function Overview() {
         )}
         {repoIssues.length === 0 || repoIssues.every((r) => !r.issues || r.issues.length === 0) ? (
           <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true">📋</span>
+            <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
             <p className="muted">暂无开放 issue</p>
           </div>
         ) : (
@@ -600,7 +601,7 @@ export default function Overview() {
             {repoIssues.map((r) => (
               <div key={r.repo_id} className="card issue-repo-card">
                 <div className="issue-repo-head">
-                  <span className="issue-repo-name" title="仓库">📁 {r.repo_name || '（已删除）'}</span>
+                  <span className="issue-repo-name" title="仓库"><Icon name="folder" /> {r.repo_name || '（已删除）'}</span>
                   <span className="badge badge-muted" title="仓库优先级：数字越小越优先">
                     优先级 {r.priority ?? 100}
                   </span>
@@ -612,13 +613,13 @@ export default function Overview() {
                             onClick={() => reconcileRepo(r)}
                             disabled={reconcileResults[r.repo_id]?.loading}
                             title="立即扫描该仓库开放 issue，把分配给了 bot 但还没有任务的 issue 补入任务队列">
-                      {reconcileResults[r.repo_id]?.loading ? '↻ 对账中…' : '↻ 对账'}
+                      {reconcileResults[r.repo_id]?.loading ? <><Icon name="refresh" /> 对账中…</> : <><Icon name="refresh" /> 对账</>}
                     </button>
                     {/* issue #92：卡片右上角「添加 Issue」按钮——打开弹窗，
                         提交后调用 GitLab API 在对应仓库创建 issue */}
                     <button type="button" className="btn btn-small add-issue-btn"
                             onClick={() => setAddIssueRepo(r)}
-                            title="在该仓库创建新 issue">＋ 添加 Issue</button>
+                            title="在该仓库创建新 issue"><Icon name="plus" /> 添加 Issue</button>
                   </div>
                 </div>
                 {/* issue #134：对账结果——与仓库页对账结果一致，小字展示
@@ -626,7 +627,7 @@ export default function Overview() {
                 {reconcileResults[r.repo_id] && <ReconcileResult result={reconcileResults[r.repo_id]} />}
                 {(r.issues || []).length === 0 ? (
                   <div className="empty-state small">
-                    <span className="empty-icon" aria-hidden="true">📋</span>
+                    <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
                     <p className="muted">该仓库暂无开放 issue</p>
                   </div>
                 ) : (
@@ -640,7 +641,7 @@ export default function Overview() {
                     return (
                       <div key={g.key} className="issue-group">
                         <div className="issue-group-head">
-                          <span className="issue-group-title" title={g.hint}>{g.title}</span>
+                          <span className="issue-group-title" title={g.hint}><Icon name={g.icon} /> {g.title}</span>
                           <span className="issue-group-count"
                                 title="组内 issue 数量">{items.length} 个</span>
                         </div>
@@ -673,13 +674,13 @@ export default function Overview() {
                                     <span className="issue-iid">#{i.iid}</span>
                                     {statusMeta && (
                                       <span className={`issue-status ${statusMeta.cls}`}
-                                            title={statusMeta.hint}>{statusMeta.label}</span>
+                                            title={statusMeta.hint}><Icon name={statusMeta.icon} /> {statusMeta.label}</span>
                                     )}
                                     {/* issue #99：正在运行的 issue 显示「运行中」徽章
                                         （任务结束后随任务列表轮询自动消失） */}
                                     {running && (
                                       <span className="issue-status issue-status-running"
-                                            title="该 issue 正在被 bot 执行中">⚙️ 运行中</span>
+                                            title="该 issue 正在被 bot 执行中"><Icon name="settings" /> 运行中</span>
                                     )}
                                     {i.title || '—'}
                                   </button>
@@ -694,7 +695,7 @@ export default function Overview() {
                                       ))}
                                       {i.milestone && (
                                         <span className="milestone-chip" title={`里程碑 ${i.milestone}`}>
-                                          🏷️ {i.milestone}
+                                          <Icon name="tag" /> {i.milestone}
                                         </span>
                                       )}
                                     </div>
@@ -722,7 +723,7 @@ export default function Overview() {
                                   )}
                                   {typeof i.user_notes_count === 'number' && (
                                     <span className="issue-notes" title="评论数">
-                                      💬 {i.user_notes_count}
+                                      <Icon name="message" /> {i.user_notes_count}
                                     </span>
                                   )}
                                 </div>
@@ -750,7 +751,9 @@ export default function Overview() {
                                         ) : null}
                                       </div>
                                       <pre className="log-view issue-task-log">
-                                        {lines.join('\n') || '（暂无输出）'}
+                                        {lines.length > 0
+                                          ? lines.map((line, i) => <span key={i}>{line}{'\n'}</span>)
+                                          : '（暂无输出）'}
                                       </pre>
                                     </div>
                                   )
@@ -774,7 +777,7 @@ export default function Overview() {
           本地数据库，不提交到 GitLab issue。每个仓库一张卡：灵感列表
           （编辑/删除）+ 底部随手记录表单 */}
       <section className="inspirations-section">
-        <h2>💡 灵感</h2>
+        <h2><Icon name="lightbulb" /> 灵感</h2>
         <p className="muted">按仓库随手记录新功能灵感，仅保存在本地数据库；可一键将灵感提交为 GitLab issue（默认标签 feature、ui；每 {INSPIRATION_POLL_MS / 1000} 秒自动刷新）</p>
         {inspirationError && (
           <div className="alert alert-error" onClick={() => setInspirationError('')}>{inspirationError}</div>
@@ -782,7 +785,7 @@ export default function Overview() {
         {inspirationCreatedIssue && (
           <div className="alert alert-ok" onClick={() => setInspirationCreatedIssue(null)}
                title="点击关闭">
-            ✅ 已创建{' '}
+            <Icon name="checkCircle" /> 已创建{' '}
             <a href={inspirationCreatedIssue.web_url || '#'} target="_blank" rel="noreferrer"
                onClick={(e) => e.stopPropagation()}>
               {'issue #' + inspirationCreatedIssue.iid}
@@ -792,7 +795,7 @@ export default function Overview() {
         )}
         {inspirationRepos.length === 0 ? (
           <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true">💡</span>
+            <span className="empty-icon" aria-hidden="true"><Icon name="lightbulb" /></span>
             <p className="muted">暂无灵感（未配置仓库）</p>
           </div>
         ) : (
@@ -800,7 +803,7 @@ export default function Overview() {
             {inspirationRepos.map((r) => (
               <div key={r.repo_id} className="card inspiration-repo-card">
                 <div className="inspiration-repo-head">
-                  <span className="inspiration-repo-name" title="仓库">📁 {r.repo_name || '（已删除）'}</span>
+                  <span className="inspiration-repo-name" title="仓库"><Icon name="folder" /> {r.repo_name || '（已删除）'}</span>
                   {r.enabled === false && (
                     <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
                   )}
@@ -808,7 +811,7 @@ export default function Overview() {
                 </div>
                 {(r.inspirations || []).length === 0 ? (
                   <div className="empty-state small">
-                    <span className="empty-icon" aria-hidden="true">💡</span>
+                    <span className="empty-icon" aria-hidden="true"><Icon name="lightbulb" /></span>
                     <p className="muted">暂无灵感，记一条吧</p>
                   </div>
                 ) : (
@@ -844,20 +847,20 @@ export default function Overview() {
                                         title="将灵感内容作为标题与描述，通过 GitLab API 创建 issue（默认标签 feature、ui；分配人为该仓库 remote url 用户，可在仓库设置页查看/重新读取）"
                                         onClick={() => addIssueFromInspiration(ins)}
                                         disabled={!!addingIssueInspIds[ins.id]}>
-                                  {addingIssueInspIds[ins.id] ? '⏳ 提交中…' : '📌 添加 Issue'}
+                                  {addingIssueInspIds[ins.id] ? <><Icon name="hourglass" /> 提交中…</> : <><Icon name="pin" /> 添加 Issue</>}
                                 </button>
                                 <button type="button" className="inspiration-action-btn inspiration-chat-btn"
                                         title="与 AI agent 探讨该灵感（复用设置页「AI API 供应商」配置的对话模型）"
-                                        onClick={() => openInspirationChat(ins)}>💬 对话</button>
+                                        onClick={() => openInspirationChat(ins)}><Icon name="message" /> 对话</button>
                                 <button type="button" className="inspiration-action-btn"
                                         title="编辑该灵感"
                                         onClick={() => {
                                           setEditingInspiration(ins)
                                           setEditInspirationDraft(ins.content)
-                                        }}>✏️ 编辑</button>
+                                        }}><Icon name="pencil" /> 编辑</button>
                                 <button type="button" className="inspiration-action-btn inspiration-delete-btn"
                                         title="删除该灵感"
-                                        onClick={() => deleteInspiration(ins)}>🗑️ 删除</button>
+                                        onClick={() => deleteInspiration(ins)}><Icon name="trash" /> 删除</button>
                               </span>
                             </div>
                           </>
@@ -875,7 +878,7 @@ export default function Overview() {
                             onChange={(e) => setNewInspirationDrafts((prev) => ({ ...prev, [r.repo_id]: e.target.value }))}
                             rows={2} />
                   <button type="submit" className="btn btn-small inspiration-add-btn"
-                          disabled={!(newInspirationDrafts[r.repo_id] || '').trim()}>＋ 记录</button>
+                          disabled={!(newInspirationDrafts[r.repo_id] || '').trim()}><Icon name="plus" /> 记录</button>
                 </form>
               </div>
             ))}
@@ -893,9 +896,9 @@ export default function Overview() {
           <div className="modal chat-modal" role="dialog" aria-modal="true"
                onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <strong>💬 与 AI 探讨灵感</strong>
+              <strong><Icon name="message" /> 与 AI 探讨灵感</strong>
               <button type="button" className="btn modal-close"
-                      onClick={closeInspirationChat} title="关闭" aria-label="关闭">×</button>
+                      onClick={closeInspirationChat} title="关闭" aria-label="关闭"><Icon name="x" /></button>
             </div>
             <div className="chat-subject" title={chatInspiration.content}>
               <span className="muted">仓库：{chatInspiration.repo_name || '—'}</span>
@@ -917,7 +920,7 @@ export default function Overview() {
                   </div>
                 ))
               )}
-              {chatSending && <div className="chat-empty muted">🤖 AI 思考中…</div>}
+              {chatSending && <div className="chat-empty muted"><Icon name="bot" /> AI 思考中…</div>}
               {chatError && (
                 <div className="alert alert-error chat-error"
                      onClick={() => setChatError('')}>{chatError}</div>
@@ -961,7 +964,7 @@ export default function Overview() {
         )}
         {pipelines.length === 0 ? (
           <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true">🚀</span>
+            <span className="empty-icon" aria-hidden="true"><Icon name="rocket" /></span>
             <p className="muted">暂无流水线</p>
           </div>
         ) : (
@@ -974,7 +977,7 @@ export default function Overview() {
               return (
                 <div key={p.repo_id} className="card pipeline-card">
                   <div className="pipeline-head">
-                    <span className="pipeline-repo" title="仓库">📁 {p.repo_name || '（已删除）'}</span>
+                    <span className="pipeline-repo" title="仓库"><Icon name="folder" /> {p.repo_name || '（已删除）'}</span>
                     {p.enabled === false && (
                       <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
                     )}
@@ -1050,8 +1053,8 @@ function ReconcileResult({ result }) {
   return (
     <div className="small reconcile-result">
       {result.enqueued > 0
-        ? <span className="test-chip ok">✓ {result.enqueued} 个待处理 issue 已入队</span>
-        : <span className="test-chip ok">✓ 无需处理</span>}
+        ? <span className="test-chip ok"><Icon name="check" /> {result.enqueued} 个待处理 issue 已入队</span>
+        : <span className="test-chip ok"><Icon name="check" /> 无需处理</span>}
       {result.scanned > 0 && <span className="muted">扫描 {result.scanned} 个 issue</span>}
     </div>
   )

@@ -194,6 +194,16 @@
    不再生硬跳变） */
 .section-toggle { transition: color var(--dur-fast) var(--ease-out); }
 
+/* issue #177：Lucide 图标统一随字号缩放并垂直对齐文字基线。
+   与 .empty-icon/.brand-dot 等以 font-size 控制 emoji 尺寸的旧用法对齐：
+   图标占据 1em 高，行内文本不受影响 */
+.lucide {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  flex: 0 0 auto;
+}
+
 * { box-sizing: border-box; }
 
 body {

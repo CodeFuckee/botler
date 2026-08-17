@@ -175,7 +175,7 @@ test('取消勾选后保存：提交 enabled 布尔值与 retention_days 数字'
   await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
   assert.deepEqual(calls.put[0], ['/api/settings', { backup: { enabled: false, retention_days: 7 } }],
     '应提交 backup 段且 enabled 为布尔 false')
-  assert.match(textOf(renderer.root), /✓ 备份配置已保存（写回 config\.yaml）/, '应显示保存成功提示')
+  assert.match(textOf(renderer.root), /备份配置已保存（写回 config\.yaml）/, '应显示保存成功提示')
   assert.equal(calls.get.length, 2, '保存成功后应重新加载列表（初始 + 重载）')
 })
 
@@ -209,7 +209,7 @@ test('立即备份：POST /api/backups 并展示返回的备份名', async () =>
   findButtons(renderer, '立即备份')[0].props.onClick()
   await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
   assert.deepEqual(calls.post[0], ['/api/backups', undefined])
-  assert.match(textOf(renderer.root), /✓ 备份完成：botler-2026-08-15\.tar\.gz/)
+  assert.match(textOf(renderer.root), /备份完成：botler-2026-08-15\.tar\.gz/)
   assert.equal(calls.get.length, 2, '备份完成后应重新加载列表')
 })
 
@@ -257,7 +257,7 @@ test('恢复：需覆盖警告确认，确认后 POST /api/backups/restore 并�
   findButtons(renderer, '恢复')[0].props.onClick()
   await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
   assert.deepEqual(calls.post[0], ['/api/backups/restore', { name: 'botler-2026-08-14.tar.gz' }])
-  assert.match(textOf(renderer.root), /✓ 恢复完成，服务正在自动重启，稍后请刷新页面/)
+  assert.match(textOf(renderer.root), /恢复完成，服务正在自动重启，稍后请刷新页面/)
 })
 
 // ---- 上传恢复 ----
@@ -293,7 +293,7 @@ test('上传恢复：未选文件不调用接口；选文件需确认；确认�
     await new Promise((resolve) => setTimeout(resolve, 20))
   })
   assert.deepEqual(calls.upload[0], ['/api/backups/restore/upload', FILE])
-  assert.match(textOf(renderer.root), /✓ 上传恢复完成，服务正在自动重启，稍后请刷新页面/)
+  assert.match(textOf(renderer.root), /上传恢复完成，服务正在自动重启，稍后请刷新页面/)
 })
 
 // ---- busy 防重复 ----

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api.js'
 import { confirmDialog } from '../dialog.js'
+import { Icon } from '../components/Icon.jsx'
 
 export default function Templates() {
   const [params, setParams] = useSearchParams()
@@ -144,7 +145,7 @@ export default function Templates() {
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
         >
-          <span className="chevron">{expanded ? '▾' : '▸'}</span>
+          <span className="chevron">{expanded ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />}</span>
           模版内容
           <span className="muted small">（{text.split('\n').length} 行）</span>
         </button>
@@ -161,7 +162,7 @@ export default function Templates() {
 
             <div className="form-row">
               <button className="btn btn-primary" onClick={save}>保存</button>
-              {saved && <span className="saved-hint">✓ 已保存</span>}
+              {saved && <span className="saved-hint"><Icon name="check" /> 已保存</span>}
               {selected?.kind === 'repo' && selected?.isOverride && (
                 <button className="btn" onClick={clearOverride}>清空覆盖</button>
               )}

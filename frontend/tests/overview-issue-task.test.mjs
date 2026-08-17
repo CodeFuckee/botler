@@ -39,6 +39,15 @@ const { api } = await vite.ssrLoadModule('/src/api.js')
 
 after(() => vite.close())
 
+// 渲染树节点 → 纯文本（递归；Lucide 图标组件无文本内容，自动忽略）
+function textOf(node) {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
+
 // ---- 源码断言 ----
 
 test('源码：概览页已删除独立任务板块（tasks-section 与任务卡片网格）', () => {
@@ -322,9 +331,9 @@ test('渲染：无活跃任务时概览页仅剩三板块且不渲染任何任�
     assert.equal(renderError, null)
     const root = renderer.root
     const h2s = root.findAll((n) => n.type === 'h2')
-      .map((n) => String(n.children && n.children.join ? n.children.join('') : n.children))
+      .map((n) => textOf(n.props.children).trim())
     // issue #131：新增灵感板块（位于开放 Issue 与流水线之间）
-    assert.deepEqual(h2s, ['开放 Issue', '💡 灵感', 'CI/CD 流水线'],
+    assert.deepEqual(h2s, ['开放 Issue', '灵感', 'CI/CD 流水线'],
                      '概览页应只剩三个板块：开放 Issue → 灵感 → CI/CD 流水线')
     assert.equal(root.findAll((n) => n.props.className === 'issue-task').length, 0,
                  '无任务时不得渲染任务块')
