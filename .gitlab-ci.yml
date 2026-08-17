@@ -715,7 +715,7 @@ frontend:build:
     - JOB_START_TIME=$(date +%s)
     - echo "=== 1. 安装依赖（npm ci）==="
     - npm ci --registry=${NPM_REGISTRY_URL}
-    - echo "=== 2. 前端测试 + 覆盖率（node --test + c8，issue #210）==="
+    - echo "=== 2. 前端测试 + 覆盖率（node --test + c8，issue 210）==="
     # c8（v8 引擎原生覆盖率）统计 src/ 源码，cobertura 报告供 GitLab
     # coverage_report 摄入；--check-coverage 设置行/分支/函数/语句阈值，
     # 低于阈值（新代码无测试悄然合入）时 job 失败阻断流水线
