@@ -36,6 +36,28 @@
 
 ### Added
 
+- **git pull 拉取冲突时保留现场交由 agent 手工合并（issue #147 补充）**：
+  需求「如果拉取代码的时候出现了冲突，让 agent 来进行合并」。此前
+  `prepare_workspace` 的 `git pull --rebase` 遇到合并冲突（本地提交与远端
+  分叉、untracked 残留被远端新提交占用等）会直接抛错导致任务在准备阶段失败，
+  agent 没有机会介入合并。改动：
+  - 后端 `executor.py`：`prepare_workspace` 的 `git pull --rebase` 包上
+    冲突判定 `_is_pull_conflict`——工作区实际处于冲突状态（`.git/rebase-merge`
+    / `.git/rebase-apply` / `.git/MERGE_HEAD` 存在或 `git ls-files -u` 有未合并
+    路径）或 git 输出含明确冲突标志（CONFLICT / could not apply / untracked
+    文件将被远端新提交覆盖等）时，不再抛错：保留冲突现场并登记工作区到
+    `_pull_conflict_workdirs`，由 agent 手工合并；凭据/网络等非冲突失败照常
+    报错。`_build_prompt` / `_resume_prompt`（claude / hermes / dsh 三引擎
+    共用）检测到冲突工作区时在提示词末尾追加「先手工解决冲突」指引
+    （git status 查看冲突 → 手工合并 → git add + git rebase --continue /
+    git commit，严禁 force push）；下一次干净 prepare 自动清除冲突登记；
+  - 文档：`docs/设计方案.md` §5.5 补充「拉取冲突处理」说明；`README.md`
+    执行器职责描述同步；
+  - **测试**：`test_executor_local_path.py` 新增
+    `TestPrepareWorkspacePullConflict` 7 用例（pull --rebase 真实冲突不抛错、
+    冲突现场保留、提示词追加解决指引、非冲突失败照常抛错、冲突登记在干净
+    prepare 后清除、未合并路径/untracked 覆盖错误文本判定、无冲突提示词不
+    追加指引）；既有 17 用例全部通过。
 
 - **插件管理页面（issue #145）**：
   需求「增加一个插件页面可以插件进行管理，所有插件的安装、卸载和插件的设置

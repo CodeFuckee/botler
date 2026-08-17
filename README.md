@@ -48,7 +48,7 @@ backend/
     gitlab_client.py GitLab REST API 封装（webhook 注册、issue 评论等）
     webhook.py       webhook 接收器（secret 校验 + assignee 判定 + 去重）
     scheduler.py     任务调度器（每仓库串行、跨仓库并行、按仓库优先级派发；同仓库队列内按 issue 标签优先级排序，默认 bug 最优先）
-    executor.py      执行器（引擎分发走插件体系，任务开始自动切回默认主分支 + git pull / 超时 / 重试 / 失败评论）
+    executor.py      执行器（引擎分发走插件体系，任务开始自动切回默认主分支 + git pull（拉取冲突保留现场交由 agent 手工合并）/ 超时 / 重试 / 失败评论）
     plugins/         插件体系（issue #140）：base（PluginKind / PluginRegistry 注册表）/
                      executors（执行引擎插件 claude / hermes / dsh）/ models（大模型供应商
                      插件 gemini / openai）/ notifiers（任务消息通道插件 webhook / in_app）；

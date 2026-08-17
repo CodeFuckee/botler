@@ -482,6 +482,11 @@ class ClaudeExecutor:
         self._procs: dict[int, subprocess.Popen] = {}
         self._stop_requests: set[int] = set()
         self._proc_lock = threading.Lock()
+        # 拉取冲突交接（issue #147 补充）：prepare_workspace 的
+        # git pull --rebase 遇到合并冲突时保留冲突现场并登记工作区，
+        # _build_prompt / _resume_prompt 据此追加「先手工解决冲突」指引，
+        # 由 agent 完成合并，而不是让任务在准备阶段直接失败
+        self._pull_conflict_workdirs: set[Path] = set()
     # ---- GitLab 调用兜底 ----
 
     def _call_with_fallback(self, repo, call):
@@ -650,10 +655,24 @@ class ClaudeExecutor:
             self._git(workdir, "reset", "--hard", f"{remote}/{branch}", env=git_env)
             self._clean_untracked(workdir, git_env)
             # 3) git pull --rebase 显式同步远端默认主分支最新提交（兜底
-            #    fetch 之后、本次执行前远端新推送的提交）
-            self._git(workdir, "pull", "--rebase", remote, branch, env=git_env)
-            logger.info("%s: 工作区已切到默认主分支 %s 并 git pull 同步最新",
-                        repo["name"], branch)
+            #    fetch 之后、本次执行前远端新推送的提交）。若拉取遇到合并
+            #    冲突（本地提交与远端分叉、untracked 残留被远端新提交占用
+            #    等），不直接失败：保留冲突现场交由 agent 手工合并
+            #    （issue #147 补充需求「如果拉取代码的时候出现了冲突，
+            #    让 agent 来进行合并」）。
+            try:
+                self._git(workdir, "pull", "--rebase", remote, branch, env=git_env)
+            except ExecutorError as exc:
+                if not self._is_pull_conflict(workdir, git_env, exc):
+                    raise
+                self._pull_conflict_workdirs.add(workdir)
+                logger.warning(
+                    "%s: git pull --rebase 出现合并冲突，保留冲突现场交由 "
+                    "agent 手工合并: %s", repo["name"], str(exc)[:200])
+            else:
+                self._pull_conflict_workdirs.discard(workdir)
+                logger.info("%s: 工作区已切到默认主分支 %s 并 git pull 同步最新",
+                            repo["name"], branch)
         # askpass 脚本保留不删除（issue #12）：并发任务/重试时序下脚本被删 →
         # fetch 回退 credential helper 旧凭据 → HTTP Basic: Access denied。
         # 脚本内容每次 prepare 覆盖刷新（token 轮换自动生效），权限 0700，
@@ -738,6 +757,69 @@ class ClaudeExecutor:
                     current or "（detached HEAD）", branch)
         self._git(workdir, "checkout", "-B", branch, "--track",
                   f"{remote}/{branch}", env=git_env)
+
+    def _is_pull_conflict(self, workdir: Path, git_env: dict,
+                          exc: ExecutorError) -> bool:
+        """判断 git pull 失败是否为可交由 agent 手工解决的合并冲突。
+
+        issue #147 补充：拉取冲突不应让任务在准备阶段直接失败，而应保留
+        冲突现场交由 agent 合并。判断依据按权威性排序：
+        1) 工作区实际处于冲突状态——rebase/merge 进行中（.git/rebase-merge、
+           .git/rebase-apply、.git/MERGE_HEAD）或存在未合并路径
+           （git ls-files -u 非空）；
+        2) git 输出包含明确的冲突标志（CONFLICT / could not apply /
+           untracked 文件被远端新提交覆盖等）。
+        凭据/网络等非冲突失败不在此列，照常抛错。
+        """
+        git_dir = workdir / ".git"
+        # worktree 等场景 .git 可能是文件：先解析实际 git 目录再探测
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workdir), "rev-parse", "--git-dir"],
+                cwd=workdir, env=git_env, capture_output=True, text=True,
+                timeout=30)
+            if result.returncode == 0:
+                git_dir = Path(result.stdout.strip())
+                if not git_dir.is_absolute():
+                    git_dir = (workdir / git_dir).resolve()
+        except Exception:  # 探测失败时退回默认 .git 目录
+            logger.debug("解析 git 目录失败，按默认 .git 处理", exc_info=True)
+        for marker in ("rebase-merge", "rebase-apply", "MERGE_HEAD"):
+            if (git_dir / marker).exists():
+                return True
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workdir), "ls-files", "-u"],
+                cwd=workdir, env=git_env, capture_output=True, text=True,
+                timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                return True
+        except Exception:  # git 缺失/异常时仅靠错误文本兜底
+            logger.debug("git ls-files -u 探测未合并路径失败", exc_info=True)
+        text = str(exc).lower()
+        for marker in ("conflict", "automatic merge failed", "fix conflicts",
+                       "could not apply", "untracked working tree files "
+                       "would be overwritten", "divergent branches",
+                       "have diverged", "unmerged files"):
+            if marker in text:
+                return True
+        return False
+
+    @staticmethod
+    def _conflict_handoff_instructions() -> str:
+        """拉取冲突交接指引（issue #147 补充）：prepare 的 git pull 遇到
+        合并冲突时追加到任务提示词末尾，引导 agent 先手工解决冲突再继续。"""
+        return (
+            "\n\n【重要：工作区存在拉取冲突，请先手工解决再开始任务】\n"
+            "平台在任务开始前的 git pull --rebase 同步最新代码时遇到合并冲突，\n"
+            "冲突现场已原样保留（未回退、未丢弃任何内容）。请先完成合并：\n"
+            "1. 运行 git status 查看冲突文件与当前 rebase/merge 状态；\n"
+            "2. 用 git diff 或编辑器逐个解决冲突文件，保留两侧合理内容；\n"
+            "3. 解决后 git add <冲突文件>，rebase 冲突执行 git rebase --continue，\n"
+            "   merge 冲突执行 git commit 完成合并；\n"
+            "4. 严禁 git push --force / --force-with-lease 强制覆盖远端；\n"
+            "5. 若冲突确实无法解决，如实汇报失败原因与冲突文件清单，不要强行提交。"
+        )
 
     def _clean_untracked(self, workdir: Path, git_env: dict) -> None:
         """清理未跟踪文件，容忍无权限删除的外部残留（issue #91）。
@@ -827,7 +909,10 @@ class ClaudeExecutor:
         template = self.renderer.resolve_template(repo)
         variables = self.renderer.build_variables(
             repo["name"], issue, repo_url=_row_get(repo, "url") or "")
-        return self.renderer.render(template, variables)
+        prompt = self.renderer.render(template, variables)
+        if self._repo_workdir(repo) in self._pull_conflict_workdirs:
+            prompt += self._conflict_handoff_instructions()
+        return prompt
 
     def _task_gitlab_token(self, repo: dict) -> str | None:
         """任务会话 GITLAB_TOKEN 注入源：仓库 remote url 内嵌 token（issue #79）。
@@ -904,7 +989,10 @@ class ClaudeExecutor:
         template = self.config.get().resume_template or DEFAULT_RESUME_PROMPT
         variables = self.renderer.build_variables(
             repo["name"], issue, repo_url=_row_get(repo, "url") or "")
-        return self.renderer.render(template, variables)
+        prompt = self.renderer.render(template, variables)
+        if self._repo_workdir(repo) in self._pull_conflict_workdirs:
+            prompt += self._conflict_handoff_instructions()
+        return prompt
 
     # ---- 单次执行 ----
 

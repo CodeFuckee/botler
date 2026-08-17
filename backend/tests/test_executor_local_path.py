@@ -242,6 +242,177 @@ class TestPrepareWorkspaceDefaultBranchAndPull:
         assert Path(workdir) == repo
         assert self._current_branch(repo) == "main"
 
+# ---- issue #147 补充：git pull 拉取冲突时保留现场交由 agent 手工合并 ----
+
+class TestPrepareWorkspacePullConflict:
+    """issue #147 补充需求「如果拉取代码的时候出现了冲突，让 agent 来进行
+    合并」：prepare_workspace 的 git pull --rebase 遇到合并冲突时不抛错，
+    保留冲突现场并登记工作区，_build_prompt 据此追加手工合并指引。
+    """
+
+    @staticmethod
+    def _make_remote_repo(tmp_path: Path) -> tuple[Path, Path]:
+        """创建远端 bare 仓库 + 工作仓库（默认分支 main，含 init 提交）。
+
+        返回 (bare, repo)。与 TestPrepareWorkspaceDefaultBranchAndPull 的
+        _make_repo_with_default 等价，但用独立目录名避免用例间共享状态。
+        """
+        bare = tmp_path / "remote-conf.git"
+        seed = tmp_path / "seed-conf"
+        repo = tmp_path / "repo-conf"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        (seed / "file.txt").write_text("hello\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                        "-c", "user.email=test@botler.local",
+                        "commit", "-q", "-m", "init"], check=True)
+        subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(bare)],
+                       check=True)
+        subprocess.run(["git", "-C", str(seed), "push", "-q", "-u", "origin", "main"],
+                       check=True)
+        subprocess.run(["git", "--git-dir", str(bare), "symbolic-ref", "HEAD",
+                        "refs/heads/main"], check=True)
+        subprocess.run(["git", "clone", "-q", str(bare), str(repo)], check=True)
+        return bare, repo
+
+    @staticmethod
+    def _issue() -> dict:
+        return {
+            "title": "拉取冲突处理",
+            "description": "拉取代码出现冲突时由 agent 手工合并",
+            "web_url": "https://gitlab.example.com/group/project/-/issues/1",
+            "project_id": 1,
+            "iid": 1,
+        }
+
+    @staticmethod
+    def _repo_with_template(repo: Path) -> dict:
+        d = _repo_dict(str(repo))
+        d["prompt_template"] = ""
+        return d
+
+    def test_rebase_conflict_keeps_workspace_and_marks(self, executor, tmp_path):
+        """pull --rebase 真实冲突：prepare 不抛错、保留冲突现场并登记工作区，
+        提示词追加手工合并指引。"""
+        _bare, repo = self._make_remote_repo(tmp_path)
+        original = executor._git
+
+        def conflicting_pull(workdir, *args, env=None, timeout=300):
+            if args and args[0] == "pull":
+                # reset --hard 之后的干净工作区上制造真实 rebase 冲突：
+                # 本地提交修改 file.txt + 远端新提交修改同一文件
+                subprocess.run(["git", "-C", str(workdir), "config", "user.name",
+                                "Test"], check=True)
+                subprocess.run(["git", "-C", str(workdir), "config", "user.email",
+                                "test@botler.local"], check=True)
+                (Path(workdir) / "file.txt").write_text("local\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(workdir), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(workdir), "commit", "-q",
+                                "-m", "local"], check=True)
+                seed = Path(workdir).parent / "seed-conf"
+                (seed / "file.txt").write_text("remote\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                                "-c", "user.email=test@botler.local",
+                                "commit", "-q", "-m", "remote"], check=True)
+                subprocess.run(["git", "-C", str(seed), "push", "-q", "origin",
+                                "main"], check=True)
+                result = subprocess.run(
+                    ["git", "-C", str(workdir), "pull", "--rebase", "origin", "main"],
+                    capture_output=True, text=True)
+                assert result.returncode != 0, "测试前提：pull --rebase 应产生冲突"
+                raise ExecutorError(
+                    f"git pull 失败 (exit {result.returncode}): "
+                    f"{(result.stderr or result.stdout).strip()[-500:]}")
+            return original(workdir, *args, env=env, timeout=timeout)
+
+        executor._git = conflicting_pull
+        try:
+            workdir, _env = executor.prepare_workspace(_repo_dict(str(repo)))
+        finally:
+            executor._git = original
+        assert Path(workdir) == repo
+        # 冲突现场保留：rebase 进行中 + 存在未合并路径
+        assert (repo / ".git" / "rebase-merge").exists()
+        out = subprocess.run(["git", "-C", str(repo), "ls-files", "-u"],
+                             capture_output=True, text=True, check=True).stdout
+        assert out.strip(), "工作区应保留未合并路径供 agent 解决"
+        # 工作区登记为拉取冲突，提示词追加解决指引
+        assert repo in executor._pull_conflict_workdirs
+        prompt = executor._build_prompt(self._repo_with_template(repo), self._issue())
+        assert "工作区存在拉取冲突" in prompt
+        assert "git rebase --continue" in prompt
+
+    def test_non_conflict_pull_failure_still_raises(self, executor, tmp_path):
+        """凭据/网络等非冲突失败照常抛 ExecutorError，不误判为拉取冲突。"""
+        _bare, repo = self._make_remote_repo(tmp_path)
+        original = executor._git
+
+        def failing_pull(workdir, *args, env=None, timeout=300):
+            if args and args[0] == "pull":
+                raise ExecutorError(
+                    "git pull 失败 (exit 128): remote: HTTP Basic: Access denied")
+            return original(workdir, *args, env=env, timeout=timeout)
+
+        executor._git = failing_pull
+        try:
+            with pytest.raises(ExecutorError):
+                executor.prepare_workspace(_repo_dict(str(repo)))
+        finally:
+            executor._git = original
+        assert repo not in executor._pull_conflict_workdirs
+
+    def test_conflict_marker_cleared_after_clean_prepare(self, executor, tmp_path):
+        """冲突登记后，下一次干净 prepare（pull 成功）应清除登记。"""
+        _bare, repo = self._make_remote_repo(tmp_path)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert repo not in executor._pull_conflict_workdirs
+        # 直接模拟登记后干净重跑，验证 else 分支清除登记
+        executor._pull_conflict_workdirs.add(repo)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert repo not in executor._pull_conflict_workdirs
+
+    def test_is_pull_conflict_detects_unmerged_paths(self, executor, tmp_path):
+        """工作区存在未合并路径时判定为冲突（即使错误文本不含冲突字样）。"""
+        _bare, repo = self._make_remote_repo(tmp_path)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@b"],
+                       check=True)
+        # side 从 init 提交分出后改 file.txt，main 也改同一文件 → 真实冲突
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "side"],
+                       check=True)
+        (repo / "file.txt").write_text("theirs\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "theirs"],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+        (repo / "file.txt").write_text("ours\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "ours"],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo), "merge", "--no-commit", "side"],
+                       capture_output=True, check=False)
+        exc = ExecutorError("git pull 失败 (exit 1): 与冲突无关的失败信息")
+        assert executor._is_pull_conflict(repo, os.environ.copy(), exc) is True
+
+    def test_is_pull_conflict_detects_untracked_overwrite_error(self, executor, tmp_path):
+        """错误文本含「untracked 文件将被覆盖」时判定为拉取冲突（交由 agent 处理）。"""
+        _bare, repo = self._make_remote_repo(tmp_path)
+        exc = ExecutorError(
+            "git pull 失败 (exit 1): error: The following untracked working tree "
+            "files would be overwritten by merge:\n\tblocker.txt\n"
+            "Please move or remove them before you merge. Aborting")
+        assert executor._is_pull_conflict(repo, os.environ.copy(), exc) is True
+
+    def test_prompt_without_conflict_has_no_handoff_section(self, executor, tmp_path):
+        """无冲突时提示词不追加拉取冲突指引。"""
+        _bare, repo = self._make_remote_repo(tmp_path)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        prompt = executor._build_prompt(self._repo_with_template(repo), self._issue())
+        assert "工作区存在拉取冲突" not in prompt
+
 # ---- issue #12 复现：origin/HEAD 缺失必现失败 + askpass 脚本被删致 fetch 凭据间歇失败 ----
 
 class TestPrepareWorkspaceIssue12:
