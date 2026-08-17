@@ -128,12 +128,24 @@ class VisionModelClient:
             raise VisionModelError(f"识图模型「{self.name}」未配置 API Key")
         # issue #163：MinIO 图片上传模式——图片先计算哈希上传 MinIO，
         # 识图请求传 http(s) URL（OpenAI 兼容 image_url），替代 base64。
-        # 供应商不支持 http URL（Gemini 官方接口）时保持 base64 内联。
+        # issue #164：OpenAI 兼容供应商（openai_vision / custom）禁止
+        # base64 内联（网关会拒绝 data: URL，如阿里云百炼 qwen 报
+        # "url error"）——未启用 MinIO 时明确报错引导配置，不再静默回退；
+        # Gemini 官方接口不支持 http URL（仅 base64 inline_data，
+        # Google API 限制），保持 base64 内联输入。
         if self.image_store is not None and self._plugin.supports_image_url:
             try:
                 image = self.image_store.put_image(image, mime_type=mime_type)
             except Exception as exc:  # noqa: BLE001 上传失败统一转识图错误
                 raise VisionModelError(f"图片上传 MinIO 失败: {exc}") from exc
+        elif self._plugin.supports_image_url:
+            raise VisionModelError(
+                f"识图模型「{self.name}」要求图片以 http URL 传入（不再支持"
+                "base64 内联，OpenAI 兼容网关会拒绝 data: URL），但未启用"
+                "MinIO 图片上传。请在设置页/配置启用 MinIO（minio.enabled"
+                " + endpoint + access_key + secret_key + public_base_url），"
+                "图片将自动上传至 MinIO 的 public 桶并经 nginx 代理地址"
+                "访问")
         elif self.image_store is not None:
             logger.warning(
                 "识图模型「%s」（%s）供应商不支持 http 图片 URL（Gemini 官方"

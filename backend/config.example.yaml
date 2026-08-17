@@ -159,22 +159,31 @@ browse:
 # SHA-256 哈希、以哈希值为对象名上传 MinIO（同内容图片自动去重复用），
 # 识图请求传 http(s) URL（OpenAI 兼容 image_url），替代直接把 base64
 # 塞进请求体的做法（图片 base64 可达数十万字符，网关/模型对请求体大小
-# 敏感）。未配置 / 未启用 = 识图图片沿用 base64 内联输入（原行为）。
-# 注意：Gemini 官方 generateContent 接口不支持任意 http URL 图片输入
-# （仅支持 base64 inline_data），MinIO URL 上传模式仅对 OpenAI 兼容
-# 识图模型（openai_vision / custom）生效；endpoint / 凭据可经 ${ENV}
-# 引用（与部署写入 data/backend/.env 的 MINIO_ROOT_USER /
-# MINIO_ROOT_PASSWORD 同源），识图模型必须能访问 public_base_url
-# （自建网关走内网地址；外部模型供应商需公网可达，且桶需允许匿名读或
-# 使用预签名 URL）。
+# 敏感；阿里云百炼等兼容网关会直接拒绝 data: URL，issue #164）。
+# ⚠️ 自 issue #164 起：OpenAI 兼容识图模型（openai_vision / custom）
+# 禁止 base64 内联——未启用 / 配置不完整时识图测试会明确报错引导启用
+# MinIO（不再静默回退 base64）；仅 Gemini 官方 generateContent 接口
+# 不支持任意 http URL 图片输入（Google API 限制，只接受 base64
+# inline_data），保持 base64 内联输入。
+# 部署要求（issue #164）：
+#   - 桶默认名 public，不存在自动创建；桶权限自动设为「公开只读」
+#     （匿名 s3:GetObject），识图模型（含外部公网网关）可匿名取图；
+#   - 建议用 nginx 代理 MinIO 桶（见 deploy/nginx-minio-public.conf），
+#     public_base_url 填 nginx 代理地址（如
+#     https://home.chenkaidi.top:509/minio-public），无需暴露 9000 端口。
+# endpoint / 凭据可经 ${ENV} 引用（与部署写入 data/backend/.env 的
+# MINIO_ROOT_USER / MINIO_ROOT_PASSWORD 同源），识图模型必须能访问
+# public_base_url（自建网关走内网地址；外部模型供应商需公网可达）。
 # minio:
 #   enabled: true                    # 识图图片上传开关
 #   endpoint: "127.0.0.1:9000"       # MinIO API 地址（host:port）
 #   secure: false                    # endpoint 是否 https
 #   access_key: ${MINIO_ROOT_USER}   # 访问凭据（留空回退环境变量）
 #   secret_key: ${MINIO_ROOT_PASSWORD}
-#   bucket: botler-images            # 图片对象桶（不存在自动创建）
-#   public_base_url: ""              # 识图模型取图的 http(s) 前缀，
+#   bucket: public                   # 图片对象桶（默认 public，不存在
+#                                    #   自动创建并设为公开只读）
+#   public_base_url: ""              # 识图模型取图的 http(s) 前缀（建议
+#                                    #   nginx 代理 MinIO 桶的地址），
 #                                    #   对象 URL =
 #                                    #   public_base_url/bucket/<sha256 哈希>
 #   verify_ssl: true                 # endpoint 证书校验（自签证书设 false）

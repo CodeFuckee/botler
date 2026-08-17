@@ -2031,7 +2031,7 @@ class TestMinioSettings:
         assert data["endpoint"] == ""
         assert data["access_key_masked"] == ""
         assert data["secret_key_masked"] == ""
-        assert data["bucket"] == "botler-images"
+        assert data["bucket"] == "public"
         assert data["public_base_url"] == ""
 
     def test_put_minio_persists(self, client):
@@ -2043,7 +2043,7 @@ class TestMinioSettings:
             "secure": False,
             "access_key": "minioadmin",
             "secret_key": "minioadmin",
-            "bucket": "botler-images",
+            "bucket": "public",
             "public_base_url": "http://img.example.com:9000",
             "verify_ssl": False,
         }})
@@ -2051,7 +2051,7 @@ class TestMinioSettings:
         data = resp.json()["minio"]
         assert data["enabled"] is True
         assert data["endpoint"] == "127.0.0.1:9000"
-        assert data["bucket"] == "botler-images"
+        assert data["bucket"] == "public"
         assert data["public_base_url"] == "http://img.example.com:9000"
         assert "*" in data["access_key_masked"]  # 掩码而非明文
         assert data["access_key_masked"] != "minioadmin"
@@ -2143,7 +2143,7 @@ class TestVisionModelTestEndpointMinio:
             "  endpoint: 127.0.0.1:9000\n"
             "  access_key: minioadmin\n"
             "  secret_key: minioadmin\n"
-            "  bucket: botler-images\n"
+            "  bucket: public\n"
             "  public_base_url: http://img.example.com:9000\n",
             encoding="utf-8")
         return config_path
@@ -2184,5 +2184,5 @@ class TestVisionModelTestEndpointMinio:
         assert resp.status_code == 200
         store = captured["image_store"]
         assert store is not None
-        assert store.cfg.bucket == "botler-images"
+        assert store.cfg.bucket == "public"
         assert store.cfg.public_base_url == "http://img.example.com:9000"

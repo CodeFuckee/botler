@@ -122,6 +122,35 @@
 
 ### Fixed
 
+- **识图模型「测试」彻底移除 base64 内联——图片一律上传 MinIO（默认桶 public + 公开只读 + nginx 代理访问，issue #164 用户反馈续修）**：
+  用户反馈「不要使用 base64」，要求图片上传 MinIO、nginx 代理 MinIO 桶、桶权限
+  公开只读、无桶则创建名为 `public` 的桶。此前（issue #163/#164 第一轮）MinIO
+  未启用时识图测试仍会静默回退 base64 data URL 内联（OpenAI 兼容网关如阿里云
+  百炼 qwen 直接拒绝，报「url error, please check url」）。本次整改：
+  - **OpenAI 兼容识图模型（`openai_vision` / `custom`）禁止 base64 内联**：
+    `VisionModelClient.describe` 在未启用 / 配置不完整 MinIO（`image_store=None`）
+    时直接报错，引导配置 `minio.enabled + endpoint + access_key + secret_key +
+    public_base_url`，绝不把图片 base64 塞进请求体；Gemini 官方 generateContent
+    接口仅支持 base64 inline_data（Google API 限制），保持 base64 内联输入并
+    记录说明；
+  - **默认桶改为 `public` 并自动设为公开只读**：`minio.bucket` 默认值
+    `botler-images` → `public`（config 默认 / env 回退 / 示例同步）；桶不存在
+    自动创建，创建后（及已存在的老桶）自动调用 `set_bucket_policy` 设置
+    「匿名 `s3:GetObject`」公开只读策略（实例内幂等只设置一次），失败统一转
+    `MinioStoreError` 并提示检查 MinIO 凭据权限——识图模型（含外部公网网关）
+    需匿名读图片 URL；
+  - **nginx 代理 MinIO 桶**：新增 `deploy/nginx-minio-public.conf`（location
+    `/minio-public/` → `proxy_pass http://127.0.0.1:9000/public/`），对象 URL
+    形如 `https://<站点>/minio-public/<sha256 哈希>`，`public_base_url` 建议填
+    nginx 代理地址（无需暴露 9000 端口）；README / config.example.yaml /
+    .env.example 同步部署说明；
+  - **测试**：`test_vision_models.py` 新增「OpenAI / custom 未启用 MinIO 时
+    describe 报错引导（不发请求）」2 用例，原 base64 载荷相关用例全部改为
+    http URL 模式断言；`test_minio_client.py` 新增「默认桶 public / 桶自动创建
+    并设公开只读 / 策略幂等只设一次 / 已存在桶补设策略 / 策略失败转业务错误」
+    5 用例并更新桶名断言；`test_api_settings.py` 桶名断言同步；实现前可复现
+    失败、实现后全部通过；后端全量测试无 regression（1488 passed）。
+
 - **识图模型「测试」点击报错「✗ Failed to fetch」——async 端点内同步调用模型冻结事件循环 + 网关拒绝 base64 data URL 图片时给出可操作诊断（issue #164）**：
   设置页「识图模型」卡片点「测试」上传图片后，浏览器报「✗ Failed to fetch」、
   后端访问日志无该请求记录；即使有响应，对阿里云百炼等 OpenAI 兼容网关

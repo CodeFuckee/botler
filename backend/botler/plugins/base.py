@@ -135,11 +135,11 @@ class VisionProviderPlugin(Plugin):
     display_name: str = ""       # 设置页展示名（预设名称）
     default_base_url: str = ""   # 内置预设默认接口地址
     default_model: str = ""      # 内置预设默认模型
-    # 是否支持以 http(s) URL 形式传图片（issue #163）：OpenAI 兼容接口
-    # image_url 支持任意 http URL；Gemini 官方 generateContent 仅支持
-    # inline_data（base64）/ file_data，不支持任意公网 URL → False。
-    # VisionModelClient 据此决定图片先上传 MinIO 传 URL、还是保留
-    # base64 内联输入。
+    # 是否支持以 http(s) URL 形式传图片（issue #163/#164）：OpenAI 兼容
+    # 接口 image_url 支持任意 http URL，且自 issue #164 起强制走 MinIO
+    # http URL（禁止 base64 内联，未启用 MinIO 时明确报错引导）；Gemini
+    # 官方 generateContent 仅支持 inline_data（base64）/ file_data，
+    # 不支持任意公网 URL → False，保持 base64 内联输入。
     supports_image_url: bool = True
 
     def describe(self, client: Any, image: bytes, *,

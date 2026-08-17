@@ -17,21 +17,27 @@ MINIO_ROOT_USER / MINIO_ROOT_PASSWORD，与部署写入 data/backend/.env
       secure: false                     # endpoint 是否 https
       access_key: ${MINIO_ROOT_USER}    # 访问凭据
       secret_key: ${MINIO_ROOT_PASSWORD}
-      bucket: botler-images             # 图片对象桶（不存在自动创建）
-      public_base_url: ""               # 识图模型可访问的 http(s) 前缀
-                                        #   （如 http://home.chenkaidi.top:9000），
+      bucket: public                   # 图片对象桶（不存在自动创建；桶权限
+                                        #   自动设为公开只读，识图模型可匿名取图）
+      public_base_url: ""               # 识图模型取图的 http(s) 前缀（建议经
+                                        #   nginx 代理 MinIO 桶，如
+                                        #   https://home.chenkaidi.top:509/minio-public），
                                         #   对象 URL =
                                         #   public_base_url/bucket/<sha256 哈希>
       verify_ssl: true                  # endpoint 证书校验（自签证书设 false）
 
-未配置 / 未启用 / 配置不完整时，识图模型沿用 base64 内联输入（原行为，
-记 warning 日志不阻塞）。
+issue #164：OpenAI 兼容识图模型（openai_vision / custom）不再支持 base64
+内联图片——网关会拒绝 data: URL（如阿里云百炼 qwen 报 "url error"）。未
+启用 / 配置不完整时，识图调用会明确报错引导启用 MinIO（不再静默回退
+base64）；Gemini 官方 generateContent 接口仅支持 base64 inline_data
+（Google API 限制），保持 base64 内联输入。
 """
 
 from __future__ import annotations
 
 import hashlib
 import io
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -60,7 +66,7 @@ class MinioConfig:
     secure: bool = False
     access_key: str = ""
     secret_key: str = ""
-    bucket: str = "botler-images"
+    bucket: str = "public"
     public_base_url: str = ""
     verify_ssl: bool = True
 
@@ -91,7 +97,7 @@ def config_from_settings(settings: Any) -> MinioConfig:
         secret_key=str(settings.minio_secret_key
                        or os.environ.get(_ENV_SECRET_KEY, "")).strip(),
         bucket=str(settings.minio_bucket
-                   or os.environ.get(_ENV_BUCKET, "botler-images")).strip(),
+                   or os.environ.get(_ENV_BUCKET, "public")).strip(),
         public_base_url=str(settings.minio_public_base_url
                             or os.environ.get(_ENV_PUBLIC_BASE_URL, "")).strip(),
         verify_ssl=bool(settings.minio_verify_ssl),
@@ -101,9 +107,12 @@ def config_from_settings(settings: Any) -> MinioConfig:
 def image_store_from_settings(settings: Any) -> MinioImageStore | None:
     """按 Settings 构造识图图片存储；未启用/配置不完整返回 None。
 
-    None = 识图模型沿用 base64 内联输入（原行为）。启用但配置不完整
-    （缺 endpoint / 凭据 / public_base_url）时记 warning 日志提示，
-    不抛错不阻塞。
+    None = 未配置 MinIO 图片上传。issue #164 起 OpenAI 兼容识图模型
+    （openai_vision / custom）不再支持 base64 内联——image_store 为
+    None 时识图调用会明确报错引导启用 MinIO（不静默回退）；仅 Gemini
+    官方接口（不支持 http URL）保持 base64 inline_data 内联输入。
+    启用但配置不完整（缺 endpoint / 凭据 / public_base_url）时记
+    warning 日志提示，不抛错不阻塞。
     """
     cfg = config_from_settings(settings)
     if not cfg.enabled:
@@ -111,7 +120,9 @@ def image_store_from_settings(settings: Any) -> MinioImageStore | None:
     if not cfg.is_usable():
         logger.warning(
             "MinIO 已启用但配置不完整（需 endpoint / access_key / "
-            "secret_key / public_base_url），识图图片回退 base64 内联输入")
+            "secret_key / public_base_url），识图图片上传不可用——OpenAI "
+            "兼容识图模型将报错引导启用 MinIO（不再回退 base64 内联，"
+            "issue #164）")
         return None
     return MinioImageStore(cfg)
 
@@ -130,6 +141,8 @@ class MinioImageStore:
     def __init__(self, cfg: MinioConfig, client: Any | None = None) -> None:
         self.cfg = cfg
         self._client = client
+        # 桶公开只读策略是否已应用（实例内只设置一次，幂等）
+        self._policy_applied = False
 
     @property
     def client(self) -> Any:
@@ -159,6 +172,7 @@ class MinioImageStore:
         digest = hashlib.sha256(data).hexdigest()
         try:
             self._ensure_bucket()
+            self._ensure_public_read_policy()
             if not self._object_exists(digest):
                 self.client.put_object(
                     self.cfg.bucket,
@@ -179,10 +193,39 @@ class MinioImageStore:
                 f"{self.cfg.bucket}/{digest}")
 
     def _ensure_bucket(self) -> None:
-        """桶不存在则自动创建（首次上传时）。"""
+        """桶不存在则自动创建（首次上传时；默认桶名 public，issue #164）。"""
         if not self.client.bucket_exists(self.cfg.bucket):
             self.client.make_bucket(self.cfg.bucket)
             logger.info("MinIO 桶已自动创建: %s", self.cfg.bucket)
+
+    def _ensure_public_read_policy(self) -> None:
+        """把桶权限设置为公开只读（匿名 s3:GetObject，issue #164）。
+
+        识图模型（含外部公网网关）需要能匿名访问图片 URL 才能取图，
+        桶对象策略固定为「公开只读」。设置动作幂等（重复设置覆盖为同一
+        策略），实例内首次上传后缓存标志，避免每次上传都调用。
+        """
+        if self._policy_applied:
+            return
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"AWS": ["*"]},
+                "Action": ["s3:GetObject"],
+                "Resource": [f"arn:aws:s3:::{self.cfg.bucket}/*"],
+            }],
+        }
+        try:
+            self.client.set_bucket_policy(
+                self.cfg.bucket, json.dumps(policy))
+        except Exception as exc:  # noqa: BLE001 底层错误统一转业务异常
+            raise MinioStoreError(
+                f"设置 MinIO 桶「{self.cfg.bucket}」公开只读权限失败: {exc}"
+                "（识图模型需匿名读图片 URL，请检查 MinIO 凭据权限）"
+            ) from exc
+        self._policy_applied = True
+        logger.info("MinIO 桶「%s」已设置为公开只读", self.cfg.bucket)
 
     def _object_exists(self, name: str) -> bool:
         """对象是否已存在（幂等去重：同内容图片不重复上传）。"""

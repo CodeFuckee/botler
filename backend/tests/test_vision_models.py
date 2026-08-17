@@ -25,7 +25,7 @@ from botler.vision_models import (
 class FakeImageStore:
     """MinIO 图片存储替身（issue #163）：put_image 返回固定 http URL。"""
 
-    def __init__(self, url="http://img.example.com:9000/botler-images/abc"):
+    def __init__(self, url="http://img.example.com:9000/public/abc"):
         self.url = url
         self.calls: list[tuple] = []
 
@@ -89,9 +89,15 @@ class TestClientCommon:
             client.describe(b"\x89PNG-test")
 
     def test_custom_without_base_url_rejected(self):
-        """自定义 provider 未配置 Base URL 时明确报错（不发请求）。"""
+        """自定义 provider 未配置 Base URL 时明确报错（不发请求）。
+
+        issue #164：未启用 MinIO 时先报「要求 http URL」的引导错误；
+        本用例注入 image_store 使检查走到 Base URL 校验（两者都是
+        describe 前置校验，顺序不影响正确性）。
+        """
         client = VisionModelClient(
             name="n", provider="custom", api_key="k", model="m")
+        client.image_store = FakeImageStore()
         with pytest.raises(VisionModelError, match="Base URL"):
             client.describe(b"\x89PNG-test")
 
@@ -191,6 +197,10 @@ class TestClientCommon:
         client = VisionModelClient(
             name="OpenAI 视觉", provider="openai_vision",
             api_key="sk-secret-key", timeout=5)
+        # issue #164：OpenAI 兼容识图模型禁止 base64 内联，须走 MinIO
+        # http URL 模式（无 image_store 时 describe 直接报错不发请求）
+        client.image_store = FakeImageStore(
+            url="http://img.example.com:9000/public/abc")
         client._http = httpx.Client(transport=transport)
         big = b"\x89PNG" + b"0" * 300
         with pytest.raises(VisionModelError) as exc:
@@ -198,9 +208,9 @@ class TestClientCommon:
         msg = str(exc.value)
         assert "网络请求失败" in msg
         assert "请求体" in msg
-        assert "已截断" in msg
-        # data URL 前缀可见，说明图片以 base64 data URL 编码进载荷
-        assert "data:image/png;base64," in msg
+        # 载荷为 http URL 图片（不再有超长 base64，无截断）
+        assert "http://img.example.com:9000/public/abc" in msg
+        assert "data:image" not in msg
         assert "sk-secret-key" not in msg
 
 
@@ -397,6 +407,10 @@ class TestOpenAIVisionClient:
             })
 
         client = self._client(handler)
+        # issue #164：OpenAI 兼容识图模型禁止 base64 内联，图片须先
+        # 上传 MinIO 以 http URL 传入
+        client.image_store = FakeImageStore(
+            url="http://img.example.com:9000/public/abc")
         desc = client.describe(png, mime_type="image/png",
                                prompt="请描述这张图片的内容")
         assert captured["url"].endswith("/chat/completions")
@@ -407,9 +421,9 @@ class TestOpenAIVisionClient:
         assert content[0]["text"] == "请描述这张图片的内容"
         img = content[1]
         assert img["type"] == "image_url"
-        assert img["image_url"]["url"].startswith("data:image/png;base64,")
-        assert base64.b64decode(
-            img["image_url"]["url"].split(",", 1)[1]) == png
+        # 图片以 http URL 传入（MinIO public 桶），不再塞 base64
+        assert img["image_url"]["url"] == "http://img.example.com:9000/public/abc"
+        assert "data:image" not in img["image_url"]["url"]
         assert desc == "这是一张夕阳下的海滩照片"
 
     def test_describe_with_image_store_uses_http_url(self):
@@ -417,7 +431,7 @@ class TestOpenAIVisionClient:
         image_url.url 使用 http URL（而非 base64 data URL），图片先
         经 put_image 上传（对象名 = 哈希值）。"""
         png = b"\x89PNG-openai-minio"
-        store = FakeImageStore(url="http://img.example.com:9000/botler-images/"
+        store = FakeImageStore(url="http://img.example.com:9000/public/"
                                     "abc123")
         captured = {}
 
@@ -464,6 +478,7 @@ class TestOpenAIVisionClient:
             })
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         desc = client.describe(b"\x89PNG-x")
         assert desc == "ok"
         content = captured["body"]["messages"][0]["content"]
@@ -475,6 +490,7 @@ class TestOpenAIVisionClient:
             return httpx.Response(429, text="rate limit exceeded")
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         with pytest.raises(VisionModelError, match="429"):
             client.describe(b"\x89PNG-x")
 
@@ -484,6 +500,7 @@ class TestOpenAIVisionClient:
             return httpx.Response(200, json={"choices": []})
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         with pytest.raises(VisionModelError, match="未包含文本"):
             client.describe(b"\x89PNG-x")
 
@@ -498,6 +515,7 @@ class TestOpenAIVisionClient:
             return httpx.Response(429, text="rate limit exceeded")
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         big = b"\x89PNG" + b"0" * 300
         with pytest.raises(VisionModelError) as exc:
             client.describe(big)
@@ -523,6 +541,7 @@ class TestOpenAIVisionClient:
             return httpx.Response(404, text="404 page not found")
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x")
         assert "404" in str(exc.value)
@@ -539,6 +558,7 @@ class TestOpenAIVisionClient:
             return httpx.Response(200, json={"choices": []})
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x")
         msg = str(exc.value)
@@ -549,30 +569,38 @@ class TestOpenAIVisionClient:
         assert "请求体" in msg
         assert "gpt-4o" in msg
 
-    def test_url_error_hint_for_base64_data_url(self):
-        """OpenAI 兼容网关拒绝 base64 data URL 图片（如阿里云百炼 qwen
-        返回 "url error, please check url"）时，错误信息带可操作的诊断
-        提示（issue #164）：引导启用 MinIO 图片上传（http URL 模式）或
-        更换支持 base64 的网关。"""
-        captured = {}
-
+    def test_openai_requires_minio_no_base64_fallback(self):
+        """issue #164：OpenAI 兼容识图模型禁止 base64 内联——未启用
+        MinIO（image_store=None）时 describe 直接报错引导启用 MinIO，
+        绝不把图片 base64 塞进请求体。"""
         def handler(request: httpx.Request) -> httpx.Response:
-            captured["url"] = str(request.url)
-            return httpx.Response(400, json={
-                "code": "InvalidParameter",
-                "message": "url error, please check url！",
-            })
+            raise AssertionError("不应发出任何请求（未启用 MinIO 时禁止 base64）")
 
         client = self._client(handler)
         with pytest.raises(VisionModelError) as exc:
-            client.describe(b"\x89PNG-x", mime_type="image/png", prompt="描述")
+            client.describe(b"\x89PNG-x", mime_type="image/png")
         msg = str(exc.value)
-        assert "400" in msg
-        assert "url error" in msg
-        # 诊断提示：base64 内联模式 + MinIO http URL 方案
-        assert "base64" in msg
         assert "MinIO" in msg
         assert "http URL" in msg
+        assert "base64" in msg
+
+    def test_url_error_hint_for_base64_data_url(self):
+        """_data_url_rejected_hint：字节图片（base64 内联模式）且网关返回
+        图片 URL 类错误时，给出可操作的诊断提示（issue #164 遗留防御：
+        直接传字节给插件的场景仍能命中提示；正常流程已禁止 base64 内联）。
+        """
+        from botler.plugins.vision_models import _data_url_rejected_hint
+        hint = _data_url_rejected_hint(
+            b"\x89PNG-x", "url error, please check url！")
+        assert "base64" in hint
+        assert "MinIO" in hint
+        assert "http URL" in hint
+        # 非图片 URL 类错误不加提示
+        assert _data_url_rejected_hint(
+            b"\x89PNG-x", "rate limit exceeded") == ""
+        # http URL 字符串图片（MinIO 模式）不加提示
+        assert _data_url_rejected_hint(
+            "http://img.example.com:9000/public/abc", "url error") == ""
 
     def test_url_error_no_hint_when_http_url_mode(self):
         """MinIO http URL 模式（图片已是 http URL 字符串）下网关报 url
@@ -584,10 +612,13 @@ class TestOpenAIVisionClient:
             })
 
         client = self._client(handler)
+        # MinIO http URL 模式：图片经 put_image 上传后以 URL 字符串传入
+        # 插件，网关报 url 错误时与图片编码无关，不加 base64 提示
+        client.image_store = FakeImageStore(
+            url="http://img.example.com:9000/public/abc")
         with pytest.raises(VisionModelError) as exc:
-            client.describe(
-                "http://img.example.com:9000/botler-images/abc",
-                mime_type="image/png", prompt="描述")
+            client.describe(b"\x89PNG-x", mime_type="image/png",
+                            prompt="描述")
         msg = str(exc.value)
         assert "url error" in msg
         assert "base64" not in msg
@@ -602,6 +633,7 @@ class TestOpenAIVisionClient:
             })
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x", mime_type="image/png")
         msg = str(exc.value)
@@ -627,6 +659,20 @@ class TestCustomVisionProvider:
         client._http = httpx.Client(transport=transport)
         return client
 
+    def test_custom_requires_minio_no_base64_fallback(self):
+        """issue #164：自定义 OpenAI 兼容网关同样禁止 base64 内联——未
+        启用 MinIO 时 describe 报错引导配置，不发请求。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("不应发出任何请求（未启用 MinIO 时禁止 base64）")
+
+        client = self._client(handler)
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x")
+        msg = str(exc.value)
+        assert "MinIO" in msg
+        assert "http URL" in msg
+        assert "base64" in msg
+
     def test_custom_uses_base_url_verbatim(self):
         """自定义 Base URL 作为完整请求地址直接使用，不拼接接口路径。"""
         captured = {}
@@ -639,6 +685,7 @@ class TestCustomVisionProvider:
             })
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         desc = client.describe(b"\x89PNG-x")
         assert captured["url"] == self.CUSTOM_URL
         assert captured["body"]["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -647,7 +694,7 @@ class TestCustomVisionProvider:
     def test_custom_with_image_store_uses_http_url(self):
         """issue #163：自定义 OpenAI 兼容网关同样走 http URL 图片模式
         （Base URL 完整地址直用，图片不塞 base64）。"""
-        store = FakeImageStore(url="http://img.example.com:9000/botler-images/"
+        store = FakeImageStore(url="http://img.example.com:9000/public/"
                                     "def456")
         captured = {}
 
@@ -677,6 +724,7 @@ class TestCustomVisionProvider:
             return httpx.Response(200, json={"choices": []})
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         with pytest.raises(VisionModelError) as exc:
             client.describe(b"\x89PNG-x")
         msg = str(exc.value)
@@ -698,6 +746,7 @@ class TestCustomVisionProvider:
             return httpx.Response(200, text="<html>gateway error page</html>")
 
         client = self._client(handler)
+        client.image_store = FakeImageStore()
         big = b"\x89PNG" + b"0" * 300
         with pytest.raises(VisionModelError) as exc:
             client.describe(big)
@@ -708,7 +757,9 @@ class TestCustomVisionProvider:
         assert "请求头" in msg
         assert "请求体" in msg
         assert "已掩码" in msg
-        assert "已截断" in msg
+        # issue #164：图片为 http URL 模式（不再塞超长 base64），请求体
+        # 完整可见且不触发截断
+        assert "http://img.example.com:9000/public/abc" in msg
         assert captured["body"]["model"] in msg
         assert "sk-custom" not in msg  # API Key 明文不泄漏
 

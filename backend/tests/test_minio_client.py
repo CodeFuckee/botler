@@ -1,13 +1,15 @@
 """MinIO 对象存储客户端测试（issue #163）。
 
-覆盖：SHA-256 哈希命名（对象名 = 哈希值）、桶自动创建、幂等去重
-（同内容图片对象已存在不重复上传）、http URL 构造、空图片 / 上传失败
-错误、配置构造与 env 回退、settings 接线（未启用 / 配置不完整回退
-None，识图保持 base64 内联）。用注入的 fake client 模拟 minio SDK，
-不做真实外呼。
+覆盖：SHA-256 哈希命名（对象名 = 哈希值）、桶自动创建（默认桶名
+public，issue #164）、桶公开只读策略设置（匿名 s3:GetObject，幂等）、
+幂等去重（同内容图片对象已存在不重复上传）、http URL 构造、空图片 /
+上传失败错误、配置构造与 env 回退、settings 接线（未启用 / 配置不完整
+返回 None，OpenAI 兼容识图模型将报错引导启用 MinIO）。用注入的 fake
+client 模拟 minio SDK，不做真实外呼。
 """
 
 import hashlib
+import json
 import os
 
 import pytest
@@ -26,7 +28,7 @@ CFG = MinioConfig(
     secure=False,
     access_key="test-access",
     secret_key="test-secret",
-    bucket="botler-images",
+    bucket="public",
     public_base_url="http://img.example.com:9000",
     verify_ssl=True,
 )
@@ -40,6 +42,12 @@ class FakeMinioClient:
         self.objects: dict[str, dict[str, tuple]] = {}
         self.put_calls: list[tuple] = []
         self.stat_calls: list[tuple] = []
+        self.policies: dict[str, str] = {}
+        self.policy_calls: list[str] = []
+
+    def set_bucket_policy(self, bucket, policy):
+        self.policy_calls.append(bucket)
+        self.policies[bucket] = policy
 
     def bucket_exists(self, bucket):
         return bucket in self.buckets
@@ -71,19 +79,28 @@ class TestPutImage:
         png = b"\x89PNG-upload-test"
         url = store.put_image(png, mime_type="image/png")
         digest = hashlib.sha256(png).hexdigest()
-        assert url == f"http://img.example.com:9000/botler-images/{digest}"
+        assert url == f"http://img.example.com:9000/public/{digest}"
         assert url.startswith("http://")  # issue #163：http 形式而非 base64
-        assert fake.objects["botler-images"][digest][0] == png
+        assert fake.objects["public"][digest][0] == png
         # 上传时带上 MIME 类型（模型经 URL 拉图时 Content-Type 正确）
-        assert fake.put_calls == [("botler-images", digest, len(png),
+        assert fake.put_calls == [("public", digest, len(png),
                                    "image/png")]
+        # issue #164：桶权限设为公开只读（匿名 s3:GetObject）
+        assert fake.policy_calls == ["public"]
+        policy = json.loads(fake.policies["public"])
+        stmt = policy["Statement"][0]
+        assert stmt["Effect"] == "Allow"
+        assert stmt["Action"] == ["s3:GetObject"]
+        assert stmt["Resource"] == ["arn:aws:s3:::public/*"]
 
     def test_auto_creates_missing_bucket(self):
-        """桶不存在时自动创建（首次上传）。"""
+        """桶不存在时自动创建（默认桶名 public，issue #164）。"""
         store, fake = _store()
         assert fake.buckets == set()
         store.put_image(b"\x89PNG-x", mime_type="image/jpeg")
-        assert "botler-images" in fake.buckets
+        assert "public" in fake.buckets
+        # 公开只读策略随之设置
+        assert "public" in fake.policies
 
     def test_idempotent_skip_existing_object(self):
         """对象已存在（同内容图片重复上传）不重复 put_object，直接复用
@@ -92,13 +109,42 @@ class TestPutImage:
         png = b"\x89PNG-same-image"
         digest = hashlib.sha256(png).hexdigest()
         # 预置已存在对象
-        fake.buckets.add("botler-images")
-        fake.objects.setdefault("botler-images", {})[digest] = (b"old", "image/png")
+        fake.buckets.add("public")
+        fake.objects.setdefault("public", {})[digest] = (b"old", "image/png")
         url1 = store.put_image(png)
         url2 = store.put_image(png)
         assert url1 == url2
         assert fake.put_calls == []  # 未触发上传
         assert fake.stat_calls  # 有检查存在性
+
+    def test_public_read_policy_applied_once_per_store(self):
+        """公开只读策略幂等：同一 store 实例多次上传只设置一次策略。"""
+        store, fake = _store()
+        fake.buckets.add("public")
+        store.put_image(b"\x89PNG-a")
+        store.put_image(b"\x89PNG-b")
+        assert fake.policy_calls == ["public"]  # 第二次上传不再重复设置
+
+    def test_existing_bucket_still_gets_public_policy(self):
+        """桶已存在（非本次创建）同样设置公开只读策略（保证老桶合规）。"""
+        store, fake = _store()
+        fake.buckets.add("public")
+        store.put_image(b"\x89PNG-x")
+        assert "public" in fake.policies
+        assert "make_bucket" not in [c[0] for c in []]  # 未重复建桶
+
+    def test_policy_failure_raises_store_error(self):
+        """设置公开只读策略失败（如凭据权限不足）统一转 MinioStoreError，
+        提示检查 MinIO 权限（识图模型依赖匿名取图）。"""
+        store, fake = _store()
+
+        class BrokenPolicyClient(FakeMinioClient):
+            def set_bucket_policy(self, bucket, policy):
+                raise OSError("AccessDenied: no permission")
+
+        store._client = BrokenPolicyClient()
+        with pytest.raises(MinioStoreError, match="公开只读"):
+            store.put_image(b"\x89PNG-x")
 
     def test_empty_image_raises(self):
         """空图片直接报错，不发请求。"""
@@ -141,7 +187,7 @@ class TestConfig:
         cfg = config_from_settings(s)
         assert cfg.enabled is False
         assert cfg.endpoint == "127.0.0.1:9000"
-        assert cfg.bucket == "botler-images"
+        assert cfg.bucket == "public"
         assert cfg.public_base_url == ""
 
     def test_config_from_settings_env_fallback(self, monkeypatch):

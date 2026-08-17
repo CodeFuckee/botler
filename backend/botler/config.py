@@ -206,7 +206,7 @@ class Settings:
     minio_secure: bool = False
     minio_access_key: str = ""
     minio_secret_key: str = ""
-    minio_bucket: str = "botler-images"
+    minio_bucket: str = "public"
     minio_public_base_url: str = ""
     minio_verify_ssl: bool = True
 
@@ -501,7 +501,7 @@ class ConfigManager:
             minio_secure=bool(minio.get("secure", False)),
             minio_access_key=str(minio.get("access_key") or "").strip(),
             minio_secret_key=str(minio.get("secret_key") or "").strip(),
-            minio_bucket=str(minio.get("bucket") or "botler-images").strip(),
+            minio_bucket=str(minio.get("bucket") or "public").strip(),
             minio_public_base_url=str(minio.get("public_base_url") or "").strip(),
             minio_verify_ssl=bool(minio.get("verify_ssl", True)),
             webhook_enabled=bool(webhook.get("enabled", False)),
