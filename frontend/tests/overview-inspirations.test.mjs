@@ -363,10 +363,18 @@ test('源码：「添加 Issue」按钮位于「编辑」按钮左侧', () => {
   assert.ok(edit < del, '「编辑」应位于「删除」左侧')
 })
 
-test('源码：一键提交调用 POST /api/inspirations/{id}/add-issue', () => {
+test('源码：一键提交调用 POST /api/inspirations/{id}/add-issue 并刷新灵感列表', () => {
   assert.match(overview, /api\.post\(`\/api\/inspirations\/\$\{ins\.id\}\/add-issue`\)/,
                '应调用 POST /api/inspirations/{id}/add-issue')
-  assert.match(overview, /loadIssues\(\)/, '创建成功后应刷新开放 issue 列表')
+  // issue #162：创建成功后端已删除该灵感，前端应刷新灵感列表移除条目
+  // （不等 15 秒轮询）；成功提示保留展示新 issue 链接
+  const fnStart = overview.indexOf('const addIssueFromInspiration')
+  const fnEnd = overview.indexOf('\n  // 对账', fnStart)
+  const fnBody = overview.slice(fnStart, fnEnd > 0 ? fnEnd : overview.length)
+  assert.ok(fnStart >= 0, '应存在 addIssueFromInspiration 函数')
+  assert.match(fnBody, /loadIssues\(\)/, '创建成功后应刷新开放 issue 列表')
+  assert.match(fnBody, /loadInspirations\(\)/,
+               '创建成功后应刷新灵感列表（issue #162）')
 })
 
 test('渲染：每条灵感都有「添加 Issue」按钮且位于编辑按钮左侧', async () => {
@@ -396,12 +404,16 @@ test('交互：点击添加 issue → POST /api/inspirations/{id}/add-issue 并�
   } })
   try {
     const issuesBefore = r.getCalls.filter((p) => p === '/api/issues/overview').length
+    const inspBefore = r.getCalls.filter((p) => p === '/api/inspirations/overview').length
     await clickAddIssue(r.renderer, 0)
     assert.equal(r.postCalls.length, 1, '应调用一次 POST')
     assert.equal(r.postCalls[0][0], '/api/inspirations/11/add-issue',
                  '应提交 id=11 的灵感')
     const issuesAfter = r.getCalls.filter((p) => p === '/api/issues/overview').length
     assert.ok(issuesAfter > issuesBefore, '创建成功后应重新拉取开放 issue 列表')
+    const inspAfter = r.getCalls.filter((p) => p === '/api/inspirations/overview').length
+    assert.ok(inspAfter > inspBefore,
+              '创建成功后应重新拉取灵感列表（issue #162，条目已删除）')
     const text = treeText(r.renderer)
     assert.ok(text.includes('issue #77'), '应展示新 issue 编号')
     assert.ok(text.includes('https://gitlab.example.com/x/-/issues/77'),
@@ -441,13 +453,18 @@ test('交互：提交中按钮禁用，重复点击只发一次请求', async ()
   }
 })
 
-test('交互：提交失败显示错误且不崩溃', async () => {
+test('交互：提交失败显示错误且不刷新灵感列表', async () => {
   const r = await renderOverview({ inspirationsAddError: 'owner token 未配置' })
   try {
+    const inspBefore = r.getCalls.filter((p) => p === '/api/inspirations/overview').length
     await clickAddIssue(r.renderer, 0)
     const text = treeText(r.renderer)
     assert.ok(text.includes('owner token 未配置'), '应显示提交错误')
     assert.ok(text.includes('💡 灵感'), '板块骨架仍应渲染')
+    // issue #162：未成功推送不删除灵感，失败后不应刷新灵感列表
+    // （条目保留可重试，避免界面闪烁）
+    const inspAfter = r.getCalls.filter((p) => p === '/api/inspirations/overview').length
+    assert.equal(inspAfter, inspBefore, '提交失败不应刷新灵感列表')
   } finally {
     await r.unmount()
   }

@@ -390,6 +390,8 @@ export default function Overview() {
   // 将灵感一键提交为 GitLab issue（issue #143）：灵感内容作为 issue
   // 的标题与描述，通过 GitLab API 创建，默认标签 feature + ui；成功后
   // 刷新开放 issue 列表并展示新 issue 链接
+  // issue #162：创建成功后端已删除该灵感，同时刷新灵感列表移除条目
+  // （不等 15 秒轮询，避免条目残留误导重复提交）
   const addIssueFromInspiration = useCallback(async (ins) => {
     if (addingIssueInspIds[ins.id]) return // 请求中禁止重复提交
     setAddingIssueInspIds((prev) => ({ ...prev, [ins.id]: true }))
@@ -399,12 +401,15 @@ export default function Overview() {
       setInspirationCreatedIssue(created)
       setInspirationError('')
       await loadIssues()
+      await loadInspirations()
     } catch (e) {
+      // 失败（GitLab 故障 / 未配置 owner token 等）：灵感未被删除，
+      // 不刷新灵感列表——条目保留可重试，避免界面闪烁
       setInspirationError(e.message)
     } finally {
       setAddingIssueInspIds((prev) => ({ ...prev, [ins.id]: false }))
     }
-  }, [addingIssueInspIds, loadIssues])
+  }, [addingIssueInspIds, loadIssues, loadInspirations])
 
   // 对账（issue #134）：立即扫描该仓库，把「assignee 是 bot 但任务表无
   // 活跃记录」的 open issues 补入队（复用仓库页对账接口，issue #17）。

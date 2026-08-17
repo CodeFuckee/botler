@@ -12,10 +12,11 @@
 - POST /api/inspirations：创建（repo_id + content 必填）；
 - PUT  /api/inspirations/{id}：更新内容并刷新 updated_at；
 - DELETE /api/inspirations/{id}：删除；
-- POST /api/inspirations/{id}/add-issue（issue #143）：一键提交为
+- POST /api/inspirations/{id}/add-issue（issue #143/#162）：一键提交为
   GitLab issue——正常路径 / 灵感不存在 404 / 仓库未启用 400 /
   仓库软删除 400 / GitLab 故障 502 / 未配置 owner token 400 /
-  创建成功后清空概览缓存；
+  创建成功后清空概览缓存并删除该灵感（issue #162），失败场景
+  （GitLab 故障 / 未配置 owner token / 仓库禁用）灵感保留可重试；
 - 边界：仓库不存在 / 软删除仓库 / 空内容 / 纯空白 / 超长内容 /
   记录不存在（404）。
 """
@@ -414,6 +415,11 @@ class TestAddIssueFromInspiration:
         assert issue["title"] == "灵感内容"
         assert issue["state"] == "opened"
         assert issue["web_url"].startswith("https://")
+        # issue #162：创建成功后灵感从列表删除（已转为 GitLab issue，
+        # 保留会误导重复提交）；overview 不再展示该条目
+        assert db.get_inspiration(insp_id) is None
+        items = tc.get("/api/inspirations/overview").json()["repos"][0]["inspirations"]
+        assert items == []
 
     def test_multiline_content_preserved_in_description(self, edit_env):
         """边界：多行灵感——标题/描述保留内部换行，仅去首尾空白。"""
@@ -444,6 +450,8 @@ class TestAddIssueFromInspiration:
         assert resp.status_code == 400
         assert "未启用" in resp.json()["detail"]
         assert stub.create_calls == []
+        # issue #162：未成功推送不删除，灵感保留可重试
+        assert db.get_inspiration(insp_id) is not None
 
     def test_repo_soft_deleted(self, edit_env):
         """边界：灵感所属仓库已软删除 → 400（不允许向已删除仓库提交）。"""
@@ -465,6 +473,8 @@ class TestAddIssueFromInspiration:
         resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
         assert resp.status_code == 502
         assert "创建 issue 失败" in resp.json()["detail"]
+        # issue #162：GitLab 创建失败未成功推送，灵感保留可重试
+        assert db.get_inspiration(insp_id) is not None
 
     def test_without_owner_token_blocked(self, client):
         """边界：未配置 owner token → 400 拦截（概览页写操作绝不回退
@@ -475,6 +485,8 @@ class TestAddIssueFromInspiration:
         resp = tc.post(f"/api/inspirations/{insp_id}/add-issue")
         assert resp.status_code == 400
         assert "owner token" in resp.json()["detail"]
+        # issue #162：未成功推送不删除，灵感保留可重试
+        assert db.get_inspiration(insp_id) is not None
 
     def test_invalidates_overview_cache(self, edit_env):
         """创建成功后清空概览缓存：下一次 overview 请求重新拉取

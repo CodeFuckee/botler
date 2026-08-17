@@ -307,7 +307,7 @@ GET    /api/inspirations/overview      概览页灵感聚合：所有未软删�
 POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；默认仅存本地数据库，issue #131）
 PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）
 DELETE /api/inspirations/{id}         删除灵感（issue #131）
-POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143/#153）：灵感内容同时作为标题与描述，默认标签 feature + ui，分配人 = 仓库用户（仓库设置页读取 remote url 得到的用户名，按项目成员解析为 GitLab 用户 id；未配置/解析失败则不指定分配人）；写操作必须配置 owner token，成功后清概览缓存
+POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143/#153/#162）：灵感内容同时作为标题与描述，默认标签 feature + ui，分配人 = 仓库用户（仓库设置页读取 remote url 得到的用户名，按项目成员解析为 GitLab 用户 id；未配置/解析失败则不指定分配人）；写操作必须配置 owner token，创建成功后清概览缓存并从灵感列表删除该灵感（issue #162，失败保留可重试）
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 

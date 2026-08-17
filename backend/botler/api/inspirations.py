@@ -14,13 +14,14 @@ GitLab issue——灵感内容作为 issue 标题与描述、默认标签 featur
 - POST   /api/inspirations：创建灵感（repo_id + content 必填）。
 - PUT    /api/inspirations/{id}：更新灵感内容（刷新 updated_at）。
 - DELETE /api/inspirations/{id}：删除灵感。
-- POST   /api/inspirations/{id}/add-issue（issue #143 / #153 / #159）：
-  将灵感一键提交为 GitLab issue——灵感内容同时作为标题与描述，默认
-  标签 feature + ui，分配人 = 仓库用户（issue #153：仓库设置页读取
+- POST   /api/inspirations/{id}/add-issue（issue #143 / #153 / #159 /
+  #162）：将灵感一键提交为 GitLab issue——灵感内容同时作为标题与描述，
+  默认标签 feature + ui，分配人 = 仓库用户（issue #153：仓库设置页读取
   remote url 得到的 userinfo 用户名，解析为 GitLab 用户 id；issue #159：
   存储值为空时提交时按 remote url 运行时读取兜底并写回仓库表，未配置/
   解析失败则不指定分配人）；走 owner token（复用 issues 模块的
-  _issue_edit_call，绝不回退 bot token），创建成功后清空概览缓存。
+  _issue_edit_call，绝不回退 bot token），创建成功后清空概览缓存并
+  删除该灵感（issue #162：成功推送后从灵感列表移除，失败保留可重试）。
 
 校验：repo_id 必须指向存在且未软删除的仓库（400）；content 去除首尾
 空白后非空（400）、长度不超过 5000 字（400，随手笔记的合理上限）；
@@ -192,9 +193,11 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
 
     写操作与概览页其他 issue 编辑一致（_issue_edit_call）：必须使用
     owner token，绝不回退 bot token——未配置 owner token 返回 400 并
-    引导设置；token 失效/权限不足返回 502。创建成功后清空概览缓存，
-    前端刷新开放 issue 列表即可看到新 issue。返回精简后的 issue 对象
-    （含 iid/web_url，供前端展示创建成功提示与跳转链接）。
+    引导设置；token 失效/权限不足返回 502。创建成功后清空概览缓存并
+    删除该灵感（issue #162：灵感已转为 GitLab issue，成功推送后从灵感
+    列表移除，避免重复提交；删除为本地数据库操作，失败仅告警不阻塞
+    返回成功），前端刷新开放 issue 列表即可看到新 issue。返回精简后
+    的 issue 对象（含 iid/web_url，供前端展示创建成功提示与跳转链接）。
 
     错误映射：灵感不存在 → 404；所属仓库不存在/已软删除 → 400；仓库
     未启用 → 400（与概览页添加 issue 弹窗一致）；GitLab 创建失败 →
@@ -263,5 +266,16 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
         # owner client 可能指向不可达 host（配置的 GitLab 地址异常）
         raise HTTPException(502, f"创建 issue 网络错误: {str(e)[:200]}") from e
     clear_issue_cache()
+    # issue #162：创建成功即从灵感列表删除——灵感已转为 GitLab issue，
+    # 保留会诱导重复点击产生重复 issue（每次提交都会新建一个 issue）。
+    # 删除属本地数据库操作（刚查过该行必然存在），正常不会失败；仍
+    # 防御性捕获并告警，不阻塞返回成功——issue 创建成功是主流程结果。
+    # 所有失败路径（GitLab 故障 / 未配置 owner token / 仓库禁用等）
+    # 均不会走到这里，灵感保留可重试。
+    try:
+        c.db.delete_inspiration(inspiration_id)
+    except Exception as e:
+        logger.warning("灵感提交 issue 成功后删除灵感失败（id=%s）: %s",
+                       inspiration_id, str(e)[:200])
     # 标签色省略（创建刚完成，前端随即刷新列表从 overview 获取完整数据）
     return _trim_issue(issue, {})
