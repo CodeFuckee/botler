@@ -91,7 +91,11 @@
     URL 非空且不以 http(s):// 开头，返回明确中文提示而非晦涩的 httpx 协议错误；
   - **测试**：`test_api_settings.py` 新增 `test_test_row_button_undefined_placeholders_fallback`
     用例——提交 base_url / api_key / model 均为 "undefined" 时断言回退已保存配置（修复前用例
-    复现失败：captured 值就是 "undefined"，与用户反馈错误一致），修复后全部通过。
+    复现失败：captured 值就是 "undefined"，与用户反馈错误一致），修复后全部通过；随后补充
+    `test_test_custom_row_button_undefined_falls_back_to_saved`（自定义识图模型 qwen3-vl-flash +
+    阿里云 compatible-mode 完整地址，与用户反馈场景一致）与
+    `test_test_invalid_scheme_returns_clear_error`（Base URL 不带协议时返回明确中文提示，
+    不再报晦涩的 httpx 协议错误），全部通过。
 
 - **生图模型测试：OpenAI 接口返回 SSE 流（text/event-stream）时按事件解析并下载生成图片，不再报「不是有效 JSON」（issue #151 用户反馈）**：
   用户配置的生图接口（聚合网关类）真实返回为 SSE 流——多行 `data: {json}` 事件逐步上报

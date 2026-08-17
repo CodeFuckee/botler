@@ -1862,3 +1862,76 @@ class TestVisionModelTestEndpoint:
         assert captured["api_key"] == "AIza-vision-test-123"
         assert captured["base_url"] == self.MODEL["base_url"]
         assert captured["model"] == "gemini-2.5-flash"
+
+    def test_test_invalid_scheme_returns_clear_error(self, client, monkeypatch):
+        """Base URL 不带 http(s):// 协议（issue #154）：返回明确中文提示，
+        而不是构造客户端后让 httpx 报 "Request URL is missing an 'http://'
+        or 'https://' protocol." 的晦涩错误。
+        """
+        tc, _ = client
+        called = []
+
+        class BoomClient:
+            def __init__(self, **kwargs):
+                called.append(kwargs)  # 不应被构造：scheme 校验先于客户端创建
+
+            def describe(self, image, *, mime_type, prompt):
+                return "ok"
+
+        self._patch_client(monkeypatch, BoomClient)
+        resp = tc.post(
+            "/api/settings/vision-model-test",
+            files={"image": ("test.png", self.PNG, "image/png")},
+            data={"name": "qwen3-vl-flash", "provider": "custom",
+                  "base_url": "localhost:8080/v1/chat/completions",
+                  "api_key": "sk-test", "model": "qwen3-vl-flash"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "必须以 http:// 或 https:// 开头" in data["error"]
+        assert called == []  # 未进入网络调用
+
+    def test_test_custom_row_button_undefined_falls_back_to_saved(self, client, monkeypatch):
+        """用户反馈场景（issue #154）：自定义识图模型（阿里云 compatible-mode
+        网关，模型 qwen3-vl-flash）列表行「测试」缺失字段被 FormData 转成
+        "undefined" 时，回退已保存配置（含 https:// 的 base_url / api_key /
+        model）发起请求，不再报协议错误。
+        """
+        tc, _ = client
+        saved = {
+            "name": "qwen3-vl-flash",
+            "provider": "custom",
+            "base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/"
+                        "compatible-mode/v1/chat/completions",
+            "api_key": "sk-aliyun-test-123",
+            "model": "qwen3-vl-flash",
+            "enabled": True,
+        }
+        tc.put("/api/settings", json={"vision_models": [saved]})
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def describe(self, image, *, mime_type, prompt):
+                return "图中有高楼与蓝天"
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = tc.post(
+            "/api/settings/vision-model-test",
+            files={"image": ("test.png", self.PNG, "image/png")},
+            data={"name": "qwen3-vl-flash", "provider": "custom",
+                  "base_url": "undefined", "api_key": "undefined",
+                  "model": "undefined"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["description"] == "图中有高楼与蓝天"
+        # 回退到已保存的明文 key / url / model
+        assert captured["api_key"] == "sk-aliyun-test-123"
+        assert captured["base_url"] == (
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/"
+            "compatible-mode/v1/chat/completions")
+        assert captured["model"] == "qwen3-vl-flash"
+        assert captured["provider"] == "custom"
