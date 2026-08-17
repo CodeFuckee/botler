@@ -84,6 +84,10 @@ cp .env.example .env          # 填入 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHR
 cd frontend
 npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 ```
+> 前端「添加 Issue」弹窗的标题输入框右侧提供语音输入按钮（🎤，issue #165）：
+> 使用浏览器原生 Web Speech API（`SpeechRecognition`）将语音实时转文字填入
+> 标题，无需后端接口；支持 Chrome / Edge / Safari，Firefox 等不支持时会给出
+> 中文提示，识别中再次点击按钮可停止。
 
 ## 部署（10.0.0.122，Ubuntu 24.04）
 

@@ -1845,6 +1845,40 @@ code {
   min-height: 100px;
   font-family: inherit;
 }
+
+
+/* issue #165：标题语音输入——输入框与语音按钮横向排列（按钮不挤压输入框），
+   语音错误提示小号红字紧贴输入行下方 */
+.add-issue-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.add-issue-title-row .input {
+  flex: 1;
+  width: auto;
+}
+.add-issue-voice {
+  flex: none;
+  padding: 5px 10px;
+  font-size: 15px;
+  line-height: 1;
+}
+/* 识别中：主色描边 + 呼吸光晕，提示正在收音 */
+.add-issue-voice.listening {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-weak);
+  animation: add-issue-voice-pulse 1.2s ease-in-out infinite;
+}
+@keyframes add-issue-voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(66, 139, 202, 0.35); }
+  50% { box-shadow: 0 0 0 4px rgba(66, 139, 202, 0); }
+}
+.add-issue-voice-error {
+  color: var(--err);
+  font-size: 12px;
+}
 .label-picker {
   display: flex;
   flex-wrap: wrap;

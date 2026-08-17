@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 ### Added
+- **添加 issue 对话框标题输入框右侧新增语音输入按钮（issue #165）**：
+  概览页「添加 Issue」弹窗中，标题输入框右侧新增语音输入按钮（🎤），点击后
+  通过浏览器原生 Web Speech API（`SpeechRecognition`，Chrome / Edge /
+  Safari 支持）将语音实时转文字填入标题，无需后端额外接口：
+  - 识别过程中 interim 结果实时预览、final 结果确认填入标题；多段语音
+    （final 段 + 末尾 interim 段）按顺序拼接；识别语言固定 `zh-CN`；
+  - 识别中按钮进入「listening」态（主色描边 + 呼吸光晕），再次点击停止
+    （`rec.stop()`）；识别自动结束 / 关闭弹窗卸载组件时兜底清理
+    （`rec.abort()`），避免识别实例泄漏；
+  - 异常场景中文提示：浏览器不支持（Firefox 等）、麦克风权限被拒绝、
+    未检测到语音、找不到麦克风、网络错误等，提示紧贴输入行下方展示；
+  - 语音填入标题与键盘输入共用 issue #103 的「描述为空自动复制标题」联动
+    逻辑（统一 `applyTitle` 入口，描述为用户手写内容时不被语音结果覆盖）；
+  - **测试**：新增 `frontend/tests/overview-add-issue-voice.test.mjs` 9 用例
+    （按钮渲染与输入框同行 / SpeechRecognition 创建与 start / interim 实时
+    填入与 final 确认 / 多段语音拼接 / 描述空跟随与手写描述不覆盖 / 停止 /
+    不支持与权限拒绝 / 无语音错误提示 / 卸载 abort 清理），实现前可复现
+    失败、实现后全部通过；前端全量测试无 regression（701 用例全绿）。
+
+
 - **识图模型调用时用户上传的图片计算哈希值上传 MinIO，识图请求传 http URL 而非 base64（issue #163）**：
   调用识图模型时，用户上传的图片此前直接以 base64 内联进请求体（OpenAI 兼容
   data URL / Gemini inline_data），图片 base64 可达数十万字符，网关/模型对
