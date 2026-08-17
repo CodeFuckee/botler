@@ -30,6 +30,10 @@ export const INSPIRATION_POLL_MS = 15000
 // 轮询 + 卡片内手动刷新按钮兜底（后端代调 deepseek user/balance）
 export const DEEPSEEK_BALANCE_POLL_MS = 60000
 
+// DeepSeek 开放平台充值页（issue #178）：余额卡片「去充值」链接按钮的跳转
+// 目标，点击后在新标签页打开官方充值页，方便用户直接在 DeepSeek 页面充值
+export const DEEPSEEK_TOPUP_URL = 'https://platform.deepseek.com/top_up'
+
 // 流水线整体状态 → 徽章映射（issue #39）。样式类复用任务状态徽章
 // status-*（视觉语义一致：成功绿 / 失败红 / 运行蓝 / 其余灰）
 export const PIPELINE_STATUS_META = {
@@ -560,6 +564,9 @@ export default function Overview() {
           <div className="form-row">
             <button type="button" className="btn btn-small"
                     onClick={loadDeepSeekBalance}><Icon name="refresh" /> 刷新</button>
+            <a className="btn btn-small deepseek-topup-link"
+               href={DEEPSEEK_TOPUP_URL} target="_blank" rel="noreferrer"
+               title="前往 DeepSeek 开放平台充值"><Icon name="externalLink" /> 去充值</a>
           </div>
         </section>
       )}

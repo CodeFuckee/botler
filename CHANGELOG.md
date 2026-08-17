@@ -37,6 +37,25 @@
 
 ### Added
 
+- **概览页 DeepSeek 账户余额卡片新增「去充值」链接按钮，点击跳转 DeepSeek 开放平台充值页（issue #178）**：
+  需求「deepseek账户余额页面可以增加一个链接按钮，点击之后跳转到deepseek页面，方便充值」。
+  此前余额卡片仅展示余额数据与「刷新」按钮，用户需要自行打开 DeepSeek 平台寻找充值入口；
+  本次在余额卡片操作行新增「去充值」链接按钮，一键跳转官方充值页，方便充值：
+  - 前端 `pages/Overview.jsx`：新增常量 `DEEPSEEK_TOPUP_URL = 'https://platform.deepseek.com/top_up'`
+    （DeepSeek 开放平台充值页）；余额卡片「刷新」按钮旁新增
+    `<a className="btn btn-small deepseek-topup-link" href={DEEPSEEK_TOPUP_URL}
+    target="_blank" rel="noreferrer">` 链接按钮，文案「去充值」，配 Lucide ExternalLink
+    图标与 title 提示；新标签页打开，`rel=noreferrer` 与项目外链约定一致；
+  - 前端 `styles.css`：新增 `.deepseek-topup-link` 样式类（复用 .btn / .btn-small 外观，
+    按钮间距由 .form-row gap 提供）；
+  - 交互边界：卡片渲染（configured=true）即提供「去充值」入口——余额查询报错、余额为
+    空（余额为 0 正是需要充值的场景）时按钮仍可用；未配置 deepseek api（configured=false）
+    时整卡不渲染，链接也不出现；
+  - 测试：`frontend/tests/overview-deepseek-balance.test.mjs` 新增 6 例——源码断言（充值页
+    地址常量 / 链接类名 / href / target=_blank / rel=noreferrer / 文案与图标）+ 渲染断言
+    （已配置渲染链接且指向充值页 / 未配置不渲染 / 余额接口报错仍可用 / 余额为空仍可用）+
+    样式类断言；前端全量测试与覆盖率门禁通过，无 regression。
+
 - **任务详情页事件流默认隐藏思考过程，事件流右侧新增「显示思考过程」开关（issue #176）**：
   需求「任务详情页面事件流默认隐藏思考过程，在事件流右边增加一个 checkbox，可以打开
   思考过程显示」。任务执行事件流中的 thinking（思考过程）事件此前以折叠条展示（默认

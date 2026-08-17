@@ -2694,6 +2694,13 @@ code {
   color: var(--primary);
 }
 
+/* ---- 概览页 DeepSeek 余额卡片「去充值」链接按钮（issue #178）：与「刷新」
+   按钮并排展示，跳转 DeepSeek 开放平台充值页；复用 .btn / .btn-small 外观，
+   按钮间间距由 .form-row 的 gap 提供（不额外加 margin） ---- */
+.deepseek-topup-link {
+  text-decoration: none;
+}
+
 /* ---- 插件管理页（issue #145） ---- */
 /* 插件列表：响应式网格卡片，每张卡片 = 一个插件（名称/描述/版本/来源/操作） */
 .plugin-list {
