@@ -18,10 +18,14 @@
     时走 `_generate_from_sse()`——取最终 `succeeded` 事件的 `results[].url`，用同一 http
     客户端（继承 verify_ssl / 超时配置，显式跟随 CDN 302 跳转）下载图片返回；任务
     `failed` 时给出 `failure_reason` / `error` 原因；流未完成 / 无结果给出可诊断错误
-    （含最终事件状态、事件数与请求地址）；
-  - **测试**：`test_image_models.py` 新增 `TestOpenAISseResponse` 7 用例（成功事件下载
+    （含最终事件状态、事件数与请求地址）；另兼容网关把多个 `data: {json}` 事件挤在
+    同一行、仅以空白分隔（无换行）的非标准形态——逐行解析无事件时按 `data:` 标记切分
+    逐段解析（issue #151 用户实际粘贴返回内容形态），否则该形态仍只能报「不是有效
+    JSON」倾倒整行原始内容、拿不到图片；
+  - **测试**：`test_image_models.py` 新增 `TestOpenAISseResponse` 8 用例（成功事件下载
     图片、failed 报失败原因、仅 running 无结果报诊断错误、图片 URL 下载失败、多行 data
-    事件、`[DONE]` 标记跳过、缺 Content-Type 时按 body 形态识别）；`test_api_settings.py`
+    事件、`[DONE]` 标记跳过、缺 Content-Type 时按 body 形态识别、单行多事件空格分隔
+    形态）；`test_api_settings.py`
     新增 2 端到端用例（POST /api/settings/image-model-test 模拟 SSE 成功回传图片 base64 /
     失败展示原因）；修复前用例可稳定复现（SSE 被当普通 JSON 报「不是有效 JSON」并整体
     倾倒原始流内容），修复后全部通过。

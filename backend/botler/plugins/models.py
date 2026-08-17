@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -127,6 +128,17 @@ def _parse_sse_events(text: str) -> list[dict[str, Any]]:
             pending.append(payload)  # 多行 JSON 事件的起始行
     if pending:
         _flush_sse_pending(pending, events)
+    if events:
+        return events
+    # 单行多事件兜底（issue #151 用户实际粘贴内容形态）：部分网关把多个
+    # data: {json} 事件挤在同一行、仅以空白分隔（非标准 SSE），逐行解析
+    # 拿不到任何事件。按 data: 标记切分后逐段尝试 JSON 解析；全失败返回
+    # 空列表，由调用方展示原始内容兜底。
+    for chunk in _split_inline_sse_payloads(text):
+        try:
+            events.append(json.loads(chunk))
+        except json.JSONDecodeError:
+            continue
     return events
 
 
@@ -145,6 +157,24 @@ def _flush_sse_pending(pending: list[str],
         return True
     except json.JSONDecodeError:
         return False
+
+
+def _split_inline_sse_payloads(text: str) -> list[str]:
+    """把同一行内多个 ``data: {json}`` 事件（空白分隔）切成独立 JSON 文本。
+
+    issue #151 用户粘贴的真实返回形态：``data: {...} data: {...}`` 全部
+    事件挤在同一行、仅以空白分隔（无换行）——标准逐行解析无法拆出事件。
+    这里以 ``data:`` 为标记切分：每段截至下一个 ``data:`` 前的空白，段首
+    残留的 ``data:`` 一并剥除；任一段无法解析为 JSON 时直接丢弃（调用方
+    无事件可解析时会报错展示原始内容兜底）。
+    """
+    chunks: list[str] = []
+    for m in re.finditer(r"data:\s*", text):
+        start = m.end()
+        nxt = re.search(r"\s+data:\s*", text[start:])
+        end = start + (nxt.start() if nxt else len(text))
+        chunks.append(text[start:end].strip())
+    return chunks
 
 
 class GeminiNanoBananaProvider(ImageProviderPlugin):

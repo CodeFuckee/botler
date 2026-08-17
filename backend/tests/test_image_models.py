@@ -771,3 +771,43 @@ class TestOpenAISseResponse:
         results = client.generate("画一只猫")
         assert len(results) == 1
         assert results[0].data == self.PNG
+
+    def test_sse_inline_multiple_events_on_one_line(self):
+        """网关把多个 data 事件挤在同一行、以空格分隔（issue #151 用户
+        实际粘贴的返回内容形态：``data: {...} data: {...}`` 无换行），
+        同样应按事件解析并下载 results 中的图片。修复前逐行解析拿不到
+        任何事件，只能报「不是有效 JSON」并倾倒整行原始内容。"""
+        # 用户 note 中真实网关返回的单行形态：多个 data: {json} 空格分隔
+        inline_sse = (
+            'data: {"id":"16-18ce737e-9692-455d-89a9-be79f437c549",'
+            '"task_id":"","url":"","width":0,"height":0,"progress":1,'
+            '"status":"running","failure_reason":"","error":"",'
+            '"results":null,"callback_url":"","start_time":1786947802,'
+            '"end_time":0} '
+            'data: {"id":"16-18ce737e-9692-455d-89a9-be79f437c549",'
+            '"task_id":"","url":"","width":0,"height":0,"progress":50,'
+            '"status":"running","failure_reason":"","error":"",'
+            '"results":null,"callback_url":"","start_time":1786947802,'
+            '"end_time":0} '
+            'data: {"id":"16-18ce737e-9692-455d-89a9-be79f437c549",'
+            '"task_id":"","url":"","width":0,"height":0,"progress":100,'
+            '"status":"succeeded","failure_reason":"","error":"",'
+            '"results":[{"url":"' + self.IMG_URL + '","width":0,'
+            '"height":0}],"callback_url":"","start_time":1786947802,'
+            '"end_time":1786947840}'
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                return httpx.Response(
+                    200, text=inline_sse,
+                    headers={"Content-Type": "text/event-stream"})
+            # GET：下载生成图片
+            return httpx.Response(
+                200, content=self.PNG,
+                headers={"Content-Type": "image/png"})
+
+        client = self._client(handler)
+        results = client.generate("画一只猫")
+        assert len(results) == 1
+        assert results[0].data == self.PNG
