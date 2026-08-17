@@ -22,6 +22,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const settings = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
 const card = readFileSync(path.join(ROOT, 'src/components/ImageModelsCard.jsx'), 'utf8')
 const providers = readFileSync(path.join(ROOT, 'src/providers.jsx'), 'utf8')
+const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
 test('设置页挂载「生图模型」卡片组件', () => {
   assert.match(settings, /import ImageModelsCard from '\.\.\/components\/ImageModelsCard\.jsx'/, '应导入卡片组件')
@@ -80,6 +81,15 @@ test('测试结果展示成功/失败提示', () => {
   assert.match(card, /res\.error \|\| '生图测试失败'/, '失败提示应展示后端错误信息')
   assert.match(card, /result\.ok \? 'saved-hint' : 'err-hint'/, '成功/失败用不同样式提示')
   assert.match(card, /testBusy \? '测试中…' : '测试'/, '测试中应有 busy 文案')
+})
+
+test('失败原因保留换行原样展示（issue #151：OpenAI 非 JSON 直接展示原始返回内容）', () => {
+  // 后端错误信息可能直接包含接口原始返回内容（多行/长文本），
+  // 失败提示必须 pre-wrap 保留换行、长内容自动折行，否则挤成一团
+  const rule = styles.match(/\.err-hint \{[^}]*\}/)
+  assert.ok(rule, 'styles.css 应有 .err-hint 规则')
+  assert.match(rule[0], /white-space:\s*pre-wrap/, '失败提示应保留换行原样展示')
+  assert.match(rule[0], /word-break:\s*break-word/, '长内容应自动折行')
 })
 
 test('列表模式（非编辑）点击测试也展示结果（issue #149）', () => {

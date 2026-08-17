@@ -738,6 +738,42 @@ class TestImageModelTestEndpoint:
         assert "空响应体" in data["error"]
         assert "Expecting value" not in data["error"]
 
+    def test_test_json_decode_error_openai_shows_raw_content(
+            self, client, monkeypatch):
+        """OpenAI 接口返回 200 + 非 JSON 内容（issue #151 后续反馈）：
+        POST /api/settings/image-model-test 的错误信息直接完整展示接口
+        原始返回内容，用户可直接看到接口返回了什么（不截断、不包裹
+        冗长诊断提示）。"""
+        from botler import image_models as im_mod
+
+        raw = "gateway error: " + "y" * 300  # 超过旧实现 200 字符截断上限
+
+        class FakeClient(im_mod.ImageModelClient):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(
+                        200, text=raw,
+                        headers={"Content-Type": "text/plain"})
+
+                self._http = httpx.Client(
+                    transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr(im_mod, "ImageModelClient", FakeClient)
+        tc, _ = client
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "x", "provider": "openai_gpt_image",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-test", "model": "gpt-image-2",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "不是有效 JSON" in data["error"]
+        assert raw in data["error"]  # 完整原始内容直接展示
+        assert "Expecting value" not in data["error"]
+
 
 class TestDshSettings:
     """dsh 段（issue #84）：GET 掩码返回 + PUT 更新与校验。"""

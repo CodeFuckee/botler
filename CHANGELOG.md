@@ -6,6 +6,24 @@
 
 ### Fixed
 
+- **生图模型测试：OpenAI 接口返回非 JSON 内容时直接展示接口原始返回内容（issue #151 后续反馈）**：
+  首次修复后用户反馈「如果 OpenAI 接口返回内容不是有效 JSON，则直接将接口返回的内容
+  显示出来」——旧实现统一走「带状态码 / 截断 200 字符片段 / 请求地址 + 冗长排查提示」
+  的诊断文案，接口实际返回了什么（如网关错误页、纯文本提示）被截断隐藏，不利于直接
+  判断。改动：
+  - 后端 `plugins/models.py`：`_parse_json_response()` 新增 `show_raw` 参数，
+    OpenAI `images/generations` / `images/edits` 调用传入 `show_raw=True`——JSON 解析
+    失败时错误信息直接完整展示接口原始返回内容（保留换行，不再 200 字符截断、不再
+    包裹冗长提示）；Gemini 保持原有带响应片段 / 请求地址的诊断文案不变；
+  - 前端 `styles.css`：`.err-hint` 补 `white-space: pre-wrap` + `word-break: break-word`，
+    多行 / 长文本的接口原始返回内容原样折行展示；
+  - **测试**：`test_image_models.py` 更新 OpenAI 3 用例（空响应体、纯文本、超 200 字符
+    长文本、HTML 错误页 → 原始返回内容完整出现在错误信息，不截断）；`test_api_settings.py`
+    新增 1 端到端用例（POST /api/settings/image-model-test 模拟 OpenAI 200 + 超长纯文本，
+    错误信息含完整原始内容）；`settings-image-models-card.test.mjs` 新增 1 用例（
+    `.err-hint` 需 pre-wrap 保留换行）；改动前新用例可复现失败（内容被截断到 200 字符），
+    改动后全部通过。
+
 - **生图模型测试时接口返回空/非 JSON 内容报「Expecting value: line 1 column 1 (char 0)」无法定位（issue #151）**：
   配置生图模型后点击「测试」报
   `{"ok":false,"error":"生图测试失败: Expecting value: line 1 column 1 (char 0)"}`

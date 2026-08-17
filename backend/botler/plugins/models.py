@@ -49,6 +49,8 @@ class ImageResult:
 
 def _parse_json_response(
     resp: httpx.Response, url: str, provider: str,
+    *,
+    show_raw: bool = False,
 ) -> dict[str, Any]:
     """解析生图接口 JSON 响应（issue #151）。
 
@@ -56,19 +58,31 @@ def _parse_json_response(
     body 为空或为 HTML 错误页：直接 ``resp.json()`` 抛出的
     ``json.JSONDecodeError``（"Expecting value: line 1 column 1 (char 0)"）
     无法定位问题（设置页只能看到「生图测试失败: Expecting value ...」）。
-    统一转为带状态码 / Content-Type / 响应片段 / 请求地址的
-    :class:`ImageModelError`，用户可据此判断是网关拦截还是 Base URL
-    配错端点。
+
+    ``show_raw=False``（默认，Gemini 等）统一转为带状态码 / Content-Type /
+    响应片段 / 请求地址的 :class:`ImageModelError`，用户可据此判断是网关
+    拦截还是 Base URL 配错端点。
+
+    ``show_raw=True``（OpenAI，issue #151 后续反馈）：错误信息直接完整
+    展示接口原始返回内容（不再截断到 200 字符、不包裹冗长诊断提示），
+    用户可直接看到接口到底返回了什么（如网关错误页、纯文本提示）。
     """
     try:
         return resp.json()
     except json.JSONDecodeError as exc:  # 空 body / 非 JSON 内容统一诊断
-        snippet = (resp.text or "").strip() or "（空响应体）"
+        raw = (resp.text or "").strip() or "（空响应体）"
         ctype = resp.headers.get("content-type") or "未知"
+        if show_raw:  # OpenAI：直接把接口原始返回内容展示给用户
+            raise ImageModelError(
+                f"{provider} 接口返回内容不是有效 JSON（HTTP "
+                f"{resp.status_code}，Content-Type: {ctype}），"
+                f"接口原始返回内容如下：\n{raw}"
+            ) from exc
+        snippet = raw[:200]
         raise ImageModelError(
             f"{provider} 接口返回内容不是有效 JSON（HTTP "
             f"{resp.status_code}，Content-Type: {ctype}）："
-            f"{snippet[:200]}（请求地址: {url}）。若使用自定义 Base URL "
+            f"{snippet}（请求地址: {url}）。若使用自定义 Base URL "
             "请确认其指向正确的接口端点；若经网关/代理转发请检查网关返回内容"
         ) from exc
 
@@ -209,7 +223,8 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
             raise ImageModelError(
                 f"OpenAI 请求失败: HTTP {resp.status_code} {resp.text[:200]}"
                 f"（请求地址: {url}）{hint}")
-        data = _parse_json_response(resp, url, "OpenAI")
+        # OpenAI 非 JSON 响应直接把原始返回内容完整展示给用户（issue #151 后续反馈）
+        data = _parse_json_response(resp, url, "OpenAI", show_raw=True)
         items = data.get("data") or []
         results: list[ImageResult] = []
         for item in items:

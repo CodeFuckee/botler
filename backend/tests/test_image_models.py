@@ -463,9 +463,13 @@ class TestJsonDecodeErrorDiagnosis:
     body 为空或为 HTML 错误页：直接 resp.json() 抛出的
     "Expecting value: line 1 column 1 (char 0)" 无法定位问题。修复前
     该异常不是 ImageModelError，会穿透到设置页显示成
-    「生图测试失败: Expecting value: ...」；修复后应转为带状态码/
-    响应片段/请求地址的 ImageModelError，用户可据此判断是网关拦截
-    还是 Base URL 配错端点。
+    「生图测试失败: Expecting value: ...」；修复后：
+
+    - Gemini：转为带状态码 / 响应片段 / 请求地址的 ImageModelError，
+      用户可据此判断是网关拦截还是 Base URL 配错端点；
+    - OpenAI（issue #151 后续反馈）：把接口原始返回内容直接完整展示
+      在错误信息中（不再截断到 200 字符、不再包裹冗长提示），用户
+      可直接看到接口到底返回了什么。
     """
 
     def _gemini(self, handler):
@@ -519,12 +523,9 @@ class TestJsonDecodeErrorDiagnosis:
         assert "502 Bad Gateway" in msg
         assert captured["url"] in msg
 
-    def test_openai_empty_body_raises_helpful_error(self):
-        """OpenAI：200 + 空 body → ImageModelError 带响应片段与请求地址。"""
-        captured = {}
-
+    def test_openai_empty_body_raises_error_directly_shows_empty_note(self):
+        """OpenAI：200 + 空 body → 错误信息直接说明「空响应体」，不再截断隐藏。"""
         def handler(request: httpx.Request) -> httpx.Response:
-            captured["url"] = str(request.url)
             return httpx.Response(200)
 
         client = self._openai(handler)
@@ -533,15 +534,11 @@ class TestJsonDecodeErrorDiagnosis:
         msg = str(exc.value)
         assert "不是有效 JSON" in msg
         assert "空响应体" in msg
-        assert captured["url"] in msg
         assert "Expecting value" not in msg
 
-    def test_openai_plain_text_body_raises_helpful_error(self):
-        """OpenAI：200 + 纯文本（非 JSON）→ ImageModelError 带内容片段。"""
-        captured = {}
-
+    def test_openai_plain_text_body_shows_full_raw_content(self):
+        """OpenAI：200 + 纯文本（非 JSON）→ 直接完整展示接口原始返回内容。"""
         def handler(request: httpx.Request) -> httpx.Response:
-            captured["url"] = str(request.url)
             return httpx.Response(200, text="ok, no json here",
                                   headers={"Content-Type": "text/plain"})
 
@@ -551,4 +548,34 @@ class TestJsonDecodeErrorDiagnosis:
         msg = str(exc.value)
         assert "不是有效 JSON" in msg
         assert "ok, no json here" in msg
-        assert captured["url"] in msg
+        assert "Expecting value" not in msg
+
+    def test_openai_long_text_body_not_truncated(self):
+        """OpenAI：非 JSON 内容超过 200 字符也不截断，完整展示（用户反馈
+        「直接将接口返回的内容显示出来」，issue #151 后续）。"""
+        raw = "gateway said: " + "x" * 300
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=raw,
+                                  headers={"Content-Type": "text/plain"})
+
+        client = self._openai(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        assert raw in msg  # 完整内容直接展示，不允许 200 字符截断
+
+    def test_openai_html_body_shows_full_raw_content(self):
+        """OpenAI：200 + HTML 错误页 → 完整 HTML 内容直接展示。"""
+        html = ("<html><body><h1>502 Bad Gateway</h1>"
+                "<p>upstream error details here</p></body></html>")
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=html,
+                                  headers={"Content-Type": "text/html"})
+
+        client = self._openai(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        assert "不是有效 JSON" in msg
+        assert html in msg
+        assert "Expecting value" not in msg

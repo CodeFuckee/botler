@@ -679,7 +679,13 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .checkbox-label { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; }
 
 .saved-hint { color: var(--ok); }
-.err-hint { color: var(--err); }
+.err-hint {
+  color: var(--err);
+  /* 生图测试失败原因可能包含接口原始返回内容（多行/长文本，issue #151）：
+     保留换行与空格原样展示、长内容自动折行，避免挤成一团无法阅读 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* 生图模型测试结果（issue #149）：成功/失败文本 + 生成图片预览 */
 .test-result {
