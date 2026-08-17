@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -44,6 +45,32 @@ class ImageResult:
 
     mime_type: str
     data: bytes
+
+
+def _parse_json_response(
+    resp: httpx.Response, url: str, provider: str,
+) -> dict[str, Any]:
+    """解析生图接口 JSON 响应（issue #151）。
+
+    网关/代理或自定义 Base URL 指向错误端点时，接口常返回 HTTP 2xx 但
+    body 为空或为 HTML 错误页：直接 ``resp.json()`` 抛出的
+    ``json.JSONDecodeError``（"Expecting value: line 1 column 1 (char 0)"）
+    无法定位问题（设置页只能看到「生图测试失败: Expecting value ...」）。
+    统一转为带状态码 / Content-Type / 响应片段 / 请求地址的
+    :class:`ImageModelError`，用户可据此判断是网关拦截还是 Base URL
+    配错端点。
+    """
+    try:
+        return resp.json()
+    except json.JSONDecodeError as exc:  # 空 body / 非 JSON 内容统一诊断
+        snippet = (resp.text or "").strip() or "（空响应体）"
+        ctype = resp.headers.get("content-type") or "未知"
+        raise ImageModelError(
+            f"{provider} 接口返回内容不是有效 JSON（HTTP "
+            f"{resp.status_code}，Content-Type: {ctype}）："
+            f"{snippet[:200]}（请求地址: {url}）。若使用自定义 Base URL "
+            "请确认其指向正确的接口端点；若经网关/代理转发请检查网关返回内容"
+        ) from exc
 
 
 class GeminiNanoBananaProvider(ImageProviderPlugin):
@@ -100,7 +127,7 @@ class GeminiNanoBananaProvider(ImageProviderPlugin):
             raise ImageModelError(
                 f"Gemini 请求失败: HTTP {resp.status_code} "
                 f"{resp.text[:200]}（请求地址: {url}）{hint}")
-        data = resp.json()
+        data = _parse_json_response(resp, url, "Gemini")
         try:
             parts_out = data["candidates"][0]["content"]["parts"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -182,7 +209,7 @@ class OpenAIGptImageProvider(ImageProviderPlugin):
             raise ImageModelError(
                 f"OpenAI 请求失败: HTTP {resp.status_code} {resp.text[:200]}"
                 f"（请求地址: {url}）{hint}")
-        data = resp.json()
+        data = _parse_json_response(resp, url, "OpenAI")
         items = data.get("data") or []
         results: list[ImageResult] = []
         for item in items:

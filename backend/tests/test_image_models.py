@@ -454,3 +454,101 @@ class TestCustomBaseUrlVerbatim:
         client.generate("画一只猫")
         assert captured["url"].endswith("/images/generations")
         assert captured["url"].startswith("https://api.openai.com/v1")
+
+
+class TestJsonDecodeErrorDiagnosis:
+    """接口返回 200 + 空 body / 非 JSON 内容时的可诊断错误（issue #151）。
+
+    生图接口（或自定义 Base URL 指向的网关/代理）常见返回 HTTP 200 但
+    body 为空或为 HTML 错误页：直接 resp.json() 抛出的
+    "Expecting value: line 1 column 1 (char 0)" 无法定位问题。修复前
+    该异常不是 ImageModelError，会穿透到设置页显示成
+    「生图测试失败: Expecting value: ...」；修复后应转为带状态码/
+    响应片段/请求地址的 ImageModelError，用户可据此判断是网关拦截
+    还是 Base URL 配错端点。
+    """
+
+    def _gemini(self, handler):
+        transport = httpx.MockTransport(handler)
+        client = ImageModelClient(
+            name="Gemini", provider="gemini_nano_banana",
+            api_key="AIza-test", timeout=5)
+        client._http = httpx.Client(transport=transport)
+        return client
+
+    def _openai(self, handler):
+        transport = httpx.MockTransport(handler)
+        client = ImageModelClient(
+            name="GPT Image", provider="openai_gpt_image",
+            api_key="sk-test", timeout=5)
+        client._http = httpx.Client(transport=transport)
+        return client
+
+    def test_gemini_empty_body_raises_helpful_error(self):
+        """Gemini：200 + 空 body → ImageModelError 带响应片段与请求地址。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200)  # 空响应体
+
+        client = self._gemini(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        assert "不是有效 JSON" in msg
+        assert "空响应体" in msg
+        assert captured["url"] in msg
+        assert "Expecting value" not in msg
+
+    def test_gemini_html_body_raises_helpful_error(self):
+        """Gemini：200 + HTML 错误页 → ImageModelError 带内容片段提示。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(
+                200, text="<html><body>502 Bad Gateway</body></html>",
+                headers={"Content-Type": "text/html"})
+
+        client = self._gemini(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        assert "不是有效 JSON" in msg
+        assert "502 Bad Gateway" in msg
+        assert captured["url"] in msg
+
+    def test_openai_empty_body_raises_helpful_error(self):
+        """OpenAI：200 + 空 body → ImageModelError 带响应片段与请求地址。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200)
+
+        client = self._openai(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        assert "不是有效 JSON" in msg
+        assert "空响应体" in msg
+        assert captured["url"] in msg
+        assert "Expecting value" not in msg
+
+    def test_openai_plain_text_body_raises_helpful_error(self):
+        """OpenAI：200 + 纯文本（非 JSON）→ ImageModelError 带内容片段。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, text="ok, no json here",
+                                  headers={"Content-Type": "text/plain"})
+
+        client = self._openai(handler)
+        with pytest.raises(ImageModelError) as exc:
+            client.generate("画一只猫")
+        msg = str(exc.value)
+        assert "不是有效 JSON" in msg
+        assert "ok, no json here" in msg
+        assert captured["url"] in msg

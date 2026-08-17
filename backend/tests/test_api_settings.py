@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -700,6 +701,42 @@ class TestImageModelTestEndpoint:
         assert resp.status_code == 200
         assert resp.json()["ok"] is False  # 空结果 → 未返回图片数据
         assert captured["verify_ssl"] is False
+
+
+    def test_test_json_decode_error_reports_response_detail(
+            self, client, monkeypatch):
+        """200 + 空 body（网关/代理常见）：错误信息带状态码/响应片段/
+        请求地址，不再裸抛「Expecting value」（issue #151 复现路径）。
+
+        修复前 resp.json() 抛 json.JSONDecodeError，被兜底 except 捕获
+        显示成「生图测试失败: Expecting value: line 1 column 1 (char 0)」，
+        用户无法定位；修复后应转为可诊断的 ImageModelError 文案。
+        """
+        from botler import image_models as im_mod
+
+        class FakeClient(im_mod.ImageModelClient):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(200)  # 空响应体
+
+                self._http = httpx.Client(
+                    transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr(im_mod, "ImageModelClient", FakeClient)
+        tc, _ = client
+        resp = tc.post("/api/settings/image-model-test", json={
+            "name": "x", "provider": "gemini_nano_banana",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta",
+            "api_key": "k", "model": "gemini-3-pro-image",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "不是有效 JSON" in data["error"]
+        assert "空响应体" in data["error"]
+        assert "Expecting value" not in data["error"]
 
 
 class TestDshSettings:

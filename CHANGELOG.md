@@ -6,6 +6,23 @@
 
 ### Fixed
 
+- **生图模型测试时接口返回空/非 JSON 内容报「Expecting value: line 1 column 1 (char 0)」无法定位（issue #151）**：
+  配置生图模型后点击「测试」报
+  `{"ok":false,"error":"生图测试失败: Expecting value: line 1 column 1 (char 0)"}`
+  ——网关/代理或自定义 Base URL 指向错误端点时，生图接口常返回 HTTP 2xx 但 body 为空
+  或为 HTML 错误页，供应商插件直接 `resp.json()` 抛 `json.JSONDecodeError`，被设置页
+  兜底 `except` 捕获后只显示原始解析异常，用户无法判断是网关拦截还是 Base URL 配错
+  端点。改动：
+  - 后端 `plugins/models.py`：新增 `_parse_json_response()`，Gemini `generateContent` 与
+    OpenAI `images/generations` / `images/edits` 响应解析统一经它处理——JSON 解析失败时
+    转为带状态码 / Content-Type / 响应内容片段 / 请求地址的 `ImageModelError`（并提示
+    检查自定义 Base URL 端点或网关返回内容），不再裸抛 `JSONDecodeError`；
+  - **测试**：`test_image_models.py` 新增 4 用例（Gemini / OpenAI × 空响应体 / HTML 或
+    纯文本非 JSON 响应 → 可诊断错误信息）；`test_api_settings.py` 新增 1 端到端用例
+    （POST /api/settings/image-model-test 模拟 200 + 空 body，返回错误信息含
+    「不是有效 JSON」与「空响应体」）；修复前用例可稳定复现（裸抛
+    `Expecting value: line 1 column 1 (char 0)`），修复后全部通过。
+
 - **生图模型调用时自定义 Base URL 被再次拼接接口路径，应直接使用配置的完整地址（issue #150）**：
   用户配置完整调用地址（如代理网关 `https://grsai.dakka.com.cn/v1/draw/completions`）
   后，后端生图调用仍在其后拼接 `/images/generations`、`/images/edits`、
