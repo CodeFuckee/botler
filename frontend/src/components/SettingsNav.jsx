@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 
 // 设置页左侧导航栏（issue #139 架构重构 / issue #155）：
 //
@@ -15,6 +15,9 @@ import { useLayoutEffect, useMemo, useState } from 'react'
 // 设置页后导航栏自动出现对应子选项（如 issue #152 新增「识图模型」卡片后
 // 导航栏自动生成「识图模型」子选项），彻底消除两边对不上的 bug；
 // 未归属任何分组的区块会进「其他设置」兜底分组，不会悄悄丢失。
+//
+// 整体折叠（issue #168）：导航面板可整体收成 44px 窄栏（仅保留「展开侧边栏」
+// 入口），设置内容区占满全宽；偏好持久化 localStorage，刷新后保持。
 //
 // 交互能力（issue #139，保持）：1) 顶部搜索框按名称/关键字过滤设置项
 // （搜索时自动展开命中分组）；2) 每个分组可折叠/展开其子项；
@@ -42,6 +45,33 @@ export const SETTING_KEYWORDS = {
 
 // 未归属任何分组标题的设置区块的兜底分组名（保证每个区块都进导航）
 const FALLBACK_GROUP_TITLE = '其他设置'
+
+// 侧边栏整体折叠偏好存储键（issue #168）：偏好本地持久化，
+// 刷新/重新进入设置页后保持用户上次的折叠/展开选择
+export const SIDEBAR_STORAGE_KEY = 'botler.settings.sidebarCollapsed'
+
+/** 读取侧边栏整体折叠偏好：存储值 '1' / 'true' 视为折叠，其余一律展开。
+ *  storage：localStorage 兼容对象（测试可注入）；无存储环境（SSR）或
+ *  getItem 抛异常（隐私模式）时兜底为展开，不影响页面使用。 */
+export function loadSidebarCollapsed(storage) {
+  try {
+    if (!storage) return false
+    const raw = storage.getItem(SIDEBAR_STORAGE_KEY)
+    return raw === '1' || raw === 'true'
+  } catch {
+    return false
+  }
+}
+
+/** 保存侧边栏整体折叠偏好：true 写 '1'、false 写 '0'；
+ *  存储不可用（SSR/隐私模式）时静默忽略，不抛错。 */
+export function saveSidebarCollapsed(storage, collapsed) {
+  try {
+    storage?.setItem(SIDEBAR_STORAGE_KEY, collapsed ? '1' : '0')
+  } catch {
+    /* 无存储环境：静默忽略，不影响页面使用 */
+  }
+}
 
 /** 读取设置页内容区，按渲染顺序生成导航分组结构。
  *  contentEl：.settings-content 元素（或测试中结构等价的最小对象）。
@@ -96,6 +126,12 @@ export default function SettingsNav() {
   const [query, setQuery] = useState('')
   // 折叠的分组 id 集合（空 = 全部展开）；搜索时强制展开命中分组
   const [collapsed, setCollapsed] = useState(() => new Set())
+  // 侧边栏整体折叠（issue #168）：默认展开；偏好存 localStorage，
+  // 无存储环境（SSR/隐私模式）默认展开且不崩溃
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof localStorage === 'undefined') return false
+    return loadSidebarCollapsed(localStorage)
+  })
   // 当前高亮的设置区块 id（点击导航项后高亮，滚动离开由页面自然接管）
   const [activeId, setActiveId] = useState(null)
 
@@ -128,6 +164,15 @@ export default function SettingsNav() {
     ? visibleGroups.reduce((n, g) => n + g.items.length, 0)
     : null
 
+  // 侧边栏整体折叠开关（issue #168）：状态变化后同步持久化到 localStorage
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') {
+      saveSidebarCollapsed(localStorage, sidebarCollapsed)
+    }
+  }, [sidebarCollapsed])
+
+  const toggleSidebar = () => setSidebarCollapsed((prev) => !prev)
+
   const toggleGroup = (gid) => {
     setCollapsed((prev) => {
       const next = new Set(prev)
@@ -151,15 +196,40 @@ export default function SettingsNav() {
   }
 
   return (
-    <aside className="settings-sidebar" aria-label="设置导航">
-      <div className="settings-nav">
+    <aside
+      className={'settings-sidebar' + (sidebarCollapsed ? ' collapsed' : '')}
+      aria-label="设置导航"
+    >
+      {sidebarCollapsed ? (
+        <div className="settings-nav-rail">
+          <button
+            className="settings-nav-rail-toggle"
+            onClick={toggleSidebar}
+            aria-label="展开侧边栏"
+            aria-expanded={false}
+            aria-controls="settings-nav-panel"
+            title="展开侧边栏"
+          >»</button>
+        </div>
+      ) : (
+      <div className="settings-nav" id="settings-nav-panel">
         <div className="settings-nav-head">
           <span className="settings-nav-title">设置导航</span>
-          {!searching && groups.length > 0 && (
-            <button className="settings-nav-toggle-all" onClick={toggleAll}>
-              {allCollapsed ? '全部展开' : '全部收起'}
-            </button>
-          )}
+          <div className="settings-nav-head-actions">
+            {!searching && groups.length > 0 && (
+              <button className="settings-nav-toggle-all" onClick={toggleAll}>
+                {allCollapsed ? '全部展开' : '全部收起'}
+              </button>
+            )}
+            <button
+              className="settings-nav-collapse"
+              onClick={toggleSidebar}
+              aria-label="收起侧边栏"
+              aria-expanded={true}
+              aria-controls="settings-nav-panel"
+              title="收起侧边栏"
+            >«</button>
+          </div>
         </div>
         <div className="settings-nav-search">
           <span className="settings-nav-search-icon" aria-hidden="true">🔍</span>
@@ -222,6 +292,7 @@ export default function SettingsNav() {
           <p className="settings-nav-empty">未找到与「{query}」匹配的设置项，换个关键词试试</p>
         )}
       </div>
+      )}
     </aside>
   )
 }

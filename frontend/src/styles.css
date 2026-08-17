@@ -347,18 +347,81 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 }
 
 
-/* ---- 设置页左侧导航栏（issue #139）----
+/* ---- 设置页左侧导航栏（issue #139 / issue #168）----
    设置项太多时按功能分组：左侧导航栏可搜索设置项、折叠/展开分组子项，
-   点击子项平滑滚动到页面相应设置区块。宽视口两栏（240px 导航 + 内容），
-   窄视口回落单栏（导航置顶，仍是全文检索入口）。 */
+   点击子项平滑滚动到页面相应设置区块；issue #168 起导航面板可**整体折叠**
+   成 44px 窄栏（仅保留「展开侧边栏」入口），设置内容区占满全宽，偏好
+   持久化 localStorage。宽视口两栏（240px 导航 + 内容），窄视口回落单栏
+   （导航置顶，仍是全文检索入口）。 */
 .settings-layout {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   gap: var(--space-5);
   align-items: start;
 }
 .settings-content {
   min-width: 0;
+}
+/* 侧边栏宽度由自身控制（grid 首列 auto 跟随），折叠时带宽度过渡动画 */
+.settings-sidebar {
+  position: sticky;
+  top: 68px;
+  width: 240px;
+  transition: width var(--dur-fast) var(--ease-out);
+}
+/* 整体折叠（issue #168）：收成 44px 窄栏 */
+.settings-sidebar.collapsed {
+  width: 44px;
+}
+/* 折叠时隐藏导航面板（搜索框 + 分组），仅保留窄栏展开入口 */
+.settings-sidebar.collapsed .settings-nav {
+  display: none;
+}
+/* 折叠态窄栏：垂直排列的展开按钮 */
+.settings-nav-rail {
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.settings-nav-rail-toggle {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: var(--space-2) var(--space-1);
+  border-radius: var(--radius);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.settings-nav-rail-toggle:hover {
+  color: var(--primary);
+  background: var(--bg-hover-soft);
+}
+/* 展开态头部操作按钮组：全部展开/收起 + 收起侧边栏 */
+.settings-nav-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.settings-nav-collapse {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.settings-nav-collapse:hover {
+  color: var(--text);
+  background: var(--primary-weak);
 }
 /* 设置区块锚点：sticky 顶导航 52px + 间距，滚动定位时内容不被遮住 */
 .settings-section {
@@ -380,10 +443,6 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   margin-top: 0;
 }
 /* 左侧导航面板（issue #139）：吸顶（宽视口），与卡片同材质 */
-.settings-sidebar {
-  position: sticky;
-  top: 68px;
-}
 .settings-nav {
   background: var(--bg-card);
   box-shadow: var(--shadow-card);

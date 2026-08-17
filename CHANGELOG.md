@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 ### Added
+- **设置页左侧边栏支持整体折叠/展开，折叠后收成窄栏、内容区占满全宽（issue #168）**：
+  设置页左侧导航栏（SettingsNav，issue #139 引入）原为固定 240px 列，只能折叠内部
+  分组子项；本次新增**侧边栏整体折叠**能力：
+  - 展开态（默认）：保持现状——头部新增「收起侧边栏」按钮（«），搜索框 + 全部分组
+    导航照常展示；
+  - 折叠态：侧边栏收成 44px 窄栏（仅保留「展开侧边栏」按钮 »），设置内容区占满
+    全宽，最大化阅读/编辑空间；
+  - 偏好持久化：折叠/展开状态写入 localStorage（`botler.settings.sidebarCollapsed`，
+    '1' = 折叠 / '0' = 展开），刷新或重新进入设置页保持用户上次选择；SSR/隐私模式
+    无存储环境默认展开且不崩溃；
+  - 无障碍：折叠/展开按钮带 `aria-label` / `aria-expanded` / `aria-controls`，折叠时
+    隐藏导航面板（`display: none`）并保留窄栏展开入口；
+  - 布局：`.settings-layout` 首列改为 `auto`，侧边栏宽度自身驱动（240px ↔ 44px，
+    带宽度过渡动画），窄视口（≤860px）单栏回落不变；
+  - **测试**：前端新增 `settings-nav-collapse.test.mjs` 11 用例（loadSidebarCollapsed /
+    saveSidebarCollapsed 纯函数边界：无存储/异常存储/乱值/写回；源码链路：按钮与
+    aria 属性、持久化键；渲染：默认展开 / 点击收起隐藏导航露出窄栏 / 点击展开恢复
+    15 个子项与搜索框 / aria-expanded 翻转；持久化：折叠写 '1'、展开写 '0'、预置值
+    初始状态；CSS：折叠窄栏与展开按钮样式）；实现前先红后绿、实现后前端全量测试
+    无 regression。
+
 - **概览页 issue 右边栏新增「查看执行的详情」按钮，点击后弹出第二层右边栏显示任务执行详情（issue #167）**：
   概览页点击 issue 弹出的右边栏（IssueDrawer）操作区新增「查看执行的详情」按钮，点击后再
   弹出一个右边栏（TaskDetailDrawer）展示该 issue 的任务执行详情：
