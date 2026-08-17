@@ -21,7 +21,9 @@
   - **测试**：新增 `frontend/tests/task-detail-thinking-toggle.test.mjs`（4 例：默认
     隐藏思考事件且文本/工具事件不受影响、勾选后展开显示与取消勾选再次隐藏、勾选状态下
     新推送思考事件立即显示、无思考事件时开关正常显示）；`task-events-stream.test.mjs`
-    同步更新 thinking 默认隐藏断言。前端全量测试（777 例）与覆盖率门禁通过，无 regression。
+    同步更新 thinking 默认隐藏断言；E2E `frontend/e2e/tests/task-detail.spec.js` 同步
+    适配——先断言思考过程默认隐藏、再勾选「显示思考过程」验证展开显示（真实后端 SSE
+    回放链路）。前端全量测试（777 例）、覆盖率门禁与 E2E 均通过，无 regression。
 
 - **任务执行环境详情记录——任务开始时采集环境快照落库 tasks.environment，任务详情页「元信息」区折叠面板展示（issue #276）**：
   需求「任务详情记录的是结果（状态/日志/提交），不记录执行环境：当时用的 claude 版本、
