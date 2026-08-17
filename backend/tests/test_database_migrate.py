@@ -516,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 12, f"user_version 应推进到 12（v12 迁移链：issue_created_at），实际 {ver}"
+        assert ver == 13, f"user_version 应推进到 13（v13 迁移链：环境快照列），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -606,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 12, f"user_version 应推进到 12（v12 迁移链：issue_created_at），实际 {ver}"
+        assert ver == 13, f"user_version 应推进到 13（v13 迁移链：环境快照列），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
@@ -657,3 +657,52 @@ class TestMigrateInspirationMessages:
         db.add_inspiration_message(insp_b, "user", "B 提问")
         db.delete_inspiration(insp_b)
         assert [r["content"] for r in db.list_inspiration_messages(insp_a)] == ["A 提问"]
+
+
+class TestMigrateEnvironment:
+    """v13 迁移（issue #276）：tasks.environment 任务执行环境快照列。"""
+
+    def test_old_db_gets_environment_column(self, tmp_path):
+        """旧库（无 environment 列）初始化后应补出该列。"""
+        path = tmp_path / "old.db"
+        _build_old_db(path)  # 复用最早无 commit_sha 的旧库：走完整迁移链
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "environment" in cols, "旧库应补出 tasks.environment 列"
+        assert ver == 13, f"user_version 应推进到 13（v13 迁移链：环境快照列），实际 {ver}"
+
+    def test_new_db_has_environment_column(self, tmp_path):
+        """新库建表语句应直接含 environment 列（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "environment" in cols
+        assert ver == 13
+
+    def test_set_task_status_accepts_environment(self, tmp_path):
+        """set_task_status 应能写入 environment（_TASK_FIELDS 白名单）。"""
+        db = Database(str(tmp_path / "new.db"))
+        repo_id = db.upsert_repo(1, "demo", "https://x/demo.git")
+        task_id = db.create_task(repo_id, 1, 5, "任务")
+        assert task_id is not None
+        db.set_task_status(task_id, None, environment='{"engine": {"name": "claude"}}')
+        row = db.get_task(task_id)
+        assert row["environment"] == '{"engine": {"name": "claude"}}'
+
+    def test_finish_task_accepts_environment(self, tmp_path):
+        """finish_task 应能写入 environment（终态收尾不丢快照）。"""
+        db = Database(str(tmp_path / "new.db"))
+        repo_id = db.upsert_repo(1, "demo", "https://x/demo.git")
+        task_id = db.create_task(repo_id, 1, 6, "任务")
+        assert task_id is not None
+        db.set_task_status(task_id, None,
+                           environment='{"git": {"branch": "main"}}')
+        assert db.claim_task(task_id)  # finish_task 仅 running/retrying 状态生效
+        ok = db.finish_task(task_id, "succeeded", exit_code=0)
+        assert ok
+        row = db.get_task(task_id)
+        assert row["status"] == "succeeded"
+        assert row["environment"] == '{"git": {"branch": "main"}}'

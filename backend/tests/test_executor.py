@@ -1553,3 +1553,84 @@ class TestResumePromptTemplate:
         executor.config.update_resume_template("   ")
         prompt = executor._resume_prompt(_REPO, _issue_dict())
         assert "继续处理（中断恢复）" in prompt
+
+
+class TestCaptureEnvSnapshot:
+    """任务执行环境快照（issue #276）：_capture_env_snapshot 采集落库。"""
+
+    def _mk_git_workdir(self, tmp_path, name: str = "demo") -> Path:
+        """在 workspace_root 下构造真实 git 仓库工作区，返回 workdir。"""
+        workdir = tmp_path / "workspace" / name
+        workdir.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(workdir)], check=True)
+        subprocess.run(["git", "-C", str(workdir), "config", "user.email", "t@t"],
+                       check=True)
+        subprocess.run(["git", "-C", str(workdir), "config", "user.name", "t"],
+                       check=True)
+        subprocess.run(["git", "-C", str(workdir), "commit", "--allow-empty",
+                        "-m", "init"], check=True)
+        return workdir
+
+    def test_capture_writes_environment_json(self, executor, monkeypatch, tmp_path):
+        """采集成功：tasks.environment 落库 JSON（引擎/起始提交/配置 hash）。"""
+        workdir = self._mk_git_workdir(tmp_path)
+        monkeypatch.setattr(
+            "botler.env_snapshot.detect_tool",
+            lambda tool, timeout: {"version": "2.1.226", "installed": True})
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=31)
+        executor._capture_env_snapshot(task_id, workdir)
+        env = json.loads(db.get_task(task_id)["environment"])
+        assert env["engine"] == {"name": "claude", "version": "2.1.226"}
+        assert env["git"]["branch"]
+        assert len(env["git"]["commit_sha"]) == 40
+        assert env["config_hash"]
+        assert env["captured_at"]
+
+    def test_capture_only_once(self, executor, monkeypatch, tmp_path):
+        """只采一次：重复调用不覆盖首次快照（重试/断点续跑语义）。"""
+        workdir = self._mk_git_workdir(tmp_path)
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=32)
+        first = {"engine": {"name": "claude", "version": "1.0.0"},
+                 "git": {"branch": "main", "commit_sha": "x"}}
+        db.set_task_status(task_id, None,
+                           environment=json.dumps(first, ensure_ascii=False))
+        called = []
+        monkeypatch.setattr(
+            "botler.executor.collect_env_snapshot",
+            lambda **kw: called.append(1) or {"engine": {"name": "claude"}})
+        executor._capture_env_snapshot(task_id, workdir)
+        assert called == []  # 已有快照 → 不再采集
+        assert json.loads(db.get_task(task_id)["environment"]) == first
+
+    def test_capture_failure_writes_error_marker(self, executor, monkeypatch,
+                                                 tmp_path):
+        """采集抛异常：落库「环境快照获取失败」标记，任务照常执行（不抛）。"""
+        workdir = self._mk_git_workdir(tmp_path)
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=33)
+
+        def boom(**kw):
+            raise RuntimeError("采集链路故障")
+        monkeypatch.setattr("botler.executor.collect_env_snapshot", boom)
+        executor._capture_env_snapshot(task_id, workdir)  # 不应抛出
+        env = json.loads(db.get_task(task_id)["environment"])
+        assert env["error"] == "环境快照获取失败"
+
+    def test_capture_persist_failure_does_not_raise(self, executor, monkeypatch,
+                                                    tmp_path):
+        """落库失败（db 异常）不阻塞任务执行。"""
+        workdir = self._mk_git_workdir(tmp_path)
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=34)
+        monkeypatch.setattr(
+            "botler.executor.collect_env_snapshot",
+            lambda **kw: {"engine": {"name": "claude"}})
+        monkeypatch.setattr(db, "set_task_status",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
+        executor._capture_env_snapshot(task_id, workdir)  # 不应抛出

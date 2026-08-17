@@ -718,3 +718,74 @@ class TestTaskEngineField:
 
         assert task["engine"] == "hermes"
 
+
+
+class TestTaskEnvironment:
+    """任务执行环境快照（issue #276）：API 返回解析后的 environment 对象。"""
+
+    def _mk_env_task(self, db, repo_id):
+        """创建带环境快照 JSON 的任务并返回 task_id。"""
+        task_id = db.create_task(repo_id, 42, 99, "环境快照任务")
+        db.set_task_status(
+            task_id, "succeeded",
+            environment=json.dumps({
+                "engine": {"name": "claude", "version": "2.1.226"},
+                "model": {"name": "deepseek-v4-pro"},
+                "git": {"branch": "main", "commit_sha": "a" * 40},
+                "platform": {"version": "1.0.289"},
+                "config_hash": "abc123",
+                "captured_at": "2026-08-18T00:00:00+08:00",
+            }, ensure_ascii=False))
+        return task_id
+
+    def test_get_task_returns_environment(self, client):
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        task_id = self._mk_env_task(db, repo_id)
+        resp = app_client.get(f"/api/tasks/{task_id}")
+        assert resp.status_code == 200
+        env = resp.json()["environment"]
+        assert env["engine"] == {"name": "claude", "version": "2.1.226"}
+        assert env["model"]["name"] == "deepseek-v4-pro"
+        assert env["git"]["branch"] == "main"
+        assert env["git"]["commit_sha"] == "a" * 40
+        assert env["platform"]["version"] == "1.0.289"
+        assert env["config_hash"] == "abc123"
+
+    def test_get_task_environment_none_without_snapshot(self, client):
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=100)
+        resp = app_client.get(f"/api/tasks/{task_id}")
+        assert resp.status_code == 200
+        assert resp.json()["environment"] is None
+
+    def test_list_returns_environment(self, client):
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        self._mk_env_task(db, repo_id)
+        resp = app_client.get("/api/tasks")
+        assert resp.status_code == 200
+        env = resp.json()["tasks"][0]["environment"]
+        assert env["engine"]["name"] == "claude"
+
+    def test_get_task_environment_error_marker(self, client):
+        """采集失败落库的 error 标记应透出（前端显示「环境快照获取失败」）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        task_id = db.create_task(repo_id, 42, 101, "采集失败任务")
+        db.set_task_status(task_id, "succeeded",
+                           environment=json.dumps({"error": "环境快照获取失败"},
+                                                  ensure_ascii=False))
+        resp = app_client.get(f"/api/tasks/{task_id}")
+        assert resp.status_code == 200
+        assert resp.json()["environment"]["error"] == "环境快照获取失败"
+
+    def test_get_task_environment_invalid_json_returns_none(self, client):
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        task_id = db.create_task(repo_id, 42, 102, "脏数据任务")
+        db.set_task_status(task_id, "succeeded", environment="{broken")
+        resp = app_client.get(f"/api/tasks/{task_id}")
+        assert resp.status_code == 200
+        assert resp.json()["environment"] is None

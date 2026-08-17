@@ -101,6 +101,46 @@ function SectionToggle({ open, onClick, level, children }) {
   )
 }
 
+// 执行环境快照（issue #276）：任务开始时采集的执行环境信息——引擎版本 /
+// 模型 / 起始提交（分支 + sha）/ 平台版本（VersionBadge 同源）/ config 关键项
+// hash / 采集时间。元信息区折叠面板展示；无快照显示「暂无环境快照」，采集
+// 失败显示「环境快照获取失败」（任务照常执行，不阻塞）
+function EnvSnapshot({ env }) {
+  if (!env) {
+    return <p className="muted">暂无环境快照（任务执行前未采集到环境信息）</p>
+  }
+  if (env.error) {
+    return <p className="muted">⚠️ {env.error}（采集失败不影响任务执行）</p>
+  }
+  const rows = []
+  if (env.engine) {
+    rows.push(['引擎', `${env.engine.name || '—'}${env.engine.version ? ' ' + env.engine.version : ''}`])
+  }
+  if (env.model && env.model.name) {
+    rows.push(['模型', env.model.name + (env.model.provider ? `（${env.model.provider}）` : '')])
+  }
+  if (env.git && (env.git.commit_sha || env.git.branch)) {
+    rows.push(['起始提交', `${env.git.branch || '—'} · ${env.git.commit_sha ? shortSha(env.git.commit_sha) : '—'}`])
+  }
+  if (env.platform && env.platform.version) {
+    rows.push(['平台版本', `v${env.platform.version}`])
+  }
+  if (env.config_hash) {
+    rows.push(['配置哈希', <code key="config-hash">{env.config_hash}</code>])
+  }
+  if (env.captured_at) {
+    rows.push(['采集时间', fmtTime(env.captured_at)])
+  }
+  if (rows.length === 0) return <p className="muted">环境快照无可用字段</p>
+  return (
+    <table className="table kv">
+      <tbody>
+        {rows.map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}
+      </tbody>
+    </table>
+  )
+}
+
 export default function TaskDetail() {
   const { id } = useParams()
   const location = useLocation()
@@ -110,6 +150,8 @@ export default function TaskDetail() {
   const [showFileLog, setShowFileLog] = useState(true)
   // 区块折叠状态（issue #52）：事件流/聊天记录/执行日志默认展开
   const [showEvents, setShowEvents] = useState(true)
+  // 执行环境快照折叠面板（issue #276）：元信息区展示，默认展开可收起
+  const [showEnv, setShowEnv] = useState(true)
   const [showChat, setShowChat] = useState(true)
   const [showLogs, setShowLogs] = useState(true)
   // 实时执行面板（issue #20）：live 为 null 表示尚未拉取过
@@ -243,6 +285,18 @@ export default function TaskDetail() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* 执行环境快照（issue #276）：元信息区折叠面板，展示任务开始时
+          采集的执行环境（引擎/模型/起始提交/平台版本/配置哈希） */}
+      <div className="card">
+        <SectionToggle open={showEnv} level="h2"
+                       onClick={() => setShowEnv(!showEnv)}>
+          执行环境快照
+          {task.environment && !task.environment.error &&
+            <span className="muted small">（引擎 / 模型 / 起始提交 / 配置）</span>}
+        </SectionToggle>
+        {showEnv && <EnvSnapshot env={task.environment} />}
       </div>
 
       <div className="card">

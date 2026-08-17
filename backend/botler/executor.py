@@ -40,6 +40,11 @@ from .database import (
 from .dsh_runner import DshRunner, DshSdkNotInstalledError
 from .hermes_sdk_runner import HermesSdkRunner, HermesSdkNotInstalledError
 from .events import EventBus, parse_claude_stream_line, parse_hermes_event_line
+from .env_snapshot import (
+    collect_env_snapshot,
+    error_snapshot,
+    serialize_snapshot,
+)
 from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
 from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
                          list_local_remotes, parse_remote_url)
@@ -1219,6 +1224,34 @@ class ClaudeExecutor:
                 time.sleep(0.05)
         return timed_out, stopped, chunks
 
+    def _capture_env_snapshot(self, task_id: int, workdir: Path) -> None:
+        """任务首次执行开始时采集环境快照（issue #276）落库 tasks.environment。
+
+        只采一次：重试/断点续跑不覆盖首次快照（起始 commit 基线以首次
+        执行的工作区 HEAD 为准）。采集全程尽力而为——任何失败不影响任务
+        执行：整体异常时落库 {"error": "环境快照获取失败"} 标记，前端
+        「元信息」区据此显示「环境快照获取失败」。
+        """
+        task = self.db.get_task(task_id)
+        if task is not None and _row_get(task, "environment"):
+            return  # 已采集过（重试/续跑），保持首次快照
+        try:
+            snapshot = collect_env_snapshot(
+                engine=self._engine(self.config.get()),
+                workdir=workdir,
+                cfg=self.config.get(),
+            )
+        except Exception as e:  # noqa: BLE001 采集失败不阻塞任务执行
+            logger.warning("任务 %s 环境快照采集失败: %s", task_id, e)
+            snapshot = error_snapshot()
+        try:
+            self.db.set_task_status(task_id, None,
+                                    environment=serialize_snapshot(snapshot))
+            self.db.add_log(task_id, "info",
+                            "已采集任务执行环境快照（引擎/模型/起始提交/平台版本/配置哈希）")
+        except Exception as e:  # noqa: BLE001 落库失败也不阻塞任务执行
+            logger.warning("任务 %s 环境快照落库失败: %s", task_id, e)
+
     def _run_once(self, task_id: int, repo: dict, issue: dict,
                   resume_session: str | None = None,
                   resume_history: list | None = None) -> tuple[int, str]:
@@ -1247,6 +1280,7 @@ class ClaudeExecutor:
         """
         cfg = self.config.get()
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
+        self._capture_env_snapshot(task_id, workdir)
         if resume_session:
             prompt = self._resume_prompt(repo, issue)
             self.db.add_log(
@@ -1445,6 +1479,7 @@ class ClaudeExecutor:
         """
         cfg = self.config.get()
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_history))
+        self._capture_env_snapshot(task_id, workdir)
         if resume_history:
             prompt = self._resume_prompt(repo, issue)
             self.db.add_log(
@@ -1562,6 +1597,7 @@ class ClaudeExecutor:
         """
         cfg = self.config.get()
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_session))
+        self._capture_env_snapshot(task_id, workdir)
         if resume_session:
             prompt = self._resume_prompt(repo, issue)
             self.db.add_log(

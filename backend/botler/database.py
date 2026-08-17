@@ -39,7 +39,8 @@ DEFAULT_PRIORITY = 100
 # set_task_status / finish_task 可写的附加字段白名单
 _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
-                "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript", "engine"}
+                "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript",
+                "engine", "environment"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   issue_created_at TEXT DEFAULT '',
   engine TEXT DEFAULT '',
   dsh_transcript TEXT,
+  environment TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -337,6 +339,16 @@ class Database:
             if "issue_created_at" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN issue_created_at TEXT DEFAULT ''")
             conn.execute("PRAGMA user_version = 12")
+
+        if ver < 13:
+            # issue #276：任务执行环境快照——任务开始时采集执行环境
+            # （引擎版本/模型/起始 commit 与分支/平台版本/config 关键项
+            # hash）序列化为 JSON 落库本列，任务详情页「元信息」区折叠
+            # 面板展示。存量任务无快照（NULL），页面显示「暂无环境快照」。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "environment" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN environment TEXT")
+            conn.execute("PRAGMA user_version = 13")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。

@@ -10,6 +10,7 @@ from queue import Empty
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from botler.env_snapshot import parse_snapshot
 from botler.events import parse_claude_stream_line, parse_hermes_event_line
 from botler.executor import (
     find_session_file, format_display_line, parse_transcript, read_log_delta,
@@ -79,6 +80,9 @@ def _task_to_dict(row, repo: dict | None = None) -> dict:
         # issue #120：执行引擎按任务落库——任务页/概览页展示该任务实际
         # 使用的引擎（claude / hermes / dsh；未执行或旧任务可能为空串）
         "engine": row["engine"] or "",
+        # issue #276：任务执行环境快照（引擎版本/模型/起始提交/平台版本/
+        # config hash JSON）；旧任务无快照返回 None
+        "environment": parse_snapshot(row["environment"]),
         "commit_sha": row["commit_sha"],
         "commit_url": _commit_url(repo_url, row["commit_sha"]),  # issue #19
         "log_path": row["log_path"],

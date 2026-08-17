@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 ### Added
+
+- **任务执行环境详情记录——任务开始时采集环境快照落库 tasks.environment，任务详情页「元信息」区折叠面板展示（issue #276）**：
+  需求「任务详情记录的是结果（状态/日志/提交），不记录执行环境：当时用的 claude 版本、
+  模型 id、基于哪个 commit 基线开始的、git 分支状态」。环境差异（模型升级、CLI 版本
+  变化）导致的行为变化无法追溯。本次新增**执行环境快照**：
+  - **采集（`backend/botler/env_snapshot.py`）**：任务首次执行开始时采集并落库
+    `tasks.environment` JSON（迁移 v13，旧库自动补列）——引擎名与版本（claude
+    `--version` / hermes / dsh SDK，复用 `environment.detect_tool` 不做网络查询）、
+    实际模型（dsh → `worker.dsh_model`；hermes → `~/.hermes/config.yaml` 的
+    `model.default`；claude → `~/.claude/settings.json`）、起始 commit sha 与分支
+    （`prepare_workspace` 之后工作区 HEAD）、平台版本（与前端 VersionBadge 同源的
+    version.json / data/version.txt）、config 关键项 hash（执行相关配置项 sha256）；
+    只采一次（重试/断点续跑不覆盖首次快照）；**采集全程尽力而为**——单项失败只影响
+    对应字段，整体异常落库 `{"error": "环境快照获取失败"}` 标记，任务照常执行、
+    不增加明显执行延迟；
+  - **展示（任务详情页「元信息」区）**：新增「执行环境快照」折叠面板（默认展开可收起），
+    展示引擎/模型/起始提交/平台版本/配置哈希/采集时间；无快照的旧任务显示
+    「暂无环境快照」，采集失败显示「环境快照获取失败」（任务照常执行不阻塞）；
+  - **API**：`GET /api/tasks` / `/api/tasks/{id}` 返回解析后的 `environment` 对象；
+  - **测试**：新增 `backend/tests/test_env_snapshot.py`（32 例：config hash 稳定性与
+    变化、平台版本读取与回退、真实 git 仓库的起始提交/分支采集、引擎版本检测、
+    dsh/hermes/claude 模型解析、序列化往返、采集失败容忍不抛异常）；
+    `test_database_migrate.py` 新增 v13 迁移用例并更新 user_version 断言；
+    `test_api_tasks.py` 新增 environment 数据契约用例；`test_executor.py` 新增
+    `_capture_env_snapshot` 采集落库/只采一次/失败容错用例；
+    前端新增 `frontend/tests/task-detail-env-snapshot.test.mjs`（4 例：快照展示、
+    折叠收起恢复、采集失败提示、旧任务「暂无环境快照」兼容）。全量测试无 regression。
+
 - **新增鸿蒙端（Web 套壳）并在 CI/CD 中加入鸿蒙编译（issue #173）**：
   需求「这个额外实现一个鸿蒙端，使用web套壳，同时在ci cd的流程中加入鸿蒙的编译」。
   额外实现一个 **HarmonyOS NEXT 鸿蒙端**，使用系统 Web 组件（WebView）套壳加载

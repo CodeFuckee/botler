@@ -374,8 +374,8 @@ POST   /api/plugins/reload             按 worker.plugin_paths 清空并重载�
 PUT    /api/plugins/settings           插件设置：默认执行引擎（executor 插件，复用 worker.engine，issue #145）
 POST   /api/settings/reconcile-now    手动触发对账
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138）
-GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url）
-GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url）
+GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment）
+GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url/environment——执行环境快照 JSON：引擎版本/模型/起始提交/平台版本/配置哈希，issue #276）
 GET    /api/tasks/{id}/logs           任务日志
 GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
 GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/文本/工具调用/结果逐事件实时可见；终态任务连接后回放历史事件，见实时输出功能）
