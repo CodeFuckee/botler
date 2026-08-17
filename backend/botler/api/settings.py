@@ -19,6 +19,7 @@ from ..config import KNOWN_FIELDS
 from ..plugins import PluginKind, list_plugins
 from ..gitlab_client import GitLabClient, GitLabError
 from ..labels import validate_label
+from ..pause_window import in_pause_window, parse_window
 from ..templates import PLACEHOLDERS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -82,6 +83,13 @@ def get_settings(request: Request):
             "engine": s.engine,
             # 外部插件加载（issue #140）：Python 模块路径列表，启动时加载
             "plugin_paths": s.plugin_paths,
+            # 定时暂停窗口（issue #169）：窗口内停止开始新任务，已开始任务
+            # 继续执行，未开始任务等到窗口结束后开始。pause_active 为服务端
+            # 按当前时间实时计算的「是否处于暂停窗口」状态，前端据此展示提示
+            "pause_windows": s.pause_windows,
+            "pause_weekdays": s.pause_weekdays,
+            "pause_timezone": s.pause_timezone,
+            "pause_active": in_pause_window(s),
         },
         "claude": {
             "command": s.claude_command,
@@ -576,6 +584,62 @@ def _validate_worker(patch: dict) -> None:
                     raise HTTPException(
                         400, "worker.plugin_paths 必须是字符串数组")
                 patch[key] = [p.strip() for p in val if str(p).strip()]
+                continue
+            if key == "pause_windows":
+                # issue #169：窗口串数组（HH:MM-HH:MM，24 小时制，支持
+                # 跨天如 22:00-02:00）；空数组 = 不启用。逐项校验格式，
+                # 非法直接 400（防手滑写坏配置后调度静默失效）
+                if not isinstance(val, list) or not all(
+                        isinstance(w, str) for w in val):
+                    raise HTTPException(
+                        400, 'worker.pause_windows 必须是字符串数组'
+                             '（如 ["09:00-12:00", "14:00-18:00"]）')
+                cleaned: list[str] = []
+                for w in val:
+                    w = w.strip()
+                    if not w:
+                        continue
+                    if parse_window(w) is None:
+                        raise HTTPException(
+                            400, f"worker.pause_windows 窗口格式非法: {w!r}"
+                                 "（应为 HH:MM-HH:MM，如 09:00-12:00）")
+                    cleaned.append(w)
+                patch[key] = cleaned
+                continue
+            if key == "pause_weekdays":
+                # issue #169：窗口生效星期（0=周一 … 6=周日），去重保序；
+                # 空数组 = 每天都生效
+                if not isinstance(val, list) or not all(
+                        isinstance(d, int) and not isinstance(d, bool)
+                        for d in val):
+                    raise HTTPException(
+                        400, "worker.pause_weekdays 必须是整数数组"
+                             "（0=周一 … 6=周日，如 [0,1,2,3,4]）")
+                seen: list[int] = []
+                for d in val:
+                    if d < 0 or d > 6:
+                        raise HTTPException(
+                            400, f"worker.pause_weekdays 取值非法: {d}"
+                                 "（可选 0-6，0=周一）")
+                    if d not in seen:
+                        seen.append(d)
+                patch[key] = seen
+                continue
+            if key == "pause_timezone":
+                # issue #169：判断窗口所用时区（IANA 名）；空串 = 服务器
+                # 本地时区。非空时校验时区名合法性（防写坏后调度误判）
+                if not isinstance(val, str):
+                    raise HTTPException(
+                        400, "worker.pause_timezone 必须是字符串"
+                             "（IANA 时区名，如 Asia/Shanghai）")
+                tz = val.strip()
+                if tz:
+                    try:
+                        ZoneInfo(tz)
+                    except ZoneInfoNotFoundError:
+                        raise HTTPException(
+                            400, f"worker.pause_timezone 时区名非法: {tz}")
+                patch[key] = tz
                 continue
             if not isinstance(val, int) or val <= 0:
                 raise HTTPException(400, f"{key} 必须是正整数")

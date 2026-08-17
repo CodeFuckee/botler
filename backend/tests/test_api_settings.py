@@ -2186,3 +2186,124 @@ class TestVisionModelTestEndpointMinio:
         assert store is not None
         assert store.cfg.bucket == "public"
         assert store.cfg.public_base_url == "http://img.example.com:9000"
+
+
+class TestPauseWindowsSettings:
+    """worker.pause_windows 段（issue #169）：定时暂停窗口配置。"""
+
+    def test_get_settings_defaults_empty(self, client):
+        """未配置时返回空数组/空串，pause_active 为布尔（服务端实时计算）。"""
+        tc, tmp_path = client
+        data = tc.get("/api/settings").json()
+        worker = data["worker"]
+        assert worker["pause_windows"] == []
+        assert worker["pause_weekdays"] == []
+        assert worker["pause_timezone"] == ""
+        assert isinstance(worker["pause_active"], bool)
+
+    def test_get_pause_active_reflects_current_state(self, client, monkeypatch):
+        """pause_active 为服务端按当前时间计算的暂停状态（mock 纯函数验证）。"""
+        import botler.api.settings as settings_mod
+        tc, tmp_path = client
+        monkeypatch.setattr(settings_mod, "in_pause_window",
+                            lambda s: True)
+        assert tc.get("/api/settings").json()["worker"]["pause_active"] is True
+        monkeypatch.setattr(settings_mod, "in_pause_window",
+                            lambda s: False)
+        assert tc.get("/api/settings").json()["worker"]["pause_active"] is False
+
+    def test_update_pause_windows_persists(self, client):
+        """PUT 三字段写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_windows": ["09:00-12:00", "14:00-18:00"],
+            "pause_weekdays": [0, 1, 2, 3, 4],
+            "pause_timezone": "Asia/Shanghai",
+        }})
+        assert resp.status_code == 200
+        worker = resp.json()["worker"]
+        assert worker["pause_windows"] == ["09:00-12:00", "14:00-18:00"]
+        assert worker["pause_weekdays"] == [0, 1, 2, 3, 4]
+        assert worker["pause_timezone"] == "Asia/Shanghai"
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "pause_windows" in config_text
+        assert "pause_timezone: Asia/Shanghai" in config_text
+
+    def test_update_empty_windows_disables(self, client):
+        """空数组 = 关闭定时暂停（回退不暂停行为）。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"worker": {
+            "pause_windows": ["09:00-12:00"]}})
+        resp = tc.put("/api/settings", json={"worker": {"pause_windows": []}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["pause_windows"] == []
+
+    def test_update_clears_weekdays_and_timezone(self, client):
+        """空数组/空串 = 每天生效 / 服务器本地时区。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"worker": {
+            "pause_weekdays": [0, 1], "pause_timezone": "Asia/Shanghai"}})
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_weekdays": [], "pause_timezone": "  "}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["pause_weekdays"] == []
+        assert resp.json()["worker"]["pause_timezone"] == ""
+
+    def test_update_weekdays_deduplicates(self, client):
+        """重复星期去重保序。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_weekdays": [3, 3, 1, 1, 5]}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["pause_weekdays"] == [3, 1, 5]
+
+    @pytest.mark.parametrize("bad", [
+        ["09:00"],          # 缺结束时刻
+        ["09:00-12:00", "xx"],  # 混入非法项
+        ["25:00-26:00"],    # 小时越界
+        ["09:60-10:00"],    # 分钟越界
+        "09:00-12:00",      # 非数组
+        [123],              # 非字符串项
+    ])
+    def test_update_rejects_bad_windows(self, client, bad):
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_windows": bad}})
+        assert resp.status_code == 400
+        assert "pause_windows" in resp.json()["detail"]
+
+    @pytest.mark.parametrize("bad", [
+        [7],                # 越界
+        [-1],               # 负数
+        ["mon"],            # 非整数
+        "0",                # 非数组
+        [True],             # 布尔不是星期
+    ])
+    def test_update_rejects_bad_weekdays(self, client, bad):
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_weekdays": bad}})
+        assert resp.status_code == 400
+        assert "pause_weekdays" in resp.json()["detail"]
+
+    @pytest.mark.parametrize("bad", [
+        "Mars/Olympus",
+        "Asia/Shanghai/Extra",
+        123,
+    ])
+    def test_update_rejects_bad_timezone(self, client, bad):
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_timezone": bad}})
+        assert resp.status_code == 400
+        assert "pause_timezone" in resp.json()["detail"]
+
+    def test_update_keeps_other_worker_fields(self, client):
+        """部分更新：提交 pause 配置不影响 worker 其他字段。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"worker": {"max_concurrent_repos": 5}})
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_windows": ["09:00-12:00"]}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["max_concurrent_repos"] == 5
+        assert resp.json()["worker"]["pause_windows"] == ["09:00-12:00"]

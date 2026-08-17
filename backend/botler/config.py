@@ -19,6 +19,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from .pause_window import parse_window
+
 logger = logging.getLogger("botler.config")
 
 # 自动加载 backend/.env（凭据引用 ${ENV} 时使用）
@@ -61,6 +63,30 @@ def _ui_default(ui: dict, key: str, default: bool) -> bool:
     """读取界面显示开关配置：缺省或非布尔值回退默认（issue #142）。"""
     val = ui.get(key, default)
     return val if isinstance(val, bool) else default
+
+
+def _pause_windows(worker: dict) -> list[str]:
+    """读取 worker.pause_windows（issue #169）：必须是字符串列表；剔除
+    格式非法项（防御手动编辑 config.yaml 写坏），全部非法 = 不启用。"""
+    val = worker.get("pause_windows")
+    if not isinstance(val, list):
+        return []
+    cleaned = [str(w).strip() for w in val if isinstance(w, str)]
+    return [w for w in cleaned if parse_window(w) is not None]
+
+
+def _pause_weekdays(worker: dict) -> list[int]:
+    """读取 worker.pause_weekdays（issue #169）：0-6（周一=0…周日=6）整数
+    列表，去重保序；非法值剔除（防御手动编辑 config.yaml 写坏）。"""
+    val = worker.get("pause_weekdays")
+    if not isinstance(val, list):
+        return []
+    cleaned: list[int] = []
+    for x in val:
+        if (isinstance(x, int) and not isinstance(x, bool)
+                and 0 <= x <= 6 and x not in cleaned):
+            cleaned.append(x)
+    return cleaned
 
 
 def _issue_priority_labels(worker: dict) -> list[str]:
@@ -107,6 +133,14 @@ class Settings:
     # 升序。设置页「任务调度」卡片可修改（默认 bug > test > feature）。
     issue_priority_labels: list[str] = field(
         default_factory=lambda: ["bug", "test", "feature"])
+    # 定时暂停窗口（issue #169）：窗口内停止开始新任务，已开始任务继续
+    # 执行，未开始任务等到窗口结束后开始。pause_windows 为 "HH:MM-HH:MM"
+    # 窗口串列表（支持跨天，如 22:00-02:00），空 = 不启用；pause_weekdays
+    # 为生效星期（0=周一…6=周日），空 = 每天生效；pause_timezone 为判断
+    # 所用时区（IANA 名），空 = 服务器本地时区。设置页「任务调度」卡片可编辑。
+    pause_windows: list[str] = field(default_factory=list)
+    pause_weekdays: list[int] = field(default_factory=list)
+    pause_timezone: str = ""
     # CI 流水线等待（issue #40）：任务成功收尾前等待任务提交触发的流水线
     # 到终态。detect = 探测窗口（GitLab 收到 push 即创建流水线记录，
     # 窗口内找不到匹配 sha 说明仓库无 CI）；timeout = 等待终态总上限；
@@ -232,7 +266,8 @@ KNOWN_FIELDS = {
     "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries",
                "reconcile_interval_seconds", "ci_wait_detect_seconds",
                "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
-               "engine", "plugin_paths", "issue_priority"},
+               "engine", "plugin_paths", "issue_priority",
+               "pause_windows", "pause_weekdays", "pause_timezone"},
     "claude": {"command", "args"},
     "hermes": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
@@ -409,6 +444,9 @@ class ConfigManager:
             max_retries=int(worker.get("max_retries", 2)),
             reconcile_interval_seconds=int(worker.get("reconcile_interval_seconds", 300)),
             issue_priority_labels=_issue_priority_labels(worker),
+            pause_windows=_pause_windows(worker),
+            pause_weekdays=_pause_weekdays(worker),
+            pause_timezone=str(worker.get("pause_timezone") or "").strip(),
             ci_wait_detect_seconds=int(worker.get("ci_wait_detect_seconds", 120)),
             ci_wait_interval_seconds=int(worker.get("ci_wait_interval_seconds", 15)),
             ci_wait_timeout_seconds=int(worker.get("ci_wait_timeout_seconds", 1800)),

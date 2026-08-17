@@ -22,6 +22,13 @@ const COMMON_TZ = [
   'UTC', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles',
 ]
 
+// 定时暂停窗口生效星期（issue #169）：0=周一 … 6=周日，与后端 pause_weekdays
+// 一致；全部不勾选 = 每天都生效
+const WEEKDAY_LABELS = [
+  ['周一', 0], ['周二', 1], ['周三', 2], ['周四', 3],
+  ['周五', 4], ['周六', 5], ['周日', 6],
+]
+
 // 网页通知时机开关（issue #21）：与后端通知事件类型一一对应
 const NOTIFY_LABELS = {
   task_needs_interaction: '任务需要交互（任务失败，需人工介入）',
@@ -77,6 +84,9 @@ export default function Settings() {
   // Webhook 卡片 issue #141 同模式）
   const [uiSaveBusy, setUiSaveBusy] = useState(false)
   const [uiSaved, setUiSaved] = useState(false)
+  // 定时暂停窗口（issue #169）：textarea 每行一个窗口串 ↔ 数组存储；
+  // 初始值在 settings 加载后回填（与 issue_priority 同模式）
+  const [pauseWindowsInput, setPauseWindowsInput] = useState('')
 
   // 设置页「弹出测试通知」按钮（issue #21 增量）：直接弹一条浏览器
   // 系统通知验证功能；权限未决时 sendTestNotification 会先请求授权。
@@ -112,7 +122,11 @@ export default function Settings() {
   }
 
   useEffect(() => {
-    api.get('/api/settings').then(setSettings).catch((e) => setError(e.message))
+    api.get('/api/settings').then((s) => {
+      setSettings(s)
+      // 定时暂停窗口（issue #169）：数组回显为每行一个窗口串
+      setPauseWindowsInput((s.worker?.pause_windows || []).join('\n'))
+    }).catch((e) => setError(e.message))
     api.get('/api/settings/sso-guide').then((d) => setGuide(d.content))
       .catch((e) => setGuideError(e.message))
     api.get('/api/settings/owner-token-guide').then((d) => setOwnerGuide(d.content))
@@ -141,6 +155,26 @@ export default function Settings() {
         issue_priority: text.split(',').map((x) => x.trim()).filter(Boolean),
       },
     }))
+
+  // 定时暂停窗口（issue #169）：textarea 每行一个窗口串 → 数组存储
+  // （trim + 过滤空行，与 issue_priority 的逗号分隔同模式）
+  const setPauseWindowsText = (text) => {
+    setPauseWindowsInput(text)
+    setWorkerField(
+      'pause_windows',
+      text.split('\n').map((x) => x.trim()).filter(Boolean),
+    )
+  }
+
+  // 定时暂停窗口生效星期（issue #169）：勾选切换 0-6，升序去重存储
+  const togglePauseWeekday = (day) => {
+    const cur = settings.worker?.pause_weekdays || []
+    const next = cur.includes(day)
+      ? cur.filter((d) => d !== day)
+      : [...cur, day]
+    next.sort((a, b) => a - b)
+    setWorkerField('pause_weekdays', next)
+  }
 
   const setNotifyField = (key, val) =>
     setSettings((s) => ({ ...s, notifications: { ...s.notifications, [key]: val } }))
@@ -262,6 +296,10 @@ export default function Settings() {
       worker.issue_priority = settings.worker.issue_priority || ['bug', 'test', 'feature']
       // 任务执行引擎（issue #113）：切换后端编写代码的 agent
       worker.engine = settings.worker?.engine || 'claude'
+      // 定时暂停窗口（issue #169）：窗口串 / 生效星期 / 时区跟随全局保存提交
+      worker.pause_windows = settings.worker?.pause_windows || []
+      worker.pause_weekdays = settings.worker?.pause_weekdays || []
+      worker.pause_timezone = settings.worker?.pause_timezone || ''
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
@@ -481,6 +519,55 @@ export default function Settings() {
               </td>
             </tr>
             <tr>
+              <th>
+                定时暂停窗口
+                <br /><code>worker.pause_windows</code>
+              </th>
+              <td>
+                {settings.worker?.pause_active && (
+                  <div className="alert alert-warning small">
+                    ⚠ 当前处于暂停窗口：新任务暂缓开始，运行中任务不受影响，
+                    未开始任务将在窗口结束后自动执行。
+                  </div>
+                )}
+                <textarea
+                  className="input grow"
+                  rows={3}
+                  placeholder={'09:00-12:00\n14:00-18:00'}
+                  value={pauseWindowsInput}
+                  onChange={(e) => setPauseWindowsText(e.target.value)}
+                />
+                <div className="weekday-row">
+                  <span className="muted">生效星期 <code>worker.pause_weekdays</code>：</span>
+                  {WEEKDAY_LABELS.map(([label, day]) => (
+                    <label key={day} className="weekday-check">
+                      <input
+                        type="checkbox"
+                        className="check-input"
+                        checked={(settings.worker?.pause_weekdays || []).includes(day)}
+                        onChange={() => togglePauseWeekday(day)}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                  <span className="muted">（不勾选 = 每天都生效）</span>
+                </div>
+                <div className="weekday-row">
+                  <span className="muted">判断时区 <code>worker.pause_timezone</code></span>
+                </div>
+                <input
+                  className="input grow"
+                  list="pause-timezone-options"
+                  placeholder="时区（IANA 名，留空 = 服务器本地时区）"
+                  value={settings.worker?.pause_timezone || ''}
+                  onChange={(e) => setWorkerField('pause_timezone', e.target.value.trim())}
+                />
+                <datalist id="pause-timezone-options">
+                  {COMMON_TZ.map((tz) => <option key={tz} value={tz} />)}
+                </datalist>
+              </td>
+            </tr>
+            <tr>
               <th>任务执行引擎 <code>worker.engine</code></th>
               <td>
                 <select
@@ -500,6 +587,13 @@ export default function Settings() {
           issue 标签优先级：同仓库有多个排队任务时，按此顺序优先派发标签命中靠前的
           issue（默认 bug 最优先）；未列出的标签排在最后，同优先级按 issue 更新时间
           升序处理。逗号分隔、可增删调整顺序，修改后点击「保存」对已排队任务立即生效。
+        </p>
+        <p className="muted small">
+          定时暂停窗口：窗口内停止开始新任务，已经开始执行的任务可以继续执行，
+          未开始执行的任务等到窗口结束后自动开始执行。每行一个窗口（
+          HH:MM-HH:MM，24 小时制，支持跨天如 22:00-02:00）；星期勾选生效
+          范围（不勾选 = 每天都生效）；时区留空 = 服务器本地时区。修改后
+          点击「保存」立即生效，对运行中任务无影响。
         </p>
         <p className="muted small">
           任务执行引擎：切换后端编写代码的 agent，默认 claude（Claude Code CLI）；

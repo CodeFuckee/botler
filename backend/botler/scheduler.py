@@ -21,8 +21,10 @@ import logging
 import threading
 import time
 from collections import defaultdict, deque
+from datetime import datetime
 
 from .config import ConfigManager
+from .pause_window import in_pause_window
 from .database import Database, DEFAULT_PRIORITY, STATUS_QUEUED, STATUS_RUNNING
 from .executor import ClaudeExecutor
 
@@ -42,6 +44,9 @@ class TaskScheduler:
         self._running: dict[int, int] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        # 暂停窗口状态翻转标记（issue #169）：仅状态变化时记录一次日志，
+        # 避免窗口内每秒派发循环刷屏
+        self._last_pause_state: bool | None = None
         self._thread = threading.Thread(target=self._loop, name="botler-scheduler", daemon=True)
 
     # ---- 对外接口 ----
@@ -102,6 +107,29 @@ class TaskScheduler:
             self.executor.request_stop(task_id)
         logger.info("一键停止所有任务：%s 个活跃任务已标记 interrupted", len(stopped))
         return stopped
+
+    # ---- 定时暂停窗口（issue #169）----
+
+    @staticmethod
+    def _now() -> datetime:
+        """当前时间（暂停窗口判断的时间来源，测试可覆盖）。"""
+        return datetime.now().astimezone()
+
+    def _in_pause_window(self) -> bool:
+        """当前是否处于定时暂停窗口内。
+
+        窗口内停止开始新任务（已在队列中的任务保留，窗口结束后自动
+        派发）；运行中任务不受影响（仅派发点检查）。状态翻转时记日志。
+        """
+        val = in_pause_window(self.config.get(), self._now())
+        if val != self._last_pause_state:
+            if val:
+                logger.info("进入定时暂停窗口：停止开始新任务，"
+                            "运行中任务继续执行，未开始任务等待窗口结束")
+            else:
+                logger.info("退出定时暂停窗口：恢复派发新任务")
+            self._last_pause_state = val
+        return val
 
     # ---- 调度循环 ----
 
@@ -172,6 +200,8 @@ class TaskScheduler:
         return (priority, self._task_sort_key(best, cfg), repo_id)
 
     def _dispatch(self) -> None:
+        if self._in_pause_window():
+            return  # 暂停窗口内不开始新任务（issue #169）
         cfg = self.config.get()
         with self._lock:
             running_count = len(self._running)

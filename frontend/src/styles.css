@@ -2718,3 +2718,23 @@ code {
   cursor: pointer;
 }
 .plugins-group { margin-bottom: var(--space-3); }
+
+/* 定时暂停窗口（issue #169）：生效星期复选框横向排列，与窗口 textarea 同宽 */
+.weekday-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin: var(--space-2) 0;
+}
+.weekday-row .weekday-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.weekday-row .weekday-check input {
+  margin: 0;
+}

@@ -30,6 +30,12 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 （默认 `bug` > `test` > `feature`，设置页可自定义），同优先级按 issue 创建时间升序
 （创建时间越早的 issue 越先处理）。
 
+> 💡 **定时暂停窗口**（issue #169）：可在设置页「任务调度」卡片配置暂停窗口
+>（如 `09:00-12:00`、`14:00-18:00`，支持多窗口、跨天、星期与时区）。窗口内
+> 调度器**停止开始新任务**（webhook / 对账仍照常入队），**已经开始执行的任务
+> 可以继续执行**，**未开始执行的任务保留在队列中，等到窗口结束后自动开始
+> 执行**；窗口状态实时计算，无需重启服务。
+
 > 💡 **断点续跑**（issue #8）：CI/CD 频繁重新部署时，执行中的任务被进程重启打断后
 > 不会从头重跑——executor 持久化 claude 会话 id，重启恢复时用 `claude --resume`
 > 接续上次会话且保留工作区改动，从上次中断处继续（会话文件丢失时自动降级全新会话）。
@@ -296,6 +302,9 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
 | `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（部署机已装好的 hermes-agent）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84）；设置页「任务调度」卡片可切换（issue #113） |
+| `worker.pause_windows` | `[]` | 定时暂停窗口（issue #169）：窗口串数组（`HH:MM-HH:MM`，24 小时制，支持跨天如 `22:00-02:00`）。窗口内停止开始新任务，已经开始执行的任务可以继续执行，未开始执行的任务等到窗口结束后自动开始执行；空数组 = 不启用（默认）。设置页「任务调度」卡片可编辑 |
+| `worker.pause_weekdays` | `[]` | 定时暂停窗口生效星期（0=周一 … 6=周日）；空 = 每天都生效（issue #169） |
+| `worker.pause_timezone` | 空 | 定时暂停窗口判断所用时区（IANA 名，如 `Asia/Shanghai`）；空 = 服务器本地时区（issue #169） |
 | `worker.plugin_paths` | `[]` | 外部插件加载（issue #140）：Python 模块路径列表，应用启动时逐个加载注册进插件体系（新增执行引擎 / 大模型供应商 / 消息发送通道）；模块内调用 `botler.plugins.register_plugin` 完成登记，加载失败仅记日志不阻塞启动 |
 | `claude.command` / `args` | `claude -p --output-format stream-json --verbose` | claude 引擎执行命令（stream-json 逐行实时输出，任务页面逐事件查看执行过程） |
 | `hermes.command` / `args` | — | hermes 引擎执行命令（部署机 hermes venv 的 python + `backend/hermes_runner.py`），部署见 `docs/hermes-engine-deployment.md` |

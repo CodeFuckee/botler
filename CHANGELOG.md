@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 ### Added
+- **定时暂停窗口：按时间规则停止开始新任务（issue #169）**：
+  可在设置页「任务调度」卡片配置暂停窗口（如 `09:00-12:00`、`14:00-18:00`），
+  窗口内调度器**停止开始新任务**，**已经开始执行的任务可以继续执行**，
+  **未开始执行的任务保留在队列中，等到窗口结束后自动开始执行**：
+  - **配置项**（`worker` 段，config.example.yaml 已加注释示例）：
+    `pause_windows`（窗口串数组 `HH:MM-HH:MM`，24 小时制，支持跨天如
+    `22:00-02:00`，空 = 不启用）/ `pause_weekdays`（生效星期 0-6，空 = 每天）/
+    `pause_timezone`（判断时区 IANA 名，空 = 服务器本地时区）；
+  - **调度器**：新增 `botler/pause_window.py` 纯函数（窗口解析 / 判断，含跨天与
+    星期、时区换算）；`TaskScheduler._dispatch` 派发前实时判断窗口状态，窗口内
+    不派发（webhook / 对账仍照常入队），状态翻转记日志；运行中任务由独立 worker
+    线程继续执行不受影响；
+  - **设置 API**：`GET /api/settings` 返回 `worker.pause_windows / pause_weekdays /
+    pause_timezone / pause_active`（pause_active 为服务端实时计算的暂停状态），
+    PUT 支持写入；非法窗口格式 / 非法星期 / 非法时区名 400 拒绝；
+  - **设置页 UI**：「任务调度」卡片新增「定时暂停窗口」区块——窗口逐行 textarea、
+    生效星期复选框（不勾选 = 每天都生效）、判断时区输入（常用时区 datalist）；
+    `pause_active=true` 时显示「当前处于暂停窗口」提示；
+  - **防御**：config.yaml 被手动编辑写坏时非法窗口串自动忽略、全部非法 = 不启用，
+    保证调度服务可用性优先；
+  - **测试**：新增后端纯函数（`tests/test_pause_window.py`：解析 / 窗口内外 / 跨天 /
+    星期 / 时区 / 坏配置回退）、调度器集成（`tests/test_scheduler_pause_windows.py`：
+    窗口内不派发 / 窗口外派发 / 排队任务窗口后自动开始 / 运行中任务不中断 / 未配置
+    行为不变）、设置 API（读写 / 校验 400 / 部分更新）与前端
+    `tests/settings-pause-windows.test.mjs` 8 条用例，全量无 regression。
 - **CI 引入代码覆盖率门禁：后端 pytest-cov + 前端 c8 双端覆盖率报告与阈值阻断（issue #210）**：
   此前 1500+ 后端 / 727 前端用例跑完即弃，不产出任何覆盖率报告，executor.py /
   gitlab_client.py / scheduler.py 等核心模块覆盖情况完全不可见。本次打通「测量 →
