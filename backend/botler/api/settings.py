@@ -404,6 +404,19 @@ def test_image_model(request: Request, body: dict):
             "image_base64": base64.b64encode(results[0].data).decode("ascii")}
 
 
+def _normalize_test_form_value(value: str) -> str:
+    """归一化识图模型测试表单值（issue #154）。
+
+    浏览器 FormData 对未赋值的字段会转成字符串 "undefined"（同理还有
+    "null" / "None" 等占位文本），这里统一视为空串，使测试端点能正确
+    回退到已保存配置，而不是把占位文本当作真实 Base URL / API Key /
+    模型名发起请求（相对地址请求会报 "Request URL is missing an
+    'http://' or 'https://' protocol."）。
+    """
+    value = (value or "").strip()
+    return "" if value.lower() in ("undefined", "null", "none") else value
+
+
 @router.post("/vision-model-test")
 async def test_vision_model(
     request: Request,
@@ -433,9 +446,11 @@ async def test_vision_model(
     settings = c.config.get()
     name = name.strip()
     provider = provider.strip()
-    base_url = base_url.strip()
-    model = model.strip()
-    api_key = api_key.strip()
+    # issue #154：前端 FormData 会把缺失字段（undefined）转成字符串
+    # "undefined"，视为空值，走下方「按 name 回退已保存配置」逻辑
+    base_url = _normalize_test_form_value(base_url)
+    model = _normalize_test_form_value(model)
+    api_key = _normalize_test_form_value(api_key)
     prompt = prompt.strip()
     if not provider:
         return {"ok": False, "error": "请先选择识图模型（模型类型）"}
@@ -453,6 +468,10 @@ async def test_vision_model(
         base_url = str(saved.get("base_url") or "").strip()
     if not model:
         model = str(saved.get("model") or "").strip()
+    # issue #154：兜底校验，避免相对地址请求时报出令人困惑的
+    # "Request URL is missing an 'http://' or 'https://' protocol."
+    if base_url and not base_url.startswith(("http://", "https://")):
+        return {"ok": False, "error": f"{name}.Base URL 必须以 http:// 或 https:// 开头"}
     try:
         client = VisionModelClient(
             name=name, provider=provider, base_url=base_url,

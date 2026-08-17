@@ -114,9 +114,12 @@ export default function VisionModelsCard() {
       fd.append('image', file)
       fd.append('name', testPayload.name)
       fd.append('provider', testPayload.provider)
-      fd.append('base_url', testPayload.base_url)
-      fd.append('api_key', testPayload.api_key)
-      fd.append('model', testPayload.model)
+      // issue #154：列表行「测试」只提交 name+provider，缺失字段若直接
+      // append undefined 会被 FormData 转成字符串 "undefined"，后端无法
+      // 回退已保存配置；统一补空串走后端「按 name 回退」逻辑
+      fd.append('base_url', testPayload.base_url || '')
+      fd.append('api_key', testPayload.api_key || '')
+      fd.append('model', testPayload.model || '')
       fd.append('prompt', testPayload.prompt || '')
       const res = await api.post('/api/settings/vision-model-test', fd)
       setTestResult(res.ok

@@ -1831,3 +1831,34 @@ class TestVisionModelTestEndpoint:
         resp = self._post(tc)
         assert resp.status_code == 200
         assert captured["verify_ssl"] is False
+
+    def test_test_row_button_undefined_placeholders_fallback(self, client, monkeypatch):
+        """列表行「测试」缺失字段被 FormData 转成字符串 'undefined'（issue #154）：
+        应视为空值回退已保存配置，而不是把 'undefined' 当作真实 base_url 发起
+        请求（否则 httpx 报 Request URL is missing an 'http://' or 'https://'
+        protocol.）。
+        """
+        tc, _ = client
+        self._save(tc)
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def describe(self, image, *, mime_type, prompt):
+                return "ok"
+
+        self._patch_client(monkeypatch, FakeClient)
+        resp = tc.post(
+            "/api/settings/vision-model-test",
+            files={"image": ("test.png", self.PNG, "image/png")},
+            data={"name": "Gemini 视觉", "provider": "gemini_vision",
+                  "base_url": "undefined", "api_key": "undefined",
+                  "model": "undefined"})
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        # 回退到已保存的明文 key / url / model（"undefined" 不是合法配置值）
+        assert captured["api_key"] == "AIza-vision-test-123"
+        assert captured["base_url"] == self.MODEL["base_url"]
+        assert captured["model"] == "gemini-2.5-flash"

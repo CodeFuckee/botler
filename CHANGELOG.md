@@ -77,6 +77,23 @@
 
 ### Fixed
 
+- **识图模型测试：列表行「测试」按钮缺失字段被 FormData 转成字符串 "undefined"，被当作真实
+  Base URL 发起请求，报「Request URL is missing an 'http://' or 'https://' protocol.」（issue #154）**：
+  用户配置好 baseurl / api_key / model 后点列表行「测试」按钮报网络请求失败——列表行测试只提交
+  name + provider，前端把缺失字段 `undefined` 直接 `FormData.append()`，浏览器会转成字符串
+  "undefined"；后端测试端点把非空字符串视为真实配置值、不再回退已保存配置，于是以
+  base_url="undefined" 构造请求，httpx 立即报「Request URL is missing an 'http://' or
+  'https://' protocol.」。改动：
+  - 前端 `VisionModelsCard.jsx`：`onFileChange` 组装 multipart 时对缺失字段补空串
+    （`testPayload.base_url || ''` 等），走后端「按 name 回退已保存配置」逻辑；
+  - 后端 `api/settings.py`：新增 `_normalize_test_form_value()`——把 "undefined" / "null" /
+    "None" 等占位文本归一为空值（兜底防护，前端回归或第三方客户端同样受益）；回退后若 Base
+    URL 非空且不以 http(s):// 开头，返回明确中文提示而非晦涩的 httpx 协议错误；
+  - **测试**：`test_api_settings.py` 新增 `test_test_row_button_undefined_placeholders_fallback`
+    用例——提交 base_url / api_key / model 均为 "undefined" 时断言回退已保存配置（修复前用例
+    复现失败：captured 值就是 "undefined"，与用户反馈错误一致），修复后全部通过。
+
+
 - **生图模型测试：OpenAI 接口返回 SSE 流（text/event-stream）时按事件解析并下载生成图片，不再报「不是有效 JSON」（issue #151 用户反馈）**：
   用户配置的生图接口（聚合网关类）真实返回为 SSE 流——多行 `data: {json}` 事件逐步上报
   进度（progress/status），最终事件 `status: "succeeded"` 且 `results[0].url` 为生成图片
