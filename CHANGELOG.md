@@ -38,6 +38,10 @@
     WEB_URL 修改 / DevEco Studio 真机运行与签名 / CI 集成说明）、README.md
     新增「鸿蒙端」章节与目录树条目、`docs/设计方案.md` 技术栈表与 Phase 3
     补充鸿蒙端。
+  - **健壮性修复**：`Index.ets` 返回键处理（onBackPress）对
+    `WebviewController.accessBackward()/backward()` 增加 try-catch 异常保护
+    （Web 组件绑定前调用可能抛异常，ArkTS 编译警告），失败时按普通返回
+    处理并记录 hilog 日志，消除编译警告、避免极端场景下应用崩溃。
 - **hermes 引擎集成方式改为 hermes agent SDK 进程内集成（issue #171）**：
   需求「帮我把hermes的集成方式改成hermes agent sdk的集成方式」。此前 hermes
   引擎（issue #47）经「子进程 + 部署机独立 hermes venv」运行

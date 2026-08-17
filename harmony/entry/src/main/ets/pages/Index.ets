@@ -8,6 +8,7 @@
  *   - 返回键：WebView 存在可回退历史时先回退网页，否则退出应用。
  */
 import webview from '@ohos.web.webview';
+import hilog from '@ohos.hilog';
 import { WEB_URL } from '../common/AppConfig';
 
 @Entry
@@ -23,9 +24,15 @@ struct Index {
    * 系统返回键处理：WebView 可后退时先回退网页历史，避免误退出应用
    */
   onBackPress(): boolean {
-    if (this.controller.accessBackward()) {
-      this.controller.backward();
-      return true;
+    try {
+      // WebviewController 在 Web 组件绑定前调用可能抛异常（ArkTS 编译警告），
+      // 用 try-catch 保护：失败时按普通返回处理（退出应用），避免崩溃。
+      if (this.controller.accessBackward()) {
+        this.controller.backward();
+        return true;
+      }
+    } catch (err) {
+      hilog.warn(0x0000, 'BotlerHarmony', 'onBackPress 网页回退失败: %{public}s', JSON.stringify(err));
     }
     return false;
   }
