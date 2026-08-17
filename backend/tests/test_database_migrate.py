@@ -467,7 +467,8 @@ class TestMigrateInspirations:
             # issue #153：v10 迁移补 remote_username 列（仓库用户）
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
-        assert ver == 10, f"user_version 应推进到 10（v10 迁移链），实际 {ver}"
+        assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
+        assert ver == 11, f"user_version 应推进到 11（v11 迁移链），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -539,3 +540,72 @@ class TestMigrateDshTranscript:
         raw = '{"prompt": "提示词", "messages": [], "truncated": false}'
         db.set_task_status(task_id, None, dsh_transcript=raw)
         assert db.get_task(task_id)["dsh_transcript"] == raw
+
+
+class TestMigrateInspirationMessages:
+    """issue #166：灵感 AI 对话消息表迁移（v11）。"""
+
+    def test_old_db_gets_inspiration_messages_table(self, tmp_path):
+        """v10 旧库初始化后应补出 inspiration_messages 表与索引。"""
+        path = tmp_path / "old.db"
+        _build_v7_db(path)  # 复用最旧库：走完整迁移链到 v11
+        db = Database(str(path))
+        with db._conn() as conn:
+            tables = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            indexes = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
+        assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
+        assert ver == 11, f"user_version 应推进到 11（v11 迁移链），实际 {ver}"
+
+    def test_new_db_has_inspiration_messages_table(self, tmp_path):
+        """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            tables = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "inspiration_messages" in tables
+
+    def test_message_crud_ordered(self, tmp_path):
+        """对话消息 CRUD：写入 / 时间序读取 / limit 取最近 N 条 / 单条删除。"""
+        db = Database(str(tmp_path / "m.db"))
+        repo_id = db.upsert_repo(42, "botler", "https://x/botler.git")
+        insp_id = db.create_inspiration(repo_id, "灵感")
+        m1 = db.add_inspiration_message(insp_id, "user", "第一问")
+        m2 = db.add_inspiration_message(insp_id, "assistant", "第一答")
+        m3 = db.add_inspiration_message(insp_id, "user", "第二问")
+        rows = db.list_inspiration_messages(insp_id)
+        assert [r["content"] for r in rows] == ["第一问", "第一答", "第二问"]
+        assert [r["role"] for r in rows] == ["user", "assistant", "user"]
+        # limit：取最近 2 条并按时间升序返回
+        tail = db.list_inspiration_messages(insp_id, limit=2)
+        assert [r["content"] for r in tail] == ["第一答", "第二问"]
+        # 单条查询与删除
+        assert db.get_inspiration_message(m2)["content"] == "第一答"
+        assert db.delete_inspiration_message(m2) is True
+        assert db.get_inspiration_message(m2) is None
+        assert [r["content"] for r in db.list_inspiration_messages(insp_id)] == [
+            "第一问", "第二问"]
+
+    def test_delete_inspiration_cascades_messages(self, tmp_path):
+        """删除灵感时级联删除其全部对话消息。"""
+        db = Database(str(tmp_path / "c.db"))
+        repo_id = db.upsert_repo(42, "botler", "https://x/botler.git")
+        insp_id = db.create_inspiration(repo_id, "灵感")
+        db.add_inspiration_message(insp_id, "user", "提问")
+        db.add_inspiration_message(insp_id, "assistant", "回复")
+        assert db.delete_inspiration(insp_id) is True
+        assert db.list_inspiration_messages(insp_id) == []
+
+    def test_cascade_only_target_inspiration(self, tmp_path):
+        """级联删除只清理目标灵感的消息，不影响其他灵感。"""
+        db = Database(str(tmp_path / "c2.db"))
+        repo_id = db.upsert_repo(42, "botler", "https://x/botler.git")
+        insp_a = db.create_inspiration(repo_id, "灵感 A")
+        insp_b = db.create_inspiration(repo_id, "灵感 B")
+        db.add_inspiration_message(insp_a, "user", "A 提问")
+        db.add_inspiration_message(insp_b, "user", "B 提问")
+        db.delete_inspiration(insp_b)
+        assert [r["content"] for r in db.list_inspiration_messages(insp_a)] == ["A 提问"]

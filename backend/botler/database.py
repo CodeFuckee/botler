@@ -121,6 +121,20 @@ CREATE TABLE IF NOT EXISTS inspirations (
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- 灵感 AI 对话消息（issue #166）：概览页灵感板块「与 AI 对话」——用户
+-- 围绕某条灵感与 AI agent 探讨，消息成对保存（user 提问 + assistant
+-- 回复），仅存本地数据库；删除灵感时级联清理（delete_inspiration）。
+CREATE TABLE IF NOT EXISTS inspiration_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  inspiration_id INTEGER NOT NULL REFERENCES inspirations(id),
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_inspiration_messages_insp
+  ON inspiration_messages(inspiration_id, id);
 """
 
 
@@ -279,6 +293,24 @@ class Database:
             if "remote_username" not in cols:
                 conn.execute("ALTER TABLE repos ADD COLUMN remote_username TEXT")
             conn.execute("PRAGMA user_version = 10")
+        if ver < 11:
+            # issue #166：灵感 AI 对话消息表——概览页灵感板块「与 AI 对话」：
+            # 用户围绕灵感与 AI agent 探讨，消息成对落库（user + assistant）。
+            # CREATE TABLE IF NOT EXISTS 已覆盖新库；旧库（user_version=10）
+            # 首次启动时同样建表，并显式推进版本号保持迁移链完整（与
+            # issue #131 灵感表 v8 迁移同模式）。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS inspiration_messages (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     inspiration_id INTEGER NOT NULL REFERENCES inspirations(id),
+                     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                     content TEXT NOT NULL,
+                     created_at TEXT DEFAULT (datetime('now'))
+                   )""")
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_inspiration_messages_insp
+                   ON inspiration_messages(inspiration_id, id)""")
+            conn.execute("PRAGMA user_version = 11")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -384,9 +416,66 @@ class Database:
             return cur.rowcount > 0
 
     def delete_inspiration(self, inspiration_id: int) -> bool:
-        """删除灵感；记录不存在返回 False。"""
+        """删除灵感及其全部 AI 对话消息（issue #166 级联清理）。
+
+        灵感删除后其 AI 对话（inspiration_messages）不再有展示入口，
+        一并删除避免孤儿数据；同一连接同一事务内先删灵感再删消息
+        （灵感不存在时直接返回 False，不动消息表）。"""
         with self._conn() as conn:
             cur = conn.execute("DELETE FROM inspirations WHERE id=?", (inspiration_id,))
+            if cur.rowcount == 0:
+                return False
+            conn.execute(
+                "DELETE FROM inspiration_messages WHERE inspiration_id=?",
+                (inspiration_id,))
+            return True
+
+    # ---- inspiration_messages（issue #166）----
+    # 灵感 AI 对话消息：用户围绕灵感与 AI agent 探讨，消息成对保存
+    # （user 提问 + assistant 回复），按 id 升序 = 时间序。
+
+    def list_inspiration_messages(
+        self, inspiration_id: int, limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        """列出灵感对话消息（时间序）；limit 指定时返回最近 limit 条。
+
+        取最近 N 条是传给 AI 的上下文截断策略（避免历史无限膨胀撑爆
+        上下文窗口）：``ORDER BY id DESC LIMIT ?`` 取尾部再反转回时间序。
+        """
+        with self._conn() as conn:
+            if limit is not None:
+                rows = conn.execute(
+                    """SELECT * FROM inspiration_messages
+                       WHERE inspiration_id = ?
+                       ORDER BY id DESC LIMIT ?""",
+                    (inspiration_id, limit)).fetchall()
+                return rows[::-1]
+            return conn.execute(
+                """SELECT * FROM inspiration_messages
+                   WHERE inspiration_id = ?
+                   ORDER BY id ASC""", (inspiration_id,)).fetchall()
+
+    def get_inspiration_message(self, message_id: int) -> sqlite3.Row | None:
+        """按 id 查单条灵感对话消息（发送失败回滚删除用）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT * FROM inspiration_messages WHERE id = ?""",
+                (message_id,)).fetchone()
+
+    def add_inspiration_message(self, inspiration_id: int, role: str,
+                                content: str) -> int:
+        """保存一条灵感对话消息，返回新记录 id。"""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT INTO inspiration_messages (inspiration_id, role, content)
+                   VALUES (?, ?, ?)""", (inspiration_id, role, content))
+            return cur.lastrowid
+
+    def delete_inspiration_message(self, message_id: int) -> bool:
+        """删除单条灵感对话消息（AI 调用失败时回滚用户消息）；不存在返回 False。"""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM inspiration_messages WHERE id=?", (message_id,))
             return cur.rowcount > 0
 
     # ---- repos ----

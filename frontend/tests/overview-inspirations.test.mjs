@@ -87,6 +87,13 @@ async function renderOverview({
   inspirationsError = null,
   inspirationsAddResult = null,
   inspirationsAddError = null,
+  // issue #166：灵感 AI 对话 mock——chatMessages 对话历史（null=空）、
+  // chatMessagesError 加载历史失败、chatSendResult 发送返回（null=默认
+  // user+assistant 两消息）、chatSendError 发送失败
+  chatMessages = null,
+  chatMessagesError = null,
+  chatSendResult = null,
+  chatSendError = null,
 } = {}) {
   const getCalls = []
   const postCalls = []
@@ -101,6 +108,10 @@ async function renderOverview({
       if (inspirationsError) throw new Error(inspirationsError)
       return inspirationsPayload
     }
+    if (pathname.startsWith('/api/inspirations/') && pathname.endsWith('/messages')) {
+      if (chatMessagesError) throw new Error(chatMessagesError)
+      return { messages: chatMessages === null ? [] : chatMessages }
+    }
     throw new Error('unexpected ' + pathname)
   })
   mock.method(api, 'post', async (pathname, body) => {
@@ -111,6 +122,19 @@ async function renderOverview({
       return inspirationsAddResult || {
         iid: 99, title: '灵感内容',
         web_url: 'https://gitlab.example.com/x/-/issues/99',
+      }
+    }
+    // issue #166：灵感 AI 对话发送——返回用户消息 + AI 回复
+    if (String(pathname).endsWith('/messages')) {
+      if (chatSendError) throw new Error(chatSendError)
+      if (chatSendResult) return chatSendResult
+      return {
+        messages: [
+          { id: 101, role: 'user', content: body.content,
+            created_at: '2026-08-17 12:00:00' },
+          { id: 102, role: 'assistant', content: 'AI 的探讨回复',
+            created_at: '2026-08-17 12:00:01' },
+        ],
       }
     }
     return { id: 99 }
@@ -465,6 +489,147 @@ test('交互：提交失败显示错误且不刷新灵感列表', async () => {
     // （条目保留可重试，避免界面闪烁）
     const inspAfter = r.getCalls.filter((p) => p === '/api/inspirations/overview').length
     assert.equal(inspAfter, inspBefore, '提交失败不应刷新灵感列表')
+  } finally {
+    await r.unmount()
+  }
+})
+
+// ---- issue #166：灵感 AI 对话 ----
+
+// 点击第 index 个灵感条目的「💬 对话」按钮（第一个仓库卡片内）
+async function openInspirationChat(renderer, index = 0) {
+  const btns = renderer.root.findAll((n) =>
+    n.type === 'button'
+    && String(n.props.className || '').includes('inspiration-chat-btn'))
+  assert.ok(btns.length > index, `找不到对话按钮（共 ${btns.length} 个）`)
+  await TestRenderer.act(async () => { btns[index].props.onClick() })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+}
+
+test('源码：灵感条目有「对话」按钮，调用 GET/POST /api/inspirations/{id}/messages', () => {
+  assert.match(overview, /💬 对话/, '灵感条目操作区应有「对话」按钮')
+  assert.match(overview, /api\.get\(`\/api\/inspirations\/\$\{ins\.id\}\/messages`\)/,
+               '打开面板应 GET /api/inspirations/{id}/messages 加载历史')
+  assert.match(overview, /api\.post\(`\/api\/inspirations\/\$\{chatInspiration\.id\}\/messages`/,
+               '发送消息应 POST /api/inspirations/{id}/messages')
+  assert.match(overview, /chat-modal/, '应渲染对话面板（chat-modal）')
+  assert.match(overview, /chat-msg-user/, '用户消息应有独立气泡样式')
+  assert.match(overview, /chat-msg-ai/, 'AI 消息应有独立气泡样式')
+})
+
+test('交互：点击「对话」打开面板并加载历史消息', async () => {
+  const history = [
+    { id: 1, role: 'user', content: '之前问过的问题', created_at: '2026-08-17 10:00:00' },
+    { id: 2, role: 'assistant', content: '之前的回复', created_at: '2026-08-17 10:00:05' },
+  ]
+  const r = await renderOverview({ chatMessages: history })
+  try {
+    assert.equal(r.renderError, null, `渲染抛错：${r.renderError?.message || r.renderError}`)
+    await openInspirationChat(r.renderer, 0)
+    // 打开面板后应请求历史接口
+    assert.ok(r.getCalls.includes('/api/inspirations/11/messages'),
+              '打开面板应 GET 灵感对话历史（id=11）')
+    const text = treeText(r.renderer)
+    assert.ok(text.includes('与 AI 探讨灵感'), '应渲染对话面板标题')
+    assert.ok(text.includes('之前问过的问题'), '应渲染历史用户消息')
+    assert.ok(text.includes('之前的回复'), '应渲染历史 AI 消息')
+    assert.ok(text.includes('支持批量处理 issue'), '面板顶部应展示灵感内容摘要')
+  } finally {
+    await r.unmount()
+  }
+})
+
+test('交互：无历史时显示引导文案', async () => {
+  const r = await renderOverview()
+  try {
+    await openInspirationChat(r.renderer, 0)
+    const text = treeText(r.renderer)
+    assert.ok(text.includes('还没有对话，向 AI 说说你对这条灵感的想法吧'),
+              '空历史应显示引导文案')
+  } finally {
+    await r.unmount()
+  }
+})
+
+// 向对话面板输入内容并提交
+async function sendChat(renderer, content) {
+  // 精确匹配 textarea（chat-input-row 也含 'chat-input' 子串，需排除）
+  const ta = renderer.root.findAll(
+    (n) => n.type === 'textarea'
+      && String(n.props.className || '').includes('chat-input'))[0]
+  await TestRenderer.act(async () => {
+    ta.props.onChange({ target: { value: content } })
+  })
+  const form = renderer.root.findAll(
+    (n) => String(n.props.className || '').includes('chat-input-row'))[0]
+  await TestRenderer.act(async () => {
+    form.props.onSubmit({ preventDefault() {} })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+}
+
+test('交互：发送消息 → POST 并渲染用户消息 + AI 回复，输入清空', async () => {
+  const r = await renderOverview()
+  try {
+    await openInspirationChat(r.renderer, 0)
+    const postBefore = r.postCalls.length
+    await sendChat(r.renderer, '这个灵感怎么落地？')
+    assert.equal(r.postCalls.length, postBefore + 1, '应调用一次 POST')
+    assert.deepEqual(r.postCalls.at(-1),
+                     ['/api/inspirations/11/messages', { content: '这个灵感怎么落地？' }],
+                     'POST 参数应为 {content}')
+    const text = treeText(r.renderer)
+    assert.ok(text.includes('这个灵感怎么落地？'), '应渲染用户消息')
+    assert.ok(text.includes('AI 的探讨回复'), '应渲染 AI 回复')
+    const ta = r.renderer.root.findAll(
+      (n) => n.type === 'textarea'
+        && String(n.props.className || '').includes('chat-input'))[0]
+    assert.equal(ta.props.value, '', '发送成功后输入框应清空')
+  } finally {
+    await r.unmount()
+  }
+})
+
+test('交互：空白消息不发起 POST', async () => {
+  const r = await renderOverview()
+  try {
+    await openInspirationChat(r.renderer, 0)
+    const postBefore = r.postCalls.length
+    await sendChat(r.renderer, '   ')
+    assert.equal(r.postCalls.length, postBefore, '空白消息不应调用 POST')
+  } finally {
+    await r.unmount()
+  }
+})
+
+test('交互：发送失败显示错误且输入保留可重试', async () => {
+  const r = await renderOverview({ chatSendError: '未配置 AI 对话模型' })
+  try {
+    await openInspirationChat(r.renderer, 0)
+    await sendChat(r.renderer, '重要提问')
+    const text = treeText(r.renderer)
+    assert.ok(text.includes('未配置 AI 对话模型'), '应显示发送错误')
+    const ta = r.renderer.root.findAll(
+      (n) => n.type === 'textarea'
+        && String(n.props.className || '').includes('chat-input'))[0]
+    assert.equal(ta.props.value, '重要提问', '失败后输入应保留供重试')
+  } finally {
+    await r.unmount()
+  }
+})
+
+test('交互：加载历史失败显示错误且面板可关闭', async () => {
+  const r = await renderOverview({ chatMessagesError: '历史加载失败' })
+  try {
+    await openInspirationChat(r.renderer, 0)
+    const text = treeText(r.renderer)
+    assert.ok(text.includes('历史加载失败'), '应显示历史加载错误')
+    // 关闭面板（× 按钮）
+    const closeBtn = r.renderer.root.findAll((n) =>
+      n.type === 'button' && String(n.props.className || '').includes('modal-close'))[0]
+    await TestRenderer.act(async () => { closeBtn.props.onClick() })
+    const after = treeText(r.renderer)
+    assert.ok(!after.includes('chat-modal'), '关闭后面板应卸载')
   } finally {
     await r.unmount()
   }

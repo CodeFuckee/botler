@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 ### Added
+- **灵感记录增加与 AI agent 对话功能，方便用户探讨灵感（issue #166）**：
+  概览页「灵感」板块每条灵感操作区新增「💬 对话」按钮，点击打开对话面板，
+  围绕该灵感与 AI agent 多轮探讨（完善想法、补充边界场景、评估可行性、
+  给出分步落地建议），对话历史持久化到本地数据库：
+  - 后端：新增 `backend/botler/chat_models.py` 对话模型统一调用封装——
+    复用设置页「AI API 供应商」（ai_providers，issue #46）配置的文本对话
+    模型，支持 OpenAI 兼容 `chat/completions`（deepseek / openai / moonshot /
+    qwen / zhipu / siliconflow / ollama / openrouter / custom）、Gemini
+    `generateContent`、Anthropic `messages` 三种协议；供应商选择取列表
+    第一个启用且 API Key 非空的项（未配置时 400 引导设置页）；
+  - 数据层：新增 `inspiration_messages` 表（id / inspiration_id / role /
+    content / created_at，v11 迁移），删除灵感时级联清理对话消息；
+  - API：`GET /api/inspirations/{id}/messages` 返回对话历史（时间升序）、
+    `POST /api/inspirations/{id}/messages` 发送消息并返回 AI 回复——用户
+    消息 + AI 回复成对落库；AI 调用失败/网络错误返回 502 并回滚已保存的
+    用户消息（对话历史保持成对完整，前端保留输入可重试）；传给模型的上
+    下文 = 系统提示（角色设定 + 灵感内容与仓库名）+ 最近 20 条历史；
+  - 前端：`Overview.jsx` 灵感条目新增「💬 对话」按钮，对话面板复用
+    `.modal` 体系（遮罩/×/Esc 关闭，Enter 发送 / Shift+Enter 换行），
+    消息气泡列表（用户右 / AI 左）+ 发送中禁用 + 错误展示（输入保留）；
+    `styles.css` 新增对话面板与气泡样式；
+  - **测试**：后端新增 `test_chat_models.py` 24 用例（三种协议请求构造 /
+    响应解析 / 非 JSON / 非 2xx / 无内容 / 网络错误 / 连续同角色防御 /
+    供应商选择），`test_api_inspirations.py` 扩展 16 用例（历史空 / 发送
+    正常 / 上下文含灵感与历史 / 404 / 空内容与超长 / 未配置与未启用 400 /
+    AI 失败与网络错误回滚 / 空回复回滚 / 级联删除），`test_database_migrate.py`
+    扩展 v11 迁移与消息 CRUD 用例；前端 `overview-inspirations.test.mjs`
+    扩展 8 用例（按钮与接口源码断言 / 打开面板加载历史 / 空历史引导 / 发送
+    渲染与输入清空 / 空白不发送 / 失败保留输入 / 加载失败可关闭）；实现前
+    先红后绿、实现后前后端全量测试无 regression（后端 1500+、前端 708 用例
+    全绿）。
+
+
 - **添加 issue 对话框标题输入框右侧新增语音输入按钮（issue #165）**：
   概览页「添加 Issue」弹窗中，标题输入框右侧新增语音输入按钮（🎤），点击后
   通过浏览器原生 Web Speech API（`SpeechRecognition`，Chrome / Edge /

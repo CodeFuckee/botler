@@ -24,6 +24,8 @@
 import time
 from types import SimpleNamespace
 
+import httpx
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -699,3 +701,265 @@ class TestAddIssueFromInspirationRuntimeRemoteUser:
 
         assert resp.status_code == 201
         assert stub.create_calls[0][1]["assignee_id"] is None
+
+
+# ---- issue #166：灵感与 AI agent 对话 ----
+
+class StubChatClient:
+    """灵感 AI 对话 ChatModelClient 桩：记录构造参数与 chat 调用，可注入回复/故障。
+
+    monkeypatch botler.chat_models.ChatModelClient（端点内延迟导入来源
+    模块），与 test_api_settings.py 的生图/识图测试桩同模式。
+    """
+
+    instances: list["StubChatClient"] = []
+    reply: str = "AI 的探讨回复"
+    raise_error: Exception | None = None
+    raise_http_error: bool = False
+
+    def __init__(self, **kwargs):
+        # 与真实 ChatModelClient 一致：未知 provider 构造即抛错
+        # （不支持的模型类型用例依赖此行为触发 502 + 回滚链路）
+        from botler.chat_models import DEFAULT_BASE_URLS, ChatModelError
+        if str(kwargs.get("provider") or "") not in DEFAULT_BASE_URLS:
+            raise ChatModelError(
+                f"不支持的 AI 对话模型类型: {kwargs.get('provider')}")
+        self.kwargs = kwargs
+        self.chat_calls: list[list[dict]] = []
+        StubChatClient.instances.append(self)
+
+    def chat(self, messages):
+        self.chat_calls.append(messages)
+        if StubChatClient.raise_error is not None:
+            raise StubChatClient.raise_error
+        if StubChatClient.raise_http_error:
+            raise httpx.ConnectError("模拟网络故障")
+        return StubChatClient.reply
+
+
+@pytest.fixture
+def chat_env(client, monkeypatch):
+    """配置 AI 供应商 + 打桩 ChatModelClient，返回 (tc, db, stub 类)。
+
+    默认注入一个启用的 deepseek 供应商；用例可覆盖列表后重新 update。
+    """
+    tc, db = client
+    tc.app.state.ctx.config.update_ai_providers([{
+        "name": "deepseek", "provider": "deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "sk-test", "model": "deepseek-chat", "enabled": True,
+    }])
+    from botler import chat_models as chat_mod
+    StubChatClient.instances = []
+    StubChatClient.reply = "AI 的探讨回复"
+    StubChatClient.raise_error = None
+    StubChatClient.raise_http_error = False
+    monkeypatch.setattr(chat_mod, "ChatModelClient", StubChatClient)
+    return tc, db
+
+
+def _add_inspiration(db, repo_id=1):
+    """便捷：插入一个仓库 + 一条灵感，返回灵感 id。"""
+    repo = _add_repo(db, repo_id, f"repo-{repo_id}")
+    return db.create_inspiration(repo, "灵感内容")
+
+
+class TestInspirationChat:
+    """GET/POST /api/inspirations/{id}/messages（issue #166）。"""
+
+    def test_get_empty_history(self, client):
+        tc, db = client
+        insp_id = _add_inspiration(db)
+        r = tc.get(f"/api/inspirations/{insp_id}/messages")
+        assert r.status_code == 200
+        assert r.json() == {"messages": []}
+
+    def test_get_not_found(self, client):
+        tc, db = client
+        r = tc.get("/api/inspirations/999/messages")
+        assert r.status_code == 404
+        assert "不存在" in r.json()["detail"]
+
+    def test_get_history_ordered(self, chat_env):
+        """历史按时间升序返回（先用户后 AI）。"""
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        db.add_inspiration_message(insp_id, "user", "第一条提问")
+        db.add_inspiration_message(insp_id, "assistant", "第一条回复")
+        db.add_inspiration_message(insp_id, "user", "第二条提问")
+        r = tc.get(f"/api/inspirations/{insp_id}/messages")
+        assert r.status_code == 200
+        msgs = r.json()["messages"]
+        assert [m["content"] for m in msgs] == [
+            "第一条提问", "第一条回复", "第二条提问"]
+        assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+
+    def test_send_ok(self, chat_env):
+        """正常发送：返回用户消息 + AI 回复，两者落库。"""
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "这个灵感怎么落地？"})
+        assert r.status_code == 201
+        body = r.json()
+        assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+        assert body["messages"][0]["content"] == "这个灵感怎么落地？"
+        assert body["messages"][1]["content"] == "AI 的探讨回复"
+        rows = db.list_inspiration_messages(insp_id)
+        assert len(rows) == 2
+        assert rows[0]["role"] == "user"
+        assert rows[1]["role"] == "assistant"
+
+    def test_send_context_contains_inspiration_and_history(self, chat_env):
+        """传给模型的 messages：系统提示含灵感内容与仓库名 + 历史 + 新消息。"""
+        tc, db = chat_env
+        repo = _add_repo(db, 7, "灵感仓库")
+        insp_id = db.create_inspiration(repo, "灵感内容ABC")
+        db.add_inspiration_message(insp_id, "user", "旧提问")
+        db.add_inspiration_message(insp_id, "assistant", "旧回复")
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "新提问"})
+        assert r.status_code == 201
+        sent = StubChatClient.instances[-1].chat_calls[-1]
+        assert sent[0]["role"] == "system"
+        assert "灵感仓库" in sent[0]["content"]
+        assert "灵感内容ABC" in sent[0]["content"]
+        assert sent[1:] == [
+            {"role": "user", "content": "旧提问"},
+            {"role": "assistant", "content": "旧回复"},
+            {"role": "user", "content": "新提问"},
+        ]
+
+    def test_send_client_built_from_ai_providers(self, chat_env):
+        """ChatModelClient 构造参数来自 ai_providers 第一项配置。"""
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        tc.post(f"/api/inspirations/{insp_id}/messages", json={"content": "hi"})
+        client = StubChatClient.instances[-1]
+        assert client.kwargs["provider"] == "deepseek"
+        assert client.kwargs["model"] == "deepseek-chat"
+        assert client.kwargs["api_key"] == "sk-test"
+        assert client.kwargs["base_url"] == "https://api.deepseek.com/v1"
+        assert client.kwargs["timeout"] == 60.0
+
+    def test_send_not_found(self, chat_env):
+        tc, db = chat_env
+        r = tc.post("/api/inspirations/999/messages", json={"content": "hi"})
+        assert r.status_code == 404
+        assert "不存在" in r.json()["detail"]
+
+    def test_send_empty_content(self, chat_env):
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        for bad in ("", "   "):
+            r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                        json={"content": bad})
+            assert r.status_code == 400
+            assert "不能为空" in r.json()["detail"]
+
+    def test_send_content_too_long(self, chat_env):
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "长" * 2001})
+        assert r.status_code == 400
+        assert "不能超过" in r.json()["detail"]
+
+    def test_send_without_provider_400(self, client):
+        """未配置任何 AI 供应商 → 400 引导设置页。"""
+        tc, db = client
+        insp_id = _add_inspiration(db)
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "hi"})
+        assert r.status_code == 400
+        assert "AI 对话模型" in r.json()["detail"]
+
+    def test_send_disabled_provider_400(self, client):
+        """供应商全部未启用 / 无 Key → 400。"""
+        tc, db = client
+        insp_id = _add_inspiration(db)
+        for providers in (
+            [{"name": "d", "provider": "deepseek", "base_url": "",
+              "api_key": "sk-1", "enabled": False}],
+            [{"name": "d", "provider": "deepseek", "base_url": "",
+              "api_key": "", "enabled": True}],
+            [{"name": "d", "provider": "deepseek", "base_url": "",
+              "api_key": None, "enabled": True}],
+        ):
+            tc.app.state.ctx.config.update_ai_providers(providers)
+            r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                        json={"content": "hi"})
+            assert r.status_code == 400
+            assert "AI 对话模型" in r.json()["detail"]
+        # 数据库无残留
+        assert db.list_inspiration_messages(insp_id) == []
+
+    def test_send_ai_error_rolls_back_user_message(self, chat_env):
+        """AI 调用失败（ChatModelError）→ 502，用户消息回滚不落库。"""
+        from botler.chat_models import ChatModelError
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        StubChatClient.raise_error = ChatModelError("模拟模型故障")
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "hi"})
+        assert r.status_code == 502
+        assert "AI 回复失败" in r.json()["detail"]
+        assert db.list_inspiration_messages(insp_id) == []
+
+    def test_send_network_error_rolls_back_user_message(self, chat_env):
+        """AI 调用网络错误 → 502，用户消息回滚不落库。"""
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        StubChatClient.raise_http_error = True
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "hi"})
+        assert r.status_code == 502
+        assert "网络错误" in r.json()["detail"]
+        assert db.list_inspiration_messages(insp_id) == []
+
+    def test_send_empty_reply_rolls_back(self, chat_env):
+        """AI 返回空白回复 → 502，用户消息回滚。"""
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        StubChatClient.reply = "   "
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "hi"})
+        assert r.status_code == 502
+        assert "AI 回复为空" in r.json()["detail"]
+        assert db.list_inspiration_messages(insp_id) == []
+
+    def test_send_unsupported_provider_502(self, chat_env):
+        """供应商 provider 不受支持 → ChatModelError → 502 且回滚。"""
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        tc.app.state.ctx.config.update_ai_providers([{
+            "name": "x", "provider": "unknown_provider",
+            "base_url": "", "api_key": "sk-1", "model": "", "enabled": True,
+        }])
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "hi"})
+        assert r.status_code == 502
+        assert "AI 回复失败" in r.json()["detail"]
+        assert db.list_inspiration_messages(insp_id) == []
+
+    def test_delete_inspiration_cascades_messages(self, chat_env):
+        """删除灵感时级联删除其对话消息。"""
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        db.add_inspiration_message(insp_id, "user", "提问")
+        db.add_inspiration_message(insp_id, "assistant", "回复")
+        r = tc.delete(f"/api/inspirations/{insp_id}")
+        assert r.status_code == 204
+        assert db.get_inspiration(insp_id) is None
+        assert db.list_inspiration_messages(insp_id) == []
+
+    def test_messages_survive_other_inspiration_delete(self, chat_env):
+        """删除另一条灵感不影响本条对话消息。"""
+        tc, db = chat_env
+        insp_a = _add_inspiration(db)
+        insp_b = _add_inspiration(db)
+        db.add_inspiration_message(insp_a, "user", "A 的提问")
+        db.add_inspiration_message(insp_b, "user", "B 的提问")
+        tc.delete(f"/api/inspirations/{insp_b}")
+        rows = db.list_inspiration_messages(insp_a)
+        assert [r["content"] for r in rows] == ["A 的提问"]

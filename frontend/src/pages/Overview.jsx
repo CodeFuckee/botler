@@ -209,6 +209,14 @@ export default function Overview() {
   const [addingIssueInspIds, setAddingIssueInspIds] = useState({})
   // 创建成功的 issue 对象（issue #143）：非空时显示成功提示与新 issue 链接
   const [inspirationCreatedIssue, setInspirationCreatedIssue] = useState(null)
+  // 灵感 AI 对话（issue #166）：与 AI agent 探讨灵感——当前对话的灵感
+  // 对象（null=面板关闭）、消息列表、输入草稿、发送中/加载中/错误状态
+  const [chatInspiration, setChatInspiration] = useState(null)
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatLoading, setChatLoading] = useState(false)
+  const [chatDraft, setChatDraft] = useState('')
+  const [chatSending, setChatSending] = useState(false)
+  const [chatError, setChatError] = useState('')
   // DeepSeek 账户余额（issue #138）：null=未加载/未配置；
   // {configured, balance, error} 为 /api/settings/deepseek-balance 返回
   const [dsBalance, setDsBalance] = useState(null)
@@ -410,6 +418,62 @@ export default function Overview() {
       setAddingIssueInspIds((prev) => ({ ...prev, [ins.id]: false }))
     }
   }, [addingIssueInspIds, loadIssues, loadInspirations])
+
+  // ---- 灵感 AI 对话（issue #166）：与 AI agent 探讨灵感 ----
+
+  // 打开对话面板：加载该灵感的历史消息（GET messages），加载中显示提示
+  const openInspirationChat = useCallback(async (ins) => {
+    setChatInspiration(ins)
+    setChatMessages([])
+    setChatLoading(true)
+    setChatError('')
+    try {
+      const d = await api.get(`/api/inspirations/${ins.id}/messages`)
+      setChatMessages(d.messages || [])
+    } catch (e) {
+      setChatError(e.message)
+    } finally {
+      setChatLoading(false)
+    }
+  }, [])
+
+  // 关闭对话面板：清空全部对话状态（再次打开重新拉取历史）
+  const closeInspirationChat = useCallback(() => {
+    setChatInspiration(null)
+    setChatMessages([])
+    setChatDraft('')
+    setChatError('')
+  }, [])
+
+  // 发送消息：POST 后端保存用户消息并调 AI 回复，成功后 append
+  // 用户消息 + AI 回复到消息列表并清空输入；失败保留输入可重试
+  const sendInspirationChat = useCallback(async () => {
+    if (chatSending || !chatInspiration) return
+    const content = chatDraft.trim()
+    if (!content) return
+    setChatSending(true)
+    setChatError('')
+    try {
+      const d = await api.post(`/api/inspirations/${chatInspiration.id}/messages`, { content })
+      setChatMessages((prev) => prev.concat(d.messages || []))
+      setChatDraft('')
+    } catch (e) {
+      setChatError(e.message)
+    } finally {
+      setChatSending(false)
+    }
+  }, [chatSending, chatInspiration, chatDraft])
+
+  // 对话面板 Esc 关闭（SSR 测试环境无 document 时跳过，与 AddIssueModal
+  // 一致）；面板关闭后移除监听，避免误关其他弹窗
+  useEffect(() => {
+    if (typeof document === 'undefined' || !chatInspiration) return
+    const onKey = (e) => {
+      if (e && e.key === 'Escape') closeInspirationChat()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [chatInspiration, closeInspirationChat])
 
   // 对账（issue #134）：立即扫描该仓库，把「assignee 是 bot 但任务表无
   // 活跃记录」的 open issues 补入队（复用仓库页对账接口，issue #17）。
@@ -782,6 +846,9 @@ export default function Overview() {
                                         disabled={!!addingIssueInspIds[ins.id]}>
                                   {addingIssueInspIds[ins.id] ? '⏳ 提交中…' : '📌 添加 Issue'}
                                 </button>
+                                <button type="button" className="inspiration-action-btn inspiration-chat-btn"
+                                        title="与 AI agent 探讨该灵感（复用设置页「AI API 供应商」配置的对话模型）"
+                                        onClick={() => openInspirationChat(ins)}>💬 对话</button>
                                 <button type="button" className="inspiration-action-btn"
                                         title="编辑该灵感"
                                         onClick={() => {
@@ -815,6 +882,68 @@ export default function Overview() {
           </div>
         )}
       </section>
+
+      {/* issue #166：灵感 AI 对话面板——与 AI agent 探讨当前灵感。
+          复用 .modal 体系（遮罩点击 / × / Esc 关闭，与 AddIssueModal
+          一致）：顶部灵感摘要，中部消息列表（用户右 / AI 左），底部
+          输入框 + 发送按钮（Enter 发送 / Shift+Enter 换行）；发送中
+          按钮禁用，AI 回复实时 append */}
+      {chatInspiration && (
+        <div className="modal-overlay" onClick={closeInspirationChat}>
+          <div className="modal chat-modal" role="dialog" aria-modal="true"
+               onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <strong>💬 与 AI 探讨灵感</strong>
+              <button type="button" className="btn modal-close"
+                      onClick={closeInspirationChat} title="关闭" aria-label="关闭">×</button>
+            </div>
+            <div className="chat-subject" title={chatInspiration.content}>
+              <span className="muted">仓库：{chatInspiration.repo_name || '—'}</span>
+              <p className="chat-subject-content">{chatInspiration.content}</p>
+            </div>
+            <div className="chat-body">
+              {chatLoading ? (
+                <div className="chat-empty muted">加载对话历史…</div>
+              ) : chatMessages.length === 0 ? (
+                <div className="chat-empty muted">还没有对话，向 AI 说说你对这条灵感的想法吧</div>
+              ) : (
+                chatMessages.map((m) => (
+                  <div key={m.id}
+                       className={'chat-msg ' + (m.role === 'user' ? 'chat-msg-user' : 'chat-msg-ai')}>
+                    <div className="chat-msg-bubble">{m.content}</div>
+                    <div className="chat-msg-meta">
+                      {m.role === 'user' ? '我' : 'AI'} · {fmtAgo(m.created_at) || '—'}
+                    </div>
+                  </div>
+                ))
+              )}
+              {chatSending && <div className="chat-empty muted">🤖 AI 思考中…</div>}
+              {chatError && (
+                <div className="alert alert-error chat-error"
+                     onClick={() => setChatError('')}>{chatError}</div>
+              )}
+            </div>
+            <form className="chat-input-row"
+                  onSubmit={(e) => { e.preventDefault(); sendInspirationChat() }}>
+              <textarea className="input chat-input" rows={2}
+                        placeholder="向 AI 提出你的想法 / 疑问…"
+                        value={chatDraft}
+                        onChange={(e) => setChatDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey && !chatSending) {
+                            e.preventDefault()
+                            sendInspirationChat()
+                          }
+                        }}
+                        disabled={chatSending} />
+              <button type="submit" className="btn btn-small chat-send-btn"
+                      disabled={chatSending || !chatDraft.trim()}>
+                {chatSending ? '发送中…' : '发送'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* issue #114：独立任务板块已删除——正在运行任务的信息（状态徽章
           / 执行引擎 / 实时输出）整合进上方开放 Issue 板块 running 组的

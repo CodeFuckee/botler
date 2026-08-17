@@ -2269,6 +2269,107 @@ code {
   cursor: not-allowed;
 }
 
+/* ---- issue #166：灵感 AI 对话面板——与 AI agent 探讨灵感 ----
+   复用 .modal 体系：灵感摘要 + 消息气泡列表（用户右 / AI 左）+
+   底部输入区；发送中禁用，AI 回复实时 append */
+.chat-modal {
+  width: 640px;
+  max-width: 94vw;
+  display: flex;
+  flex-direction: column;
+}
+.chat-subject {
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  background: var(--bg-soft);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-subject-content {
+  margin: var(--space-1) 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 72px;
+  overflow-y: auto;
+}
+.chat-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: var(--space-2);
+  min-height: 120px;
+}
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+}
+.chat-msg-user { align-items: flex-end; }
+.chat-msg-ai { align-items: flex-start; }
+.chat-msg-bubble {
+  max-width: 85%;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* apple-design 反馈：气泡出现微上移淡入 */
+  animation: chat-in var(--dur-fast) var(--ease-out);
+}
+.chat-msg-user .chat-msg-bubble {
+  background: var(--primary);
+  color: #fff;
+  border-bottom-right-radius: 2px;
+}
+.chat-msg-ai .chat-msg-bubble {
+  background: var(--bg-soft);
+  color: var(--text);
+  border-bottom-left-radius: 2px;
+}
+.chat-msg-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  padding: 0 2px;
+}
+.chat-empty {
+  text-align: center;
+  padding: var(--space-4) var(--space-2);
+}
+.chat-input-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+.chat-input {
+  flex: 1;
+  resize: vertical;
+}
+.chat-send-btn {
+  white-space: nowrap;
+}
+.chat-error {
+  margin: 0;
+}
+@keyframes chat-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+/* 对话按钮主色描边（与「添加 Issue」区分度一致，issue #166） */
+.inspiration-chat-btn {
+  color: var(--primary);
+  font-weight: 600;
+}
+
 /* ---- SSO 配置指南折叠区（issue #27 第六轮） ---- */
 /* 使用者看不到仓库本地文档，设置页直接展示 docs/Synology-SSO-配置指南.md
    的渲染结果；guide-content 内是轻量 Markdown 渲染器（components/Markdown.jsx）

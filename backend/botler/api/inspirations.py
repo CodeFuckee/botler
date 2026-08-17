@@ -22,11 +22,19 @@ GitLab issue——灵感内容作为 issue 标题与描述、默认标签 featur
   解析失败则不指定分配人）；走 owner token（复用 issues 模块的
   _issue_edit_call，绝不回退 bot token），创建成功后清空概览缓存并
   删除该灵感（issue #162：成功推送后从灵感列表移除，失败保留可重试）。
+- GET    /api/inspirations/{id}/messages（issue #166）：返回该灵感与
+  AI agent 的对话历史（按时间升序）。
+- POST   /api/inspirations/{id}/messages（issue #166）：向 AI agent
+  发送一条消息并返回回复——用户消息 + AI 回复成对保存到本地数据库；
+  对话模型复用设置页「AI API 供应商」（ai_providers）第一个启用且
+  API Key 非空的项；AI 调用失败时回滚已保存的用户消息并返回 502
+  （对话历史保持成对完整，前端保留输入可重试）。
 
 校验：repo_id 必须指向存在且未软删除的仓库（400）；content 去除首尾
 空白后非空（400）、长度不超过 5000 字（400，随手笔记的合理上限）；
 add-issue 要求灵感存在（404）、所属仓库存在且未软删除（400）、仓库
-已启用（400）。
+已启用（400）；对话消息要求灵感存在（404）、消息内容非空且不超过
+2000 字（400）、已配置可用的 AI 对话供应商（400）。
 """
 
 from __future__ import annotations
@@ -50,6 +58,13 @@ router = APIRouter(prefix="/inspirations", tags=["inspirations"])
 # 灵感内容长度上限（去除首尾空白后）：随手笔记场景的合理上限
 MAX_CONTENT_LEN = 5000
 
+# 灵感 AI 对话（issue #166）参数：单条消息长度上限（去除首尾空白后）、
+# 传给模型的上下文最大消息条数（历史过长时截取最近 N 条，防止撑爆
+# 模型上下文窗口）、对话请求超时（秒，文本接口通常 30s 内返回）
+MAX_CHAT_CONTENT_LEN = 2000
+CHAT_CONTEXT_MESSAGES = 20
+CHAT_TIMEOUT = 60.0
+
 
 class InspirationCreate(BaseModel):
     repo_id: int = Field(description="仓库本地 id（repos.id）")
@@ -58,6 +73,10 @@ class InspirationCreate(BaseModel):
 
 class InspirationUpdate(BaseModel):
     content: str = Field(description="灵感内容")
+
+
+class InspirationChatMessage(BaseModel):
+    content: str = Field(description="向 AI agent 发送的消息内容")
 
 
 def _validate_content(content: str) -> str:
@@ -279,3 +298,120 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
                        inspiration_id, str(e)[:200])
     # 标签色省略（创建刚完成，前端随即刷新列表从 overview 获取完整数据）
     return _trim_issue(issue, {})
+
+
+# ---- issue #166：灵感与 AI agent 对话 ----
+# 概览页灵感板块「与 AI 对话」：用户围绕某条灵感与 AI agent 探讨。
+# 对话消息成对保存到本地数据库（inspiration_messages 表），模型复用
+# 设置页「AI API 供应商」（ai_providers，issue #46）配置的文本对话
+# 供应商——取第一个 enabled 且 API Key 非空的项作为灵感对话模型，
+# 用户可通过调整列表顺序 / 启用开关选择。
+
+def _message_to_dict(row) -> dict:
+    """灵感对话消息行 → API 响应对象。"""
+    return {
+        "id": row["id"],
+        "role": row["role"],
+        "content": row["content"],
+        "created_at": row["created_at"],
+    }
+
+
+def _require_inspiration(c, inspiration_id: int):
+    """校验灵感存在，返回灵感行；否则抛 404。"""
+    insp = c.db.get_inspiration(inspiration_id)
+    if insp is None:
+        raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
+    return insp
+
+
+@router.get("/{inspiration_id}/messages")
+def inspiration_messages(request: Request, inspiration_id: int):
+    """返回灵感与 AI agent 的对话历史（issue #166），按时间升序。
+
+    对话面板打开时调用：返回该灵感全部历史消息（用户 + AI 回复），
+    前端按时间序渲染；无对话时返回空列表（前端展示引导文案）。
+    """
+    c = request.app.state.ctx
+    _require_inspiration(c, inspiration_id)
+    rows = c.db.list_inspiration_messages(inspiration_id)
+    return {"messages": [_message_to_dict(r) for r in rows]}
+
+
+@router.post("/{inspiration_id}/messages", status_code=201)
+def send_inspiration_message(request: Request, inspiration_id: int,
+                             body: InspirationChatMessage):
+    """向 AI agent 发送一条消息并返回回复（issue #166）。
+
+    灵感条目「对话」面板发送按钮调用：后端先保存用户消息，再携带
+    「系统提示（含灵感内容与仓库名）+ 最近 N 条历史 + 新消息」调用
+    对话模型，成功后保存 AI 回复并一并返回（前端 append 到消息列表）。
+
+    失败处理：灵感不存在 → 404；消息内容为空 / 超长 → 400；未配置
+    可用的 AI 对话供应商（ai_providers 为空或全部未启用/无 Key）→
+    400 引导设置；模型调用失败 / 网络错误 → 502，且回滚删除刚保存的
+    用户消息——对话历史保持「user 必有对应 assistant」的成对结构，
+    前端输入框保留内容供用户重试。
+    """
+    c = request.app.state.ctx
+    insp = _require_inspiration(c, inspiration_id)
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(400, "消息内容不能为空")
+    if len(content) > MAX_CHAT_CONTENT_LEN:
+        raise HTTPException(400, f"消息内容不能超过 {MAX_CHAT_CONTENT_LEN} 字")
+    # 对话模型：复用设置页「AI API 供应商」第一个启用且 Key 非空的项
+    from ..chat_models import ChatModelClient, ChatModelError, resolve_chat_provider
+    settings = c.config.get()
+    provider_cfg = resolve_chat_provider(settings)
+    if provider_cfg is None:
+        raise HTTPException(
+            400, "未配置 AI 对话模型：请先在设置页「AI API 供应商」添加"
+                 "并启用一个供应商（需填写 API Key）")
+    # 系统提示：角色设定 + 当前探讨的灵感内容与所属仓库（AI 回复围绕
+    # 该灵感展开）；历史取最近 CHAT_CONTEXT_MESSAGES 条控制上下文长度
+    repo = dict(c.db.get_repo(insp["repo_id"]) or {})
+    repo_name = (repo.get("name") or "").strip() or "未知仓库"
+    system_prompt = (
+        "你是 Botler 平台的 AI 灵感顾问。用户会分享关于某个仓库的新功能"
+        "灵感，请作为产品与技术顾问与用户一起探讨：帮助完善想法、补充"
+        "边界场景与细节、评估可行性并指出潜在风险与成本、给出分步落地"
+        "的建议。用中文回答，简洁有条理；灵感内容不明确时先向用户提问"
+        "澄清。\n当前探讨的灵感（仓库：%s）：\n%s" % (repo_name, insp["content"]))
+    history = c.db.list_inspiration_messages(
+        inspiration_id, limit=CHAT_CONTEXT_MESSAGES)
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += [{"role": r["role"], "content": r["content"]} for r in history]
+    messages.append({"role": "user", "content": content})
+    # 先保存用户消息；AI 调用失败时回滚删除（delete_inspiration_message），
+    # 保证对话历史成对完整
+    user_msg_id = c.db.add_inspiration_message(inspiration_id, "user", content)
+    try:
+        client = ChatModelClient(
+            name=str(provider_cfg.get("name") or "AI 供应商"),
+            provider=str(provider_cfg.get("provider") or "custom").strip(),
+            base_url=str(provider_cfg.get("base_url") or "").strip(),
+            api_key=str(provider_cfg.get("api_key") or "").strip(),
+            model=str(provider_cfg.get("model") or "").strip(),
+            timeout=CHAT_TIMEOUT,
+            verify_ssl=getattr(settings, "verify_ssl", True))
+        reply = client.chat(messages)
+    except ChatModelError as e:
+        c.db.delete_inspiration_message(user_msg_id)
+        raise HTTPException(502, f"AI 回复失败: {e}") from e
+    except httpx.HTTPError as e:
+        c.db.delete_inspiration_message(user_msg_id)
+        raise HTTPException(502, f"AI 回复网络错误: {str(e)[:200]}") from e
+    reply = (reply or "").strip()
+    if not reply:
+        c.db.delete_inspiration_message(user_msg_id)
+        raise HTTPException(502, "AI 回复为空，请稍后重试")
+    assistant_msg_id = c.db.add_inspiration_message(
+        inspiration_id, "assistant", reply)
+    user_row = c.db.get_inspiration_message(user_msg_id)
+    assistant_row = c.db.get_inspiration_message(assistant_msg_id)
+    assert user_row is not None and assistant_row is not None  # 刚写入必然可查
+    return {"messages": [
+        _message_to_dict(user_row),
+        _message_to_dict(assistant_row),
+    ]}

@@ -59,6 +59,7 @@ backend/
     image_models.py  生图模型调用接口封装（Gemini Nano Banana Pro / GPT Image 2，统一 ImageModelClient，issue #135/#137，含配置可用性测试端点）
     vision_models.py 识图模型调用接口封装（Gemini 视觉 / OpenAI 视觉 / 自定义 OpenAI 兼容视觉，统一 VisionModelClient，issue #152，含测试端点：上传图片调用模型描述图片；issue #163 起支持图片先哈希上传 MinIO、识图请求传 http URL；issue #164 起 OpenAI 兼容识图模型禁止 base64 内联，未启用 MinIO 时明确报错引导）
     minio_client.py  MinIO 对象存储客户端（issue #163：识图图片 SHA-256 哈希命名上传，返回 http URL，配合 vision_models 使用；issue #164：默认桶 public、不存在自动创建并自动设为公开只读）
+    chat_models.py   灵感 AI 对话模型调用封装（issue #166：复用设置页「AI API 供应商」配置，支持 OpenAI 兼容 chat/completions / Gemini generateContent / Anthropic messages 三种协议，统一 ChatModelClient）
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
     api/             REST API（repos / tasks / settings / auth）
   config.example.yaml
@@ -88,6 +89,13 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 使用浏览器原生 Web Speech API（`SpeechRecognition`）将语音实时转文字填入
 > 标题，无需后端接口；支持 Chrome / Edge / Safari，Firefox 等不支持时会给出
 > 中文提示，识别中再次点击按钮可停止。
+
+> 概览页「灵感」板块每条灵感提供「💬 对话」按钮（issue #166）：打开面板即可
+> 围绕该灵感与 AI agent 多轮探讨（完善想法、补充边界场景、评估可行性、给出
+> 分步落地建议），对话历史保存到本地数据库。对话模型复用设置页「AI API
+> 供应商」（ai_providers）配置的文本对话模型——取列表第一个启用且 API Key
+> 非空的项（支持 DeepSeek / OpenAI / Gemini / Anthropic 等，未配置时给出
+> 中文提示引导到设置页）；AI 回复失败时输入保留可重试。
 
 ## 部署（10.0.0.122，Ubuntu 24.04）
 
@@ -319,6 +327,8 @@ POST   /api/inspirations              记录一条灵感（repo_id + content 必
 PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）
 DELETE /api/inspirations/{id}         删除灵感（issue #131）
 POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143/#153/#162）：灵感内容同时作为标题与描述，默认标签 feature + ui，分配人 = 仓库用户（仓库设置页读取 remote url 得到的用户名，按项目成员解析为 GitLab 用户 id；未配置/解析失败则不指定分配人）；写操作必须配置 owner token，创建成功后清概览缓存并从灵感列表删除该灵感（issue #162，失败保留可重试）
+GET    /api/inspirations/{id}/messages   返回灵感与 AI agent 的对话历史（按时间升序；issue #166）
+POST   /api/inspirations/{id}/messages   向 AI agent 发送一条消息并返回回复（issue #166）：用户消息 + AI 回复成对保存到本地数据库，对话模型复用设置页「AI API 供应商」第一个启用且 API Key 非空的项（未配置返回 400 引导设置）；AI 调用失败返回 502 并回滚已保存的用户消息（对话历史保持成对完整，前端保留输入可重试）
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 
