@@ -107,9 +107,12 @@ cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp config.example.yaml config.yaml && cp .env.example .env   # 填入凭据
 cd ../frontend && npm install && npm run build               # 构建 Web UI
 deploy/install-dsh-sdk.sh                # 安装 dsh 引擎 SDK（可选依赖，issue #112）
+deploy/install-minio.sh                # 安装 MinIO Server 二进制（对象存储服务，issue #160）
 
 # 启动（三选一）
 pm2 start deploy/botler.config.cjs && pm2 save && pm2 startup
+#   pm2 配置含 botler + botler-minio 两个 app（MinIO 随 botler 一并托管，
+#   数据目录 $BOTLER_DATA_DIR/minio/data，控制台 http://10.0.0.122:9001）
 # 或
 sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --now botler
 # 或 Docker（见下方「Docker 部署」）
@@ -117,7 +120,10 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 
 > 💡 **CI/CD 自动部署**：推送 main 分支后，GitLab CI 自动执行 pm2 部署
 > （`deploy_to_code01`：安装依赖 → 停止旧服务 → pm2 启动 → 健康检查），
-> 无需手动操作。dsh 引擎 SDK 在部署 job 内自动安装（issue #112）。
+> 无需手动操作。dsh 引擎 SDK 与 MinIO Server 二进制均在部署 job 内自动
+> 安装（issue #112 / #160）；MinIO 凭据（`MINIO_ROOT_USER` /
+> `MINIO_ROOT_PASSWORD`）自动写入 `data/backend/.env`（缺失时用 CI 变量
+> 或默认值），pm2 与 docker compose 两种部署形态同源保持一致。
 > 部署前会自动停止旧 pm2 服务，凭据优先用服务器上 `backend/.env`（缺失时用
 > CI 变量生成）。
 
@@ -141,21 +147,26 @@ touch data/backend/botler.db                # SQLite 库（首次运行自动建
 
 # 2. 构建并启动
 docker compose up -d --build
-# 国内无法访问 Docker Hub 时，用环境变量覆盖基础镜像：
+# 国内无法访问 Docker Hub 时，用环境变量覆盖基础镜像 / MinIO 镜像：
 #   NODE_IMAGE=docker.m.daocloud.io/library/node:20-alpine \
 #   RUNTIME_IMAGE=docker.m.daocloud.io/library/node:20-bookworm-slim \
+#   MINIO_IMAGE=docker.m.daocloud.io/minio/minio:RELEASE.2025-04-22T22-12-26Z \
 #   docker compose up -d --build
 
 # 3. 验证
-docker compose ps                          # 状态 healthy
+docker compose ps                          # 状态 healthy（botler + minio）
 curl http://localhost:8000/api/health      # {"ok":true,...}
-./deploy/verify-docker.sh --full           # 12 项冒烟检查（临时数据目录，不碰真实数据）
+curl http://localhost:9000/minio/health/live   # MinIO 健康检查（issue #160）
+./deploy/verify-docker.sh --full           # 冒烟检查（临时数据目录，不碰真实数据，含 MinIO）
 ```
 
 数据持久化（全部卷挂载，容器重建不丢失）：`data/backend/config.yaml`（Web UI 设置页会写回）、
 `data/backend/.env`（只读）、`data/backend/botler.db`、`data/workspace/`、`data/logs/`、
 `data/claude-home/`（claude 会话文件 `~/.claude`，断点续跑依赖——容器重建后
 `--resume` 才能找到上次会话；pm2 部署下在宿主 HOME 天然持久，无需此挂载）。
+**MinIO 对象存储（issue #160）**：compose 启动的 `minio` 服务数据挂在
+`data/minio/data`（与 botler 数据同根目录，容器重建不丢失）；根凭据默认
+`minioadmin/minioadmin`，生产环境务必用环境变量覆盖（见下表）。
 容器时区固定为 **Asia/Shanghai**（compose `TZ` 环境变量 + 镜像内 tzdata）。
 CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/codes/botler/data`**
 （显式 export `BOTLER_DATA_DIR`，不随 gitlab-runner 构建目录漂移，构建目录可能被清理）。
@@ -168,6 +179,9 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `BOTLER_DATA_DIR` | `./data` | 数据目录前缀（换目录时 config.yaml / botler.db 需一并迁移） |
 | `NODE_IMAGE` / `RUNTIME_IMAGE` | 官方镜像 | 构建基础镜像覆盖（国内镜像源） |
 | `GIT_CREDENTIALS_FILE` | `/dev/null` | 容器内 git 凭据文件（挂载为 `/root/.git-credentials`，执行器 clone/push 仓库依赖；CI 部署自动用宿主凭据或 `GITLAB_BOT_TOKEN` 生成，手动部署可指向任意格式的 `.git-credentials` 文件） |
+| `MINIO_IMAGE` | `minio/minio:RELEASE.2025-04-22T22-12-26Z` | MinIO 镜像（国内镜像源覆盖，如 `docker.m.daocloud.io/minio/minio`） |
+| `MINIO_API_PORT` / `MINIO_CONSOLE_PORT` | `9000` / `9001` | MinIO API / console 端口映射（pm2 形态固定 9000/9001） |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `minioadmin` / `minioadmin` | MinIO 根凭据（pm2 部署同款，CI 自动写入 `data/backend/.env`，生产环境务必覆盖） |
 
 自定义镜像：`docker build -t botler:latest .`（见 Dockerfile 头部注释）。
 停止：`docker compose down`（数据保留）；删除数据：`docker compose down -v`。

@@ -79,3 +79,50 @@ services:
       timeout: 5s
       start_period: 60s
       retries: 3
+
+  # ----------------------------------------------------------------
+  # MinIO 对象存储服务（issue #160）：后端部署附属服务，docker compose
+  # 一并启动（pm2 部署形态见 deploy/botler.config.cjs 的 botler-minio app
+  # 与 deploy/install-minio.sh）。
+  #
+  # 可调参数（环境变量，均有默认值）:
+  #   MINIO_IMAGE=minio/minio:RELEASE.2025-04-22T22-12-26Z
+  #                           镜像（国内无法访问 Docker Hub 时覆盖为
+  #                           镜像源，如 docker.m.daocloud.io/minio/minio）
+  #   MINIO_API_PORT=9000     宿主机 API 端口映射
+  #   MINIO_CONSOLE_PORT=9001 宿主机 console 端口映射
+  #   MINIO_ROOT_USER / MINIO_ROOT_PASSWORD
+  #                           根凭据（默认 minioadmin/minioadmin，生产
+  #                           环境务必覆盖；与 pm2 部署共用
+  #                           data/backend/.env 中的同名变量）
+  #
+  # 数据持久化：${BOTLER_DATA_DIR}/minio/data 挂载为容器 /data
+  # （与 botler 数据同根目录，备份/迁移一并处理，容器重建不丢失）。
+  # 健康检查：GET /minio/health/live（live 探针）。
+  # ================================================================
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
+    container_name: minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      # 根凭据：默认 minioadmin/minioadmin，生产环境务必用环境变量覆盖
+      # （与 pm2 部署共用 data/backend/.env 中的 MINIO_ROOT_USER /
+      # MINIO_ROOT_PASSWORD，保持一致）
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # 部署时区与 botler 保持一致（容器内无需 tzdata，环境变量即时生效）
+      TZ: Asia/Shanghai
+    volumes:
+      # 数据目录固定在数据目录前缀下（默认 ./data = 部署目录 data/，
+      # 如 /home/ckd/codes/botler/data/minio/data），容器重建不丢
+      - ${BOTLER_DATA_DIR:-./data}/minio/data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

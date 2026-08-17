@@ -10,6 +10,8 @@
 #   - 构造临时 config.yaml（假凭据）/ .env / botler.db
 #   - docker compose up 起容器 → 等 healthcheck → 校验 /api/health 与前端页面
 #   - 校验幂等（重复 up 无报错）→ down 清理
+#   - MinIO（issue #160）随 compose 一并启动：19000/19001 临时端口校验
+#     /minio/health/live 与 /data 数据目录
 # ================================================================
 set -euo pipefail
 
@@ -62,6 +64,7 @@ if [[ "${1:-}" == "--full" ]]; then
 
   # 用假凭据起容器
   BOTLER_DATA_DIR="$TMP" BOTLER_HTTP_PORT=18000 \
+  MINIO_API_PORT=19000 MINIO_CONSOLE_PORT=19001 \
   docker compose -p botler-verify up -d || die "docker compose up 失败"
   ok "容器已启动"
 
@@ -79,6 +82,25 @@ if [[ "${1:-}" == "--full" ]]; then
     die "健康检查超时"
   }
   ok "健康检查通过（/api/health 200）"
+
+  echo "----- 校验 MinIO 服务（issue #160）-----"
+  docker compose -p botler-verify ps | grep -q "minio" || die "minio 容器未运行"
+  ok "minio 容器已启动"
+  MINIO_HEALTHY=0
+  for i in $(seq 1 45); do
+    if curl -fsS --max-time 3 http://127.0.0.1:19000/minio/health/live >/dev/null 2>&1; then
+      MINIO_HEALTHY=1; break
+    fi
+    sleep 2
+  done
+  [ "$MINIO_HEALTHY" = 1 ] || {
+    echo "--- minio 容器日志（尾部）---"
+    docker compose -p botler-verify logs minio --tail 30
+    die "MinIO 健康检查超时"
+  }
+  ok "MinIO 健康检查通过（/minio/health/live 200，端口 19000）"
+  docker compose -p botler-verify exec -T minio     sh -c "ls /data >/dev/null 2>&1" || die "minio 数据目录 /data 不可用"
+  ok "minio 数据目录 /data 可读写"
 
   echo "----- 校验 API 与前端页面 -----"
   HEALTH=$(curl -fsS http://127.0.0.1:18000/api/health)
@@ -101,6 +123,7 @@ if [[ "${1:-}" == "--full" ]]; then
 
   echo "----- 幂等性：重复 up 无报错 -----"
   BOTLER_DATA_DIR="$TMP" BOTLER_HTTP_PORT=18000 \
+    MINIO_API_PORT=19000 MINIO_CONSOLE_PORT=19001 \
     docker compose -p botler-verify up -d >/dev/null 2>&1 || die "重复 up 失败"
   ok "重复 up 幂等"
 
@@ -111,7 +134,7 @@ if [[ "${1:-}" == "--full" ]]; then
 
   echo "----- 清理 -----"
   docker compose -p botler-verify down -v >/dev/null 2>&1
-  ok "冒烟容器已清理"
+  ok "冒烟容器已清理（含 minio）"
 fi
 
 echo ""

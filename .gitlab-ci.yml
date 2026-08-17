@@ -914,6 +914,20 @@ deploy_to_code01:
       dbg STEP2b "OK"
 
       # ================================================================
+      # 第 2c 步：安装 MinIO Server 二进制（issue #160，pm2 部署形态）
+      # minio 为后端部署附属对象存储服务（docker 形态用 compose 镜像，
+      # pm2 形态直接托管二进制）。deploy/install-minio.sh 一键安装
+      # （版本锁定 + 幂等 + fail fast），默认装到 $HOME/.local/bin
+      # （before_script 已 export 进 PATH）。装不上即部署失败。
+      # ================================================================
+      dbg STEP2c "安装 MinIO Server 二进制"
+      echo "=== 2c. 安装 MinIO Server（对象存储服务，issue #160）==="
+      bash deploy/install-minio.sh || { dbg STEP2c "FAIL: minio 安装失败"; echo "错误：MinIO Server 安装失败"; exit 1; }
+      export MINIO_BIN="$HOME/.local/bin/minio"
+      dbg STEP2c "OK"
+
+
+      # ================================================================
       # 第 3 步：数据目录固定 data/ + 迁移 + 凭据 + symlink 桥接
       # 数据目录固定为 /home/ckd/codes/botler/data（用户指定，不随
       # gitlab-runner 构建目录漂移——构建目录可能被清理，历史部署数据
@@ -968,6 +982,23 @@ deploy_to_code01:
         echo "✓ data/backend/.env 已存在（保留服务器配置）"
         dbg STEP3 "OK: 已存在"
       fi
+      # 3b+. minio 凭据（issue #160）：.env 缺失 MINIO_ROOT_USER /
+      # MINIO_ROOT_PASSWORD 时写入（CI 变量优先，否则默认值；与
+      # docker compose 注入的同名环境变量同源，pm2 配置读取此文件）。
+      # 幂等：已有键不覆盖（保留服务器配置）。无论 .env 是 CI 变量
+      # 生成还是服务器已有，都执行此补齐。
+      for MVAR in MINIO_ROOT_USER MINIO_ROOT_PASSWORD; do
+        if ! grep -q "^${MVAR}=" "$DATA_DIR/backend/.env" 2>/dev/null; then
+          if [ "$MVAR" = "MINIO_ROOT_USER" ]; then
+            echo "MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}" >> "$DATA_DIR/backend/.env"
+          else
+            echo "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}" >> "$DATA_DIR/backend/.env"
+          fi
+          echo "✓ 已写入 $MVAR 到 data/backend/.env"
+        fi
+      done
+      chmod 600 "$DATA_DIR/backend/.env"
+      dbg STEP3 "OK: minio 凭据就绪"
       if [ ! -f "$DATA_DIR/backend/config.yaml" ]; then
         echo "⚠️  data/backend/config.yaml 不存在，用示例配置兜底"
         cp backend/config.example.yaml "$DATA_DIR/backend/config.yaml"
@@ -1015,14 +1046,18 @@ deploy_to_code01:
         echo "✓ docker 不可用，无需停止"
         dbg STEP4 "OK: docker 不可用"
       fi
-      if command -v pm2 >/dev/null 2>&1 && pm2 describe ${APP_NAME} >/dev/null 2>&1; then
-        pm2 delete ${APP_NAME} >/dev/null 2>&1 && echo "✓ 已停止旧 pm2 botler" || echo "⚠️ pm2 delete 失败（继续）"
-        pm2 save >/dev/null 2>&1 || true
-        dbg STEP4 "OK: 旧 pm2 已停止"
-      else
-        echo "✓ 无运行中的 pm2 botler（或 pm2 未安装），无需停止"
-        dbg STEP4 "OK: 无需停 pm2"
-      fi
+      # minio（issue #160）与 botler 一起由 pm2 管理，旧实例一并
+      # 停止（防 9000 端口被旧进程占用导致新实例 EADDRINUSE）
+      PM2_APPS="${APP_NAME} botler-minio"
+      for APP in $PM2_APPS; do
+        if command -v pm2 >/dev/null 2>&1 && pm2 describe "$APP" >/dev/null 2>&1; then
+          pm2 delete "$APP" >/dev/null 2>&1 && echo "✓ 已停止旧 pm2 $APP" || echo "⚠️ pm2 delete $APP 失败（继续）"
+        else
+          echo "✓ 无运行中的 pm2 $APP（或 pm2 未安装），无需停止"
+        fi
+      done
+      pm2 save >/dev/null 2>&1 || true
+      dbg STEP4 "OK: 旧 pm2 已停止"
 
       # ================================================================
       # 第 5 步：确保 pm2 可用（未安装则全局安装）
@@ -1086,6 +1121,29 @@ deploy_to_code01:
         dbg STEP7 "FAIL: 健康检查 ${HEALTHCHECK_RETRIES:-30} 次全部失败或假绿"
         dbg STEP7 "pm2 状态: $(pm2 describe ${APP_NAME} 2>/dev/null | grep -E 'status|restarts' | tr '\n' ' ')"
         dbg STEP7 "8000 端口: $(ss -tlnp 2>/dev/null | grep ':8000' | tr '\n' ' ')"
+      fi
+      # 7b. MinIO 服务健康检查（issue #160）：后端健康通过后，再等
+      # minio 就绪（/minio/health/live，pm2 托管，端口 9000）。
+      # 失败同样视为部署失败（exit 1），不允许带病运行。
+      if [ "$HEALTHY" = true ]; then
+        dbg STEP7b "MinIO 健康检查 http://localhost:9000/minio/health/live"
+        MINIO_HEALTHY=false
+        for i in $(seq 1 ${HEALTHCHECK_RETRIES:-30}); do
+          if curl -sf "http://localhost:9000/minio/health/live" >/dev/null 2>&1; then
+            echo "✓ MinIO 健康检查通过 (${i}s)"
+            dbg STEP7b "OK: MinIO 健康检查通过 (${i}s)"
+            MINIO_HEALTHY=true
+            break
+          fi
+          echo "  MinIO 等待中... (${i}s)"
+          sleep 1
+        done
+        if [ "$MINIO_HEALTHY" = false ]; then
+          echo "❌ MinIO 健康检查 ${HEALTHCHECK_RETRIES:-30} 次全部失败"
+          dbg STEP7b "FAIL: MinIO 未就绪"
+          pm2 describe botler-minio 2>/dev/null | grep -E "status|restarts" | tr '\n' ' ' || true
+          HEALTHY=false
+        fi
       fi
 
       # ================================================================

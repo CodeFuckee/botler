@@ -3,6 +3,36 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+### Added
+
+- **后端部署时增加 MinIO 对象存储服务：docker compose 与 pm2 两种部署形态均可用（issue #160）**：
+  后端部署（pm2 为主、docker 为辅）时需一并提供一个 MinIO 对象存储服务，作为后续功能的
+  存储底座。本次两种部署形态全部打通：
+  - **Docker 部署**：`docker-compose.yml` 新增 `minio` service——镜像
+    `minio/minio:RELEASE.2025-04-22T22-12-26Z`（`MINIO_IMAGE` 可覆盖为国内镜像源）、
+    API 端口 9000 / console 端口 9001（`MINIO_API_PORT` / `MINIO_CONSOLE_PORT` 可覆盖）、
+    数据卷挂载 `${BOTLER_DATA_DIR}/minio/data:/data`（与 botler 数据同根目录，容器重建不丢）、
+    根凭据 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` 环境变量注入（默认 minioadmin，
+    生产环境务必覆盖）、`/minio/health/live` 健康检查、`restart: unless-stopped`；
+    `deploy/verify-docker.sh --full` 冒烟同步增加 minio 容器 / 健康检查 / 数据目录校验
+    （19000/19001 临时端口，不碰真实环境）；
+  - **pm2 部署**：新增 `deploy/install-minio.sh` 一键安装 minio server 二进制（版本
+    锁定 `RELEASE.2025-04-22T22-12-26Z`、默认装 `$HOME/.local/bin`、`MINIO_DOWNLOAD_URL`
+    可覆盖下载源、幂等跳过、临时文件 + mv 原子替换、安装后 `minio --version` 校验 fail
+    fast）；`deploy/botler.config.cjs` 新增 `botler-minio` app（`interpreter: none` 托管
+    原生二进制，数据目录 `$BOTLER_DATA_DIR/minio/data`，凭据从 `data/backend/.env`
+    读取、缺失回退默认值，日志 `logs/pm2-minio-*.log`）；CI `deploy_to_code01` 在依赖
+    安装后自动调用安装脚本、把 minio 凭据写入 `data/backend/.env`（幂等，CI 变量优先）、
+    停止旧部署时一并删除旧 `botler-minio`、健康检查阶段增加 `/minio/health/live` 探活
+    （失败即部署失败）；
+  - **凭据与文档**：`backend/.env.example` 声明 `MINIO_ROOT_USER` /
+    `MINIO_ROOT_PASSWORD` / `MINIO_API_PORT` / `MINIO_CONSOLE_PORT`；README 两种部署
+    方式均补充 minio 启动 / 验证 / 数据目录 / 可调参数说明。
+  - **测试**：新增 `test_deploy_minio.py` 27 用例（安装脚本存在性/版本锁定/镜像覆盖/
+    幂等/原子替换、pm2 配置 app/args/凭据/日志、compose service 定义、CI 部署 job
+    自动安装与健康检查、.env.example 与 README 同步），实现前全部可复现失败，实现后
+    全部通过；后端全量测试无 regression。
+
 ### Fixed
 
 - **灵感页面「添加 Issue」未自动设置 git 仓库用户为负责人：提交时存储值缺失则按 remote url 运行时读取兜底并写回仓库表（issue #159）**：
