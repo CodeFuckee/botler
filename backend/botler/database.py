@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   hermes_history TEXT,
   issue_labels TEXT DEFAULT '[]',
   issue_updated_at TEXT DEFAULT '',
+  issue_created_at TEXT DEFAULT '',
   engine TEXT DEFAULT '',
   dsh_transcript TEXT,
   created_at TEXT DEFAULT (datetime('now'))
@@ -138,10 +139,12 @@ CREATE INDEX IF NOT EXISTS idx_inspiration_messages_insp
 """
 
 
-def normalize_issue_updated_at(value: str | None) -> str:
-    """归一化 GitLab issue 更新时间（issue #76）：ISO8601（含时区）→
-    UTC 'YYYY-MM-DD HH:MM:SS'（与 tasks.created_at 同格式，字符串可直接
-    比较）。解析失败/空值返回空串（调度器用 created_at 兜底）。"""
+def _normalize_issue_time(value: str | None) -> str:
+    """归一化 GitLab issue 时间字段（ISO8601 含时区 → UTC 无后缀串）。
+
+    与 tasks.created_at（SQLite datetime('now') UTC）同格式，字符串可直接
+    比较。解析失败/空值返回空串。
+    """
     if not value:
         return ""
     try:
@@ -151,6 +154,20 @@ def normalize_issue_updated_at(value: str | None) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)  # 无时区按 UTC 语义（与 created_at 一致）
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def normalize_issue_updated_at(value: str | None) -> str:
+    """归一化 GitLab issue 更新时间（issue #76）：ISO8601（含时区）→
+    UTC 'YYYY-MM-DD HH:MM:SS'（与 tasks.created_at 同格式，字符串可直接
+    比较）。解析失败/空值返回空串（调度器用创建时间/任务提交时间兜底）。"""
+    return _normalize_issue_time(value)
+
+
+def normalize_issue_created_at(value: str | None) -> str:
+    """归一化 GitLab issue 创建时间（issue #234）：ISO8601（含时区）→
+    UTC 'YYYY-MM-DD HH:MM:SS'（与 tasks.created_at 同格式，字符串可直接
+    比较）。解析失败/空值返回空串（调度器用 issue 更新时间/任务提交时间兜底）。"""
+    return _normalize_issue_time(value)
 
 
 def _parse_db_ts(s: str) -> datetime | None:
@@ -311,6 +328,15 @@ class Database:
                 """CREATE INDEX IF NOT EXISTS idx_inspiration_messages_insp
                    ON inspiration_messages(inspiration_id, id)""")
             conn.execute("PRAGMA user_version = 11")
+        if ver < 12:
+            # issue #234：同权重按 issue 创建时间排序派发——入队时记录
+            # issue 创建时间（UTC 串），调度器同权重时按创建时间升序选
+            # 任务（创建早的 issue 先处理）；存量行缺失时按 issue 更新
+            # 时间、再按任务提交时间兜底。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "issue_created_at" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN issue_created_at TEXT DEFAULT ''")
+            conn.execute("PRAGMA user_version = 12")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -564,11 +590,14 @@ class Database:
     def create_task(self, repo_id: int, project_id: int, issue_iid: int,
                     issue_title: str, triggered_by: str = "webhook",
                     issue_labels: list[str] | None = None,
-                    issue_updated_at: str | None = None) -> int | None:
+                    issue_updated_at: str | None = None,
+                    issue_created_at: str | None = None) -> int | None:
         """创建任务。若已有活跃任务则返回 None（去重）。
 
         issue_labels / issue_updated_at（issue #76）：入队时记录 issue 标签
         与更新时间，调度器按配置的标签优先级选任务派发。
+        issue_created_at（issue #234）：入队时记录 issue 创建时间，同标签
+        权重时调度器按创建时间升序选任务（创建早的 issue 先处理）。
         """
         labels_json = json.dumps(issue_labels or [], ensure_ascii=False)
         with self._conn() as conn:
@@ -580,10 +609,10 @@ class Database:
                 return None
             cur = conn.execute(
                 """INSERT INTO tasks (repo_id, project_id, issue_iid, issue_title, status, triggered_by,
-                                      issue_labels, issue_updated_at)
-                   VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)""",
+                                      issue_labels, issue_updated_at, issue_created_at)
+                   VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)""",
                 (repo_id, project_id, issue_iid, issue_title, triggered_by,
-                 labels_json, issue_updated_at or ""))
+                 labels_json, issue_updated_at or "", issue_created_at or ""))
             return cur.lastrowid
 
     def get_task(self, task_id: int) -> sqlite3.Row | None:

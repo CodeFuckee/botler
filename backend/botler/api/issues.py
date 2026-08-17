@@ -53,7 +53,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..database import normalize_issue_updated_at
+from ..database import normalize_issue_created_at, normalize_issue_updated_at
 from ..gitlab_client import GitLabClient, GitLabError
 from .pipelines import _commit_time_utc, _repo_client
 from .tasks import _task_to_dict  # issue #167：任务执行详情右边栏复用任务序列化
@@ -405,7 +405,8 @@ def retry_issue(request: Request, project_id: int, iid: int):
         issue.get("title") or f"issue #{iid}",
         triggered_by="manual",
         issue_labels=issue.get("labels") or [],
-        issue_updated_at=normalize_issue_updated_at(issue.get("updated_at")))
+        issue_updated_at=normalize_issue_updated_at(issue.get("updated_at")),
+        issue_created_at=normalize_issue_created_at(issue.get("created_at")))
     if task_id is None:
         # 竞态：创建期间出现活跃任务（极端并发），按冲突处理
         raise HTTPException(409, "该 issue 已有任务在执行中，无法重试")

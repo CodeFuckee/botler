@@ -27,7 +27,8 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 ```
 
 调度器派发顺序：仓库优先级（数字小先）→ 同仓库队列内按 issue 标签优先级
-（默认 `bug` > `test` > `feature`，设置页可自定义），同优先级按 issue 更新时间升序。
+（默认 `bug` > `test` > `feature`，设置页可自定义），同优先级按 issue 创建时间升序
+（创建时间越早的 issue 越先处理）。
 
 > 💡 **断点续跑**（issue #8）：CI/CD 频繁重新部署时，执行中的任务被进程重启打断后
 > 不会从头重跑——executor 持久化 claude 会话 id，重启恢复时用 `claude --resume`
@@ -242,7 +243,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `gitlab.webhook_secret` | — | webhook 校验 secret |
 | `worker.max_concurrent_repos` | 3 | 跨仓库并行上限 |
 | `repos[].priority` | 100 | 仓库调度优先级（1~999 整数，数字越小越优先；多个仓库同时有排队任务时按优先级派发，同优先级按任务提交时间排序） |
-| `worker.issue_priority` | `["bug","test","feature"]` | issue 标签处理优先级（同仓库队列内按此顺序选任务派发，越靠前越先处理；未列出的标签排在最后，同优先级按 issue 更新时间升序；设置页「任务调度」卡片可修改） |
+| `worker.issue_priority` | `["bug","test","feature"]` | issue 标签处理优先级（同仓库队列内按此顺序选任务派发，越靠前越先处理；未列出的标签排在最后，同优先级按 issue 创建时间升序（创建早的 issue 先处理）；设置页「任务调度」卡片可修改） |
 | `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟） |
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |

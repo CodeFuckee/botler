@@ -13,7 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import ConfigManager
-from .database import Database, STATUS_FAILED, STATUS_SUCCEEDED, normalize_issue_updated_at
+from .database import Database, STATUS_FAILED, STATUS_SUCCEEDED, normalize_issue_created_at, normalize_issue_updated_at
 from .gitlab_client import GitLabClient, GitLabError
 from .git_remote import build_repo_client_with_username
 from .labels import CLAIM_SKIP_LABELS
@@ -202,14 +202,16 @@ class Reconciler:
             if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
                 active_count += 1  # 已有活跃任务（含排队中）
                 continue
-            # issue #76：补入队时记录 issue 标签与更新时间，调度器按
-            # 配置的标签优先级排序派发
+            # issue #76 + #234：补入队时记录 issue 标签、更新时间与创建
+            # 时间，调度器按配置的标签优先级排序派发（同权重按创建时间
+            # 升序，创建早的 issue 先处理）
             task_id = self.db.create_task(
                 repo["id"], repo["gitlab_project_id"], issue["iid"],
                 issue.get("title") or f"issue #{issue['iid']}",
                 triggered_by="reconcile",
                 issue_labels=issue.get("labels") or [],
-                issue_updated_at=normalize_issue_updated_at(issue.get("updated_at")))
+                issue_updated_at=normalize_issue_updated_at(issue.get("updated_at")),
+                issue_created_at=normalize_issue_created_at(issue.get("created_at")))
             if task_id is not None:
                 self.scheduler.enqueue(task_id)
                 enqueued += 1

@@ -218,6 +218,26 @@
 
 ### Fixed
 
+- **调度器同权重 issue 未按创建时间排序——同优先级时改为按 issue 创建时间升序派发，创建时间越早的 issue 越先处理（issue #234）**：
+  需求约定「issue 标记优先级没有区别的情况下，按照创建时间的排序来处理 issue，创建
+  时间越早的 issue，越早处理」。此前（issue #76 实现）队内同标签权重时按 **issue
+  更新时间**升序选任务派发——issue 被编辑/评论后 updated_at 会推进，更新晚的 issue
+  反而排到更新早的 issue 前面，与「先创建先处理」的约定不符。修复：
+  - 数据库：`tasks` 表新增 `issue_created_at` 列（迁移 v12，旧库自动补列），入队时
+    记录 GitLab issue 创建时间（`normalize_issue_created_at` 归一化为 UTC 无后缀串，
+    与 `normalize_issue_updated_at` 共用同一解析实现）；
+  - 调度器：`_task_sort_key` 同权重排序键由「issue 更新时间」改为「issue 创建时间」，
+    创建时间缺失的历史任务按 issue 更新时间、再按任务提交时间 `created_at` 兜底；
+  - 入队链路：webhook / 对账补入队 / 概览页手动重试新建任务三处均记录
+    `issue_created_at`；
+  - 文档：README 调度顺序说明同步改为「同优先级按 issue 创建时间升序」；
+  - **测试**：`test_scheduler_issue_priority.py` 新增/改写 3 用例（同权重按创建时间
+    升序、创建时间优先于更新时间——创建早但更新晚的 issue 先派发、创建时间缺失时
+    按更新时间兜底）；`test_database_migrate.py` 新增 `TestMigrateIssueCreatedAt` 5
+    用例（旧库补列 / 新库建列 / create_task 落库 / 缺省空串 / 归一化函数）；
+    `test_api_issues.py` 手动重试用例补充创建时间断言；实现前先红后绿、实现后后端
+    全量测试无 regression。
+
 - **从灵感一键添加 Issue：灵感内容超过 255 字符时创建失败——标题截断到 GitLab 上限（255 字符）并加省略号标记、描述保留完整内容（issue #186）**：
   用户反馈「从灵感添加到 issue 的时候，限制了 255 个字符，但是我在 gitlab 的描述里
   却可以输入超过 255 个字符」。根因：灵感「添加 Issue」把灵感内容**同时**作为 issue

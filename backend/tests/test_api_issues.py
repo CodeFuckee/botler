@@ -1055,6 +1055,7 @@ class TestRetryIssue:
         repo_id = self._mk_repo(db)
         stub.issue_by_key = {(42, 64): make_issue(
             64, "重试我", updated_at="2026-08-14T18:30:00.000+08:00",
+            created_at="2026-08-14T08:00:00.000+08:00",
             labels=["feature", "bot-failed"])}
 
         resp = tc.post("/api/issues/42/64/retry")
@@ -1069,6 +1070,7 @@ class TestRetryIssue:
         assert row["issue_title"] == "重试我"
         assert row["triggered_by"] == "manual"
         assert row["issue_updated_at"] == "2026-08-14 10:30:00",             "issue 更新时间应归一化为 UTC 无后缀（+08:00 → UTC）"
+        assert row["issue_created_at"] == "2026-08-14 00:00:00",             "issue 创建时间应归一化为 UTC 无后缀（+08:00 → UTC）"
         assert set(json.loads(row["issue_labels"])) == {"feature", "bot-failed"}
         assert tc.app.state.ctx.scheduler.enqueued == [body["task_id"]],             "新建任务应重新入队"
         assert db.count_tasks(repo_id=repo_id) == 1

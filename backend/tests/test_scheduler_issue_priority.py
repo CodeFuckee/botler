@@ -2,9 +2,10 @@
 
 需求：同仓库队列内按「issue 标签权重」排序派发，默认 bug 最优先；
 配置项 worker.issue_priority 可自定义标签顺序（设置页可修改）。
-排序键：(标签权重, issue 更新时间, task_id)，权重 = 任务 issue_labels
+排序键：(标签权重, issue 创建时间, task_id)，权重 = 任务 issue_labels
 在配置列表中首个命中的索引，未命中任何配置标签（或无标签）排最后；
-同权重按 issue 更新时间升序（缺失时按任务创建时间兜底）。
+同权重按 issue 创建时间升序（issue #234，创建时间缺失时按 issue
+更新时间、再按任务创建时间兜底）。
 
 此前同仓库队列纯 FIFO（入队顺序），本测试先行编写，实现前应全部失败。
 """
@@ -86,13 +87,15 @@ def _mk_repo(db, project_id: int, priority: int | None = None) -> int:
 
 def _mk_task(db, repo_id: int, project_id: int, issue_iid: int,
              issue_labels: list[str] | None = None,
+             issue_created_at: str | None = None,
              issue_updated_at: str | None = None,
              created_at: str | None = None) -> int:
-    """创建排队任务（带标签/issue 更新时间），可按需改写 created_at。"""
+    """创建排队任务（带标签/issue 创建时间），可按需改写 created_at。"""
     task_id = db.create_task(
         repo_id, project_id, issue_iid, f"任务 {project_id}#{issue_iid}",
         triggered_by="webhook",
         issue_labels=issue_labels or [],
+        issue_created_at=issue_created_at or "",
         issue_updated_at=issue_updated_at or "")
     if created_at is not None:
         conn = sqlite3.connect(db.path)
@@ -216,8 +219,53 @@ class TestDispatchIssueLabelPriority:
         assert done2.wait(timeout=2)
         assert executor.run_ids == [t_feature, t_none], "无标签任务应排最后"
 
-    def test_same_weight_ordered_by_issue_updated_at(self, config, db, executor):
-        """同权重（都是 bug）：按 issue 更新时间升序，更新早的先派发。"""
+    def test_same_weight_ordered_by_issue_created_at(self, config, db, executor):
+        """同权重（都是 bug）：按 issue 创建时间升序，创建早的先派发（issue #234）。"""
+        repo = _mk_repo(db, project_id=11)
+        t_late = _mk_task(db, repo, project_id=11, issue_iid=1,
+                          issue_labels=["bug"],
+                          issue_created_at="2026-08-14 12:00:00")
+        t_early = _mk_task(db, repo, project_id=11, issue_iid=2,
+                           issue_labels=["bug"],
+                           issue_created_at="2026-08-14 08:00:00")
+
+        sched = _scheduler(config, db, executor)
+        sched.enqueue(t_late)   # 创建晚的 issue 先入队
+        sched.enqueue(t_early)
+
+        started, done = executor.expect()
+        sched._dispatch()
+        assert done.wait(timeout=2)
+        assert executor.run_ids == [t_early], "同权重应按 issue 创建时间升序派发"
+
+    def test_issue_created_at_precedes_updated_at(self, config, db, executor):
+        """创建时间优先于更新时间：创建早但更新晚的 issue 先派发（issue #234）。
+
+        回归保护：修复前按 issue 更新时间排序，创建早但更新晚的 issue 会被
+        排在后面；修复后一律按创建时间排序。
+        """
+        repo = _mk_repo(db, project_id=11)
+        t_created_late = _mk_task(db, repo, project_id=11, issue_iid=1,
+                                  issue_labels=["bug"],
+                                  issue_created_at="2026-08-14 10:00:00",
+                                  issue_updated_at="2026-08-14 08:00:00")
+        t_created_early = _mk_task(db, repo, project_id=11, issue_iid=2,
+                                   issue_labels=["bug"],
+                                   issue_created_at="2026-08-14 08:00:00",
+                                   issue_updated_at="2026-08-14 12:00:00")
+
+        sched = _scheduler(config, db, executor)
+        sched.enqueue(t_created_late)
+        sched.enqueue(t_created_early)
+
+        started, done = executor.expect()
+        sched._dispatch()
+        assert done.wait(timeout=2)
+        assert executor.run_ids == [t_created_early], \
+            "创建更早的 issue 应先派发（即使其更新时间更晚）"
+
+    def test_missing_issue_created_at_falls_back_to_updated_at(self, config, db, executor):
+        """issue_created_at 缺失（修复前历史数据）：按 issue 更新时间兜底。"""
         repo = _mk_repo(db, project_id=11)
         t_new = _mk_task(db, repo, project_id=11, issue_iid=1,
                          issue_labels=["bug"],
@@ -227,13 +275,14 @@ class TestDispatchIssueLabelPriority:
                          issue_updated_at="2026-08-14 08:00:00")
 
         sched = _scheduler(config, db, executor)
-        sched.enqueue(t_new)  # 更新的 issue 先入队
+        sched.enqueue(t_new)
         sched.enqueue(t_old)
 
         started, done = executor.expect()
         sched._dispatch()
         assert done.wait(timeout=2)
-        assert executor.run_ids == [t_old], "同权重应按 issue 更新时间升序派发"
+        assert executor.run_ids == [t_old], \
+            "创建时间缺失时按 issue 更新时间升序兜底"
 
     def test_missing_updated_at_falls_back_to_created_at(self, config, db, executor):
         """issue_updated_at 缺失（历史数据）：按任务创建时间兜底。"""

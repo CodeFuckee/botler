@@ -89,6 +89,54 @@ class TestMigrateCommitSha:
         assert db.get_task(task_id)["commit_sha"] == "deadbeef00"
 
 
+class TestMigrateIssueCreatedAt:
+    """tasks 表 issue_created_at 列迁移（issue #234：同权重按 issue 创建时间排序派发）。"""
+
+    def test_old_db_gets_issue_created_at_column(self, tmp_path):
+        """旧库初始化后 tasks 表应补出 issue_created_at 列。"""
+        path = tmp_path / "old.db"
+        _build_old_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "issue_created_at" in cols, "旧库应补出 issue_created_at 列"
+
+    def test_new_db_has_issue_created_at_column(self, tmp_path):
+        """新库建表语句应直接含 issue_created_at 列（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "issue_created_at" in cols
+
+    def test_create_task_writes_issue_created_at(self, tmp_path):
+        """create_task 写入 issue_created_at（入队时记录 issue 创建时间）。"""
+        db = Database(str(tmp_path / "c.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        task_id = db.create_task(
+            repo_id, 42, 1, "任务",
+            issue_labels=["bug"],
+            issue_created_at="2026-08-14 08:00:00",
+            issue_updated_at="2026-08-14 09:00:00")
+        task = db.get_task(task_id)
+        assert task["issue_created_at"] == "2026-08-14 08:00:00"
+        assert task["issue_updated_at"] == "2026-08-14 09:00:00"
+
+    def test_create_task_defaults_issue_created_at_empty(self, tmp_path):
+        """create_task 未传 issue_created_at 时默认为空串。"""
+        db = Database(str(tmp_path / "d.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        task_id = db.create_task(repo_id, 42, 1, "任务")
+        assert db.get_task(task_id)["issue_created_at"] == ""
+
+    def test_normalize_issue_created_at(self):
+        """normalize_issue_created_at：ISO8601（含时区）→ UTC 无后缀串。"""
+        from botler.database import normalize_issue_created_at
+        assert normalize_issue_created_at("2026-08-14T08:00:00.000+08:00") == "2026-08-14 00:00:00"
+        assert normalize_issue_created_at("2026-08-14T08:00:00Z") == "2026-08-14 08:00:00"
+        assert normalize_issue_created_at("2026-08-14 08:00:00") == "2026-08-14 08:00:00"
+        assert normalize_issue_created_at(None) == ""
+
+
 class TestMigrateRepoPriority:
     """repos 表 priority 列迁移（issue #51）。"""
 
@@ -468,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 11, f"user_version 应推进到 11（v11 迁移链），实际 {ver}"
+        assert ver == 12, f"user_version 应推进到 12（v12 迁移链：issue_created_at），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -558,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 11, f"user_version 应推进到 11（v11 迁移链），实际 {ver}"
+        assert ver == 12, f"user_version 应推进到 12（v12 迁移链：issue_created_at），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
