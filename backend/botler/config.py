@@ -245,7 +245,8 @@ DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以�
 链接: {issue_url}
 
 工作要求：
-1. 在本地工作区（已检出 main 最新代码）分析问题，定位根因
+1. 本地工作区已由平台自动切到默认主分支并 git pull 拉取最新代码，
+   直接基于最新代码分析问题、定位根因（无需自行切换分支或 git pull）
 2. 编写修复代码并自测通过（运行相关测试/构建验证）
 3. 自测通过后，直接推送到 main 分支：
    git add -A && git commit -m "fix: 解决（issue #{issue_iid}）" && git push origin main

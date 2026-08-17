@@ -1,7 +1,7 @@
 """Claude Code 执行器。
 
 流程（设计方案 §5.5）：
-1. 准备干净工作区（fetch / checkout main / reset --hard / clean -fd）
+1. 准备干净工作区（fetch / 切回默认主分支 / reset --hard / clean -fd / git pull --rebase）
 2. 渲染提示词（全局/仓库模版 + 变量）
 3. 注入环境变量（GITLAB_TOKEN 等只走子进程 env，不进提示词 transcript）
 4. subprocess 跑 `claude -p --output-format json`，带超时
@@ -633,28 +633,111 @@ class ClaudeExecutor:
                 raise ExecutorError(
                     f"克隆仓库 {repo['name']} 失败: {(result.stderr or result.stdout).strip()[-500:]}")
 
-        # 每次执行前重置到远端 main，从根上消除脏状态。
+        # 每次执行前重置到远端默认主分支，从根上消除脏状态。
+        # issue #147：模版库前两点「任务开始先校验当前分支切回默认主分支 +
+        # 每次开发前 git pull 同步」下沉为平台代码自动完成，agent 无需再
+        # 自行执行（节省 token）。
         # remote_name 记录本地方式添加时用户选中的 remote（老数据缺省为 origin）
         remote = _row_get(repo, "remote_name") or "origin"
         self._git(workdir, "fetch", remote, "--prune", env=git_env)
         if not resume:
-            # checkout 实际所在的分支（main → master），reset 跟随同一分支。
-            # 不依赖 {remote}/HEAD 符号引用：手工加 remote 的仓库无 origin/HEAD，
-            # reset --hard origin/HEAD 必现 ambiguous argument（issue #12）
-            branch = "main"
-            try:
-                self._git(workdir, "checkout", "main", env=git_env)
-            except ExecutorError:
-                logger.warning("%s: 无 main 分支，尝试 checkout master", repo["name"])
-                branch = "master"
-                self._git(workdir, "checkout", "master", env=git_env)
+            # 1) 解析远端默认主分支名：优先 ls-remote --symref 的服务端权威
+            #    HEAD 符号引用，不依赖本地 {remote}/HEAD——手工加 remote 的
+            #    仓库可能缺失该引用（issue #12）
+            branch = self._resolve_default_branch(workdir, remote, git_env)
+            # 2) 校验当前分支，非默认主分支 → checkout 切回主分支
+            self._checkout_default_branch(workdir, remote, branch, git_env)
             self._git(workdir, "reset", "--hard", f"{remote}/{branch}", env=git_env)
             self._clean_untracked(workdir, git_env)
+            # 3) git pull --rebase 显式同步远端默认主分支最新提交（兜底
+            #    fetch 之后、本次执行前远端新推送的提交）
+            self._git(workdir, "pull", "--rebase", remote, branch, env=git_env)
+            logger.info("%s: 工作区已切到默认主分支 %s 并 git pull 同步最新",
+                        repo["name"], branch)
         # askpass 脚本保留不删除（issue #12）：并发任务/重试时序下脚本被删 →
         # fetch 回退 credential helper 旧凭据 → HTTP Basic: Access denied。
         # 脚本内容每次 prepare 覆盖刷新（token 轮换自动生效），权限 0700，
         # 且在工作区父目录，不受 clean -fd 波及。
         return workdir, git_env
+
+    def _resolve_default_branch(self, workdir: Path, remote: str,
+                                git_env: dict) -> str:
+        """解析远端默认主分支名（issue #147）。
+
+        优先读取 ``git ls-remote --symref`` 返回的服务端 HEAD 符号引用目标，
+        并校验该分支真实存在于远端 refs（``git init --bare`` 的裸仓库 HEAD
+        可能指向不存在的 master，只有 main 被推送）；解析失败或分支缺失时
+        依次回退本地 refs/remotes/<remote>/HEAD 符号引用 → main → master
+        （与旧逻辑一致）。
+        """
+        cmd = ["git", "-c", "http.sslVerify=false", "ls-remote", "--symref", remote]
+        try:
+            result = subprocess.run(cmd, cwd=workdir, env=git_env,
+                                    capture_output=True, text=True, timeout=120)
+        except Exception:  # git 缺失/超时/异常等一律走回退链，探测不阻塞任务
+            logger.debug("ls-remote --symref 解析默认主分支失败，走回退链",
+                         exc_info=True)
+            result = None
+        if result is not None and result.returncode == 0:
+            candidate: str | None = None
+            heads: set[str] = set()
+            for line in result.stdout.splitlines():
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                if parts[0] == "ref:" and len(parts) == 3 and parts[2] == "HEAD":
+                    if parts[1].startswith("refs/heads/"):
+                        candidate = parts[1].rsplit("/", 1)[-1]
+                elif parts[0].startswith("refs/heads/"):
+                    heads.add(parts[0].rsplit("/", 1)[-1])
+            if candidate and candidate in heads:
+                return candidate
+            # HEAD 符号引用指向的分支不存在（如新裸仓库）→ 按常见命名回退
+            for name in ("main", "master"):
+                if name in heads:
+                    return name
+            if heads:
+                return sorted(heads)[0]
+        # 回退：本地 remote HEAD 符号引用（clone / git remote set-head 生成）
+        try:
+            result = subprocess.run(
+                ["git", "symbolic-ref", f"refs/remotes/{remote}/HEAD"],
+                cwd=workdir, env=git_env, capture_output=True, text=True,
+                timeout=30)
+            if result.returncode == 0:
+                ref = result.stdout.strip()
+                prefix = f"refs/remotes/{remote}/"
+                if ref.startswith(prefix):
+                    return ref[len(prefix):]
+        except Exception:  # 同上：任何失败回退 main
+            logger.debug("本地 remote HEAD 符号引用解析失败，回退 main",
+                         exc_info=True)
+        return "main"
+
+    def _checkout_default_branch(self, workdir: Path, remote: str,
+                                 branch: str, git_env: dict) -> None:
+        """校验当前分支：非默认主分支则 checkout 切回主分支（issue #147）。
+
+        已处于默认主分支时直接返回（不重复切换）；detached HEAD（rev-parse
+        输出 HEAD）同样视为非默认分支重新检出。``-B --track`` 保证本地分支
+        不存在时基于远端分支创建并建立跟踪。
+        """
+        current = ""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=workdir, env=git_env, capture_output=True, text=True,
+                timeout=30)
+            if result.returncode == 0:
+                current = result.stdout.strip()
+        except Exception:  # 探测失败视为未知分支，走 checkout 切回
+            logger.debug("读取当前分支失败，按非默认分支处理", exc_info=True)
+        if current == branch:
+            return
+        logger.info("工作区当前分支 %s ≠ 默认主分支 %s，切回主分支",
+                    current or "（detached HEAD）", branch)
+        self._git(workdir, "checkout", "-B", branch, "--track",
+                  f"{remote}/{branch}", env=git_env)
 
     def _clean_untracked(self, workdir: Path, git_env: dict) -> None:
         """清理未跟踪文件，容忍无权限删除的外部残留（issue #91）。

@@ -20,7 +20,7 @@ UI 优化参考与同类开源项目调研见 [`docs/ui-design-reference.md`](do
 Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库并行）
         ▲                 │
         │                 ▼
-对账兜底调度器 ◄──── Claude Code 执行器（干净工作区 + 模版渲染 + 超时/重试）
+对账兜底调度器 ◄──── Claude Code 执行器（自动切回默认主分支 + 干净工作区 + 模版渲染 + 超时/重试）
 （每 5 分钟扫漏网 issue）   │
                           ├─► git push 到 main（Claude 自己执行）
                           └─► 调 GitLab API 关闭 issue（Claude 自己执行）
@@ -48,7 +48,7 @@ backend/
     gitlab_client.py GitLab REST API 封装（webhook 注册、issue 评论等）
     webhook.py       webhook 接收器（secret 校验 + assignee 判定 + 去重）
     scheduler.py     任务调度器（每仓库串行、跨仓库并行、按仓库优先级派发；同仓库队列内按 issue 标签优先级排序，默认 bug 最优先）
-    executor.py      执行器（引擎分发走插件体系，干净工作区 / 超时 / 重试 / 失败评论）
+    executor.py      执行器（引擎分发走插件体系，任务开始自动切回默认主分支 + git pull / 超时 / 重试 / 失败评论）
     plugins/         插件体系（issue #140）：base（PluginKind / PluginRegistry 注册表）/
                      executors（执行引擎插件 claude / hermes / dsh）/ models（大模型供应商
                      插件 gemini / openai）/ notifiers（任务消息通道插件 webhook / in_app）；

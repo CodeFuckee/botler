@@ -115,6 +115,133 @@ class TestPrepareWorkspaceLocalPath:
         assert Path(workdir) == repo
 
 
+# ---- issue #147：任务开始前校验当前分支切回默认主分支 + git pull 同步 ----
+
+class TestPrepareWorkspaceDefaultBranchAndPull:
+    """issue #147：模版库前两点「切回默认主分支 + git pull」下沉为代码。
+    任务开始时平台自动：校验当前分支（非默认主分支 → checkout 切回）、
+    git pull（--rebase）同步远端最新代码，agent 无需再自行执行。
+    """
+
+    @staticmethod
+    def _make_repo_with_default(tmp_path: Path, branch: str = "main") -> tuple[Path, Path]:
+        """创建远端 bare 仓库 + 工作仓库，默认分支为 branch（bare HEAD 指向它）。
+
+        返回 (bare, repo)。与 _make_local_repo 的区别：支持任意默认分支名，
+        便于验证「默认主分支不是 main」与「bare HEAD 指向不存在分支」场景。
+        """
+        bare = tmp_path / f"remote-{branch}.git"
+        seed = tmp_path / f"seed-{branch}"
+        repo = tmp_path / f"repo-{branch}"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", branch, str(seed)], check=True)
+        (seed / "file.txt").write_text("hello\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                        "-c", "user.email=test@botler.local",
+                        "commit", "-q", "-m", "init"], check=True)
+        subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(bare)],
+                       check=True)
+        subprocess.run(["git", "-C", str(seed), "push", "-q", "-u", "origin", branch],
+                       check=True)
+        subprocess.run(["git", "--git-dir", str(bare), "symbolic-ref", "HEAD",
+                        f"refs/heads/{branch}"], check=True)
+        subprocess.run(["git", "clone", "-q", str(bare), str(repo)], check=True)
+        return bare, repo
+
+    @staticmethod
+    def _current_branch(repo: Path) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+
+    def test_switches_to_default_branch_when_on_other_branch(self, executor, tmp_path):
+        """当前在非默认分支时，prepare 应自动切回默认主分支。"""
+        _bare, repo = self._make_repo_with_default(tmp_path, branch="main")
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "dev"],
+                       check=True)
+        assert self._current_branch(repo) == "dev"
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert self._current_branch(repo) == "main"
+
+    def test_uses_non_main_default_branch(self, executor, tmp_path):
+        """默认主分支不是 main（如 trunk）时，应切到该分支而非硬编码 main。"""
+        _bare, repo = self._make_repo_with_default(tmp_path, branch="trunk")
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "dev"],
+                       check=True)
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert self._current_branch(repo) == "trunk"
+        assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
+
+    def test_detached_head_reattaches_to_default_branch(self, executor, tmp_path):
+        """detached HEAD 状态（rev-parse 输出 HEAD）应重新检出默认主分支。"""
+        _bare, repo = self._make_repo_with_default(tmp_path, branch="main")
+        head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", head], check=True)
+        assert self._current_branch(repo) == "HEAD"
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert self._current_branch(repo) == "main"
+
+    def test_pull_syncs_latest_remote_commit(self, executor, tmp_path):
+        """远端默认主分支有新提交时，prepare 的 git pull 应同步最新提交。"""
+        bare, repo = self._make_repo_with_default(tmp_path, branch="main")
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        # 远端 seed 仓库新增提交并推送
+        seed = tmp_path / "seed-main"
+        (seed / "file.txt").write_text("hello v2\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                        "-c", "user.email=test@botler.local",
+                        "commit", "-q", "-m", "v2"], check=True)
+        subprocess.run(["git", "-C", str(seed), "push", "-q", "origin", "main"],
+                       check=True)
+        # 第二次 prepare 应把远端新提交同步进工作区
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert (repo / "file.txt").read_text(encoding="utf-8") == "hello v2\n"
+        assert self._current_branch(repo) == "main"
+
+    def test_pull_invoked_with_rebase(self, executor, tmp_path):
+        """prepare 必须显式执行 git pull --rebase（模版前两点下沉为代码）。"""
+        _bare, repo = self._make_repo_with_default(tmp_path, branch="main")
+        calls: list[tuple] = []
+        original = executor._git
+
+        def recording_git(workdir, *args, env=None, timeout=300):
+            calls.append(args)
+            return original(workdir, *args, env=env, timeout=timeout)
+
+        executor._git = recording_git
+        try:
+            executor.prepare_workspace(_repo_dict(str(repo)))
+        finally:
+            executor._git = original
+        assert any(a[0] == "pull" and a[1] == "--rebase" for a in calls), \
+            f"prepare 未执行 git pull --rebase: {calls!r}"
+
+    def test_head_symref_missing_branch_falls_back_to_main(self, executor, tmp_path):
+        """bare HEAD 指向不存在的分支（init --bare 默认 master）时回退已有 main。"""
+        bare = tmp_path / "remote-git.git"
+        seed = tmp_path / "seed-git"
+        repo = tmp_path / "repo-git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        # init --bare 默认 HEAD → refs/heads/master（不存在），只推送 main
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        (seed / "f.txt").write_text("v1\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                        "-c", "user.email=t@b", "commit", "-q", "-m", "v1"], check=True)
+        subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(bare)],
+                       check=True)
+        subprocess.run(["git", "-C", str(seed), "push", "-q", "origin", "main"], check=True)
+        subprocess.run(["git", "clone", "-q", str(bare), str(repo)], check=True)
+        # 克隆仓库不含 main 分支（远端 HEAD 悬空）→ 先建一个 dev 分支
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "dev"],
+                       check=True)
+        workdir, _env = executor.prepare_workspace(_repo_dict(str(repo)))
+        assert Path(workdir) == repo
+        assert self._current_branch(repo) == "main"
+
 # ---- issue #12 复现：origin/HEAD 缺失必现失败 + askpass 脚本被删致 fetch 凭据间歇失败 ----
 
 class TestPrepareWorkspaceIssue12:

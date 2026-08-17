@@ -4,7 +4,38 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **任务开始前自动切回默认主分支并 git pull 同步最新代码（issue #147）**：
+  需求「全局模版库中前两点（任务开始先校验当前分支、非主分支切回默认主分支；
+  每次开发前 git pull 同步远端最新代码）通过代码实现，完成后再让 agent 操作，
+  节省 token」。此前这两点写在全局模版里由 agent（LLM）自行执行，每次任务都
+  重复消耗 token；且执行器工作区准备硬编码 `main → master` 回退，未按仓库真实
+  默认主分支处理。改动：
+  - 后端 `executor.py`：`prepare_workspace`（claude / hermes / dsh 三引擎共用）
+    新增 `_resolve_default_branch`（优先 `git ls-remote --symref` 解析服务端
+    权威默认主分支并校验分支真实存在，兜底本地 `refs/remotes/<remote>/HEAD`
+    符号引用 → `main` → `master`，兼容 `git init --bare` 默认 HEAD 指向不存在
+    分支的裸仓库）与 `_checkout_default_branch`（校验当前分支，非默认主分支或
+    detached HEAD 时 `git checkout -B <默认主分支> --track <remote>/<默认主分支>`
+    切回）；非恢复路径在 `fetch` / `reset --hard` / `clean -fd` 之后显式执行
+    `git pull --rebase <remote> <默认主分支>` 兜底同步 fetch 之后的新推送；
+    `resume=True`（断点续跑）保持只 fetch 不动工作区，不强制切分支/拉取；
+  - 后端 `config.py`：`DEFAULT_TEMPLATE` 工作要求第 1 点改为「本地工作区已由
+    平台自动切到默认主分支并 git pull 拉取最新代码……（无需自行切换分支或
+    git pull）」；部署侧全局模版库中的前两点指令可随之移除；
+  - 文档：`docs/设计方案.md` §5.5 工作区准备命令更新（默认主分支解析 + 显式
+    git pull）、§5.6 示例模版同步为当前 `DEFAULT_TEMPLATE`（含 no-close 政策与
+    全角括号 issue 引用规范）；`README.md` 执行器职责描述补充自动切回默认主分支
+    与 git pull；
+  - **测试**：`test_executor_local_path.py` 新增 `TestPrepareWorkspaceDefaultBranchAndPull`
+    6 用例（非默认分支自动切回默认主分支、默认主分支非 main（trunk）场景、
+    detached HEAD 重新检出默认主分支、远端新提交经 git pull 同步、prepare 显式
+    执行 `git pull --rebase`、bare HEAD 指向不存在分支时回退已有 main）；
+    既有 11 用例与凭据注入回归（test_executor_credentials.py）全部通过。
+
 ### Added
+
 
 - **插件管理页面（issue #145）**：
   需求「增加一个插件页面可以插件进行管理，所有插件的安装、卸载和插件的设置
