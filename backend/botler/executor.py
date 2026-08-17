@@ -738,9 +738,28 @@ class ClaudeExecutor:
         """校验当前分支：非默认主分支则 checkout 切回主分支（issue #147）。
 
         已处于默认主分支时直接返回（不重复切换）；detached HEAD（rev-parse
-        输出 HEAD）同样视为非默认分支重新检出。``-B --track`` 保证本地分支
-        不存在时基于远端分支创建并建立跟踪。
+        输出 HEAD）同样视为非默认分支重新检出。``-B`` 保证本地分支不存在时
+        基于远端分支创建、已存在时重置到远端提交，随后显式写
+        branch.<name>.remote / branch.<name>.merge 建立上游跟踪
+        （受限 fetch refspec 下 ``--track`` 无法建立跟踪，见下）。
+
+        issue #148：执行前先补齐远端默认主分支的本地跟踪引用
+        （refs/remotes/<remote>/<branch>）。工作区仓库可能是单分支克隆
+        （--single-branch）或手工配置了受限 fetch refspec，fetch 只拉取了
+        部分分支——此时即便远端确实存在默认主分支，本地也查不到对应跟踪
+        引用：checkout -B <branch> --track <remote>/<branch> 会报
+        "'origin/main' is not a commit"（任务 #249 失败根因），后续
+        reset --hard <remote>/<branch> 同样报 'ambiguous argument'。
+        缺失时用显式 refspec 拉取该分支补齐（命令行 refspec 不受受限配置
+        影响），再走切回/重置流程。
         """
+        if not self._remote_tracking_ref_exists(workdir, remote, branch, git_env):
+            logger.warning(
+                "%s: 远端默认主分支 %s 的本地跟踪引用 refs/remotes/%s/%s "
+                "缺失（单分支克隆或受限 fetch refspec），显式拉取补齐",
+                workdir, branch, remote, branch)
+            self._git(workdir, "fetch", remote,
+                      f"{branch}:refs/remotes/{remote}/{branch}", env=git_env)
         current = ""
         try:
             result = subprocess.run(
@@ -755,8 +774,35 @@ class ClaudeExecutor:
             return
         logger.info("工作区当前分支 %s ≠ 默认主分支 %s，切回主分支",
                     current or "（detached HEAD）", branch)
-        self._git(workdir, "checkout", "-B", branch, "--track",
+        # 不用 --track 建跟踪：受限 fetch refspec（单分支克隆等）下 git 无法
+        # 把 refs/remotes/<remote>/<branch> 映射回远端分支名，--track 会报
+        # "cannot set up tracking information; starting point ... is not a
+        # branch"（与引用是否已补齐无关）。改为 checkout 后直接写
+        # branch.<name>.remote / branch.<name>.merge，标准仓库结果等价。
+        self._git(workdir, "checkout", "-B", branch,
                   f"{remote}/{branch}", env=git_env)
+        self._git(workdir, "config", f"branch.{branch}.remote", remote,
+                  env=git_env)
+        self._git(workdir, "config", f"branch.{branch}.merge",
+                  f"refs/heads/{branch}", env=git_env)
+
+    def _remote_tracking_ref_exists(self, workdir: Path, remote: str,
+                                    branch: str, git_env: dict) -> bool:
+        """判断本地远端跟踪引用 refs/remotes/<remote>/<branch> 是否存在。
+
+        返回 False 的情形：引用从未拉取过（单分支克隆/受限 refspec）、
+        被 --prune 清除、git 异常等。探测失败一律按缺失处理，由调用方
+        显式拉取补齐。
+        """
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet",
+                 f"refs/remotes/{remote}/{branch}"],
+                cwd=workdir, env=git_env, capture_output=True, text=True,
+                timeout=30)
+        except Exception:  # git 缺失/超时等一律视为引用不存在
+            return False
+        return result.returncode == 0
 
     def _is_pull_conflict(self, workdir: Path, git_env: dict,
                           exc: ExecutorError) -> bool:

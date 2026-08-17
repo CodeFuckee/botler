@@ -242,6 +242,88 @@ class TestPrepareWorkspaceDefaultBranchAndPull:
         assert Path(workdir) == repo
         assert self._current_branch(repo) == "main"
 
+    # ---- issue #148：远端默认主分支本地跟踪引用缺失（单分支克隆等） ----
+
+    @staticmethod
+    def _make_single_branch_remote(tmp_path: Path) -> tuple[Path, Path]:
+        """创建带 main + dev 两个分支的远端 bare 仓库 + dev 单分支克隆。
+
+        返回 (bare, repo)。克隆使用 --single-branch --branch dev，fetch
+        refspec 只覆盖 refs/heads/dev，本地永远不会出现 refs/remotes/origin/
+        main——即使远端默认分支是 main。用于复现 issue #148：任务 #249
+        （graph2plan，125#38）工作区当前分支 master ≠ 远端默认 main，且
+        origin/main 跟踪引用缺失 → checkout -B main --track origin/main
+        报 "fatal: 'origin/main' is not a commit"。
+        """
+        bare = tmp_path / "remote-single.git"
+        seed = tmp_path / "seed-single"
+        repo = tmp_path / "repo-single"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        (seed / "file.txt").write_text("hello\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                        "-c", "user.email=test@botler.local",
+                        "commit", "-q", "-m", "init"], check=True)
+        subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(bare)],
+                       check=True)
+        subprocess.run(["git", "-C", str(seed), "push", "-q", "-u", "origin", "main"],
+                       check=True)
+        # 再推送一个 dev 分支：单分支克隆只拉取 dev，形成受限 fetch refspec
+        subprocess.run(["git", "-C", str(seed), "checkout", "-q", "-b", "dev"],
+                       check=True)
+        (seed / "dev.txt").write_text("dev\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(seed), "-c", "user.name=Test",
+                        "-c", "user.email=test@botler.local",
+                        "commit", "-q", "-m", "dev"], check=True)
+        subprocess.run(["git", "-C", str(seed), "push", "-q", "origin", "dev"],
+                       check=True)
+        # 远端默认分支指向 main（服务端权威 HEAD）
+        subprocess.run(["git", "--git-dir", str(bare), "symbolic-ref", "HEAD",
+                        "refs/heads/main"], check=True)
+        subprocess.run(["git", "clone", "-q", "--single-branch", "--branch", "dev",
+                        str(bare), str(repo)], check=True)
+        # 复现前提：本地确实不存在 origin/main 跟踪引用
+        check = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--verify", "--quiet",
+             "refs/remotes/origin/main"],
+            capture_output=True)
+        assert check.returncode != 0, "复现前提不成立：origin/main 不应存在"
+        return bare, repo
+
+    def test_single_branch_clone_switches_to_default_branch(self, executor, tmp_path):
+        """单分支克隆（受限 fetch refspec）缺默认分支跟踪引用时切回不失败。
+
+        issue #148 复现：任务 #249 工作区当前分支非默认主分支，且远端默认
+        主分支（main）未在本地拉取过 → 修复前 checkout -B main --track
+        origin/main 报 "'origin/main' is not a commit"（exit 128）→ 任务
+        重试耗尽失败。修复后应先显式拉取该分支补齐跟踪引用再切回。
+        """
+        _bare, repo = self._make_single_branch_remote(tmp_path)
+        assert self._current_branch(repo) == "dev"
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert self._current_branch(repo) == "main"
+        # 切回后跟踪引用已补齐，工作区内容为远端 main 快照
+        assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
+        assert not (repo / "dev.txt").exists()
+
+    def test_already_on_default_branch_with_missing_tracking_ref(self, executor, tmp_path):
+        """本地已在默认分支名但跟踪引用缺失时，reset --hard 不应失败。
+
+        单分支克隆 dev 后手工建同名的本地 main 分支（无上游）：当前分支已
+        是 main，_checkout_default_branch 提前返回，但后续 reset --hard
+        origin/main 仍依赖跟踪引用——修复前报 'ambiguous argument'。修复后
+        无论当前分支是否已是默认分支，都先补齐跟踪引用。
+        """
+        _bare, repo = self._make_single_branch_remote(tmp_path)
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "main"],
+                       check=True)
+        assert self._current_branch(repo) == "main"
+        executor.prepare_workspace(_repo_dict(str(repo)))
+        assert self._current_branch(repo) == "main"
+        assert (repo / "file.txt").read_text(encoding="utf-8") == "hello\n"
+
 # ---- issue #147 补充：git pull 拉取冲突时保留现场交由 agent 手工合并 ----
 
 class TestPrepareWorkspacePullConflict:

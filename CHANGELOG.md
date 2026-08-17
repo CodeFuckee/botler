@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Fixed
+
+- **远端默认主分支跟踪引用缺失时工作区准备失败（issue #148）**：任务 #249
+  （graph2plan，125#38）执行报 `[executor] git checkout 失败 (exit 128):
+  fatal: 'origin/main' is not a commit and a branch 'main' cannot be created
+  from it`。根因：工作区仓库当前分支 master ≠ 远端默认主分支 main，且本地
+  缺失 `refs/remotes/origin/main` 跟踪引用——仓库为单分支克隆
+  （`--single-branch`）或手工配置了受限 fetch refspec 时，`git fetch --prune`
+  只拉取配置的分支，远端默认分支（经 `ls-remote --symref` 权威解析）从未在
+  本地落盘；`_checkout_default_branch` 却假设 `git checkout -B main --track
+  origin/main` 必然可用。改动：
+  - 后端 `executor.py`：`_checkout_default_branch` 执行前先校验本地跟踪引用
+    `refs/remotes/<remote>/<branch>` 是否存在（新增 `_remote_tracking_ref_exists`），
+    缺失时用命令行显式 refspec `git fetch <remote> <branch>:refs/remotes/<remote>/<branch>`
+    拉取补齐（命令行 refspec 不受受限配置影响，也保证后续 `reset --hard
+    <remote>/<branch>` 有目标可依）；切回分支不再用 `--track`——受限 refspec
+    下 git 无法把跟踪引用映射回远端分支名，`--track` 即使引用已补齐仍报
+    "cannot set up tracking information"，改为 checkout 后直接写
+    `branch.<name>.remote` / `branch.<name>.merge` 建立上游，标准仓库结果与
+    `--track` 等价；
+  - **测试**：`test_executor_local_path.py` 新增 2 用例（单分支克隆切回默认
+    主分支不失败、本地已在默认分支名但跟踪引用缺失时 `reset --hard` 不失败）；
+    后端全量 1308 用例通过（含既有 default-branch/pull 回归）。
+
 ### Changed
 
 - **任务开始前自动切回默认主分支并 git pull 同步最新代码（issue #147）**：
