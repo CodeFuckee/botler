@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from ..config import RepoConfig
 from ..database import DEFAULT_PRIORITY
 from ..gitlab_client import GitLabError
+from ..labels import DEFAULT_LABELS
 from ..git_remote import build_client_from_url, mask_url_token
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,39 @@ def _masked_repo_row(row) -> dict:
     d = _repo_row_to_dict(row)
     d["url"] = mask_url_token(d["url"])
     return d
+
+
+def _sync_default_labels(client, project_id: int) -> list[str]:
+    """添加仓库时在目标 GitLab 项目上补齐标记库内置默认标签（issue #157）。
+
+    目标项目上缺失的默认标签（labels.DEFAULT_LABELS，与 docs/labels.md /
+    scripts/sync_labels.py 保持一致）逐个创建；已存在的标签保持不变——
+    只补缺失，不覆盖用户已有的颜色/描述。尽力而为：读取或创建失败只记
+    日志，不阻塞仓库添加——仓库主体（项目识别 + webhook 注册）已就绪，
+    标签缺失不影响平台正常工作，用户可在 GitLab 上手动补建。
+
+    返回本次实际创建的标签名列表（供日志使用）。
+    """
+    try:
+        existing = {l["name"] for l in client.list_project_labels(project_id)}
+    except GitLabError as e:
+        logger.warning("添加仓库 %s：读取远端标签失败，跳过默认标签补齐: %s",
+                       project_id, e)
+        return []
+    created: list[str] = []
+    for spec in DEFAULT_LABELS:
+        if spec["name"] in existing:
+            continue
+        try:
+            client.create_project_label(
+                project_id, spec["name"], spec["color"], spec.get("description"))
+            created.append(spec["name"])
+        except GitLabError as e:
+            logger.warning("添加仓库 %s：创建默认标签「%s」失败（忽略）: %s",
+                           project_id, spec["name"], e)
+    if created:
+        logger.info("添加仓库 %s：补齐标记库默认标签 %s", project_id, created)
+    return created
 
 
 def _sync_repo_to_config(app, repo_dict: dict) -> None:
@@ -232,6 +266,11 @@ def add_repo(request: Request, body: RepoCreate):
                 raise HTTPException(502, f"注册 webhook 失败: {e}")
         else:
             raise HTTPException(502, f"注册 webhook 失败: {e}")
+
+    # issue #157：目标 GitLab 项目补齐标记库内置默认标签（缺失的创建、
+    # 已存在的不动；尽力而为，失败只记日志不阻塞添加）。与 webhook 注册
+    # 共用同一 client（全局 token 失效时用 remote token 兜底 client）。
+    _sync_default_labels(fallback_client or temp_client, project_id)
 
     # issue #153：仓库用户——remote url userinfo 的用户名（如 agent），
     # 读取 remote url 获取后随仓库落库，设置页展示、灵感提交 issue 默认分配人。

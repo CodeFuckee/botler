@@ -321,6 +321,22 @@ class GitLabClient:
         """
         return self._paged(f"/projects/{project_id}/labels")
 
+    def create_project_label(self, project_id: int, name: str, color: str,
+                             description: str | None = None) -> dict:
+        """在指定项目创建标签（issue #157：添加仓库时补齐标记库默认标签）。
+
+        GitLab labels API POST /projects/:id/labels 接受 {name, color,
+        description}；同名标签已存在时返回 409——调用方应先
+        list_project_labels 比对再创建（add_repo 的默认标签补齐即如此）。
+        color 需为 #RRGGBB 格式（labels.DEFAULT_LABELS 内置颜色即该格式）。
+        """
+        body: dict = {"name": name, "color": color}
+        if description:
+            body["description"] = description
+        label = self._request("POST", f"/projects/{project_id}/labels", json=body)
+        assert isinstance(label, dict)
+        return label
+
     def list_project_members(self, project_id: int) -> list[dict]:
         """项目成员清单（含继承，members/all，issue #92：添加 issue 弹窗
         的分配人下拉数据源）。

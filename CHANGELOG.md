@@ -55,6 +55,25 @@
 
 ### Added
 
+- **添加仓库时自动在目标 GitLab 项目补齐标记库缺失的默认标签（issue #157）**：
+  「添加仓库」成功后，若目标项目（GitLab 仓库）上不存在标记库内置的默认标签
+  （`labels.DEFAULT_LABELS`，即 docs/labels.md 规范里的 14 个类型/流程标签），平台自动
+  在 GitLab 上逐个创建这些标签，免去新仓库手动补标签、或依赖脚本批量同步的前置步骤。
+  与 `scripts/sync_labels.py` 的区别：只补缺失、不覆盖已存在标签的颜色/描述（避免覆盖
+  用户自定义）；同步为尽力而为——读取远端标签或创建失败只记日志，不阻塞仓库添加
+  （仓库主体「项目识别 + webhook 注册」已就绪，标签缺失不影响平台正常工作）。改动：
+  - 后端 `gitlab_client.py`：新增 `create_project_label()`（POST /projects/:id/labels，
+    name/color/description 组装，description 缺省不携带）；
+  - 后端 `api/repos.py`：新增 `_sync_default_labels()`（list 远端标签 → 逐个创建缺失的
+    内置默认标签），在 `add_repo` 注册 webhook 成功后调用，复用同一 GitLab 客户端
+    （全局 token 失效时沿用 remote url 内嵌 token 的兜底 client）；
+  - 前端无需改动（响应结构不变，标签补齐结果记入后端日志）；
+  - **测试**：`test_api_repos.py` 新增 6 用例（全缺→14 个全建、部分缺失→只建缺失、
+    同名不同色→不覆盖、读标签失败→跳过不阻塞、创建失败→跳过单个不阻塞、仓库已存在
+    409→不做同步），既有 local_path 添加用例补充「14 个默认标签全部补齐」断言；
+    `test_gitlab_client.py` 新增 `create_project_label` 请求体组装 2 用例。实现前新用例
+    全部可复现失败（`GitLabClient` 无 `create_project_label` 属性），实现后全部通过。
+
 - **设置页新增「识图模型」卡片：可配置具有视觉理解的模型，并支持上传图片调用模型描述图片（issue #152）**：
   设置页面新增识图模型配置能力，复用生图模型（issue #135/#137）的成熟模式——内置
   Gemini 视觉（默认模型 `gemini-2.5-flash`）与 OpenAI 视觉（默认模型 `gpt-4o`）两个

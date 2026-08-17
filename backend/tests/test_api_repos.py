@@ -12,6 +12,7 @@ from botler.api import router as api_router
 from botler.config import ConfigManager
 from botler.database import Database
 from botler.gitlab_client import GitLabClient, GitLabError
+from botler.labels import DEFAULT_LABELS
 
 CONFIG_TEXT = """\
 gitlab:
@@ -32,6 +33,10 @@ class StubGitLab:
     def __init__(self):
         self.resolved_urls: list[str] = []
         self.unregistered: list[int] = []
+        # issue #157 默认标签同步：existing_labels 为远端已有标签，
+        # created_labels 记录本次创建调用
+        self.existing_labels: list[dict] = []
+        self.created_labels: list[dict] = []
 
     def resolve_project(self, url_or_id):
         self.resolved_urls.append(url_or_id)
@@ -46,15 +51,36 @@ class StubGitLab:
         self.unregistered.append(project_id)
         return 0
 
+    def list_project_labels(self, project_id):
+        """远端项目已有标签（issue #157 默认标签补齐的比对基准）。"""
+        return list(self.existing_labels)
+
+    def create_project_label(self, project_id, name, color, description=None):
+        """记录默认标签创建调用（issue #157）。"""
+        self.created_labels.append(
+            {"name": name, "color": color, "description": description})
+        return {"name": name, "color": color}
+
 
 @pytest.fixture
-def api_app(tmp_path):
+def api_app(tmp_path, monkeypatch):
     """最小测试 app：只挂 repos 路由，ctx 用临时 config + db + 桩 gitlab。"""
     config_path = tmp_path / "config.yaml"
     config_path.write_text(CONFIG_TEXT, encoding="utf-8")
     config = ConfigManager(str(config_path))
     db = Database(str(tmp_path / "test.db"))
     stub = StubGitLab()
+    # issue #157：添加仓库时的默认标签同步经由 add_repo 内部新建的
+    # GitLabClient（temp_client / fallback_client）调用 list_project_labels /
+    # create_project_label——统一打桩到 stub，记录调用供断言（webhook 注册
+    # 沿用各用例 monkeypatch 的既有模式）。
+    monkeypatch.setattr(
+        GitLabClient, "list_project_labels",
+        lambda self, project_id: stub.list_project_labels(project_id))
+    monkeypatch.setattr(
+        GitLabClient, "create_project_label",
+        lambda self, project_id, name, color, description=None:
+            stub.create_project_label(project_id, name, color, description))
     # 用 SimpleNamespace 而非 botler.main.AppContext：import main 会触发
     # 模块级 create_app() 加载真实 config.yaml（凭据未设置时报错）。
     ctx = SimpleNamespace(config=config, db=db, gitlab=stub, config_path=str(config_path))
@@ -123,6 +149,9 @@ class TestAddRepoWithLocalPath:
         # 识别项目用的是从本地 remote 读出的 URL（scp-like 形态）
         assert stub.resolved_urls == ["git@gitlab.example.com:group/project.git"]
         assert registered == [42]
+        # issue #157：远端无任何默认标签 → 14 个内置默认标签全部补齐
+        assert [c["name"] for c in stub.created_labels] == [
+            l["name"] for l in DEFAULT_LABELS]
         # 写回 config.yaml（config 是唯一事实来源）
         config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
         assert "local_path" in config_text
@@ -694,3 +723,87 @@ class TestRemoteUser:
         assert resp.status_code == 200
         assert resp.json()["remote_username"] == "new-user"
         assert db.get_repo(repo_id)["remote_username"] == "new-user"
+
+
+class TestAddRepoSyncDefaultLabels:
+    """添加仓库时补齐标记库内置默认标签（issue #157）。
+
+    目标 GitLab 项目上缺失的默认标签逐个创建；已存在的标签保持不变
+    （不覆盖用户已有颜色/描述）；读取/创建失败为尽力而为，不阻塞仓库添加。
+    """
+
+    def _add(self, client, monkeypatch, **extra):
+        tc, stub, _ = client
+        monkeypatch.setattr(
+            GitLabClient, "register_webhook",
+            lambda self, project_id, secret: {"id": 1})
+        return tc.post("/api/repos", json={
+            "url": "https://gitlab.example.com/group/p.git", "name": "demo",
+            **extra})
+
+    def test_creates_all_default_labels_when_none_exist(self, client, monkeypatch):
+        """远端无任何默认标签 → 14 个内置默认标签全部创建，颜色/描述与规范一致。"""
+        resp = self._add(client, monkeypatch)
+        assert resp.status_code == 201
+        created = [c["name"] for c in client[1].created_labels]
+        assert created == [l["name"] for l in DEFAULT_LABELS]
+        assert client[1].created_labels[0] == {
+            "name": "bug", "color": "#d9534f", "description": "缺陷修复"}
+
+    def test_only_creates_missing_labels(self, client, monkeypatch):
+        """远端已存在部分默认标签 → 只创建缺失的，已存在的不重复创建。"""
+        tc, stub, _ = client
+        stub.existing_labels = [
+            {"name": "bug", "color": "#d9534f", "description": "缺陷修复"},
+            {"name": "feature", "color": "#009966", "description": "新功能"},
+            {"name": "自定义", "color": "#123456", "description": "自定义标签"},
+        ]
+        resp = self._add(client, monkeypatch)
+        assert resp.status_code == 201
+        created_names = [c["name"] for c in stub.created_labels]
+        assert "bug" not in created_names and "feature" not in created_names
+        assert "自定义" not in created_names
+        assert len(created_names) == len(DEFAULT_LABELS) - 2
+
+    def test_existing_label_with_different_color_not_overwritten(self, client, monkeypatch):
+        """已存在同名标签（颜色/描述与规范不同）→ 不覆盖，仅补缺失。"""
+        tc, stub, _ = client
+        stub.existing_labels = [
+            {"name": "feature", "color": "#000000", "description": "用户自定义"},
+        ]
+        resp = self._add(client, monkeypatch)
+        assert resp.status_code == 201
+        assert all(c["name"] != "feature" for c in stub.created_labels)
+
+    def test_label_list_failure_does_not_block_add(self, client, monkeypatch):
+        """读取远端标签失败 → 跳过同步，仓库仍添加成功（尽力而为）。"""
+        tc, stub, _ = client
+        monkeypatch.setattr(
+            GitLabClient, "list_project_labels",
+            lambda self, project_id: (_ for _ in ()).throw(GitLabError("网络错误", 500)))
+        resp = self._add(client, monkeypatch)
+        assert resp.status_code == 201
+        assert stub.created_labels == []
+
+    def test_label_create_failure_does_not_block_add(self, client, monkeypatch):
+        """单个标签创建失败 → 记日志跳过，其余标签照常创建，仓库仍添加成功。"""
+        tc, stub, _ = client
+        def failing_create(self, project_id, name, color, description=None):
+            if name == "bug":
+                raise GitLabError("权限不足", 403)
+            return stub.create_project_label(project_id, name, color, description)
+        monkeypatch.setattr(GitLabClient, "create_project_label", failing_create)
+        resp = self._add(client, monkeypatch)
+        assert resp.status_code == 201
+        created_names = [c["name"] for c in stub.created_labels]
+        assert "bug" not in created_names
+        assert len(created_names) == len(DEFAULT_LABELS) - 1
+
+    def test_duplicate_repo_skips_label_sync(self, client, monkeypatch):
+        """仓库已存在（409）→ 不做标签同步。"""
+        tc, stub, _ = client
+        tc.app.state.ctx.db.upsert_repo(
+            42, "已存在", "https://gitlab.example.com/group/p.git")
+        resp = self._add(client, monkeypatch)
+        assert resp.status_code == 409
+        assert stub.created_labels == []

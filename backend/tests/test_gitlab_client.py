@@ -590,3 +590,41 @@ class TestReplyToNote:
             client.reply_to_note(42, 7, 1, "hi")
 
         assert exc.value.status_code == 500
+
+
+class TestCreateProjectLabel:
+    """GitLabClient.create_project_label（issue #157：添加仓库时补齐标记库
+    默认标签）：POST /projects/:id/labels 请求体组装。"""
+
+    def _stub(self, client: GitLabClient) -> list[tuple[str, str, dict]]:
+        """用桩替换 _request，记录 (method, path, json) 调用参数。"""
+        captured: list[tuple[str, str, dict]] = []
+
+        def fake_request(method, path, **kwargs):
+            captured.append((method, path, kwargs.get("json")))
+            return {"id": 1, "name": kwargs["json"]["name"],
+                    "color": kwargs["json"]["color"]}
+
+        client._request = fake_request
+        return captured
+
+    def test_creates_label_with_description(self):
+        """带描述创建：POST /projects/42/labels，body 含 name/color/description。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        label = client.create_project_label(42, "bug", "#d9534f", "缺陷修复")
+
+        assert label["name"] == "bug"
+        method, path, body = captured[0]
+        assert (method, path) == ("POST", "/projects/42/labels")
+        assert body == {"name": "bug", "color": "#d9534f", "description": "缺陷修复"}
+
+    def test_description_none_omitted(self):
+        """描述缺省（None）→ 请求体不携带 description 字段。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        client.create_project_label(42, "feature", "#009966")
+
+        assert captured[0][2] == {"name": "feature", "color": "#009966"}
