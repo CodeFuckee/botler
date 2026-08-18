@@ -257,5 +257,14 @@
   "shortcuts.scope.overview": "Overview",
   "shortcuts.scope.tasks": "Tasks",
   "nav.notLoggedIn": "Not signed in (open mode)",
-  "nav.sessionExpiry": "Session valid until {time}"
+  "nav.sessionExpiry": "Session valid until {time}",
+  "overview.sort": "Sort",
+  "overview.sortTitle": "Switch issue sort method (default: scheduler execution order)",
+  "overview.sortAria": "Sort method",
+  "overview.sortBy.scheduler": "Scheduler order",
+  "overview.sortBy.updated": "Recently updated",
+  "overview.sortBy.created": "Created",
+  "overview.sortHint.scheduler": "By scheduler dispatch order: repo priority → issue label priority (default bug > test > feature) → created time ascending",
+  "overview.sortHint.updated": "By issue last updated time descending (most recently updated first)",
+  "overview.sortHint.created": "By issue created time descending (newest first)"
 }

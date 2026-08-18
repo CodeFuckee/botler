@@ -2399,14 +2399,16 @@ code {
   white-space: nowrap;
 }
 .issue-filter-statuses,
-.issue-filter-labels {
+.issue-filter-labels,
+.issue-filter-sorts {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
 }
 .issue-filter-status,
-.issue-filter-label-chip {
+.issue-filter-label-chip,
+.issue-sort-option {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -2425,12 +2427,14 @@ code {
     border-color var(--dur-fast) var(--ease-out);
 }
 .issue-filter-status:hover,
-.issue-filter-label-chip:hover {
+.issue-filter-label-chip:hover,
+.issue-sort-option:hover {
   border-color: var(--border-hover);
   color: var(--text);
 }
 .issue-filter-status.active,
-.issue-filter-label-chip.active {
+.issue-filter-label-chip.active,
+.issue-sort-option.active {
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;

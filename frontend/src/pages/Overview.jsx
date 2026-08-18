@@ -275,6 +275,111 @@ export function toggleGroupCollapsed(collapsed, key) {
   return next
 }
 
+// ---- issue #286：概览页开放 issue 排序方法切换 ----
+// 开放 issue 板块支持切换排序方法，默认按「调度器执行顺序」排序——
+// 与任务调度器派发语义一致（仓库优先级升序 → issue 标签优先级 →
+// issue 创建时间升序，创建早的先处理），方便用户预判调度器接下来会
+// 按什么顺序处理各分组（尤其是「其他」分组的未处理 issue，issue
+// #287 在此基础上做拖动改调度顺序）。排序偏好存 localStorage（键
+// botler.overview.issueSort），刷新后保持。
+export const ISSUE_SORT_STORAGE_KEY = 'botler.overview.issueSort'
+
+// 调度器默认 issue 标签优先级（issue #76）：设置页 worker.issue_priority
+// 未配置/读取失败时前端兜底（后端 settings 接口恒有默认值，此处仅防御，
+// 与 backend/config.py 默认一致）
+export const DEFAULT_ISSUE_PRIORITY = ['bug', 'test', 'feature']
+
+// 排序方法选项：scheduler=调度器执行顺序（默认）；updated=最近更新降序；
+// created=创建时间降序。label 为 UI 展示文案（i18n key 见
+// overview.sortBy.<key>），hint 为悬浮说明（overview.sortHint.<key>）
+export const ISSUE_SORTS = [
+  { key: 'scheduler', label: '调度器执行顺序',
+    hint: '按调度器派发顺序：仓库优先级 → issue 标签优先级（默认 bug > test > feature）→ 创建时间升序' },
+  { key: 'updated', label: '最近更新',
+    hint: '按 issue 最后更新时间降序，最新更新在前' },
+  { key: 'created', label: '创建时间',
+    hint: '按 issue 创建时间降序，最新创建在前' },
+]
+
+// 读取排序偏好：localStorage 兼容对象（测试可注入）；无存储环境或
+// getItem 抛异常（隐私模式）时回默认「调度器执行顺序」。未知排序键
+// （手改/旧版本写入）同样回默认，不抛错
+export function loadIssueSort(storage) {
+  try {
+    if (!storage) return 'scheduler'
+    const raw = storage.getItem(ISSUE_SORT_STORAGE_KEY)
+    if (!raw) return 'scheduler'
+    return ISSUE_SORTS.some((s) => s.key === raw) ? raw : 'scheduler'
+  } catch {
+    return 'scheduler'
+  }
+}
+
+// 保存排序偏好：只接受 ISSUE_SORTS 已知排序键；存储不可用或 setItem
+// 抛异常时静默忽略，不影响页面使用
+export function saveIssueSort(storage, sortKey) {
+  try {
+    if (!storage || !sortKey) return
+    if (!ISSUE_SORTS.some((s) => s.key === sortKey)) return
+    storage.setItem(ISSUE_SORT_STORAGE_KEY, sortKey)
+  } catch {
+    /* 无存储环境：静默忽略 */
+  }
+}
+
+// issue 标签在调度器优先级列表中的权重（issue #286，语义对齐
+// scheduler._task_sort_key）：首个命中标签的索引即权重（越靠前越先
+// 处理），未命中任何配置标签（或无标签）排最后（权重 = len(priority)）。
+// priority 非数组/为空时用内置默认（与后端 issue_priority_labels 兜底一致）
+export function issueLabelWeight(issue, priority) {
+  const list = Array.isArray(priority) && priority.length > 0
+    ? priority : DEFAULT_ISSUE_PRIORITY
+  const names = new Set(issueLabelNames(issue))
+  for (let i = 0; i < list.length; i++) {
+    if (names.has(list[i])) return i
+  }
+  return list.length
+}
+
+// 调度器执行顺序排序键（issue #286）：(标签权重, 创建时间)。
+// 同权重按 issue 创建时间升序（创建早的先处理，issue #234）；创建
+// 时间缺失按更新时间兜底（与 scheduler._task_sort_key 语义一致），
+// UTC 无后缀串可直接字典序比较
+export function schedulerOrderKey(issue, priority) {
+  const created = (issue && (issue.created_at || issue.updated_at)) || ''
+  return [issueLabelWeight(issue, priority), created]
+}
+
+// 按排序方法重排 issue 列表（纯函数，返回新数组不改动入参）：
+// scheduler=调度器执行顺序（标签权重升序 → 创建时间升序）；updated=
+// 最近更新降序（与后端 order_by=updated_at 一致）；created=创建时间
+// 降序。时间字段缺失的 issue 按空串兜底排最后，排序稳定确定（比较
+// 相等时保持原相对顺序，组内分组逻辑不受影响）
+export function sortIssuesByMethod(issues, method, priority) {
+  const list = Array.isArray(issues) ? issues : []
+  if (method === 'scheduler') {
+    return [...list].sort((a, b) => {
+      const [wa, ca] = schedulerOrderKey(a, priority)
+      const [wb, cb] = schedulerOrderKey(b, priority)
+      if (wa !== wb) return wa - wb
+      return ca < cb ? -1 : ca > cb ? 1 : 0
+    })
+  }
+  if (method === 'created') {
+    return [...list].sort((a, b) => {
+      const ca = (a && a.created_at) || ''
+      const cb = (b && b.created_at) || ''
+      return cb < ca ? -1 : cb > ca ? 1 : 0
+    })
+  }
+  // 默认（updated）：最近更新降序，保持后端 order_by=updated_at 语义
+  return [...list].sort((a, b) => {
+    const ua = (a && a.updated_at) || ''
+    const ub = (b && b.updated_at) || ''
+    return ub < ua ? -1 : ub > ua ? 1 : 0
+  })
+}
+
 // 提取 issue 的标签名数组：labels 元素可能是 {name} 对象（后端标准）、
 // 纯字符串或 null/缺 name（旧缓存/异常数据），逐一防御兼容
 export function issueLabelNames(issue) {
@@ -450,6 +555,21 @@ export default function Overview() {
                         collapsedGroups)
   }, [collapsedGroups])
 
+  // issue #286：开放 issue 排序偏好——初值从 localStorage 恢复（无存储
+  // 环境/损坏数据回默认「调度器执行顺序」），变更时持久化，刷新后保持
+  const [issueSort, setIssueSort] = useState(() =>
+    loadIssueSort(typeof localStorage !== 'undefined' ? localStorage : null))
+
+  useEffect(() => {
+    saveIssueSort(typeof localStorage !== 'undefined' ? localStorage : null,
+                  issueSort)
+  }, [issueSort])
+
+  // 调度器 issue 标签优先级（issue #286）：从 /api/settings 读取
+  // worker.issue_priority（与调度器动态读取同一配置源），用于「调度器
+  // 执行顺序」排序；接口失败/未配置回退内置默认（DEFAULT_ISSUE_PRIORITY）
+  const [issuePriority, setIssuePriority] = useState(DEFAULT_ISSUE_PRIORITY)
+
   // 过滤后的仓库 issue（issue #230）：保留仓库分组结构、仅过滤条目。
   // 未过滤时全部仓库卡片照常渲染（含零 issue 仓库的仓库级空状态）；
   // 过滤激活时无匹配条目的仓库整卡隐藏（避免空卡噪音）。标签候选
@@ -457,7 +577,12 @@ export default function Overview() {
   const issueFilterActive = issueFilter.status !== 'all' || issueFilter.labels.length > 0
   const issueLabelOptions = collectLabelOptions(repoIssues)
   const hasAnyIssue = repoIssues.some((r) => (r.issues || []).length > 0)
-  const filteredRepoIssues = repoIssues
+  // issue #286：按所选排序方法重排仓库内 issue（排序在前、过滤在后——
+  // 过滤只做子集不重排，最终展示顺序即排序结果）。仓库卡片外层顺序仍
+  // 由后端按仓库优先级升序保证（与调度器仓库优先级派发一致）
+  const sortedRepoIssues = repoIssues
+    .map((r) => ({ ...r, issues: sortIssuesByMethod(r.issues, issueSort, issuePriority) }))
+  const filteredRepoIssues = sortedRepoIssues
     .map((r) => ({
       ...r,
       issues: filterIssuesByFilter(r.issues, issueFilter, runningKeys, r.repo_id),
@@ -548,7 +673,13 @@ export default function Overview() {
   // 保存后手动刷新页面生效）
   useEffect(() => {
     api.get('/api/settings')
-      .then((d) => setOwnerTokenOk(!!(d.gitlab && d.gitlab.owner_token_masked)))
+      .then((d) => {
+        setOwnerTokenOk(!!(d.gitlab && d.gitlab.owner_token_masked))
+        // issue #286：同步调度器 issue 标签优先级（设置页可自定义），
+        // 排序「调度器执行顺序」据此计算；缺失/非法回退内置默认
+        const prio = d && d.worker && d.worker.issue_priority
+        if (Array.isArray(prio) && prio.length > 0) setIssuePriority(prio)
+      })
       .catch(() => setOwnerTokenOk(true)) // 读取失败不打扰编辑（后端自会拦截）
   }, [])
 
@@ -916,6 +1047,24 @@ export default function Overview() {
                 （与置顶 running 组同源判定） */}
             {hasAnyIssue && (
               <div className="issue-filter-bar">
+                {/* issue #286：排序方法切换——默认「调度器执行顺序」，与
+                    任务调度器派发语义一致（仓库优先级 → issue 标签优先级
+                    → 创建时间升序），方便预判各分组 issue 的处理顺序；可
+                    切「最近更新」（原默认展示顺序）/「创建时间」；偏好存
+                    localStorage 刷新后保持 */}
+                <div className="issue-filter-row">
+                  <span className="issue-filter-label" title={tr('overview.sortTitle')}>{tr('overview.sort')}</span>
+                  <div className="issue-filter-sorts" role="group" aria-label={tr('overview.sortAria')}>
+                    {ISSUE_SORTS.map((s) => (
+                      <button key={s.key} type="button"
+                              className={'issue-sort-option' + (issueSort === s.key ? ' active' : '')}
+                              title={tr(`overview.sortHint.${s.key}`)} aria-pressed={issueSort === s.key}
+                              onClick={() => setIssueSort(s.key)}>
+                        {tr(`overview.sortBy.${s.key}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="issue-filter-row">
                   <span className="issue-filter-label" title={tr('overview.filterByStatusTitle')}>{tr('overview.status')}</span>
                   <div className="issue-filter-statuses" role="group" aria-label={tr('overview.filterStatusAria')}>

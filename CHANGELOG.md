@@ -5,6 +5,37 @@
 ## [Unreleased]
 ### Added
 
+- **概览页开放 Issue 排序方法切换（issue #286）**：
+  概览页「开放 Issue」板块新增排序方法切换组件，默认按「调度器执行顺序」
+  排序——与任务调度器派发语义一致（仓库优先级 → issue 标签优先级 →
+  issue 创建时间升序，创建早的先处理，issue #234），方便用户预判各分组
+  issue 的处理顺序（尤其「其他」分组的未处理 issue，issue #287 将在此
+  基础上做拖动改调度顺序）：
+  - `frontend/src/pages/Overview.jsx`：过滤条顶部新增「排序」行，三个
+    选项按钮（调度器执行顺序 / 最近更新 / 创建时间，`aria-pressed` 选中
+    态，悬浮说明）；新增纯函数 `loadIssueSort` / `saveIssueSort` /
+    `issueLabelWeight` / `schedulerOrderKey` / `sortIssuesByMethod` 与
+    存储键 `botler.overview.issueSort`——排序偏好持久化到 localStorage
+    （沿用 issue #230 过滤偏好的存取模式：未知排序键/损坏数据回默认、
+    无存储环境静默忽略），刷新后保持；`issueLabelWeight` 语义对齐
+    `scheduler._task_sort_key`（配置 `worker.issue_priority` 中首个命中
+    标签的索引即权重、未命中排最后，优先级顺序从 `/api/settings` 读取，
+    未配置回退内置默认 bug > test > feature）；
+  - `frontend/src/styles.css`：`.issue-sort-option` 排序按钮样式（与过滤
+    状态按钮同风格）；`frontend/src/locales/zh-CN.json` / `en-US.json`
+    新增排序文案与悬浮提示（`overview.sort` / `overview.sortBy.*` /
+    `overview.sortHint.*` 等）；
+  - `frontend/tests/overview-issue-running-top.test.mjs` /
+    `overview-issue-filter.test.mjs`：既有断言默认展示顺序的用例固定
+    「最近更新」排序注入（排序语义由新测试覆盖）；
+  - **测试**：新增 `frontend/tests/overview-issue-sort.test.mjs` 21 例
+    （存取纯函数边界：无存储/损坏数据/未知键回默认、非法键不写入、存储
+    异常静默；权重计算：索引定权/未命中排最后/空优先级回默认/自定义优先级；
+    三种排序语义与稳定性、非数组兜底；渲染：默认选中与默认排序生效、切换
+    生效并持久化、预置偏好初始生效、分组内排序且分组结构不变、无 issue
+    不渲染排序条；i18n 中英文键齐全），前端全量测试与后端全量测试无
+    regression。
+
 - **概览页开放 Issue 分组折叠/展开（issue #285）**：
   概览页「开放 Issue」按 bot 终态标签分组展示（运行中 / bot-failed /
   bot-done / 其他），长列表占据大量纵向空间。本次为每个分组增加折叠开关，

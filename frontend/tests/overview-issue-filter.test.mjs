@@ -43,7 +43,8 @@ const vite = await createServer({
 const { default: Overview, loadIssueFilter, saveIssueFilter,
         issueLabelNames, collectLabelOptions, matchesIssueStatus,
         matchesIssueLabels, filterIssuesByFilter,
-        ISSUE_FILTER_STORAGE_KEY, ISSUE_STATUS_FILTERS } =
+        ISSUE_FILTER_STORAGE_KEY, ISSUE_STATUS_FILTERS,
+        ISSUE_SORT_STORAGE_KEY } =
   await vite.ssrLoadModule('/src/pages/Overview.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 
@@ -409,7 +410,12 @@ test('渲染：点击「进行中」仅展示运行中 issue，仓库卡片保�
 })
 
 test('渲染：点击标签胶囊按标签过滤，多选为 OR 并集', async () => {
-  const { renderer, renderError, restore } = await renderOverview({ issuesPayload: MIXED_PAYLOAD })
+  // 固定「最近更新」排序（issue #286 默认已改为调度器执行顺序），
+  // 本测试聚焦过滤语义，排序细节由 overview-issue-sort 测试覆盖
+  const { renderer, renderError, restore } = await renderOverview({
+    issuesPayload: MIXED_PAYLOAD,
+    storage: makeStorage({ [ISSUE_SORT_STORAGE_KEY]: 'updated' }),
+  })
   try {
     assert.equal(renderError, null)
     const root = renderer.root

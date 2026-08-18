@@ -37,7 +37,7 @@ const vite = await createServer({
   logLevel: 'error',
 })
 const { default: Overview, groupIssuesByBotLabel, ISSUE_GROUPS,
-        runningIssueKeys } =
+        runningIssueKeys, ISSUE_SORT_STORAGE_KEY } =
   await vite.ssrLoadModule('/src/pages/Overview.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 
@@ -166,24 +166,55 @@ test('边界：100 条混合数据分组计数正确、总量不丢', () => {
 
 // Overview 挂载后同时轮询 tasks / pipelines / issues 三个端点，
 // mock 按路径分流；tasks 与 issues 数据均可注入。
-async function renderOverview(tasksPayload, issuesPayload) {
+async function renderOverview(tasksPayload, issuesPayload, storage) {
   mock.method(api, 'get', async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) return tasksPayload
     if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
     if (pathname === '/api/issues/overview') return issuesPayload
     throw new Error('unexpected ' + pathname)
   })
+  // 排序偏好注入（issue #286）：本组测试聚焦 running 置顶/回落语义，
+  // 传入 storage 固定「最近更新」排序可保持 payload 原始相对顺序断言；
+  // 未传时删除 global.localStorage 走默认路径（调度器执行顺序）
+  const realStorage = global.localStorage
+  if (storage !== undefined) global.localStorage = storage
+  else delete global.localStorage
+  const restore = () => {
+    if (realStorage === undefined) delete global.localStorage
+    else global.localStorage = realStorage
+  }
   let renderer = null
   let renderError = null
-  await TestRenderer.act(async () => {
-    try {
-      renderer = TestRenderer.create(React.createElement(Overview))
-      await new Promise((resolve) => setTimeout(resolve, 30))
-    } catch (e) {
-      renderError = e
-    }
-  })
-  return { renderer, renderError }
+  try {
+    await TestRenderer.act(async () => {
+      try {
+        renderer = TestRenderer.create(React.createElement(Overview))
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      } catch (e) {
+        renderError = e
+      }
+    })
+  } catch (e) {
+    renderError = e
+  }
+  return { renderer, renderError, restore }
+}
+
+// 简单内存 storage 替身（localStorage 子集，同 overview-issue-filter.test.mjs）
+function makeStorage(initial = {}) {
+  const map = new Map(Object.entries(initial))
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+    _map: map,
+  }
+}
+
+// 固定「最近更新」排序的 storage（issue #286：默认已改为调度器执行顺序，
+// 本组测试关注 running 置顶/回落，排序细节由 overview-issue-sort 覆盖）
+function updatedSortStorage() {
+  return makeStorage({ [ISSUE_SORT_STORAGE_KEY]: 'updated' })
 }
 
 function buildTasksPayload(...running) {
@@ -259,8 +290,9 @@ test('渲染：运行中的 issue 置顶为「⚙️ 运行中」组，其余组
 })
 
 test('渲染：多个运行中 issue 同归 running 组且保持原始相对顺序', async () => {
-  const { renderer, renderError } =
-    await renderOverview(buildTasksPayload([1, 102], [1, 104]), buildMixedPayload())
+  const { renderer, renderError, restore } =
+    await renderOverview(buildTasksPayload([1, 102], [1, 104]),
+                         buildMixedPayload(), updatedSortStorage())
   try {
     assert.equal(renderError, null)
     const root = renderer.root
@@ -286,6 +318,7 @@ test('渲染：多个运行中 issue 同归 running 组且保持原始相对顺�
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
+    restore()
   }
 })
 
@@ -353,8 +386,9 @@ test('渲染：跨仓库同 iid 不误置顶（repo_id 参与分组键）', asyn
 
 test('渲染：任务结束后（任务列表清空）issue 回落原分组', async () => {
   const mixed = buildMixedPayload()
-  // 有任务：102 置顶
-  const first = await renderOverview(buildTasksPayload([1, 102]), mixed)
+  // 有任务：102 置顶（固定「最近更新」排序，保持 payload 原始顺序）
+  const first = await renderOverview(buildTasksPayload([1, 102]), mixed,
+                                     updatedSortStorage())
   try {
     assert.equal(first.renderError, null)
     const titles = first.renderer.root.findAll(
@@ -365,9 +399,11 @@ test('渲染：任务结束后（任务列表清空）issue 回落原分组', as
   } finally {
     await TestRenderer.act(() => first.renderer.unmount())
     mock.restoreAll()
+    first.restore()
   }
   // 任务结束：102 回落「其他」组（带 feature/in-progress 标签）
-  const second = await renderOverview(buildTasksPayload(), mixed)
+  const second = await renderOverview(buildTasksPayload(), mixed,
+                                      updatedSortStorage())
   try {
     assert.equal(second.renderError, null)
     const root = second.renderer.root
@@ -390,6 +426,7 @@ test('渲染：任务结束后（任务列表清空）issue 回落原分组', as
   } finally {
     await TestRenderer.act(() => second.renderer.unmount())
     mock.restoreAll()
+    second.restore()
   }
 })
 

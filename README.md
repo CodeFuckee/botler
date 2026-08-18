@@ -143,7 +143,13 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > bot-done / 其他，issue #80/#101），每组头部提供**折叠/展开开关**（issue
 > #285）：折叠后隐藏组内 issue 列表、保留组标题与计数，方便折叠长列表；
 > 折叠偏好持久化到浏览器本地（localStorage 键
-> `botler.overview.collapsedGroups`），刷新后保持。
+> `botler.overview.collapsedGroups`），刷新后保持。板块支持**切换排序方法**
+> （issue #286）：默认按「调度器执行顺序」排序——与任务调度器派发语义一致
+> （仓库优先级 → issue 标签优先级，默认 bug > test > feature、可在设置页
+> 自定义 → issue 创建时间升序，创建早的先处理），方便预判各分组 issue 的
+> 处理顺序；可切换「最近更新」（按最后更新时间降序）或「创建时间」（按创建
+> 时间降序）；排序偏好持久化到浏览器本地（localStorage 键
+> `botler.overview.issueSort`），刷新后保持。
 
 > 界面语言（issue #268）：导航栏右上角与设置页「界面显示」卡片提供「中文 / English」快捷切换，
 > 选择持久化到浏览器本地（localStorage 键 botler.lang），刷新后保持；高频页面（导航 / 概览 /

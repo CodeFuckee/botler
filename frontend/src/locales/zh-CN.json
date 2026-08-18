@@ -257,5 +257,14 @@
   "shortcuts.scope.overview": "概览页",
   "shortcuts.scope.tasks": "任务页",
   "nav.notLoggedIn": "未登录（开放模式）",
-  "nav.sessionExpiry": "会话有效期至 {time}"
+  "nav.sessionExpiry": "会话有效期至 {time}",
+  "overview.sort": "排序",
+  "overview.sortTitle": "切换 issue 排序方法（默认按调度器执行顺序）",
+  "overview.sortAria": "排序方法",
+  "overview.sortBy.scheduler": "调度器执行顺序",
+  "overview.sortBy.updated": "最近更新",
+  "overview.sortBy.created": "创建时间",
+  "overview.sortHint.scheduler": "按调度器派发顺序：仓库优先级 → issue 标签优先级（默认 bug > test > feature）→ 创建时间升序",
+  "overview.sortHint.updated": "按 issue 最后更新时间降序，最新更新在前",
+  "overview.sortHint.created": "按 issue 创建时间降序，最新创建在前"
 }
