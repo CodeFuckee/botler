@@ -347,6 +347,30 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 
 完整设计见 [`docs/插件体系设计方案.md`](docs/插件体系设计方案.md)（接口定义 / 迁移清单 / 测试计划 / 演进方向）。
 
+## 技能管理（issue #282）
+
+顶部导航「技能」入口（`/skills`）展示**所有配置的执行引擎（executor 插件）
+所拥有的技能**，并支持查看 / 编辑 `SKILL.md` 以及其他技能相关的 md 文件：
+
+- **技能 = 引擎技能目录下含 `SKILL.md` 的目录**（技能说明取 SKILL.md
+  frontmatter 的 `description`；支持嵌套技能，如 hermes 的
+  `software-development/spike`）；
+- **技能目录解析**（`backend/botler/skills.py`）：内置引擎按部署机惯例路径
+  ——`claude` → `~/.claude/skills`、`hermes` → `$HERMES_HOME/skills`
+  （默认 `~/.hermes/skills`）、`dsh` → `$DSH_HOME/skills` + `~/.agents/skills`；
+  外部执行引擎插件可在插件类上声明 `skills_dir` 属性（字符串或路径列表）指定；
+- **页面交互**：引擎 tab 切换 → 技能列表（名称 + 描述）→ md 文件 chips
+  （`SKILL.md` 带「技能说明」徽章）→ 编辑器（textarea 编辑 + Markdown 预览
+  切换 + 保存，保存即时生效；有未保存修改时切换会先确认）；
+- **安全约束**：仅允许编辑技能目录内的 `md` / `markdown` 文件，路径穿越
+  （`..` / 绝对路径 / 符号链接逃逸）与非 md 文件一律拒绝，单文件 2MB 写入
+  上限；不提供删除（删除会直接影响引擎侧技能行为，保留由人工操作）。
+
+**API**（`backend/botler/api/skills.py`）：`GET /api/skills`（按引擎分组列出
+技能）、`GET /api/skills/{engine}/files?skill=...`（技能 md 文件列表）、
+`GET /api/skills/{engine}/file?skill=...&path=...`（读取文件）、
+`PUT /api/skills/{engine}/file`（保存文件）。
+
 ## Web 终端（issue #183）
 
 浏览器内直接使用系统终端（顶部导航「终端」→ `/terminal`），**无需再打开系统终端**：
@@ -451,6 +475,10 @@ POST   /api/plugins/install            安装外部插件模块（校验后写�
 POST   /api/plugins/uninstall          卸载外部插件（配置与注册表同时移除；内置插件不可卸载，issue #145）
 POST   /api/plugins/reload             按 worker.plugin_paths 清空并重载外部插件（issue #145）
 PUT    /api/plugins/settings           插件设置：默认执行引擎（executor 插件，复用 worker.engine，issue #145）
+GET    /api/skills                     技能列表（按执行引擎分组返回技能与目录根 exists 标记；技能管理页数据源，issue #282）
+GET    /api/skills/{engine}/files      技能目录内 md 文件列表（?skill= 技能相对路径，可嵌套；issue #282）
+GET    /api/skills/{engine}/file       读取技能 md 文件内容（?skill=&path=，issue #282）
+PUT    /api/skills/{engine}/file       保存技能 md 文件内容（body: {skill, path, content}，仅允许技能目录内 md/markdown，issue #282）
 POST   /api/settings/reconcile-now    手动触发对账
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138）
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment；?include_usage=1 可选附带 token 用量字段，issue #235）

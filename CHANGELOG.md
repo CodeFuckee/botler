@@ -5,6 +5,39 @@
 ## [Unreleased]
 ### Added
 
+- **技能管理页面（issue #282）**：
+  新增「技能」页面，展示所有配置的执行引擎（executor 插件）所拥有的技能，
+  并支持查看 / 编辑 SKILL.md 以及其他技能相关的 md 文件（如 README.md /
+  API.md / 嵌套文档）。技能 = 引擎技能目录下含 SKILL.md 的目录：
+  - `backend/botler/skills.py`（新增）：技能目录管理核心——内置引擎技能根
+    解析（claude → `~/.claude/skills`、hermes → `$HERMES_HOME/skills`、
+    dsh → `$DSH_HOME/skills` + `~/.agents/skills`，外部执行引擎插件可声明
+    `skills_dir` 属性覆盖）；技能枚举（递归查找含 SKILL.md 的目录并解析
+    frontmatter `description` 作为技能说明，支持嵌套技能如
+    `software-development/spike`）；技能目录内 md 文件枚举 / 读取 / 写入；
+    安全约束统一收敛在 `safe_md_path`——仅允许 md / markdown 文件、禁止
+    路径穿越（`..` / 绝对路径 / 符号链接逃逸）、单文件 2MB 写入上限；
+  - `backend/botler/api/skills.py`（新增）：`GET /api/skills`（按引擎分组
+    返回技能列表 + 目录根 exists 标记 + 默认引擎标记）、`GET
+    /api/skills/{engine}/files?skill=...`（技能 md 文件列表）、`GET
+    /api/skills/{engine}/file?skill=...&path=...`（读取）、`PUT
+    /api/skills/{engine}/file`（保存）；engine 必须是已注册执行引擎插件、
+    skill 必须是含 SKILL.md 的合法目录，非法输入 400 / 404 拒绝；
+  - 前端：`frontend/src/pages/Skills.jsx`（新增）——引擎 tab 切换 → 技能
+    列表（描述）→ md 文件 chips（SKILL.md 带「技能说明」徽章）→ 编辑器
+    （textarea 编辑 + Markdown 预览切换 + 保存，保存即时生效；切换前有
+    未保存修改先确认）；`App.jsx` 导航新增「技能」入口并注册 `/skills`
+    路由；`styles.css` 技能页样式；i18n 新增 `nav.skills` 中英字典；
+    `Icon.jsx` 补充 `fileText` / `eye` 图标；
+  - **测试**：新增 `backend/tests/test_skills.py` 31 例（引擎技能根解析含
+    HERMES_HOME / DSH_HOME 覆盖、技能枚举与 frontmatter 解析、md 文件
+    枚举、路径安全（穿越 / 绝对路径 / 非 md / 符号链接逃逸 / 空路径）、
+    读写往返与大小上限、技能目录解析），`test_api_skills.py` 20 例（分组
+    列表、文件列表 / 读取 / 保存、嵌套技能寻址、未注册引擎 / 不存在技能
+    404、穿越与非 md 400）；前端新增 `frontend/tests/skills-page.test.mjs`
+    7 例（导航 / 路由 / 页面结构 / 后端接口静态断言 + mock fetch 渲染与
+    引擎切换 / 保存交互），前端测试全通过，后端全量测试无 regression。
+
 - **任务失败原因自动分类与处理建议（issue #274）**：
   任务失败时详情页只显示错误信息原文与日志，用户要自己判断失败类型（环境 token
   失效/网络/超时、引擎命令缺失/API Key 失效、还是 agent 无法解决）。本次在任务

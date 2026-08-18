@@ -8,11 +8,11 @@
 //   Lucide 无对应图形，不在图标替换范围内。
 import {
   ArrowLeft, ArrowUp, BarChart3, Bot, Brain, Check, CheckCircle2, ChevronDown,
-  ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Flag,
-  Folder, FolderOpen, Hourglass, Image as ImageIcon, Keyboard, Lightbulb, Lock,
-  MessageCircle, Mic, Package, Pencil, Pin, Plus, RefreshCw, Rocket, Search,
-  Settings, Sparkles, Square, Tag, Terminal as TerminalIcon, Trash2,
-  TriangleAlert, User, Wallet, Wrench, X, XCircle,
+  ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Eye,
+  FileText, Flag, Folder, FolderOpen, Hourglass, Image as ImageIcon, Keyboard,
+  Lightbulb, Lock, MessageCircle, Mic, Package, Pencil, Pin, Plus, RefreshCw,
+  Rocket, Search, Settings, Sparkles, Square, Tag, Terminal as TerminalIcon,
+  Trash2, TriangleAlert, User, Wallet, Wrench, X, XCircle,
 } from 'lucide-react'
 
 // 语义名 → Lucide 图标映射（全量 Lucide 系列）
@@ -31,6 +31,8 @@ export const ICONS = {
   compass: Compass,
   download: Download,
   externalLink: ExternalLink,
+  eye: Eye,
+  fileText: FileText,
   flag: Flag,
   folder: Folder,
   folderOpen: FolderOpen,

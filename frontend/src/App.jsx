@@ -9,6 +9,7 @@ import Stats from './pages/Stats.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
 import Plugins from './pages/Plugins.jsx'
+import Skills from './pages/Skills.jsx'
 import Terminal from './pages/Terminal.jsx'
 import Login from './pages/Login.jsx'
 import DialogHost from './components/DialogHost.jsx'
@@ -187,6 +188,10 @@ export default function App() {
         <NavLink to="/plugins" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           {t('nav.plugins')}
         </NavLink>
+        {/* 技能管理页（issue #282）：展示各执行引擎拥有的技能，查看/编辑 skill.md */}
+        <NavLink to="/skills" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+          {t('nav.skills')}
+        </NavLink>
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           {t('nav.settings')}
         </NavLink>
@@ -239,6 +244,7 @@ export default function App() {
           <Route path="/templates" element={<Templates />} />
           <Route path="/labels" element={<Labels />} />
           <Route path="/plugins" element={<Plugins />} />
+          <Route path="/skills" element={<Skills />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/terminal" element={<Terminal />} />
         </Routes>
