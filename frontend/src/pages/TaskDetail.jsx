@@ -3,6 +3,7 @@ import { Icon } from '../components/Icon.jsx'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { api, openTaskEventStream, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 import { confirmDialog } from '../dialog.js'
+import UsageCard from '../components/UsageCard.jsx'
 
 // 任务仍可能产出新日志/聊天的状态（活跃期间持续轮询）
 const LIVE_STATUSES = ['queued', 'running', 'retrying']
@@ -395,6 +396,10 @@ export default function TaskDetail() {
           </tbody>
         </table>
       </div>
+
+      {/* Token 用量（issue #235）：引擎采集的模型调用 token 用量与估算
+          费用卡片；无用量数据时显示「无数据」而不是报错 */}
+      <UsageCard usage={task.usage} />
 
       {/* 执行环境快照（issue #276）：元信息区折叠面板，展示任务开始时
           采集的执行环境（引擎/模型/起始提交/平台版本/配置哈希） */}

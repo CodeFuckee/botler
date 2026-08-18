@@ -26,6 +26,7 @@ from .repo_logo import router as repo_logo_router  # noqa: E402
 from .discover import router as discover_router  # noqa: E402
 from .plugins import router as plugins_router
 from .terminal import router as terminal_router  # noqa: E402  # noqa: E402
+from .usage import router as usage_router  # noqa: E402
 
 router.include_router(repos_router)
 router.include_router(tasks_router)
@@ -43,3 +44,4 @@ router.include_router(repo_logo_router)
 router.include_router(discover_router)
 router.include_router(plugins_router)
 router.include_router(terminal_router)
+router.include_router(usage_router)

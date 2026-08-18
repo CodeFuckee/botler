@@ -53,6 +53,7 @@ from .gitlab_client import (
 from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
                          list_local_remotes, parse_remote_url)
 from .templates import TemplateRenderer
+from .usage import finalize_usage, parse_claude_result_usage
 from .plugins import (
     PluginKind,
     get_plugin,
@@ -1390,6 +1391,61 @@ class ClaudeExecutor:
         return plugin.run(self, task_id, repo, issue,
                           resume_session, resume_history)
 
+    def _persist_engine_usage(self, task_id: int, engine: str,
+                             usage: dict | None,
+                             model: str | None = None) -> None:
+        """把引擎采集的 token 用量落库 task_usage（issue #235）。
+
+        usage 为 None（引擎无用量数据）→ 不写库（任务详情显示「无数据」）；
+        费用估算：优先引擎自带费用（claude total_cost_usd / hermes
+        session_estimated_cost_usd），否则按 config usage.pricing 单价
+        估算；无单价 → estimated_cost 为 None（前端只展示 token 数）。
+        落库失败仅记日志，绝不阻塞任务收尾。
+        """
+        try:
+            record = finalize_usage(
+                engine, usage, model=model,
+                pricing=self.config.get().usage_pricing,
+                currency=self.config.get().usage_currency)
+        except Exception as e:  # noqa: BLE001 估算失败按无用量处理
+            logger.warning("任务 %s 用量归一化失败: %s", task_id, e)
+            record = None
+        if record is None:
+            return
+        try:
+            self.db.save_task_usage(
+                task_id, engine=engine,
+                model=record["model"],
+                prompt_tokens=record["prompt_tokens"],
+                completion_tokens=record["completion_tokens"],
+                total_tokens=record["total_tokens"],
+                estimated_cost=record["estimated_cost"],
+                currency=record["currency"],
+                raw_usage=json.dumps(record["raw_usage"], ensure_ascii=False)
+                if record["raw_usage"] is not None else None)
+            cost_text = (f"，估算费用 {record['estimated_cost']} "
+                         f"{record['currency']}") if record["estimated_cost"] is not None else ""
+            self.db.add_log(
+                task_id, "info",
+                f"token 用量已记录：{record['prompt_tokens']} 输入 / "
+                f"{record['completion_tokens']} 输出"
+                f"（模型 {record['model'] or engine}）{cost_text}")
+        except Exception as e:  # noqa: BLE001 落库失败不影响任务收尾
+            self.db.add_log(task_id, "warn", f"token 用量落库失败: {e}")
+
+    def _persist_claude_usage(self, task_id: int, output: str) -> None:
+        """从 claude 输出解析用量并落库（执行结束/停止/超时路径共用）。
+
+        结果行（type=result）含 usage 字段（stream-json 与单行
+        --output-format json 同构），modelUsage 提供模型名；解析失败
+        （异常中断无结果行）不落库，任务详情显示「无数据」。
+        """
+        data = self._last_json_object(output)
+        usage = parse_claude_result_usage(data)
+        if usage is None:
+            return
+        self._persist_engine_usage(task_id, "claude", usage)
+
     def _run_claude_once(self, task_id: int, repo: dict, issue: dict,
                          resume_session: str | None = None) -> tuple[int, str]:
         """执行一次 claude 引擎（Claude Code CLI 无头模式）。
@@ -1471,6 +1527,7 @@ class ClaudeExecutor:
                 self.db.add_log(task_id, "warn",
                                 "任务被用户停止，已强制终止 claude 进程组")
                 self._persist_session_id(task_id, output)
+                self._persist_claude_usage(task_id, output)  # issue #235
                 return STOP_EXIT_CODE, output
 
             if timed_out:
@@ -1480,12 +1537,14 @@ class ClaudeExecutor:
                 self.db.add_log(task_id, "error",
                                 f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止进程组")
                 self._persist_session_id(task_id, output)
+                self._persist_claude_usage(task_id, output)  # issue #235
                 return 124, output  # 124 = timeout 约定退出码
 
             exit_code = proc.wait(timeout=30)
             output = "".join(chunks)
             self.db.add_log(task_id, "info", f"claude 退出码: {exit_code}")
             self._persist_session_id(task_id, output)
+            self._persist_claude_usage(task_id, output)  # issue #235
             return exit_code, output
         finally:
             with self._proc_lock:
@@ -1660,14 +1719,24 @@ class ClaudeExecutor:
             if stopped:
                 self.db.add_log(task_id, "warn",
                                 "任务被用户停止，已请求 hermes 中断")
+                # getattr 防御：旧 runner / 测试假 runner 可能无 usage/model
+                self._persist_engine_usage(  # issue #235
+                    task_id, "hermes", getattr(runner, "usage", None),
+                    model=getattr(runner, "model", ""))
                 return STOP_EXIT_CODE, output
 
             if timed_out:
                 self.db.add_log(task_id, "error",
                                 f"任务超时（>{cfg.task_timeout_seconds}s），已请求 hermes 中断")
+                self._persist_engine_usage(  # issue #235
+                    task_id, "hermes", getattr(runner, "usage", None),
+                    model=getattr(runner, "model", ""))
                 return 124, output  # 124 = timeout 约定退出码
 
             self.db.add_log(task_id, "info", f"hermes 引擎退出码: {exit_code}")
+            self._persist_engine_usage(  # issue #235
+                task_id, "hermes", getattr(runner, "usage", None),
+                model=getattr(runner, "model", ""))
             return exit_code, output
         finally:
             log_f.close()
@@ -1849,12 +1918,17 @@ class ClaudeExecutor:
             _dsh_accumulate(line)
             _dsh_persist()
 
+        # issue #235：捕获本轮 runner 供执行结束后读 token 用量（runner
+        # 内部在 worker 完成后聚合 usage；碰撞重跑后指向最新一轮 runner）
+        last_runner: DshRunner | None = None
+
         def _run_round(session_id: str, round_prompt: str) -> tuple[int, bool, bool]:
             """跑一轮 dsh：构造 runner、启动、等待完成（停止/超时强制终止）。
 
             返回 (exit_code, stopped, timed_out)；SDK 未安装抛
             ExecutorError（run_task 捕获重试）。
             """
+            nonlocal last_runner
             try:
                 # issue #115：dsh 段未配 key 时回退设置页「AI 供应商」的
                 # deepseek 项（用户已在该处配过 key，此前未被消费）
@@ -1874,6 +1948,7 @@ class ClaudeExecutor:
                     api_key=dsh_api_key,
                     env=env, on_line=_on_line)
                 runner.start()
+                last_runner = runner
             except DshSdkNotInstalledError as e:
                 raise ExecutorError(str(e))
 
@@ -1940,16 +2015,28 @@ class ClaudeExecutor:
                 self.db.add_log(task_id, "warn",
                                 "任务被用户停止，已强制终止 dsh 运行时")
                 self._persist_dsh_session_id(task_id, output)
+                self._persist_engine_usage(  # issue #235
+                    task_id, "dsh",
+                    getattr(last_runner, "usage", None) if last_runner else None,
+                    model=cfg.dsh_model)
                 return STOP_EXIT_CODE, output
 
             if timed_out:
                 self.db.add_log(task_id, "error",
                                 f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止 dsh 运行时")
                 self._persist_dsh_session_id(task_id, output)
+                self._persist_engine_usage(  # issue #235
+                    task_id, "dsh",
+                    getattr(last_runner, "usage", None) if last_runner else None,
+                    model=cfg.dsh_model)
                 return 124, output  # 124 = timeout 约定退出码
 
             self.db.add_log(task_id, "info", f"dsh 引擎退出码: {exit_code}")
             self._persist_dsh_session_id(task_id, output)
+            self._persist_engine_usage(  # issue #235
+                task_id, "dsh",
+                getattr(last_runner, "usage", None) if last_runner else None,
+                model=cfg.dsh_model)
             return exit_code, output
         finally:
             log_f.close()

@@ -5,6 +5,43 @@
 ## [Unreleased]
 ### Added
 
+- **任务执行 token 用量采集与费用统计：三引擎（claude / hermes / dsh）任务详情展示用量卡片，概览页按仓库/引擎/时间段聚合（issue #235）**：
+  需求——每个任务都会调用大模型 API，但任务详情只展示状态/日志/提交信息，完全没有记录每次执行消耗了多少 token、调用
+  了哪些模型、估算费用是多少；claude CLI 的 stream-json 输出、dsh SDK 的 usage 字段、hermes 的消息记录里都含用量
+  数据但没采集。本次打通「采集 → 落库 → 估算费用 → 展示/统计」全链路：
+  - `backend/botler/database.py`：新增 `task_usage` 表（engine / model / prompt_tokens / completion_tokens /
+    total_tokens / estimated_cost / currency / raw_usage JSON，迁移 v16，旧库启动自动建表）；新增
+    `save_task_usage`（同任务覆盖语义，重试以最后一次执行为准）/ `get_task_usage` / `get_task_usage_map`（列表
+    批量查询避免 N+1）/ `usage_stats`（按 repo_id / engine / since / until 过滤，返回 summary + by_repo /
+    by_engine / by_date 聚合）；
+  - `backend/botler/usage.py`（新增）：`parse_claude_result_usage`（result 事件行 usage——input + 缓存读写
+    计入 prompt，modelUsage 取模型名，SDK 自带 total_cost_usd 优先作费用）、`extract_dsh_usage`（SDK 会话事件
+    流 assistant/chunk 的 usage chunk 累加，DeepSeek OpenAI 兼容字段）、`estimate_cost` / `find_pricing`
+    （config 单价表，精确匹配优先再子串匹配，无单价返回 None=只展示 token 数）、`finalize_usage`（统一归一化）；
+  - `backend/botler/config.py`：新增 `usage` 配置段——`currency`（默认 USD）+ `pricing` 单价表（每项 model /
+    input_per_million / output_per_million，model 支持子串匹配），已写入 `config.example.yaml`；
+  - `backend/botler/dsh_runner.py`：`DshRunner` 执行后从 `result.events` 聚合 usage 落 `runner.usage`，结果行
+    附带 usage（日志可诊断）；`backend/botler/hermes_sdk_runner.py`：`HermesSdkRunner` 执行后从 agent 会话级
+    计数器（session_prompt_tokens / session_completion_tokens / session_total_tokens /
+    session_estimated_cost_usd 等）聚合 usage 落 `runner.usage`，结果行附带 usage；
+  - `backend/botler/executor.py`：`_persist_engine_usage` 统一落库（费用：引擎自带费用 > config 单价估算 >
+    None 只展示 token 数；落库失败仅记日志不阻塞收尾），三引擎执行路径（claude 停止/超时/正常、hermes、dsh
+    停止/超时/正常 + 碰撞重跑）全部接入，执行日志新增「token 用量已记录」行；
+  - `backend/botler/api/tasks.py`：任务详情/列表（`include_usage=1` 可选展示，批量查询）附 `usage` 字段（无
+    用量数据为 null，前端显示「无数据」而不是报错）；`backend/botler/api/usage.py`（新增）：
+    `GET /api/usage/stats` 按仓库/引擎/时间段聚合接口（非法日期 400）；
+  - 前端：`frontend/src/components/UsageCard.jsx`（新增）用量卡片组件（引擎/模型/输入/输出/总 tokens/估算费用，
+    无数据「无数据」、无单价「未估算（未配置单价）」）+ 列表摘要 `UsageSummary`；`TaskDetail.jsx` 与
+    `TaskDetailDrawer.jsx` 元信息区下方展示用量卡片；`Tasks.jsx` 任务列表「显示用量」勾选（可选展示列，窄视口
+    可隐藏）；`Overview.jsx` 新增「Token 用量统计」板块（仓库/引擎/时间范围过滤器 + 合计 tokens/费用 + 按引擎/
+    仓库分组表格，60 秒低频轮询，空态与失败提示不崩溃）；`styles.css` 新增用量卡片/列表/统计板块样式；
+  - **测试**：后端新增 `backend/tests/test_task_usage.py` 34 例（DB 覆盖/聚合/过滤、claude result 解析缓存
+    token 计入、dsh chunk 累加、费用估算精确/子串/无单价、executor 落库与日志、API 详情/列表/统计与无数据
+    null）；`test_database_legacy_cst.py` / `test_database_migrate.py` 迁移版本断言更新至 v16；前端新增
+    `frontend/tests/task-detail-usage.test.mjs` 7 例、`tasks-usage-column.test.mjs` 5 例、
+    `overview-usage-stats.test.mjs` 6 例；前后端全量测试通过，无 regression。
+
+
 - **前端可见版本号（含 commit/时间）+ 后端 /api/health 版本对齐 + 新版部署后页面提示刷新，排查「这个功能部署了吗」不再靠猜（issue #233）**：
   需求——`VersionBadge.jsx` 组件与 `gen-version.mjs` 构建版本生成早已存在（issue #9），但版本信息展示缺 commit、后端
   `/api/health` 版本号硬编码 `1.0.0` 与前端生成版本不一致、新版部署后页面无任何提示，用户无法直观确认当前部署版本。

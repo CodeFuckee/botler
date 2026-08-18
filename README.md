@@ -398,6 +398,8 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `image_models[]` | 空列表 | 生图模型配置（设置页「生图模型」卡片增删改查，issue #135/#137）：每项 `{name, provider, base_url, api_key, model, enabled}`，内置 Gemini Nano Banana Pro（默认模型 `gemini-3-pro-image`，generateContent 接口）与 GPT Image 2（默认模型 `gpt-image-2`，OpenAI images 接口）两个预设；api_key 落盘 config.yaml（支持 `${ENV}` 引用），API 只返回掩码；后端 `image_models.py` 提供统一调用封装（自定义 base_url 且不等于预设默认时视为完整请求地址直接使用，不再拼接接口路径；留空或等于预设默认按官方接口拼接），设置页测试按钮走 `POST /api/settings/image-model-test` 真实调用一次生图接口验证配置可用；OpenAI 兼容接口若返回 SSE 流（`text/event-stream`，多行 `data: {json}` 事件逐步上报进度、最终 `status: "succeeded"` 且 `results[].url` 为生成图片地址）自动按事件解析并下载图片返回，任务失败时展示 `failure_reason` / `error` 原因（issue #151） |
 | `ui.show_disabled_repos` | true | 灵感 / CI/CD 页面是否显示未启用项目（issue #142）：`true` = 显示（未启用仓库带「未启用」徽章）；`false` = 两个板块只展示已启用仓库（后端接口直接过滤，未启用仓库不再发起 GitLab 流水线查询）；设置页「界面显示」卡片可切换，保存后立即生效 |
 | `ui.theme` | system | 界面显示主题三态（issue #217）：`system` = 跟随系统 `prefers-color-scheme` 自动适配（默认）；`light` = 强制浅色；`dark` = 强制深色（深色底 `#1a1d23` + 蓝色强调 `#3b82f6`）。设置页「界面显示」卡片可切换，切换即时预览；保存后写回 config.yaml 并同步浏览器 localStorage（`botler.theme`，刷新不闪变） |
+| `usage.currency` | USD | 任务 token 用量估算费用货币（issue #235） |
+| `usage.pricing[]` | 空列表 | 模型单价表（issue #235）：每项 `{model, input_per_million, output_per_million}`——`model` 支持子串匹配（如 `deepseek` 可匹配 `deepseek-v4-flash`，精确匹配优先）；配置后任务执行按「prompt × 输入单价 + completion × 输出单价」估算费用，无单价时任务详情只展示 token 数；引擎自带费用（claude `total_cost_usd` / hermes `session_estimated_cost_usd`）优先于本表 |
 | `notifications.enabled` | true | 网页通知总开关（任务需交互 / issue 完成 / 队列空 / 无新任务，逐项可关） |
 | `webhook.enabled` | false | Webhook 消息推送总开关（issue #136）：任务完成（成功收尾）时调用 webhook 推送消息；设置页「消息推送 Webhook」卡片可配置，卡片内提供独立「保存 Webhook 配置」按钮（issue #141），也可用上方「任务调度」卡片全局「保存」 |
 | `webhook.url` / `content_type` / `authorization` | — | webhook 地址（POST 目标，须 http(s):// 开头）/ Content-Type 请求头（默认 `application/json`）/ Authorization 请求头（可选，支持 `${ENV}` 引用） |
@@ -443,8 +445,9 @@ POST   /api/plugins/reload             按 worker.plugin_paths 清空并重载�
 PUT    /api/plugins/settings           插件设置：默认执行引擎（executor 插件，复用 worker.engine，issue #145）
 POST   /api/settings/reconcile-now    手动触发对账
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138）
-GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment）
-GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url/environment——执行环境快照 JSON：引擎版本/模型/起始提交/平台版本/配置哈希，issue #276）
+GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment；?include_usage=1 可选附带 token 用量字段，issue #235）
+GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url/environment——执行环境快照 JSON：引擎版本/模型/起始提交/平台版本/配置哈希，issue #276；usage——任务 token 用量：engine/model/prompt_tokens/completion_tokens/total_tokens/estimated_cost/currency/raw_usage，无用量数据为 null，issue #235）
+GET    /api/usage/stats               任务 token 用量统计（按 repo_id/engine/since/until 过滤，返回 summary + by_repo/by_engine/by_date 聚合，issue #235）
 GET    /api/tasks/{id}/logs           任务日志
 GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
 GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/文本/工具调用/结果逐事件；终态任务连接后回放历史事件；思考过程默认隐藏，任务详情页事件流右侧勾选「显示思考过程」后展开显示，见实时输出功能）

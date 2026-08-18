@@ -119,6 +119,28 @@ CREATE TABLE IF NOT EXISTS task_progress (
 CREATE INDEX IF NOT EXISTS idx_task_progress_task
   ON task_progress(task_id, step_no);
 
+-- 任务 token 用量与费用（issue #235）：每次任务执行采集引擎的模型调用
+-- token 用量（claude result 行 usage / dsh SDK usage chunk / hermes 会话
+-- 计数器），执行结束后落库一行（重试覆盖上一次）；estimated_cost 为估算
+-- 费用（引擎自带费用或按 config 单价估算，无单价为 NULL=只展示 token 数）。
+CREATE TABLE IF NOT EXISTS task_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES tasks(id),
+  engine TEXT NOT NULL DEFAULT '',
+  model TEXT,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  estimated_cost REAL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  raw_usage TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_usage_task
+  ON task_usage(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_usage_engine
+  ON task_usage(engine);
+
 -- 网页通知事件（issue #21）：前端轮询增量拉取后弹系统通知。
 -- 任务类事件以 task_id 唯一（同一任务收尾只记一次，幂等）；
 -- 队列类事件（queue_empty/queue_no_work）task_id 为 NULL，靠 notifier 节流去重。
@@ -409,6 +431,32 @@ class Database:
             if "logo_mime" not in cols:
                 conn.execute("ALTER TABLE repos ADD COLUMN logo_mime TEXT")
             conn.execute("PRAGMA user_version = 15")
+
+        if ver < 16:
+            # issue #235：任务 token 用量表 task_usage。CREATE TABLE IF NOT EXISTS
+            # 已在 _SCHEMA 覆盖新库；旧库（user_version=15）首次启动时同样建表，
+            # 并显式推进版本号保持迁移链完整（与 issue #131 灵感表 v8 同模式）。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS task_usage (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     task_id INTEGER NOT NULL REFERENCES tasks(id),
+                     engine TEXT NOT NULL DEFAULT '',
+                     model TEXT,
+                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                     completion_tokens INTEGER NOT NULL DEFAULT 0,
+                     total_tokens INTEGER NOT NULL DEFAULT 0,
+                     estimated_cost REAL,
+                     currency TEXT NOT NULL DEFAULT 'USD',
+                     raw_usage TEXT,
+                     created_at TEXT DEFAULT (datetime('now'))
+                   )""")
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_task_usage_task
+                   ON task_usage(task_id)""")
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_task_usage_engine
+                   ON task_usage(engine)""")
+            conn.execute("PRAGMA user_version = 16")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1024,6 +1072,141 @@ class Database:
                          WHERE task_id=? GROUP BY step_no) m
                      ON tp.id = m.max_id
                    ORDER BY tp.step_no ASC""", (task_id,)).fetchall()
+
+
+    # ---- task_usage（issue #235：任务 token 用量与费用统计）----
+
+    def save_task_usage(self, task_id: int, *, engine: str,
+                        model: str | None = None,
+                        prompt_tokens: int = 0,
+                        completion_tokens: int = 0,
+                        total_tokens: int = 0,
+                        estimated_cost: float | None = None,
+                        currency: str = "USD",
+                        raw_usage: str | None = None) -> None:
+        """保存一次任务执行的 token 用量（同任务覆盖上一次执行）。
+
+        一个任务只跑一种引擎（issue #120），重试/续跑以最后一次执行
+        为准（与 tasks.engine 覆盖语义一致）；统计页按 task_usage 行聚合。
+        """
+        with self._conn() as conn:
+            conn.execute("DELETE FROM task_usage WHERE task_id=?", (task_id,))
+            conn.execute(
+                """INSERT INTO task_usage
+                     (task_id, engine, model, prompt_tokens, completion_tokens,
+                      total_tokens, estimated_cost, currency, raw_usage)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (task_id, engine, model,
+                 int(prompt_tokens or 0), int(completion_tokens or 0),
+                 int(total_tokens or 0),
+                 estimated_cost, currency, raw_usage))
+
+    def get_task_usage(self, task_id: int) -> sqlite3.Row | None:
+        """取任务最近一次执行的 token 用量（无记录返回 None）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM task_usage WHERE task_id=?",
+                (task_id,)).fetchone()
+
+    def get_task_usage_map(self, task_ids: list[int]) -> dict[int, sqlite3.Row]:
+        """批量取多个任务的用量（任务列表可选展示，避免 N+1 查询）。"""
+        if not task_ids:
+            return {}
+        q = ", ".join("?" * len(task_ids))
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM task_usage WHERE task_id IN ({q})",  # nosec B608
+                task_ids).fetchall()
+        return {r["task_id"]: r for r in rows}
+
+    def usage_stats(self, repo_id: int | None = None,
+                    engine: str | None = None,
+                    since: str | None = None,
+                    until: str | None = None) -> dict:
+        """按仓库/引擎/时间段聚合 token 用量统计（issue #235 验收标准 3）。
+
+        过滤条件：repo_id（task_usage JOIN tasks 按仓库）、engine（引擎名）、
+        since/until（task_usage.created_at 的 UTC 日期串 'YYYY-MM-DD'，
+        含端点）。返回：
+        - summary：全局合计（记录数 / prompt / completion / total / 费用）
+        - by_repo：按仓库分组 [{repo_id, repo_name, task_count, 各 token 合计, cost}]
+        - by_engine：按引擎分组 [{engine, task_count, 各 token 合计, cost}]
+        - by_date：按记录日期分组 [{date, task_count, 各 token 合计, cost}]
+        费用合计只累加 estimated_cost 非空行；空结果返回空列表（前端空态）。
+        """
+        where = ["u.id IS NOT NULL"]
+        params: list = []
+        if repo_id is not None:
+            where.append("t.repo_id=?")
+            params.append(repo_id)
+        if engine:
+            where.append("u.engine=?")
+            params.append(engine)
+        if since:
+            where.append("date(u.created_at) >= ?")
+            params.append(since)
+        if until:
+            where.append("date(u.created_at) <= ?")
+            params.append(until)
+        cond = " AND ".join(where)
+        base = f"""FROM task_usage u JOIN tasks t ON t.id = u.task_id WHERE {cond}"""
+
+        def _agg(sql: str, extra_params: list) -> list[sqlite3.Row]:
+            with self._conn() as conn:
+                return conn.execute(sql, [*params, *extra_params]).fetchall()
+
+        with self._conn() as conn:
+            summary = conn.execute(
+                f"""SELECT COUNT(*) AS task_count,
+                           COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
+                           COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens,
+                           COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+                           COALESCE(SUM(u.estimated_cost), 0) AS estimated_cost,
+                           COALESCE(SUM(CASE WHEN u.estimated_cost IS NOT NULL
+                                             THEN 1 ELSE 0 END), 0) AS costed_count
+                    {base}""", params).fetchone()
+
+        by_repo = _agg(
+            f"""SELECT t.repo_id AS repo_id, COALESCE(r.name, '') AS repo_name,
+                       COUNT(*) AS task_count,
+                       COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
+                       COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens,
+                       COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(u.estimated_cost), 0) AS estimated_cost
+                FROM task_usage u JOIN tasks t ON t.id = u.task_id
+                LEFT JOIN repos r ON r.id = t.repo_id
+                WHERE {cond}
+                GROUP BY t.repo_id ORDER BY total_tokens DESC""", [])
+        by_engine = _agg(
+            f"""SELECT u.engine AS engine, COUNT(*) AS task_count,
+                       COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
+                       COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens,
+                       COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(u.estimated_cost), 0) AS estimated_cost
+                {base}
+                GROUP BY u.engine ORDER BY total_tokens DESC""", [])
+        by_date = _agg(
+            f"""SELECT date(u.created_at) AS date, COUNT(*) AS task_count,
+                       COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
+                       COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens,
+                       COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(u.estimated_cost), 0) AS estimated_cost
+                {base}
+                GROUP BY date(u.created_at) ORDER BY date ASC""", [])
+        # 取首个非空 currency（同一任务库内货币一致，防御性兜底 USD）
+        with self._conn() as conn:
+            cur_row = conn.execute(
+                f"""SELECT u.currency AS currency FROM task_usage u
+                    JOIN tasks t ON t.id = u.task_id WHERE {cond}
+                    ORDER BY u.id DESC LIMIT 1""", params).fetchone()
+        currency = cur_row["currency"] if cur_row else "USD"
+        return {
+            "summary": dict(summary),
+            "currency": currency,
+            "by_repo": [dict(r) for r in by_repo],
+            "by_engine": [dict(r) for r in by_engine],
+            "by_date": [dict(r) for r in by_date],
+        }
 
     def task_stats(self) -> dict:
         with self._conn() as conn:

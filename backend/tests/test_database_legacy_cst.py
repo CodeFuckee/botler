@@ -131,18 +131,20 @@ def test_migration_idempotent(tmp_path):
 
 
 def test_user_version_marker(tmp_path):
-    """迁移完成后 user_version 应为 14（v2 CST 修正 + v3 仓库优先级列 + v4 deleted_at
+    """迁移完成后 user_version 应为 16（v2 CST 修正 + v3 仓库优先级列 + v4 deleted_at
     + v5 dsh_session_id + v6 issue_labels/issue_updated_at + v7 engine
     + v8 inspirations 灵感表 issue #131 + v9 dsh_transcript issue #146
     + v10 repos.remote_username 仓库用户列 issue #153
     + v11 inspiration_messages 灵感 AI 对话消息表 issue #166
     + v12 tasks.issue_created_at 同权重按 issue 创建时间排序 issue #234
     + v13 tasks.environment 任务执行环境快照列 issue #276
-    + v14 task_progress 任务进度账本表 issue #281）。"""
+    + v14 task_progress 任务进度账本表 issue #281
+    + v15 repos.logo_* 仓库 logo 列 issue #188
+    + v16 task_usage 任务 token 用量表 issue #235）。"""
     db = Database(str(tmp_path / "ver.db"))
     with db._conn() as conn:
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 15
+    assert ver == 16
 
 
 def test_legacy_db_gets_remote_username_column(tmp_path):
@@ -176,7 +178,7 @@ def test_legacy_db_gets_remote_username_column(tmp_path):
         cols = {r["name"] for r in conn2.execute("PRAGMA table_info(repos)")}
         assert "remote_username" in cols
         ver = conn2.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 15
+    assert ver == 16  # v9 旧库迁移应推进到最新版本（v16：task_usage 表，issue #235）
     # 新列可正常写入读取
     repo_id = db.upsert_repo(
         42, "demo", "https://gitlab.example.com/group/demo.git",

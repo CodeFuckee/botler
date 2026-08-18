@@ -155,6 +155,10 @@ class HermesSdkRunner:
         self._thread: threading.Thread | None = None
         self._exit_code = 1
         self._error: str | None = None
+        # issue #235：任务 token 用量——run_conversation 后从 agent 会话级
+        # 计数器聚合（含模型名与 SDK 自带费用），供 executor 落库与结果行展示
+        self.usage: dict | None = None
+        self.model: str = ""
         # 环境还原快照（worker 线程临时写入 os.environ，结束恢复）
         self._env_saved: dict[str, str | None] = {}
         self._cwd_saved: str | None = None
@@ -296,15 +300,22 @@ class HermesSdkRunner:
             pass
 
     def _emit_result(self, final_response: str, messages: list | None,
-                     session_id: str, error: str | None = None) -> None:
-        """输出结果行（executor 落库断点续跑与结果判定）。"""
-        line = json.dumps({
+                     session_id: str, error: str | None = None,
+                     usage: dict | None = None) -> None:
+        """输出结果行（executor 落库断点续跑与结果判定）。
+
+        usage（issue #235）：会话累计 token 用量 dict（无用量时省略），
+        写进结果行供日志诊断；executor 落库直接读 runner.usage。
+        """
+        data = {
             "final_response": final_response or "",
             "messages": messages if isinstance(messages, list) else [],
             "session_id": session_id or "",
             "error": error,
-        }, ensure_ascii=False)
-        _emit(self.on_line, line)
+        }
+        if isinstance(usage, dict):
+            data["usage"] = usage
+        _emit(self.on_line, json.dumps(data, ensure_ascii=False))
 
     def _run_agent(self) -> None:
         """worker 主流程：import SDK → 构造 AIAgent → run_conversation → 结果行。"""
@@ -380,6 +391,27 @@ class HermesSdkRunner:
         # 供 executor 落库、下次执行接续同一会话
         session_id = str(getattr(agent, "session_id", "") or ""
                          or result.get("session_id") or "")
+        # issue #235：从 agent 会话级计数器聚合 token 用量（会话内全部
+        # API 调用的累计；conversation_history 消息本身不携带 usage 字段，
+        # 计数器是同等语义的权威合计），模型名取 agent.model，费用优先
+        # SDK 自带估算（session_estimated_cost_usd，含缓存/推理计价）
+        usage = {
+            "prompt_tokens": int(getattr(agent, "session_prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(agent, "session_completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(agent, "session_total_tokens", 0) or 0),
+            "input_tokens": int(getattr(agent, "session_input_tokens", 0) or 0),
+            "output_tokens": int(getattr(agent, "session_output_tokens", 0) or 0),
+            "cache_read_tokens": int(getattr(agent, "session_cache_read_tokens", 0) or 0),
+            "cache_write_tokens": int(getattr(agent, "session_cache_write_tokens", 0) or 0),
+            "reasoning_tokens": int(getattr(agent, "session_reasoning_tokens", 0) or 0),
+            "api_calls": int(getattr(agent, "session_api_calls", 0) or 0),
+            "estimated_cost_usd": getattr(agent, "session_estimated_cost_usd", None),
+            "cost_source": str(getattr(agent, "session_cost_source", "") or ""),
+            "model": str(getattr(agent, "model", "") or ""),
+        }
+        self.usage = usage
+        self.model = usage["model"]
         self._exit_code = 0
         self._error = None
-        self._emit_result(str(final_response), messages, session_id, error=None)
+        self._emit_result(str(final_response), messages, session_id, error=None,
+                          usage=usage)

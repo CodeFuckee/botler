@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { Icon } from '../components/Icon.jsx'
+import { UsageSummary } from '../components/UsageCard.jsx'
 
 // 每页条数（与后端 limit 一致，issue #50 翻页）
 const PAGE_SIZE = 50
@@ -18,6 +19,11 @@ export const HIDDEN_COL_PRIORITY = [
   { key: 'reason', label: '失败原因', width: 140 }, // 第 8 列
   { key: 'duration', label: '用时', width: 120 }, // 第 11 列
 ]
+
+// 可选用量列（issue #235）：勾选「显示用量」后追加为第 6 列（状态之后），
+// 不参与响应式隐藏（可选列勾选后恒显示，窄视口走 .table-wrap 横向滚动）；
+// 宽度与 styles.css 的 .tasks-table-usage th:nth-child(6) 一致
+export const USAGE_COL_WIDTH = 150
 
 // 12 列宽度总和（styles.css .table.tasks-table min-width 同值）
 export const TABLE_MIN_WIDTH = 1360
@@ -153,6 +159,9 @@ export default function Tasks() {
   const [refreshing, setRefreshing] = useState(false) // 手动刷新请求进行中（issue #59）
   const [drawerTask, setDrawerTask] = useState(null) // ⋯ 按钮打开的右侧抽屉任务（issue #70）
   const [hiddenCols, setHiddenCols] = useState(() => new Set()) // 窄视口隐藏的列 key 集合（issue #70）
+  // issue #235：任务列表可选展示 token 用量列（默认关闭，勾选后带
+  // include_usage=1 重新拉取，后端批量返回避免逐任务 N+1 查询）
+  const [showUsage, setShowUsage] = useState(false)
   const timer = useRef(null)
 
   const load = useCallback(async () => {
@@ -164,12 +173,13 @@ export default function Tasks() {
       if (status) q.set('status', status)
       if (search.trim()) q.set('search', search.trim())
       if (repoId) q.set('repo_id', repoId)
+      if (showUsage) q.set('include_usage', '1')
       const d = await api.get('/api/tasks?' + q)
       setData(d)
     } catch (e) {
       setError(e.message)
     }
-  }, [status, search, repoId, page])
+  }, [status, search, repoId, page, showUsage])
 
   // 总页数（issue #50）：total 为 0 时也保持 ≥1，组件渲染条件另由 totalPages > 1 控制
   const totalPages = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
@@ -203,8 +213,9 @@ export default function Tasks() {
 
   // 有隐藏列时操作列最右侧出现「⋯」按钮（issue #70）
   const hasHiddenCols = hiddenCols.size > 0
-  // 表格 min-width 随隐藏列缩减为剩余列宽总和，窄屏下不出现横向滚动条
-  const tableMinWidth = TABLE_MIN_WIDTH -
+  // 表格 min-width 随隐藏列缩减为剩余列宽总和，窄屏下不出现横向滚动条；
+  // issue #235：勾选「显示用量」时追加用量列宽（默认不勾选，布局不变）
+  const tableMinWidth = TABLE_MIN_WIDTH + (showUsage ? USAGE_COL_WIDTH : 0) -
     HIDDEN_COL_PRIORITY.reduce((sum, c) => sum + (hiddenCols.has(c.key) ? c.width : 0), 0)
   // 隐藏列的 className（display:none 由 styles.css 提供，列保留 DOM 保持 nth-child 索引）
   const colCls = (key) => (hiddenCols.has(key) ? 'col-hidden' : undefined)
@@ -372,17 +383,26 @@ export default function Tasks() {
           >
             <><Icon name="refresh" /> 刷新{refreshing ? '…' : ''}</>
           </button>
+          {/* issue #235：任务列表可选展示 token 用量列——默认关闭（列表
+              不查询用量，无额外开销）；勾选后重新拉取展示 */}
+          <label className="checkbox-label tasks-usage-toggle" title="展示每个任务的 token 用量（无用量数据显示「无数据」）">
+            <input type="checkbox" checked={showUsage}
+                   onChange={(e) => setShowUsage(e.target.checked)} />
+            显示用量
+          </label>
         </div>
 
         {/* 12 列表格最小宽度超容器，外包滚动容器防止窄视口下内容溢出卡片（issue #28） */}
         <div className="table-wrap">
           {/* table-layout: fixed 固定布局，表格宽度恒等于容器宽度，宽视口不出现水平滚动条（issue #28 第二轮）；
               窄视口隐藏列后 min-width 缩减为剩余列宽总和（issue #70） */}
-          <table className="table tasks-table" style={{ minWidth: tableMinWidth }}>
+          <table className={'table tasks-table' + (showUsage ? ' tasks-table-usage' : '')}
+                 style={{ minWidth: tableMinWidth }}>
             <thead>
               <tr>
                 <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
                 <th>状态</th>
+                {showUsage && <th className="usage-col">用量</th>}
                 <th className={colCls('attempt')}>尝试</th>
                 <th className={colCls('source')}>来源</th>
                 <th className={colCls('reason')}>失败原因</th>
@@ -394,7 +414,7 @@ export default function Tasks() {
             </thead>
           <tbody>
             {data.tasks.length === 0 && (
-              <tr><td colSpan={12}>
+              <tr><td colSpan={showUsage ? 13 : 12}>
                 <div className="empty-state">
                   <span className="empty-icon" aria-hidden="true"><Icon name="folderOpen" /></span>
                   <p className="muted">暂无任务</p>
@@ -417,6 +437,11 @@ export default function Tasks() {
                   <td><Link to={`/tasks/${t.id}`}>#{t.issue_iid}</Link></td>
                   <td className="ellipsis" title={t.issue_title}>{t.issue_title || '—'}</td>
                   <td><span className={'badge ' + meta.cls}>{meta.label}</span></td>
+                  {showUsage && (
+                    <td className="usage-col">
+                      {t.usage ? <UsageSummary usage={t.usage} /> : <span className="muted">—</span>}
+                    </td>
+                  )}
                   <td className={colCls('attempt')}>
                     {t.attempt_count}
                     {t.resumed && (

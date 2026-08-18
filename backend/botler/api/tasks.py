@@ -48,12 +48,39 @@ def _issue_url(repo_url: str | None, issue_iid: int | None) -> str | None:
     return f"{base}/-/issues/{issue_iid}"
 
 
-def _task_to_dict(row, repo: dict | None = None) -> dict:
+def _usage_to_dict(row) -> dict | None:
+    """把 task_usage 行转为 API dict（issue #235：token 用量卡片数据）。
+
+    raw_usage 为引擎采集的原始 usage JSON（claude usage / dsh 聚合 /
+    hermes 会话计数器），解析失败返回 None 不报错；无记录返回 None。
+    """
+    if row is None:
+        return None
+    raw = None
+    if row["raw_usage"]:
+        try:
+            raw = json.loads(row["raw_usage"])
+        except (ValueError, TypeError):
+            raw = None
+    return {
+        "engine": row["engine"] or "",
+        "model": row["model"] or None,
+        "prompt_tokens": row["prompt_tokens"],
+        "completion_tokens": row["completion_tokens"],
+        "total_tokens": row["total_tokens"],
+        "estimated_cost": row["estimated_cost"],
+        "currency": row["currency"] or "USD",
+        "raw_usage": raw,
+    }
+
+
+def _task_to_dict(row, repo: dict | None = None, usage_row=None) -> dict:
     """把任务行转为 API 字典。
 
     error_detail 为 executor 写入的 JSON 字符串（每次尝试的失败详情），
     这里解析成结构化对象供前端「查看详细原因」按钮使用；解析失败返回 None。
     repo 为仓库信息 dict（含 name/url），用于拼接 repo_name 与 commit_url。
+    usage_row（issue #235）：该任务最近一次执行的 token 用量行（无则 None）。
     """
     detail = None
     if row["error_detail"]:
@@ -94,6 +121,10 @@ def _task_to_dict(row, repo: dict | None = None) -> dict:
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
         "created_at": row["created_at"],
+        # issue #235：任务 token 用量（engine/model/prompt/completion/
+        # total/estimated_cost/currency/raw_usage；无用量数据为 None，
+        # 前端显示「无数据」而不是报错）
+        "usage": _usage_to_dict(usage_row),
     }
 
 
@@ -103,6 +134,7 @@ def list_tasks(
     status: str | None = Query(None),
     repo_id: int | None = Query(None),
     search: str | None = Query(None),
+    include_usage: bool = Query(False),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -122,8 +154,13 @@ def list_tasks(
     # issue #62：包含已软删除的仓库，任务历史仍能解析出仓库名
     repos = {r["id"]: {"name": r["name"], "url": r["url"]}
              for r in c.db.list_repos(include_deleted=True)}
+    # issue #235：任务列表可选展示 token 用量（include_usage=1 时批量
+    # 查询，避免逐任务 N+1；默认不查询，列表无额外开销）
+    usage_map = (c.db.get_task_usage_map([r["id"] for r in rows])
+                 if include_usage else {})
     return {
-        "tasks": [_task_to_dict(r, repos.get(r["repo_id"])) for r in rows],
+        "tasks": [_task_to_dict(r, repos.get(r["repo_id"]),
+                                usage_map.get(r["id"])) for r in rows],
         # total 与 list_tasks 同套过滤条件（issue #50 翻页组件按 total 计算总页数）
         "total": c.db.count_tasks(status=statuses, repo_id=repo_id, search=search),
         "stats": c.db.task_stats(),
@@ -211,7 +248,8 @@ def get_task(request: Request, task_id: int):
     if row is None:
         raise HTTPException(404, "任务不存在")
     repo = c.db.get_repo(row["repo_id"])
-    task = _task_to_dict(row, dict(repo) if repo else None)
+    task = _task_to_dict(row, dict(repo) if repo else None,
+                         usage_row=c.db.get_task_usage(task_id))
     task["logs"] = [dict(l) for l in c.db.list_logs(task_id)]
     # 附上完整执行日志文件尾部（stdout/stderr）
     file_tail = None

@@ -275,6 +275,13 @@ class Settings:
     webhook_content_type: str = "application/json"
     webhook_authorization: str = ""
     webhook_body_template: str = ""
+    # 任务 token 用量与费用（issue #235）：usage.currency 为估算费用货币
+    # （默认 USD）；usage.pricing 为模型单价表——每项 {model（支持子串
+    # 匹配，如 deepseek-v4-flash / claude）, input_per_million（每百万
+    # 输入 token 单价）, output_per_million（每百万输出 token 单价）}，
+    # 空表 = 未配置单价，任务详情只展示 token 数不估算费用。
+    usage_currency: str = "USD"
+    usage_pricing: list[dict] = field(default_factory=list)
 
 
 
@@ -303,6 +310,9 @@ KNOWN_FIELDS = {
     # 保持现有值（update_minio 处理），与 webhook.authorization 同模式。
     "minio": {"enabled", "endpoint", "secure", "access_key", "secret_key",
               "bucket", "public_base_url", "verify_ssl"},
+    # 任务 token 用量（issue #235）：currency 为费用货币；pricing 为模型
+    # 单价表（每项 model / input_per_million / output_per_million）。
+    "usage": {"currency", "pricing"},
 }
 
 # 网页通知开关 → Settings 字段映射（issue #21）
@@ -441,6 +451,7 @@ class ConfigManager:
         image_models_raw = data.get("image_models", []) or []
         vision_models_raw = data.get("vision_models", []) or []
         minio = data.get("minio", {}) or {}
+        usage = data.get("usage", {}) or {}
 
         repos = []
         for r in repos_raw:
@@ -567,6 +578,10 @@ class ConfigManager:
             minio_bucket=str(minio.get("bucket") or "public").strip(),
             minio_public_base_url=str(minio.get("public_base_url") or "").strip(),
             minio_verify_ssl=bool(minio.get("verify_ssl", True)),
+            # issue #235：usage 段——currency（默认 USD）+ pricing 单价表
+            usage_currency=(str(usage.get("currency") or "USD").strip() or "USD"),
+            usage_pricing=[
+                p for p in (usage.get("pricing") or []) if isinstance(p, dict)],
             webhook_enabled=bool(webhook.get("enabled", False)),
             webhook_url=str(webhook.get("url", "")).strip(),
             webhook_content_type=str(webhook.get("content_type", "")).strip()

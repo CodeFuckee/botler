@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon.jsx'
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
+import UsageCard from '../components/UsageCard.jsx'
 
 // 任务仍可能产出新日志/聊天的活跃状态（与任务详情页一致，活跃期间轮询）
 const LIVE_STATUSES = ['queued', 'running', 'retrying']
@@ -330,6 +331,10 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
                     )}
                   </tbody>
                 </table>
+
+                {/* issue #235：token 用量卡片——引擎采集的模型调用用量
+                    与估算费用；无数据时显示「无数据」而不是报错 */}
+                <UsageCard usage={task.usage} />
 
                 <div className="issue-notes-block">
                   <h3>事件流

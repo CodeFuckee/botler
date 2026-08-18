@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, STATUS_META, shortSha, fmtTime, fmtAgo, fmtSeconds, summarizeToolInput } from '../api.js'
 import IssueDrawer, { ENGINE_META } from '../components/IssueDrawer.jsx'
 import { Icon } from '../components/Icon.jsx'
+import { fmtTokens, fmtCost } from '../components/UsageCard.jsx'
 import AddIssueModal from '../components/AddIssueModal.jsx'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
@@ -38,6 +39,10 @@ export const DEEPSEEK_TOPUP_URL = 'https://platform.deepseek.com/top_up'
 // 来自本地 tasks 表成功终态任务（GET /api/issues/completion-stats），
 // 无 GitLab 请求压力，低频轮询即可（任务完成后再等下一轮刷新）
 export const COMPLETION_STATS_POLL_MS = 60000
+
+// Token 用量统计轮询间隔（issue #235）：数据来自本地 task_usage 表
+// （GET /api/usage/stats），无 GitLab 请求压力，沿用 60 秒低频轮询
+export const USAGE_STATS_POLL_MS = 60000
 
 // 流水线整体状态 → 徽章映射（issue #39）。样式类复用任务状态徽章
 // status-*（视觉语义一致：成功绿 / 失败红 / 运行蓝 / 其余灰）
@@ -353,6 +358,15 @@ export default function Overview() {
   // avg_seconds, trend} 为 /api/issues/completion-stats 返回
   const [completionStats, setCompletionStats] = useState(null)
   const [completionStatsError, setCompletionStatsError] = useState('')
+  // Token 用量统计（issue #235）：null=加载中；{summary, by_repo,
+  // by_engine, by_date, currency} 为 /api/usage/stats 返回；过滤器
+  // usageRepoId（''=全部仓库）/ usageEngine（''=全部引擎）/
+  // usageRange（'7'|'30'|'0'=最近 7/30 天或全部）
+  const [usageStats, setUsageStats] = useState(null)
+  const [usageStatsError, setUsageStatsError] = useState('')
+  const [usageRepoId, setUsageRepoId] = useState('')
+  const [usageEngine, setUsageEngine] = useState('')
+  const [usageRange, setUsageRange] = useState('7')
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
@@ -531,6 +545,32 @@ export default function Overview() {
     const t = setInterval(loadCompletionStats, COMPLETION_STATS_POLL_MS)
     return () => clearInterval(t)
   }, [loadCompletionStats])
+
+  // Token 用量统计（issue #235）：按仓库/引擎/时间段聚合，数据来自本地
+  // task_usage 表（GET /api/usage/stats），无 GitLab 请求压力，沿用 60 秒
+  // 低频轮询；过滤器变化时立即重拉（不清空旧数据避免闪烁）
+  const loadUsageStats = useCallback(async () => {
+    const q = new URLSearchParams()
+    if (usageRepoId) q.set('repo_id', usageRepoId)
+    if (usageEngine) q.set('engine', usageEngine)
+    if (usageRange && usageRange !== '0') {
+      q.set('since', new Date(Date.now() - Number(usageRange) * 86400000)
+        .toISOString().slice(0, 10))
+    }
+    try {
+      const d = await api.get('/api/usage/stats?' + q)
+      setUsageStats(d || { summary: {}, by_repo: [], by_engine: [], by_date: [] })
+      setUsageStatsError('')
+    } catch (e) {
+      setUsageStatsError(e.message)
+    }
+  }, [usageRepoId, usageEngine, usageRange])
+
+  useEffect(() => {
+    loadUsageStats()
+    const t = setInterval(loadUsageStats, USAGE_STATS_POLL_MS)
+    return () => clearInterval(t)
+  }, [loadUsageStats])
 
   // ---- 灵感增删改（issue #131）：仅写 Botler 本地数据库 ----
 
@@ -1294,6 +1334,95 @@ export default function Overview() {
                   <span className="muted">平均完成耗时（{completionStats.completed_count} 个已完成 issue）</span>
                 </div>
                 <CompletionTrendChart trend={completionStats.trend} />
+              </>
+            ) : null}
+          </section>
+
+          {/* issue #235：Token 用量统计——按仓库/引擎/时间段聚合（本地
+              task_usage 表，GET /api/usage/stats），无 GitLab 请求压力；
+              展示合计 token 数与估算费用（未配置单价只展示 token 数）；
+              过滤器变化立即重拉，沿用 60 秒低频轮询 */}
+          <section className="usage-stats-section">
+            <h2>Token 用量统计</h2>
+            <p className="muted">任务执行消耗的模型 token 与估算费用（按仓库 / 引擎 / 时间段聚合，每 {USAGE_STATS_POLL_MS / 1000} 秒自动刷新）</p>
+            <div className="form-row wrap">
+              <select className="input usage-stats-filter" value={usageRepoId}
+                      onChange={(e) => setUsageRepoId(e.target.value)}
+                      title="按仓库过滤">
+                <option value="">全部仓库</option>
+                {(repoIssues || []).map((r) => (
+                  <option key={r.repo_id} value={r.repo_id}>{r.repo_name}</option>
+                ))}
+              </select>
+              <select className="input usage-stats-filter" value={usageEngine}
+                      onChange={(e) => setUsageEngine(e.target.value)}
+                      title="按执行引擎过滤">
+                <option value="">全部引擎</option>
+                <option value="claude">claude</option>
+                <option value="hermes">hermes</option>
+                <option value="dsh">dsh</option>
+              </select>
+              <select className="input usage-stats-filter" value={usageRange}
+                      onChange={(e) => setUsageRange(e.target.value)}
+                      title="按记录时间过滤">
+                <option value="7">最近 7 天</option>
+                <option value="30">最近 30 天</option>
+                <option value="0">全部</option>
+              </select>
+            </div>
+            {usageStatsError && (
+              <div className="alert alert-error" onClick={() => setUsageStatsError('')}>{usageStatsError}</div>
+            )}
+            {usageStats && (usageStats.summary?.task_count || 0) === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true"><Icon name="coins" /></span>
+                <p className="muted">暂无用量数据（任务执行未采集到模型调用用量）</p>
+              </div>
+            ) : usageStats ? (
+              <>
+                <div className="usage-stats-summary">
+                  <span className="usage-stats-value">
+                    {fmtTokens(usageStats.summary?.total_tokens || 0)} tokens
+                  </span>
+                  <span className="muted">
+                    共 {usageStats.summary?.task_count || 0} 个任务 ·{' '}
+                    {fmtCost(usageStats.summary?.estimated_cost, usageStats.currency)
+                      ? <>估算费用 <b>{fmtCost(usageStats.summary?.estimated_cost, usageStats.currency)}</b></>
+                      : '未配置单价，仅统计 token 数'}
+                  </span>
+                </div>
+                <div className="usage-stats-grid">
+                  <table className="table usage-stats-table">
+                    <thead>
+                      <tr><th>引擎</th><th>任务数</th><th>总 tokens</th><th>估算费用</th></tr>
+                    </thead>
+                    <tbody>
+                      {(usageStats.by_engine || []).map((e) => (
+                        <tr key={e.engine}>
+                          <td>{e.engine || '—'}</td>
+                          <td>{e.task_count}</td>
+                          <td>{fmtTokens(e.total_tokens)}</td>
+                          <td>{fmtCost(e.estimated_cost, usageStats.currency) || <span className="muted">—</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <table className="table usage-stats-table">
+                    <thead>
+                      <tr><th>仓库</th><th>任务数</th><th>总 tokens</th><th>估算费用</th></tr>
+                    </thead>
+                    <tbody>
+                      {(usageStats.by_repo || []).map((r) => (
+                        <tr key={r.repo_id}>
+                          <td className="ellipsis" title={r.repo_name}>{r.repo_name || '（已删除）'}</td>
+                          <td>{r.task_count}</td>
+                          <td>{fmtTokens(r.total_tokens)}</td>
+                          <td>{fmtCost(r.estimated_cost, usageStats.currency) || <span className="muted">—</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </>
             ) : null}
           </section>

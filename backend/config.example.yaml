@@ -242,6 +242,25 @@ webhook:
                                     #   {project_path_encoded}/{gitlab_host}），
                                     #   请求时自动填充；留空 = 内置默认 JSON 模板
 
+usage:
+  # 任务 token 用量与费用（issue #235）：任务执行时采集三引擎（claude /
+  # hermes / dsh）的模型调用 token 用量，任务详情页展示用量卡片、概览页
+  # 按仓库/引擎/时间段聚合统计。本段全部可缺省：
+  #   currency：估算费用货币（默认 USD）；
+  #   pricing：模型单价表（每百万 token 单价）。配置后按「prompt × 输入
+  #   单价 + completion × 输出单价」估算费用；无单价时任务详情只展示
+  #   token 数、不估算费用。model 支持子串匹配（如 deepseek 可匹配
+  #   deepseek-v4-flash），精确匹配优先；引擎自带费用（claude 的
+  #   total_cost_usd / hermes 的 session_estimated_cost_usd）优先于本表。
+  currency: USD
+  pricing:
+    - model: deepseek-v4-flash
+      input_per_million: 0.2        # 每百万输入 token 单价（USD）
+      output_per_million: 0.8       # 每百万输出 token 单价（USD）
+    - model: claude
+      input_per_million: 3
+      output_per_million: 15
+
 sso:
   # Synology SSO 登录（issue #27）：OIDC 授权码模式接入群晖 SSO Server。
   # 启用后访问 Web UI 需用群晖账号登录（未启用时保持开放访问）；

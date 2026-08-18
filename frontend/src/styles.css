@@ -1004,6 +1004,23 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 /* 操作列 65→145px（issue #37）：「执行」+「重试」两按钮（重试中… 最宽）约 116px，
    加 padding 20px 需 136px，原 65px 导致两按钮上下堆叠 */
 .table.tasks-table th:nth-child(12) { width: 145px; }
+/* 可选用量列（issue #235）：勾选「显示用量」后表格追加第 6 列（状态之后），
+   原第 6~12 列索引整体右移一位。默认 12 列布局（上方规则）保持不变；
+   勾选态由 Tasks.jsx 给 table 加 .tasks-table-usage 类，覆盖第 6~13 列宽
+   （第 6 列 = 用量 150px，第 7~13 列 = 原尝试/来源/失败原因/提交/创建时间/
+   用时/操作宽度；min-width 由组件内联 style 计算：1360 + 150 = 1510） */
+.table.tasks-table.tasks-table-usage th:nth-child(6) { width: 150px; }
+.table.tasks-table.tasks-table-usage th:nth-child(7) { width: 88px; }
+.table.tasks-table.tasks-table-usage th:nth-child(8) { width: 76px; }
+.table.tasks-table.tasks-table-usage th:nth-child(9) { width: 140px; }
+.table.tasks-table.tasks-table-usage th:nth-child(10) { width: 90px; }
+.table.tasks-table.tasks-table-usage th:nth-child(11) { width: 165px; }
+.table.tasks-table.tasks-table-usage th:nth-child(12) { width: 120px; }
+.table.tasks-table.tasks-table-usage th:nth-child(13) { width: 145px; }
+/* 勾选态时间/用时/操作列（第 11~13 列）同样不折行 */
+.table.tasks-table.tasks-table-usage td:nth-child(11),
+.table.tasks-table.tasks-table-usage td:nth-child(12),
+.table.tasks-table.tasks-table-usage td:nth-child(13) { white-space: nowrap; }
 /* 时间/用时/操作三列不折行（issue #37）：内容含空格（日期与时间之间、数字与单位之间），
    列宽不足时浏览器默认在空格处折行；nowrap 保证三列内容恒为一行 */
 .table.tasks-table td:nth-child(10),
@@ -3194,4 +3211,65 @@ code {
 .terminal-empty {
   padding: var(--space-4);
   text-align: center;
+}
+
+/* ---- 任务 token 用量（issue #235）----
+   用量卡片（任务详情/抽屉）：独立卡片区，kv 表格与元信息一致；
+   列表摘要（UsageSummary）：单行 total + 费用，占位窄列不撑破表格；
+   概览页统计板块：过滤器行 + 合计数字 + 按引擎/仓库分组表格。 */
+.usage-card {
+  margin-top: var(--space-5);
+}
+.usage-card h3 {
+  font-size: 15px;
+  margin: 0 0 var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.usage-summary {
+  white-space: nowrap;
+  font-size: 13px;
+}
+.tasks-usage-toggle {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.usage-stats-section {
+  margin-top: var(--space-5);
+}
+.usage-stats-section h2 {
+  font-size: 16px;
+  margin: 0 0 var(--space-1);
+}
+.usage-stats-summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  flex-wrap: wrap;
+}
+.usage-stats-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+.usage-stats-filter {
+  width: auto;
+  min-width: 140px;
+}
+.usage-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.usage-stats-table {
+  margin: 0;
+}
+.usage-stats-table th {
+  font-size: 13px;
+}
+.usage-stats-table td {
+  font-size: 13px;
 }

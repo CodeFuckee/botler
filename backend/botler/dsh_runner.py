@@ -36,6 +36,8 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Callable
 
+from .usage import extract_dsh_usage
+
 # SDK 安装指引（部署机清华 pip 源未同步 rc 版，需用阿里镜像；
 # Docker 镜像与 CI pm2 部署已自动安装，手动部署用一键脚本）
 INSTALL_HINT = (
@@ -376,13 +378,19 @@ def _format_assistant_content(data: dict) -> list[str]:
 
 
 def build_result_line(final_response, finish_reason, session_id,
-                      error=None) -> str:
-    """构造结果行（hermes 协议同款：final_response/finish_reason/session_id）。"""
+                      error=None, usage=None) -> str:
+    """构造结果行（hermes 协议同款：final_response/finish_reason/session_id）。
+
+    usage（issue #235）：dsh 会话累计的 token 用量 dict（无用量时省略），
+    写进结果行供日志诊断；executor 落库直接读 runner.usage，不依赖解析。
+    """
     data = {"final_response": final_response or "",
             "finish_reason": finish_reason,
             "session_id": session_id or ""}
     if error:
         data["error"] = error
+    if isinstance(usage, dict):
+        data["usage"] = usage
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -432,6 +440,8 @@ class DshRunner:
         self._thread: threading.Thread | None = None
         self._exit_code = 1
         self._error: str | None = None
+        # issue #235：任务 token 用量（worker 执行完后由 result.events 聚合）
+        self.usage: dict | None = None
 
     def start(self) -> None:
         """启动 worker 线程；SDK 未安装抛 DshSdkNotInstalledError。"""
@@ -527,10 +537,13 @@ class DshRunner:
         finally:
             self._close_harness()
         self._exit_code = 0
+        # issue #235：从 SDK 返回的事件流聚合 token 用量（assistant/chunk
+        # 的 usage chunk，多次模型调用累加），供 executor 落库与结果行展示
+        self.usage = extract_dsh_usage(result.events)
         self._coalescer.flush()
         self.on_line(build_result_line(
             result.final_response, result.finish_reason,
-            result.session_id or self.session_id))
+            result.session_id or self.session_id, usage=self.usage))
 
     def _close_harness(self) -> None:
         harness = self._harness

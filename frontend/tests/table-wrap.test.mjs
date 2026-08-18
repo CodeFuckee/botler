@@ -36,7 +36,7 @@ test('任务表格启用 table-layout: fixed，表格宽度恒等于容器宽度
   const rule = styles.match(/\.table\.tasks-table\s*\{[^}]*\}/)
   assert.ok(rule, 'styles.css 缺少 .table.tasks-table 规则')
   assert.match(rule[0], /table-layout\s*:\s*fixed/, '任务表格应使用 table-layout: fixed，使表格宽度恒等于容器宽度')
-  assert.match(tasks, /className="table tasks-table"/, '任务列表 <table> 应带 tasks-table 类，以单独应用 fixed 布局，避免影响其他页面的 .table 表格')
+  assert.match(tasks, /table tasks-table/, '任务列表 <table> 应带 tasks-table 类，以单独应用 fixed 布局，避免影响其他页面的 .table 表格（issue #235 起为动态 className：勾选「显示用量」时追加 tasks-table-usage）')
 })
 
 test('任务表格 12 列均显式分配宽度，列宽受控不再被内容撑破', () => {
