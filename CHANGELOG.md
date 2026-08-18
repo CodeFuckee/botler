@@ -5,6 +5,27 @@
 ## [Unreleased]
 ### Added
 
+- **任务模板占位符新增 URL 编码版本与正文注入控制（issue #223）**：issue
+  标题/描述常含 `#`、`%`、反引号、换行等特殊字符，直接拼进 prompt 可能破坏
+  模板结构或被模型误解（标题 255 截断 issue #186 已证明标题内容边界问题
+  真实存在）。本次新增：
+  - 新占位符 `{issue_title_urlenc}` / `{issue_body_urlenc}`（URL 百分号
+    编码 `quote(safe="")`）：特殊字符不再原样进入 prompt（防注入/防模板
+    破坏），模型需要时可 URL 解码还原；`{issue_body_urlenc}` 为完整正文
+    不截断（安全形式）；
+  - 正文注入控制（Web UI「模版」页「正文注入控制」卡片 / config.yaml
+    `templates` 段）：
+    - `templates.raw_body_in_prompt`（默认 `true`）：`false` = 原始正文不
+      进 prompt，`{issue_body}` 渲染为指向 issue 链接的提示（防 prompt
+      injection，高风险场景可只给 URL）；
+    - `templates.body_max_chars`（默认 `8000`，`0` = 不截断）：正文超长
+      截断并追加 `[描述已截断，共 N 字，完整见 {issue_url}]` 标记（agent
+      知道描述被截断，需要全文时经 issue 链接查看）；
+  - 文档同步：README 占位符说明 / config.example.yaml 注释 / Web UI 模版
+    页占位符表自动展示新占位符；
+  - 新增测试：`test_config_template.py` URL 编码/开关/截断边界 9 例 +
+    `test_api_settings.py` 注入控制读写与非法值校验 4 例。
+
 - **config.py 泛化配置写回（issue #193）**：`ConfigManager` 原先 15+ 个
   结构重复的 `update_*` 方法（`update_worker` / `update_gitlab` /
   `update_claude` / `update_dsh` / `update_browse` / `update_backup` /

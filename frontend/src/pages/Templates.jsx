@@ -20,6 +20,10 @@ export default function Templates() {
   const [text, setText] = useState('')
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
+  // issue #223：正文注入控制——原始描述是否进 prompt 开关 + 注入长度上限
+  const [rawBodyInPrompt, setRawBodyInPrompt] = useState(true)
+  const [bodyMaxChars, setBodyMaxChars] = useState(8000)
+  const [controlsSaved, setControlsSaved] = useState(false)
   // 模版编辑器折叠状态（issue #56）：默认全部展开，高度自适应内容
   // 完整展示、无内层垂直滚动；折叠方式与任务详情页聊天记录一致
   // （issue #52 SectionToggle 标题行切换），折叠时编辑器整体隐藏
@@ -36,6 +40,9 @@ export default function Templates() {
     setResumeTemplate(settings.templates.resume || '')
     // 结果评论模版（issue #252）：未配置时后端返回空串，渲染层 fallback 内置模版
     setCommentTemplate(settings.templates.comment || '')
+    // issue #223：正文注入控制（原始描述开关 + 长度上限）
+    setRawBodyInPrompt(settings.templates.raw_body_in_prompt !== false)
+    setBodyMaxChars(settings.templates.body_max_chars ?? 8000)
     // 全局模板同样支持占位符（issue #25：此前全局视图占位符表格为空，
     // 用户误以为占位符未生效）
     const phs = settings.templates.placeholders || {}
@@ -82,6 +89,28 @@ export default function Templates() {
       }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  const saveInjectionControls = async () => {
+    setError('')
+    setControlsSaved(false)
+    const max = Number(bodyMaxChars)
+    if (!Number.isInteger(max) || max < 0) {
+      setError('正文注入长度上限必须是非负整数')
+      return
+    }
+    try {
+      const settings = await api.put('/api/settings', { templates: {
+        raw_body_in_prompt: !!rawBodyInPrompt,
+        body_max_chars: max,
+      } })
+      setRawBodyInPrompt(settings.templates.raw_body_in_prompt !== false)
+      setBodyMaxChars(settings.templates.body_max_chars ?? 8000)
+      setControlsSaved(true)
+      setTimeout(() => setControlsSaved(false), 2000)
     } catch (e) {
       setError(e.message)
     }
@@ -194,6 +223,41 @@ export default function Templates() {
             </div>
           </>
         )}
+      </div>
+
+      <div className="card">
+        <h2>正文注入控制</h2>
+        <p className="muted small">
+          issue 标题/描述常含 <code>#</code>、<code>%</code>、反引号、换行等特殊字符，
+          直接拼进 prompt 可能破坏模板结构或被模型误解（issue #223）。
+          平台额外提供 URL 编码占位符 <code>{'{issue_title_urlenc}'}</code> /
+          <code>{'{issue_body_urlenc}'}</code>（特殊字符安全，见下方占位符表）；
+          此处控制原始正文的注入行为。
+        </p>
+        <label className="form-row">
+          <input
+            type="checkbox"
+            checked={rawBodyInPrompt}
+            onChange={(e) => setRawBodyInPrompt(e.target.checked)}
+          />
+          <span>原始描述进 prompt（关闭后 <code>{'{issue_body}'}</code> 渲染为指向 issue 链接的提示，防 prompt injection）</span>
+        </label>
+        <div className="form-row">
+          <label className="muted small">正文注入最大字符数（0 = 不截断，超长自动截断并标注长度与链接）</label>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            className="input"
+            style={{ maxWidth: 160 }}
+            value={bodyMaxChars}
+            onChange={(e) => setBodyMaxChars(e.target.value)}
+          />
+        </div>
+        <div className="form-row">
+          <button className="btn btn-primary" onClick={saveInjectionControls}>保存</button>
+          {controlsSaved && <span className="saved-hint"><Icon name="check" /> 已保存</span>}
+        </div>
       </div>
 
       <div className="card">

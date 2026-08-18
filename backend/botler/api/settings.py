@@ -119,6 +119,10 @@ def get_settings(request: Request):
             # 结果评论模版（issue #252）：未配置/清空时返回空串，
             # 前端展示内置默认说明，渲染层 fallback 内置模版
             "comment": s.comment_template,
+            # issue #223：正文注入控制——原始描述是否进 prompt 开关 +
+            # 正文注入长度上限（超长截断并标注长度与 issue 链接）
+            "raw_body_in_prompt": s.raw_body_in_prompt,
+            "body_max_chars": s.body_max_chars,
             # 全局模板也可用全部占位符（issue #25：模板页全局视图
             # 占位符表格此前为空，用户误以为占位符未生效）
             "placeholders": PLACEHOLDERS,
@@ -287,6 +291,18 @@ def update_settings(request: Request, body: dict):
             if not isinstance(tpl["comment"], str):
                 raise HTTPException(400, "templates.comment 必须是字符串")
             c.config.update_section("templates", {"comment": tpl["comment"]})
+        if "raw_body_in_prompt" in tpl:
+            # issue #223：原始描述是否进 prompt 开关必须是布尔值
+            if not isinstance(tpl["raw_body_in_prompt"], bool):
+                raise HTTPException(400, "templates.raw_body_in_prompt 必须是布尔值")
+            c.config.update_section("templates", {
+                "raw_body_in_prompt": tpl["raw_body_in_prompt"]})
+        if "body_max_chars" in tpl:
+            # issue #223：正文注入长度上限必须是非负整数（0 = 不截断）
+            v = tpl["body_max_chars"]
+            if (not isinstance(v, int) or isinstance(v, bool) or v < 0):
+                raise HTTPException(400, "templates.body_max_chars 必须是非负整数")
+            c.config.update_section("templates", {"body_max_chars": v})
 
     browse = body.get("browse")
     if browse is not None:

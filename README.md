@@ -499,7 +499,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `notifications.enabled` | true | 网页通知总开关（任务需交互 / issue 完成 / 队列空 / 无新任务，逐项可关） |
 | `webhook.enabled` | false | Webhook 消息推送总开关（issue #136）：任务完成（成功收尾）时调用 webhook 推送消息；设置页「消息推送 Webhook」卡片可配置，卡片内提供独立「保存 Webhook 配置」按钮（issue #141），也可用上方「任务调度」卡片全局「保存」 |
 | `webhook.url` / `content_type` / `authorization` | — | webhook 地址（POST 目标，须 http(s):// 开头）/ Content-Type 请求头（默认 `application/json`）/ Authorization 请求头（可选，支持 `${ENV}` 引用） |
-| `webhook.body_template` | 内置默认 JSON 模板 | POST 结构体模板，可使用全局模板占位符（`{repo_name}` `{issue_title}` `{issue_body}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}` `{project_path}` `{project_path_encoded}` `{gitlab_host}`），请求时自动填充；留空 = 内置默认模板 |
+| `webhook.body_template` | 内置默认 JSON 模板 | POST 结构体模板，可使用全局模板占位符（`{repo_name}` `{issue_title}` `{issue_body}` `{issue_title_urlenc}` `{issue_body_urlenc}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}` `{project_path}` `{project_path_encoded}` `{gitlab_host}`），请求时自动填充；留空 = 内置默认模板 |
 | `sso.enabled` | false | Synology SSO 登录总开关：启用后访问 Web UI 需用群晖账号登录（issue #27） |
 | `sso.well_known_url` / `client_id` / `client_secret` | — | 群晖 SSO Server 的 OIDC 接入参数（Well-known URL / Application ID / Secret） |
 | `sso.session_days` | 7 | 登录有效期（天，1~365） |
@@ -511,8 +511,14 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `minio.bucket` | `public` | 识图图片对象桶（默认 `public`，不存在自动创建，并自动设为公开只读——匿名 `s3:GetObject`，识图模型可匿名取图） |
 | `minio.public_base_url` | 空 | 识图模型取图的 http(s) 前缀，对象 URL = `public_base_url/bucket/<sha256 哈希>`；**识图模型必须能访问该地址**（建议用 nginx 代理 MinIO 桶，配置见 `deploy/nginx-minio-public.conf`，填 nginx 代理地址如 `https://home.chenkaidi.top:509/minio-public`，无需暴露 9000 端口；自建网关走内网地址；外部模型供应商需公网可达） |
 
-提示词模版支持变量占位符：`{repo_name}` `{issue_title}` `{issue_body}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}`。
+提示词模版支持变量占位符：`{repo_name}` `{issue_title}` `{issue_body}` `{issue_title_urlenc}` `{issue_body_urlenc}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}`。
 全局默认模版 + 仓库级覆盖可在 Web UI「模版」页编辑。
+
+**URL 编码占位符（issue #223）**：issue 标题/描述常含 `#`、`%`、反引号、换行等特殊字符，直接拼进 prompt 可能破坏模板结构或被模型误解（标题 255 截断 issue #186 已证明标题内容边界问题真实存在）。`{issue_title_urlenc}` / `{issue_body_urlenc}` 渲染为百分号编码版本（`urllib.parse.quote(safe="")`），特殊字符不再原样进入 prompt（防注入/防模板破坏），模型需要时可 URL 解码还原；`{issue_body_urlenc}` 为完整正文不截断（安全形式）。
+
+**正文注入控制（issue #223）**：Web UI「模版」页「正文注入控制」卡片可配置（config.yaml 的 `templates` 段）：
+- `templates.raw_body_in_prompt`（默认 `true`）：原始 issue 正文是否进 prompt。`false` 时 `{issue_body}` 渲染为「原始描述未注入，完整正文见 issue 链接」提示——防 prompt injection，高风险场景可只给 URL；
+- `templates.body_max_chars`（默认 `8000`，`0` = 不截断）：issue 正文注入提示词的最大字符数。超长截断并在末尾追加 `[描述已截断，共 N 字，完整见 {issue_url}]` 标记（agent 知道描述被截断，需要全文时经 issue 链接查看）。
 中断恢复模版（平台重启/中断后恢复会话的引导语，claude/hermes/dsh 三引擎通用）同机制可编辑：留空保存即恢复内置默认（issue #116）。
 结果评论模版（issue #252：任务收尾时在 issue 上留的结构化执行报告——改动文件表格 / 测试摘要 / commit 链接 / 用时）同机制可编辑，额外支持
 `{diff_stat}` `{test_summary}` `{commit_link}` `{commit_sha}` `{duration}` `{result_summary}` `{error_message}` `{log_tail}` 占位符

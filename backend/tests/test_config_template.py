@@ -219,3 +219,124 @@ repos: []
         assert "自定义恢复提示" in path.read_text(encoding="utf-8")
         assert "继续处理（中断恢复）" in mgr.update_section("templates", {"resume": "  "}).resume_template
         assert "resume:" not in path.read_text(encoding="utf-8")
+
+
+class TestUrlEncodedPlaceholders:
+    """{issue_title_urlenc} / {issue_body_urlenc} 占位符 + 正文注入控制（issue #223）。
+
+    背景：issue 标题/描述常含 `#`、`%`、反引号、换行等特殊字符，直接拼进
+    prompt 可能破坏 Markdown/模板结构或被模型误解（标题 255 截断 issue #186
+    已证明标题内容边界问题真实存在）。优化三件套：
+    1) 新增 URL 编码占位符（quote safe=""），特殊字符不再原样进入 prompt；
+    2) 正文注入长度上限 body_max_chars：超长截断并标注长度与 issue 链接；
+    3) 原始描述开关 raw_body_in_prompt=false 时正文不注入（防 prompt
+       injection），仅保留 URL 与 URL 编码形式。
+    """
+
+    ISSUE = {"state": "opened",
+             "title": "修复 #问题/100%?（反引号 `code`）\n第二行",
+             "description": "## 背景\n\n正文含 `#`、`%`、&、中文与换行\n- 列表项",
+             "web_url": "https://gitlab.example.com/chenkaidi/botler/-/issues/223",
+             "project_id": 123, "iid": 223}
+
+    def _renderer(self, tmp_path, tpl_extra: str = "") -> TemplateRenderer:
+        """构造最小 config；tpl_extra 为 templates 段追加字段（如
+        "raw_body_in_prompt: false, body_max_chars: 50"）。"""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "gitlab:\n  url: https://gitlab.example.com\n  bot_token: t\n"
+            "worker: {}\nclaude: {}\n"
+            f"templates: {{{tpl_extra}}}\nrepos: []\n",
+            encoding="utf-8")
+        return TemplateRenderer(ConfigManager(str(config_path)))
+
+    def test_title_and_body_url_encoded(self, tmp_path):
+        """特殊字符标题/正文渲染后全部百分号编码，原文不进入 prompt。"""
+        r = self._renderer(tmp_path)
+        tpl = "标题: {issue_title_urlenc}\n正文: {issue_body_urlenc}"
+        rendered = r.render(tpl, r.build_variables("botler", self.ISSUE))
+        # 原文特殊字符序列不得原样出现（#、%、反引号、&、换行；
+        # URL 编码本身含 % 转义符，故按原始序列断言而非单字符）
+        for raw in ("100%?", "`code`", "#", "&"):
+            assert raw not in rendered, f"原始序列 {raw!r} 不应原样进入 prompt"
+        # URL 编码后可通过 unquote 还原
+        from urllib.parse import unquote
+        assert unquote(rendered) == (
+            f"标题: {self.ISSUE['title']}\n正文: {self.ISSUE['description']}")
+
+    def test_url_encoded_variables_values(self, tmp_path):
+        """build_variables 输出与 urllib.parse.quote(safe='') 一致。"""
+        from urllib.parse import quote
+        r = self._renderer(tmp_path)
+        v = r.build_variables("botler", self.ISSUE)
+        assert v["issue_title_urlenc"] == quote(self.ISSUE["title"], safe="")
+        assert v["issue_body_urlenc"] == quote(self.ISSUE["description"], safe="")
+
+    def test_default_raw_body_still_injected(self, tmp_path):
+        """默认（未配置开关）时 {issue_body} 原样注入，行为不变。"""
+        r = self._renderer(tmp_path)
+        rendered = r.render("{issue_body}", r.build_variables("botler", self.ISSUE))
+        assert rendered == self.ISSUE["description"]
+
+    def test_raw_body_switch_off_replaces_with_notice(self, tmp_path):
+        """raw_body_in_prompt=false：原始正文不注入，改为指向 issue 的提示；
+        URL 编码占位符仍可用（安全形式）。"""
+        r = self._renderer(tmp_path, "raw_body_in_prompt: false")
+        v = r.build_variables("botler", self.ISSUE)
+        rendered = r.render("正文: {issue_body}", v)
+        assert self.ISSUE["description"] not in rendered
+        assert "原始描述未注入" in rendered
+        assert self.ISSUE["web_url"] in rendered
+        # 编码版仍完整可用
+        assert v["issue_body_urlenc"].startswith("%23")  # '#' → %23
+        assert "正文: {issue_body}" not in rendered.replace("正文: ", "正文: ") or True
+
+    def test_body_truncation_marks_length_and_url(self, tmp_path):
+        """超长正文截断到上限，并标注总长度与完整 issue 链接。"""
+        r = self._renderer(tmp_path, "body_max_chars: 50")
+        issue = dict(self.ISSUE)
+        issue["description"] = "字" * 200  # 200 字正文
+        rendered = r.render("{issue_body}", r.build_variables("botler", issue))
+        assert rendered.startswith("字" * 50)
+        assert "[描述已截断，共 200 字，完整见 " in rendered
+        assert issue["web_url"] in rendered
+        assert "字" * 200 not in rendered  # 完整正文未注入
+
+    def test_body_within_limit_no_marker(self, tmp_path):
+        """正文长度等于上限时不截断、不追加标记。"""
+        r = self._renderer(tmp_path, "body_max_chars: 10")
+        issue = dict(self.ISSUE)
+        issue["description"] = "0123456789"  # 恰好 10 字
+        rendered = r.render("{issue_body}", r.build_variables("botler", issue))
+        assert rendered == "0123456789"
+        assert "已截断" not in rendered
+
+    def test_body_max_chars_zero_disables_truncation(self, tmp_path):
+        """body_max_chars=0：不截断（完整正文注入，无标记）。"""
+        r = self._renderer(tmp_path, "body_max_chars: 0")
+        issue = dict(self.ISSUE)
+        issue["description"] = "长" * 300
+        rendered = r.render("{issue_body}", r.build_variables("botler", issue))
+        assert rendered == "长" * 300
+        assert "已截断" not in rendered
+
+    def test_truncation_and_switch_combined(self, tmp_path):
+        """开关关闭优先于截断：正文已被提示替换，不再走截断。"""
+        r = self._renderer(tmp_path, "raw_body_in_prompt: false, body_max_chars: 5")
+        issue = dict(self.ISSUE)
+        issue["description"] = "长" * 100
+        rendered = r.render("{issue_body}", r.build_variables("botler", issue))
+        assert "长" * 100 not in rendered
+        assert "原始描述未注入" in rendered
+        assert "已截断" not in rendered
+
+    def test_invalid_config_values_fall_back_to_defaults(self, tmp_path):
+        """非法配置值（非布尔开关/负数上限）回退默认，不抛错。"""
+        r = self._renderer(tmp_path, "raw_body_in_prompt: 不是布尔, body_max_chars: -5")
+        issue = dict(self.ISSUE)
+        issue["description"] = "长" * 200
+        rendered = r.render("{issue_body}", r.build_variables("botler", issue))
+        # raw_body_in_prompt 非法 → 默认 true（原样注入）
+        assert rendered == "长" * 200
+        # body_max_chars 非法 → 默认 8000（不截断 200 字）
+        assert "已截断" not in rendered

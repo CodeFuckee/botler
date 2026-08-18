@@ -66,6 +66,22 @@ def _ui_default(ui: dict, key: str, default: bool) -> bool:
     return val if isinstance(val, bool) else default
 
 
+def _tpl_bool(tpl: dict, key: str, default: bool) -> bool:
+    """读取 templates 段布尔开关：缺省或非布尔值回退默认（issue #223）。"""
+    val = tpl.get(key, default)
+    return val if isinstance(val, bool) else default
+
+
+def _tpl_body_max_chars(tpl: dict) -> int:
+    """读取 templates.body_max_chars（issue #223）：正文注入提示词的最大
+    字符数，非负整数；缺省/非法值回退 8000（防御手动编辑 config.yaml
+    写坏）；0 = 不截断。"""
+    val = tpl.get("body_max_chars", 8000)
+    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+        return val
+    return 8000
+
+
 # 界面显示主题三态（issue #217）：system（跟随系统）/ light（浅色）/ dark（深色）
 THEME_MODES = ("system", "light", "dark")
 
@@ -242,6 +258,13 @@ class Settings:
     # DEFAULT_FAILURE_COMMENT_TEMPLATE）；支持 {diff_stat}/{test_summary}
     # 等占位符（见 templates.PLACEHOLDERS），空段落自动隐藏。
     comment_template: str = ""
+    # 原始 issue 正文是否注入提示词（issue #223）：false = 正文不进 prompt，
+    # {issue_body} 渲染为指向 issue 链接的提示（防 prompt injection，高风险
+    # 场景可只给 URL）；{issue_body_urlenc} 仍可用（URL 编码形式安全）。
+    raw_body_in_prompt: bool = True
+    # issue 正文注入提示词的最大字符数（issue #223）：超长截断并在末尾追加
+    # 「[描述已截断，共 N 字，完整见 issue_url]」标记；0 = 不截断。
+    body_max_chars: int = 8000
     # 任务失败原因分类规则（issue #274）：config.yaml 的 failure_classify.rules
     # 可整体覆盖内置默认规则（botler.failure_classify.DEFAULT_RULES）——键为
     # 分类名（env/engine/unsolvable），值为正则字符串列表（re.IGNORECASE
@@ -346,7 +369,8 @@ KNOWN_FIELDS = {
     "claude": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
             "session_root", "cordis", "runtime_bin", "base_url", "api_key"},
-    "templates": {"default", "resume", "comment"},
+    "templates": {"default", "resume", "comment",
+                  "raw_body_in_prompt", "body_max_chars"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
     "ui": {"timezone", "show_disabled_repos", "theme"},
@@ -614,6 +638,9 @@ class ConfigManager:
             # 结果评论模版（issue #252）：缺失/空串 = 内置默认（收尾评论
             # 渲染层 fallback，见 executor._build_report_comment）
             comment_template=tpl.get("comment", ""),
+            # issue #223：正文注入控制——原始描述开关 + 长度上限
+            raw_body_in_prompt=_tpl_bool(tpl, "raw_body_in_prompt", True),
+            body_max_chars=_tpl_body_max_chars(tpl),
             # issue #274：失败分类规则可配置扩展——config failure_classify.rules
             # 整体覆盖内置默认规则；空/缺失/非法值归一为 None（用内置默认）
             failure_classify_rules=_failure_classify_rules(failure_classify),

@@ -131,6 +131,15 @@ templates:
   # 仅评论模版生效）；渲染后为空的段落自动隐藏（无改动/无测试数据不报错）。
   # 可选：不配置/留空 = 使用内置默认（Web UI 模版页可编辑，留空保存即恢复内置默认）。
   comment: ""
+  # issue #223：原始 issue 正文是否注入提示词。true（默认）= 原样注入；
+  # false = 正文不进 prompt，{issue_body} 渲染为指向 issue 链接的提示
+  # （防 prompt injection，高风险场景可只给 URL）；{issue_body_urlenc}
+  # 仍可用（URL 编码形式安全，模型需要时 URL 解码还原）。
+  raw_body_in_prompt: true
+  # issue #223：issue 正文注入提示词的最大字符数。超长截断并在末尾追加
+  # 「[描述已截断，共 N 字，完整见 issue_url]」标记（agent 知道描述被截断，
+  # 需要全文时经 issue_url 查看）；0 = 不截断（默认 8000）。
+  body_max_chars: 8000
 
 # 任务失败原因自动分类（issue #274）：任务收尾时对失败原因做规则分类
 # （正则/关键字匹配错误信息），结果落库 tasks.failure_category，任务详情页

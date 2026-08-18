@@ -48,6 +48,7 @@ test('界面注明留空保存即恢复内置默认', () => {
 test('后端 GET /api/settings 返回 templates.resume，PUT 支持写入', () => {
   assert.match(settingsApi, /"resume": s\.resume_template/, 'GET templates 段应包含 resume')
   assert.match(settingsApi, /"resume" in tpl/, 'PUT 应处理 templates.resume 键')
-  assert.match(settingsApi, /update_resume_template\(tpl\["resume"\]\)/, 'PUT 应调用 update_resume_template')
+  // issue #193 后 update_resume_template 收敛为泛型 update_section 写回
+  assert.match(settingsApi, /update_section\("templates", \{"resume": tpl\["resume"\]\}\)/, 'PUT 应经 update_section 写回 templates.resume')
   assert.match(settingsApi, /templates\.resume 必须是字符串/, '非字符串应 400 拒绝')
 })

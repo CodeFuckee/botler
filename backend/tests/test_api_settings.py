@@ -2524,3 +2524,60 @@ class TestPausePriorityThresholdSettings:
             "pause_priority_threshold": bad}})
         assert resp.status_code == 400
         assert "pause_priority_threshold" in resp.json()["detail"]
+
+
+class TestTemplateInjectionSettings:
+    """templates.raw_body_in_prompt / body_max_chars 段（issue #223）。
+
+    正文注入控制三件套的后两件：① 原始描述是否进 prompt 开关（防 prompt
+    injection，false = 只给 URL/编码形式）；② 正文注入长度上限（超长截断
+    并标注长度与 issue 链接）。默认 raw_body_in_prompt=true（保持原行为）、
+    body_max_chars=8000；非法值 400 拒绝、不落盘。
+    """
+
+    def test_get_settings_includes_injection_controls(self, client):
+        """未配置时返回默认值（前端展示可编辑基线）。"""
+        tc, _ = client
+        tpl = tc.get("/api/settings").json()["templates"]
+        assert tpl["raw_body_in_prompt"] is True
+        assert tpl["body_max_chars"] == 8000
+        # 新占位符出现在可用占位符表中（前端模版页自动展示）
+        assert "issue_title_urlenc" in tpl["placeholders"]
+        assert "issue_body_urlenc" in tpl["placeholders"]
+
+    def test_update_injection_controls_persists(self, client):
+        """PUT 两项写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"templates": {
+            "raw_body_in_prompt": False, "body_max_chars": 500}})
+        assert resp.status_code == 200
+        tpl = resp.json()["templates"]
+        assert tpl["raw_body_in_prompt"] is False
+        assert tpl["body_max_chars"] == 500
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "raw_body_in_prompt: false" in config_text
+        assert "body_max_chars: 500" in config_text
+
+    def test_update_rejects_invalid_values(self, client):
+        """非布尔开关 / 负数或非整数上限 400 拒绝，不落盘。"""
+        tc, tmp_path = client
+        for bad in ("yes", 1, ["x"], None):
+            resp = tc.put("/api/settings", json={
+                "templates": {"raw_body_in_prompt": bad}})
+            assert resp.status_code == 400, f"raw_body_in_prompt={bad!r} 应拒绝"
+        for bad in (-1, "500", 1.5, [500]):
+            resp = tc.put("/api/settings", json={
+                "templates": {"body_max_chars": bad}})
+            assert resp.status_code == 400, f"body_max_chars={bad!r} 应拒绝"
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "raw_body_in_prompt" not in config_text
+        assert "body_max_chars" not in config_text
+
+    def test_update_one_keeps_default_template(self, client):
+        """只更新注入控制不影响 templates.default（部分更新）。"""
+        tc, _ = client
+        before = tc.get("/api/settings").json()["templates"]["default"]
+        assert tc.put("/api/settings", json={
+            "templates": {"raw_body_in_prompt": False}}).status_code == 200
+        after = tc.get("/api/settings").json()["templates"]["default"]
+        assert after == before

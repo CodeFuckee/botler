@@ -21,6 +21,13 @@ PLACEHOLDERS = {
     "project_path": "仓库路径（group/repo，如 chenkaidi/botler）",
     "project_path_encoded": "仓库路径 URL 编码（chenkaidi%2Fbotler）",
     "gitlab_host": "GitLab 主机 host:port（无 scheme）",
+    # issue #223：URL 编码占位符——issue 标题/描述常含 `#`、`%`、反引号、
+    # 换行等特殊字符，直接拼进 prompt 可能破坏 Markdown/模板结构或被模型
+    # 误解（标题 255 截断 issue #186 已证明标题内容边界问题真实存在）。
+    # 编码后特殊字符不再原样进入 prompt（防注入/防模板破坏），模型需要时
+    # 可 URL 解码还原；issue_body_urlenc 为完整正文不截断（安全形式）。
+    "issue_title_urlenc": "issue 标题 URL 编码（特殊字符安全，防模板结构破坏）",
+    "issue_body_urlenc": "issue 正文 URL 编码（完整不截断，防注入/防模板结构破坏）",
     "progress_summary": "中断恢复进度交接单（issue #281：任务进度账本渲染的确定性已完成/下一步摘要，仅恢复引导语模版使用）",
     # 结果评论模版占位符（issue #252）：结构化执行报告评论（改动文件/diff
     # 统计/测试结果），仅在 templates.comment 评论模版中生效，提示词模版
@@ -37,6 +44,15 @@ PLACEHOLDERS = {
     "failure_category_badge": "失败分类徽章文案（如「环境类（env）」，仅失败评论模版）",
     "failure_advice": "失败分类处理建议（如「环境类：请检查仓库 token 与网络配置后点重试」，仅失败评论模版）"
 }
+
+# issue #223：正文注入控制标记文案。截断标记在正文超长（超过
+# templates.body_max_chars）时追加在截断后的正文末尾，标注总长度与
+# 完整 issue 链接（agent 知道描述被截断，需要时经 issue_url 查看全文）。
+BODY_TRUNCATED_MARKER = "\n\n[描述已截断，共 {total} 字，完整见 {url}]"
+# 防注入提示：templates.raw_body_in_prompt=false 时原始正文不进 prompt，
+# 仅保留指向 issue 的链接（高风险场景可只给 URL，防 prompt injection）。
+BODY_NOT_INJECTED_NOTICE = ("[原始描述未注入（防注入开关已开启），"
+                            "完整正文见 {url}]")
 
 
 def project_path_from_url(url: str) -> str:
@@ -70,17 +86,35 @@ class TemplateRenderer:
         # 无 URL（如恢复执行路径）时兜底用仓库名
         project_path = project_path_from_url(repo_url) if repo_url else repo_name
         gitlab_url = cfg.gitlab_url.rstrip("/")
+        issue_url = issue.get("web_url", "")
+        issue_title = issue.get("title", "")
+        issue_body = issue.get("description") or ""
+        if cfg.raw_body_in_prompt:
+            body = issue_body
+            # issue #223：长正文注入标注长度与截断标记（agent 知道描述被
+            # 截断；body_max_chars=0 = 不截断）
+            if cfg.body_max_chars > 0 and len(body) > cfg.body_max_chars:
+                body = (body[:cfg.body_max_chars]
+                        + BODY_TRUNCATED_MARKER.format(
+                            total=len(body), url=issue_url))
+        else:
+            # 防 prompt injection（issue #223）：原始描述不进 prompt，
+            # 高风险场景只给 URL；需要正文时用 {issue_body_urlenc} 或
+            # 经 issue_url 查看
+            body = BODY_NOT_INJECTED_NOTICE.format(url=issue_url)
         return {
             "repo_name": repo_name,
-            "issue_title": issue.get("title", ""),
-            "issue_body": issue.get("description") or "",
-            "issue_url": issue.get("web_url", ""),
+            "issue_title": issue_title,
+            "issue_body": body,
+            "issue_url": issue_url,
             "gitlab_url": gitlab_url,
             "gitlab_host": gitlab_url.split("://", 1)[-1],
             "project_id": str(issue["project_id"]),
             "issue_iid": str(issue["iid"]),
             "project_path": project_path,
             "project_path_encoded": quote(project_path, safe=""),
+            "issue_title_urlenc": quote(issue_title, safe=""),
+            "issue_body_urlenc": quote(issue_body, safe=""),
         }
 
     def resolve_template(self, repo: dict) -> str:

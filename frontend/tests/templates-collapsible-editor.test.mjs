@@ -88,6 +88,16 @@ function findToggle(renderer) {
     && node.props.className.includes('section-toggle'))
 }
 
+// 模版编辑器卡片内的「保存」按钮（issue #223：页面新增独立的「正文注入
+// 控制」卡片后，全局 findButtons 会命中该卡片的保存按钮；折叠语义只约束
+// 编辑器卡片自身——折叠时编辑器与操作按钮整体隐藏，其他卡片不受影响）
+function findEditorSaveButtons(renderer) {
+  const editorCard = renderer.root.findAllByType('div')
+    .find((d) => String(d.props.className || '').includes('card'))
+  return editorCard.findAllByType('button')
+    .filter((b) => String(b.props.children).includes('保存'))
+}
+
 // 递归提取 React children 的纯文本（chevron span + 文本 + 行数 span）
 function textOf(node) {
   if (node == null || typeof node === 'boolean') return ''
@@ -164,9 +174,9 @@ test('标题行点击折叠/展开切换（聊天记录式）：折叠时编辑�
         '折叠态不应渲染 textarea（内容整体隐藏，非截断小窗口）',
       )
       assert.equal(
-        findButtons(renderer, '保存').length,
+        findEditorSaveButtons(renderer).length,
         0,
-        '折叠态不应渲染保存按钮（操作区随编辑器一起隐藏）',
+        '折叠态不应渲染编辑器保存按钮（操作区随编辑器一起隐藏）',
       )
       assert.equal(toggle.props['aria-expanded'], false, '折叠态 aria-expanded 应为 false')
       assert.match(JSON.stringify(renderer.toJSON()), /lucide-chevron-right/, '折叠态标题行 chevron 应为 Lucide ChevronRight')
@@ -177,7 +187,7 @@ test('标题行点击折叠/展开切换（聊天记录式）：折叠时编辑�
       const ta = findTextarea(renderer)[0]
       assert.equal(ta.props.value, LONG_TEMPLATE, '折叠切换不应丢失模版内容')
       assert.equal(ta.props.rows, 41, '重新展开后 rows 仍自适应完整内容行数')
-      assert.equal(findButtons(renderer, '保存').length, 1, '展开态恢复保存按钮')
+      assert.equal(findEditorSaveButtons(renderer).length, 1, '展开态恢复编辑器保存按钮')
       assert.equal(toggle.props['aria-expanded'], true, '重新展开后 aria-expanded 应为 true')
     } finally {
       await TestRenderer.act(() => renderer.unmount())
