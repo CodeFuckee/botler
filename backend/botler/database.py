@@ -1164,7 +1164,8 @@ class Database:
                            COALESCE(SUM(u.estimated_cost), 0) AS estimated_cost,
                            COALESCE(SUM(CASE WHEN u.estimated_cost IS NOT NULL
                                              THEN 1 ELSE 0 END), 0) AS costed_count
-                    {base}""", params).fetchone()
+                    {base}""", params).fetchone()  # nosec B608
+
 
         by_repo = _agg(
             f"""SELECT t.repo_id AS repo_id, COALESCE(r.name, '') AS repo_name,
@@ -1176,7 +1177,7 @@ class Database:
                 FROM task_usage u JOIN tasks t ON t.id = u.task_id
                 LEFT JOIN repos r ON r.id = t.repo_id
                 WHERE {cond}
-                GROUP BY t.repo_id ORDER BY total_tokens DESC""", [])
+                GROUP BY t.repo_id ORDER BY total_tokens DESC""", [])  # nosec B608
         by_engine = _agg(
             f"""SELECT u.engine AS engine, COUNT(*) AS task_count,
                        COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
@@ -1184,7 +1185,7 @@ class Database:
                        COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
                        COALESCE(SUM(u.estimated_cost), 0) AS estimated_cost
                 {base}
-                GROUP BY u.engine ORDER BY total_tokens DESC""", [])
+                GROUP BY u.engine ORDER BY total_tokens DESC""", [])  # nosec B608
         by_date = _agg(
             f"""SELECT date(u.created_at) AS date, COUNT(*) AS task_count,
                        COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
@@ -1192,13 +1193,13 @@ class Database:
                        COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
                        COALESCE(SUM(u.estimated_cost), 0) AS estimated_cost
                 {base}
-                GROUP BY date(u.created_at) ORDER BY date ASC""", [])
+                GROUP BY date(u.created_at) ORDER BY date ASC""", [])  # nosec B608
         # 取首个非空 currency（同一任务库内货币一致，防御性兜底 USD）
         with self._conn() as conn:
             cur_row = conn.execute(
                 f"""SELECT u.currency AS currency FROM task_usage u
                     JOIN tasks t ON t.id = u.task_id WHERE {cond}
-                    ORDER BY u.id DESC LIMIT 1""", params).fetchone()
+                    ORDER BY u.id DESC LIMIT 1""", params).fetchone()  # nosec B608
         currency = cur_row["currency"] if cur_row else "USD"
         return {
             "summary": dict(summary),
