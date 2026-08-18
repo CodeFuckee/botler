@@ -1613,7 +1613,7 @@ class TestIssueDetail:
 
         assert resp.status_code == 200
         assert resp.json() == {"notes": [], "engine": "claude",
-                            "task_id": None}
+                            "task_id": None, "task_duration_seconds": None}
 
     # ---- issue #120：执行引擎按 issue 展示（回退链：任务落库 engine
     # > 断点续跑会话字段推断 > 全局 worker.engine）----
@@ -1715,6 +1715,98 @@ class TestIssueDetail:
 
         assert resp.status_code == 200
         assert resp.json()["task_id"] is None
+
+    # ---- issue #300：完成耗时展示——detail 返回最近任务完成耗时 ----
+
+    @staticmethod
+    def _mk_task_times(db, task_id, created_at, finished_at):
+        """写入受控 created_at / finished_at（UTC 无后缀串，与
+        TestCompletionStats._mk_succeeded 同法）。"""
+        db.set_task_status(task_id, "succeeded", finished_at=finished_at)
+        with db._conn() as conn:
+            conn.execute("UPDATE tasks SET created_at=? WHERE id=?",
+                         (created_at, task_id))
+
+    def test_returns_duration_from_succeeded_task(self, client):
+        """任务已完成（succeeded 且有合法 created_at/finished_at）→ 返回
+        完成耗时秒数（finished_at - created_at，与 issue #180 语义一致），
+        供前端侧边栏「完成耗时」行展示。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        task_id = db.create_task(repo_id, 42, 64, "已完成任务")
+        self._mk_task_times(db, task_id, "2026-08-12 02:00:00",
+                            "2026-08-12 03:00:00")
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["task_duration_seconds"] == 3600.0
+        assert resp.json()["task_id"] == task_id
+
+    def test_duration_none_when_task_not_completed(self, client):
+        """任务未完成（failed 终态即使带 finished_at）→ 完成耗时为 null，
+        前端显示「—」（完成耗时只对成功终态有意义）。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        task_id = db.create_task(repo_id, 42, 64, "失败任务")
+        db.set_task_status(task_id, "failed", finished_at="2026-08-12 03:00:00")
+        with db._conn() as conn:
+            conn.execute("UPDATE tasks SET created_at=? WHERE id=?",
+                         ("2026-08-12 02:00:00", task_id))
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["task_duration_seconds"] is None
+        # 任务 id 照常返回（任务行展示不受影响，只有完成耗时隐藏）
+        assert resp.json()["task_id"] == task_id
+
+    def test_duration_none_when_no_task(self, client):
+        """从未执行（无任务记录）→ 完成耗时为 null。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["task_duration_seconds"] is None
+
+    def test_duration_none_when_times_missing(self, client):
+        """succeeded 但缺 finished_at / created_at 非法 → 无法计算 → null。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        # 缺 finished_at（空串）
+        t1 = db.create_task(repo_id, 42, 64, "缺完成时间")
+        db.set_task_status(t1, "succeeded", finished_at="")
+        # created_at 非法格式
+        t2 = db.create_task(repo_id, 42, 65, "非法创建时间")
+        db.set_task_status(t2, "succeeded", finished_at="2026-08-12 03:00:00")
+        with db._conn() as conn:
+            conn.execute("UPDATE tasks SET created_at=? WHERE id=?",
+                         ("not-a-time", t2))
+
+        r1 = tc.get("/api/issues/42/64/detail").json()
+        r2 = tc.get("/api/issues/42/65/detail").json()
+        assert r1["task_duration_seconds"] is None
+        assert r2["task_duration_seconds"] is None
+
+    def test_duration_none_when_negative(self, client):
+        """用时为负（时钟异常）→ null，不展示错误耗时。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        task_id = db.create_task(repo_id, 42, 64, "时钟异常任务")
+        self._mk_task_times(db, task_id, "2026-08-12 10:00:00",
+                            "2026-08-12 09:00:00")
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["task_duration_seconds"] is None
 
     def test_repo_not_found(self, client):
         """GitLab project_id 无对应启用仓库 → 404，且不触碰 GitLab。"""

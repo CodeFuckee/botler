@@ -35,13 +35,20 @@
 // 一条任务记录 id，从未执行为 null）：已执行过的 issue 在 KV 表
 // 「任务」行展示对应任务 id（#id），从未执行/加载失败显示「—」。
 //
+// issue #300：完成耗时——detail 响应新增 task_duration_seconds 字段
+// （该 issue 最近任务成功终态（succeeded）时的完成耗时秒数，
+// finished_at - created_at，与 issue #180 完成耗时统计语义一致）：
+// 任务已完成（succeeded）的 issue 在 KV 表「任务」行下方新增
+// 「完成耗时」行展示人类可读耗时（fmtSeconds），未完成/从未执行/
+// 加载失败/异常数据显示「—」。
+//
 // 交互约定：
 // - 列表项本身不再直接跳转 GitLab，跳转统一走抽屉右上角
 //   「在 GitLab 中打开」按钮（web_url 新窗口）；
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键。
 import { useCallback, useEffect, useState } from 'react'
 import { Icon } from './Icon.jsx'
-import { api, fmtTime } from '../api.js'
+import { api, fmtTime, fmtSeconds } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import Markdown, { linkifyCommits } from './Markdown.jsx'
 import TaskDetailDrawer from './TaskDetailDrawer.jsx'  // issue #167：任务执行详情第二层右边栏
@@ -187,6 +194,11 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 过才有值），KV 表「任务」行据此展示 #id；null=加载中/从未执行
   // （加载完成后无任务显示「—」）
   const [taskId, setTaskId] = useState(null)
+  // issue #300：完成耗时秒数——detail 响应返回该 issue 最近任务成功终态
+  // 的完成耗时（finished_at - created_at，后端计算，未完成/无记录为
+  // null），KV 表「完成耗时」行据此 fmtSeconds 展示；null=加载中/未完成
+  // （加载完成后未完成任务显示「—」）
+  const [taskDuration, setTaskDuration] = useState(null)
 
   // Esc 关闭抽屉（SSR 测试环境无 document 时跳过）。issue #167：任务
   // 执行详情第二层右边栏打开时不响应 Esc（由第二层自己关闭），避免
@@ -243,6 +255,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     setEngine(null)
     setEngineErr('')
     setTaskId(null)
+    setTaskDuration(null)
     try {
       const d = await api.get(`/api/issues/${i.project_id}/${i.iid}/detail`)
       setNotes(Array.isArray(d && d.notes) ? d.notes : [])
@@ -253,6 +266,13 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
       // 负数）按无任务兜底显示「—」，不因坏数据崩溃
       setTaskId((typeof d.task_id === 'number' && Number.isInteger(d.task_id)
                  && d.task_id > 0) ? d.task_id : null)
+      // issue #300：完成耗时——后端仅成功终态任务返回秒数（未完成/无
+      // 记录为 null）；异常值（非有限数/负数/字符串）按未完成兜底显示
+      // 「—」，不因坏数据崩溃
+      setTaskDuration((typeof d.task_duration_seconds === 'number'
+                       && Number.isFinite(d.task_duration_seconds)
+                       && d.task_duration_seconds >= 0)
+                      ? d.task_duration_seconds : null)
     } catch (e) {
       setDetailErr(e.message || '加载失败')
       setEngineErr(e.message || '加载失败')
@@ -585,6 +605,22 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                   <span className="muted">加载中…</span>
                 ) : typeof taskId === 'number' ? (
                   <span title={`该 issue 最近一次任务 #${taskId}`}>#{taskId}</span>
+                ) : '—'}
+              </td></tr>
+            {/* issue #300：完成耗时——任务已完成（最近任务 succeeded）
+                显示人类可读完成耗时（finished_at - created_at）；未
+                完成/从未执行/加载失败/异常数据显示「—」；详情加载中
+                显示「加载中…」 */}
+            <tr><th>完成耗时</th>
+              <td>
+                {detailErr ? (
+                  <span title={`加载失败：${detailErr}`}>—</span>
+                ) : notes === null ? (
+                  <span className="muted">加载中…</span>
+                ) : typeof taskDuration === 'number' ? (
+                  <span title={`该 issue 最近任务完成耗时 ${fmtSeconds(taskDuration)}`}>
+                    {fmtSeconds(taskDuration)}
+                  </span>
                 ) : '—'}
               </td></tr>
             <tr><th>作者</th><td>{author}</td></tr>

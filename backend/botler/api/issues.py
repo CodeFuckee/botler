@@ -53,7 +53,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..database import normalize_issue_created_at, normalize_issue_updated_at
+from ..database import (_parse_db_ts, normalize_issue_created_at,
+                            normalize_issue_updated_at)
 from ..gitlab_client import GitLabClient, GitLabError
 from .pipelines import _commit_time_utc, _repo_client
 from .tasks import _task_to_dict  # issue #167：任务执行详情右边栏复用任务序列化
@@ -671,6 +672,30 @@ def _trim_note(note: dict) -> dict:
     }
 
 
+def _task_duration_seconds(latest) -> float | None:
+    """任务记录 → 完成耗时秒数（issue #300）。
+
+    仅当该 issue 最近任务成功终态（succeeded——任务完成时系统会给 issue
+    打 bot-done 标签，executor issue #49）且 created_at / finished_at
+    均存在、解析成功、用时非负时返回（finished_at - created_at，与
+    issue #180 完成耗时统计语义一致：系统接收时间 → bot-done 打标时间）；
+    未完成（无任务记录/运行中/失败/中断）或时间数据异常（缺字段、格式
+    非法、时钟回拨产生负值）返回 None，前端「完成耗时」行显示「—」。
+    """
+    if latest is None:
+        return None
+    if latest["status"] != "succeeded":
+        return None
+    start = _parse_db_ts(latest["created_at"])
+    end = _parse_db_ts(latest["finished_at"])
+    if start is None or end is None:
+        return None
+    sec = (end - start).total_seconds()
+    if sec < 0:
+        return None
+    return round(sec, 3)
+
+
 def _task_engine_name(latest) -> str | None:
     """任务记录 → 执行引擎（issue #120 回退链第 1/2 级）。
 
@@ -708,7 +733,12 @@ def issue_detail(request: Request, project_id: int, iid: int):
       （无任务记录回退全局 worker.engine）；
     - task_id（issue #290）：该 issue 最近一条任务记录 id——已执行过
       （有任务记录）才返回，从未执行/尚未派发为 null，概览页右边栏
-      「任务」行据此展示对应任务 id。
+      「任务」行据此展示对应任务 id；
+    - task_duration_seconds（issue #300）：该 issue 最近任务的完成耗时
+      秒数——仅当任务成功终态（succeeded）且有合法 created_at /
+      finished_at 时返回（finished_at - created_at，与 issue #180
+      完成耗时语义一致）；未完成/时间数据异常为 null，概览页右边栏
+      「完成耗时」行据此展示（未完成显示「—」）。
 
     错误映射：GitLab 404（issue 不存在）→ 404；GitLab 其他错误与
     网络错误 → 502（上游故障如实上报，前端展示重试按钮）。
@@ -733,13 +763,17 @@ def issue_detail(request: Request, project_id: int, iid: int):
     # 记录回退全局 worker.engine），前端右边栏「执行引擎」行据此展示；
     # task_id（issue #290）：该 issue 最近一条任务记录 id——已执行过
     # （有任务记录）才有值，从未执行/尚未派发为 null，前端右边栏
-    # 「任务」行据此展示对应任务 id（无任务显示「—」）
+    # 「任务」行据此展示对应任务 id（无任务显示「—」）；
+    # task_duration_seconds（issue #300）：该 issue 最近任务完成耗时
+    # 秒数——仅成功终态（succeeded）且时间字段合法时返回，其余为
+    # null，前端右边栏「完成耗时」行据此展示（未完成显示「—」）
     latest = c.db.find_latest_task(project_id, iid)
     return {"notes": [_trim_note(n) for n in notes or [] if isinstance(n, dict)],
             "engine": (_task_engine_name(latest)
                        or str(getattr(c.config.get(), "engine", "")
                               or "claude").strip().lower()),
-            "task_id": latest["id"] if latest is not None else None}
+            "task_id": latest["id"] if latest is not None else None,
+            "task_duration_seconds": _task_duration_seconds(latest)}
 
 
 @router.get("/{project_id}/{iid}/tasks")

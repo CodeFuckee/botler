@@ -5,6 +5,31 @@
 ## [Unreleased]
 ### Added
 
+- **概览页 issue 详情侧边栏展示完成耗时（issue #300）**：
+  「概览页面，issue详情的有侧边栏，如果是任务完成了，显示完成耗时」——
+  概览页弹出的 issue 右边栏「任务」行下方新增「完成耗时」行：该 issue
+  最近任务成功终态（succeeded）时展示完成耗时（`finished_at - created_at`，
+  与 issue #180 完成耗时统计语义一致：系统接收时间 → bot-done 打标时间），
+  未完成/从未执行显示「—」：
+  - 后端 `GET /api/issues/{project_id}/{iid}/detail` 新增
+    `task_duration_seconds` 字段（该 issue 最近任务完成耗时秒数：仅
+    succeeded 终态且 created_at/finished_at 均存在、解析成功、用时非负
+    时返回，复用 `find_latest_task` 取最近一条；未完成/时间数据异常
+    返回 `null`）；`_task_duration_seconds(latest)` 与 `_task_engine_name`
+    并列，detail 一次查询同时产出 engine/task_id/完成耗时；
+  - 前端 `IssueDrawer` 抽屉 KV 表「任务」行下方新增「完成耗时」行：
+    `d.task_duration_seconds` 为有限非负数时经 `fmtSeconds` 展示人类可读
+    耗时（如「3 小时 25 分钟」），详情加载中显示「加载中…」，未完成/
+    加载失败/异常值（负数、NaN、字符串）均显示「—」兜底，不因坏数据
+    崩溃；
+  - 同步更新 README 的 detail 接口文档（两处 API 表）；
+  - 新增测试：后端 `TestIssueDetail` 5 例（成功任务返回耗时 / failed 终态
+    不返回 / 无任务 null / 缺时间字段与非法格式 null / 负用时 null，既有空
+    notes 精确断言同步补 `task_duration_seconds` 字段）、前端
+    `frontend/tests/overview-issue-drawer-duration.test.mjs` 5 例（源码
+    数据流 + 渲染已完成/未完成/加载失败/异常值兜底），全量测试无 regression。
+
+
 - **标记库默认标签一键同步到全部仓库（issue #307）**：
   「标记库增加一个添加默认标记的功能，点击默认标记后，自动将标记同步到已添加到
   所有仓库，包括启用和未启用的」——标记库页每个默认标签新增「同步到所有仓库」
