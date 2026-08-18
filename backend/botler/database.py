@@ -187,6 +187,20 @@ CREATE TABLE IF NOT EXISTS inspiration_messages (
 
 CREATE INDEX IF NOT EXISTS idx_inspiration_messages_insp
   ON inspiration_messages(inspiration_id, id);
+
+-- issue #287：概览页「其他」分组手动调度顺序——用户在「调度器执行顺序」
+-- 排序下拖动 issue 上下移动，把调整后的顺序落库（仅存 Botler 本地
+-- 数据库，不改 GitLab 侧任何字段）。调度器派发时按 position 优先于
+-- 标签权重/创建时间排序，实现「手动改变调度顺序」。整组顺序全量替换
+-- （拖动一次即重排整组），position 从 0 连续编号。
+CREATE TABLE IF NOT EXISTS issue_manual_orders (
+  repo_id INTEGER NOT NULL REFERENCES repos(id),
+  issue_iid INTEGER NOT NULL,
+  position INTEGER NOT NULL,
+  updated_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (repo_id, issue_iid),
+  UNIQUE (repo_id, position)
+);
 """
 
 
@@ -485,6 +499,22 @@ class Database:
                 conn.execute("ALTER TABLE tasks ADD COLUMN failure_category TEXT DEFAULT ''")
             conn.execute("PRAGMA user_version = 18")
 
+        if ver < 19:
+            # issue #287：概览页「其他」分组手动调度顺序表。CREATE TABLE
+            # IF NOT EXISTS 已覆盖新库；旧库（user_version=18）首次启动时
+            # 同样建表，并显式推进版本号保持迁移链完整（与 issue #131
+            # 灵感表 v8 迁移同模式）。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS issue_manual_orders (
+                     repo_id INTEGER NOT NULL REFERENCES repos(id),
+                     issue_iid INTEGER NOT NULL,
+                     position INTEGER NOT NULL,
+                     updated_at TEXT DEFAULT (datetime('now')),
+                     PRIMARY KEY (repo_id, issue_iid),
+                     UNIQUE (repo_id, position)
+                   )""")
+            conn.execute("PRAGMA user_version = 19")
+
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
 
@@ -731,6 +761,47 @@ class Database:
     def delete_repo(self, repo_id: int) -> None:
         with self._conn() as conn:
             conn.execute("DELETE FROM repos WHERE id=?", (repo_id,))
+
+    # ---- issue_manual_orders（issue #287）----
+    # 概览页「其他」分组手动调度顺序：用户在「调度器执行顺序」排序下拖动
+    # issue 上下移动，整组顺序全量替换落库（position 从 0 连续编号），
+    # 调度器派发时优先按 position 排序。仅存 Botler 本地数据库。
+
+    def list_manual_orders(self, repo_id: int) -> list[int]:
+        """返回指定仓库的 issue_iid 列表（按 position 升序 = 用户调整后的顺序）。
+
+        无手动顺序（从未拖动）时返回空列表。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT issue_iid FROM issue_manual_orders
+                   WHERE repo_id=? ORDER BY position ASC""",
+                (repo_id,)).fetchall()
+            return [r["issue_iid"] for r in rows]
+
+    def get_manual_order_position(self, repo_id: int, issue_iid: int) -> int | None:
+        """查询单个 issue 的手动调度位置；未设置返回 None（调度器按默认排序）。"""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT position FROM issue_manual_orders
+                   WHERE repo_id=? AND issue_iid=?""",
+                (repo_id, issue_iid)).fetchone()
+            return row["position"] if row is not None else None
+
+    def replace_manual_orders(self, repo_id: int, iids: list[int]) -> list[int]:
+        """全量替换仓库的手动调度顺序（拖动后整组重排即调用此方法）。
+
+        同一事务内先删旧行再逐条插入，position 按入参顺序从 0 连续编号；
+        传入空列表清空手动顺序（恢复调度器默认排序）。返回按 position
+        排序后的 iid 列表（即入参原序）。"""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM issue_manual_orders WHERE repo_id=?", (repo_id,))
+            for pos, iid in enumerate(iids):
+                conn.execute(
+                    """INSERT INTO issue_manual_orders
+                       (repo_id, issue_iid, position, updated_at)
+                       VALUES (?, ?, ?, datetime('now'))""",
+                    (repo_id, iid, pos))
+        return list(iids)
 
     # ---- tasks ----
 

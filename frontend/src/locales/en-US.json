@@ -236,8 +236,8 @@
   "overview.groupHint.other": "Issues not yet processed or in progress",
   "overview.collapseGroup": "Collapse this group",
   "overview.expandGroup": "Expand this group",
-  "overview.collapseGroupHint": "Collapse this group\u0027s issue list to reduce clutter",
-  "overview.expandGroupHint": "Expand this group\u0027s issue list",
+  "overview.collapseGroupHint": "Collapse this group's issue list to reduce clutter",
+  "overview.expandGroupHint": "Expand this group's issue list",
   "overview.botStatusHint.done": "Bot finished development, waiting for manual confirmation to close",
   "overview.botStatusHint.failed": "Bot processing failed, manual intervention needed",
   "tasks.task": "Task",
@@ -266,5 +266,13 @@
   "overview.sortBy.created": "Created",
   "overview.sortHint.scheduler": "By scheduler dispatch order: repo priority → issue label priority (default bug > test > feature) → created time ascending",
   "overview.sortHint.updated": "By issue last updated time descending (most recently updated first)",
-  "overview.sortHint.created": "By issue created time descending (newest first)"
+  "overview.sortHint.created": "By issue created time descending (newest first)",
+  "overview.manualOrderHint": "Drag to reorder schedule",
+  "overview.manualOrderTitle": "Drag issues up/down to manually change scheduling order (available in Scheduler order sort without filters)",
+  "overview.manualOrderAria": "Drag to reorder scheduling order",
+  "overview.manualOrderSaving": "Saving schedule order…",
+  "overview.manualOrderSaved": "Schedule order saved",
+  "overview.manualOrderError": "Failed to save schedule order: {msg}",
+  "overview.manualOrderDisabledSort": "Switch back to Scheduler order to drag-reorder issues in the Other group",
+  "overview.manualOrderDisabledFilter": "Clear filters to drag-reorder issues in the Other group"
 }

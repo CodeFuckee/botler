@@ -33,10 +33,12 @@ function renderIcon(name, props) {
 // issue #189：新增 compass（概览页「发掘」按钮）语义名，同步补入清单
 // issue #264：新增 chart（统计看板空态与总览卡片）语义名，同步补入清单
 // issue #269：新增 keyboard（导航栏「快捷键帮助」按钮）语义名，同步补入清单
+// issue #287：新增 gripVertical（概览页「其他」分组拖动排序手柄）语义名，同步补入清单
 const EXPECTED_NAMES = [
   'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle',
   'chevronDown', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
-  'externalLink', 'eye', 'fileText', 'flag', 'folder', 'folderOpen', 'hourglass', 'image',
+  'externalLink', 'eye', 'fileText', 'flag', 'folder', 'folderOpen', 'gripVertical',
+  'hourglass', 'image',
   'lightbulb', 'lock', 'message', 'mic', 'package', 'pencil', 'pin',
   'keyboard', 'plus', 'refresh', 'rocket', 'search', 'settings', 'sparkles', 'square',
   'tag', 'terminal', 'trash', 'user', 'wallet', 'warning', 'wrench',

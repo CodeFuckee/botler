@@ -174,20 +174,26 @@ class TaskScheduler:
         except (ValueError, TypeError):
             return []
 
-    def _task_sort_key(self, task_id: int, cfg) -> tuple[int, str, int]:
-        """任务排序键（issue #76 + #234）：(标签权重, issue 创建时间, task_id)。
+    def _task_sort_key(self, task_id: int, cfg) -> tuple[int, int, int, str, int]:
+        """任务排序键（issue #76 + #234 + #287）：
+        (手动标记, 手动位置, 标签权重, issue 创建时间, task_id)。
 
-        权重 = issue_labels 在配置 issue_priority 列表中首个命中的索引；
-        未命中任何配置标签（或无标签）排最后（权重 = len(priority)）。
-        同权重按 issue 创建时间升序（issue #234：创建时间越早的 issue
-        越先处理；UTC 串可直接比较；创建时间缺失的历史任务按 issue 更新
-        时间、再按任务提交时间 created_at 兜底），task_id 兜底保证确定性。
+        手动标记/位置（issue #287）：概览页「其他」分组拖动调整的手动调度
+        顺序——设置过手动顺序的 issue 优先派发（标记 0），按用户拖动后的
+        位置升序；未设置手动顺序的 issue（标记 1，位置恒 0）按默认排序。
+
+        默认排序（issue #76 + #234）：权重 = issue_labels 在配置
+        issue_priority 列表中首个命中的索引；未命中任何配置标签（或无
+        标签）排最后（权重 = len(priority)）。同权重按 issue 创建时间
+        升序（issue #234：创建时间越早的 issue 越先处理；UTC 串可直接
+        比较；创建时间缺失的历史任务按 issue 更新时间、再按任务提交时间
+        created_at 兜底），task_id 兜底保证确定性。
         """
         priority = cfg.issue_priority_labels
         unlisted = len(priority)
         task = self.db.get_task(task_id)
         if task is None:
-            return (unlisted, "", task_id)
+            return (1, 0, unlisted, "", task_id)
         labels = self._decode_labels(task["issue_labels"])
         weight = unlisted
         for i, name in enumerate(priority):
@@ -196,7 +202,11 @@ class TaskScheduler:
                 break
         created = (task["issue_created_at"] or task["issue_updated_at"]
                    or task["created_at"] or "")
-        return (weight, created, task_id)
+        pos = self.db.get_manual_order_position(
+            task["repo_id"], task["issue_iid"])
+        if pos is not None:
+            return (0, pos, weight, created, task_id)
+        return (1, 0, weight, created, task_id)
 
     def _pick_task(self, q: deque[int], cfg) -> int:
         """从仓库队列中选择最优任务并移除（issue #76）。

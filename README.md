@@ -149,7 +149,14 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 自定义 → issue 创建时间升序，创建早的先处理），方便预判各分组 issue 的
 > 处理顺序；可切换「最近更新」（按最后更新时间降序）或「创建时间」（按创建
 > 时间降序）；排序偏好持久化到浏览器本地（localStorage 键
-> `botler.overview.issueSort`），刷新后保持。
+> `botler.overview.issueSort`），刷新后保持。在「调度器执行顺序」排序下，
+> **「其他」分组支持拖动 issue 上下移动来手动改变调度顺序**（issue #287）：
+> 拖动后的整组顺序全量保存到 Botler 本地数据库（`issue_manual_orders` 表，
+> 不修改 GitLab 侧字段），刷新后保持；任务调度器派发时优先按该手动顺序
+> （语义对齐调度器排序键的手动标记/位置），未设置手动顺序的 issue 仍按
+> 调度器默认顺序排后。拖动仅在「其他」分组、仅「调度器执行顺序」排序、
+> 无过滤时可用（过滤子集拖动会误清未显示条目的顺序，故过滤时禁用）；
+> 新开放的 issue 自动排在手动顺序之后。
 
 > 界面语言（issue #268）：导航栏右上角与设置页「界面显示」卡片提供「中文 / English」快捷切换，
 > 选择持久化到浏览器本地（localStorage 键 botler.lang），刷新后保持；高频页面（导航 / 概览 /
@@ -522,6 +529,8 @@ GET    /api/issues/form-meta/{id}     添加 issue 表单元数据：项目成�
 POST   /api/issues                    在指定仓库创建 issue（标题/分配人/标签必填、描述选填，描述为空时发送 GitLab API 自动填充标题；成功后清缓存，issue #92/#103）
 GET    /api/issues/{project_id}/labels      项目标记池（概览页右边栏「编辑标记」多选数据源，颜色归一化，issue #108）
 PUT    /api/issues/{project_id}/{iid}/labels  更新 issue 标记（add/remove 一次提交加删标记；成功后清缓存并返回更新后标记列表，issue #108）
+GET    /api/issues/{project_id}/manual-orders 读取仓库手动调度顺序（iid 按 position 升序，issue #287；overview 聚合结果同样携带 manual_order 字段）
+PUT    /api/issues/{project_id}/manual-orders 全量保存仓库手动调度顺序（拖动 issue 后整组 iid 列表；非正整数/重复剔除、空列表清空、超长截断；成功后清 overview 缓存，issue #287）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120）
 GET    /api/inspirations/overview      概览页灵感聚合：所有未软删除仓库 + 各自灵感（仓库按优先级排序，灵感按 updated_at 降序，issue #131）
 POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；默认仅存本地数据库，issue #131）

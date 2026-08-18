@@ -193,7 +193,12 @@ def _collect(c) -> dict:
         if not row["enabled"]:
             continue  # 需求：只读已启用的仓库（未启用/已删除不出现）
         entry = {"repo_id": row["id"], "repo_name": row["name"],
-                 "priority": row["priority"], "issues": []}
+                 "priority": row["priority"], "issues": [],
+                 # issue #287：透传 GitLab project_id（手动调度顺序接口
+                 # 定位仓库用）与该仓库手动调度顺序（iid 按 position 升序，
+                 # 从未拖动过为空列表，前端据此渲染拖动后的顺序）
+                 "project_id": row["gitlab_project_id"],
+                 "manual_order": c.db.list_manual_orders(row["id"])}
         # 与流水线概览一致（issue #60）：优先用仓库自己 remote url 内嵌的
         # token 查询（复用 pipelines 模块的 per-repo client 缓存），
         # 无 token 回退全局 bot token（兼容旧仓库）
@@ -482,6 +487,62 @@ def project_labels(request: Request, project_id: int):
         # per-repo client 可能指向不可达 host（remote url 解析出的地址）
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
     return {"labels": _form_meta_labels(labels or [])}
+
+
+# ---- issue #287：概览页「其他」分组手动调度顺序 ----
+# 用户在「调度器执行顺序」排序下拖动 issue 上下移动，把调整后的整组顺序
+# 全量保存（PUT），调度器派发时优先按此顺序（见 scheduler._task_sort_key）。
+# 仅存 Botler 本地数据库（issue_manual_orders 表），不改 GitLab 侧字段。
+
+# 单仓库手动调度顺序条数上限：概览页单仓库最多聚合 100 条开放 issue，
+# 此处放宽到 200（防止异常请求写爆本地库；正常拖动远小于该值）
+MAX_MANUAL_ORDERS_PER_REPO = 200
+
+
+class ManualOrderUpdate(BaseModel):
+    """手动调度顺序更新体：整组 issue_iid 列表（按用户拖动后的顺序）。"""
+    iids: list[int]
+
+
+@router.get("/{project_id}/manual-orders")
+def get_manual_orders(request: Request, project_id: int):
+    """读取仓库手动调度顺序：iid 按 position 升序（用户拖动后的顺序）。
+
+    仓库不存在/未启用 → 404。返回 {"project_id", "iids"}。"""
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    return {"project_id": project_id,
+            "iids": c.db.list_manual_orders(row["id"])}
+
+
+@router.put("/{project_id}/manual-orders")
+def put_manual_orders(request: Request, project_id: int,
+                      body: ManualOrderUpdate):
+    """全量保存仓库手动调度顺序（issue #287：拖动 issue 后整组顺序）。
+
+    body.iids 为拖动后的整组 issue_iid 列表：非正整数/重复项剔除（保序
+    去重，与 _normalize_label_names 风格一致）、空列表清空手动顺序、
+    超长截断到 MAX_MANUAL_ORDERS_PER_REPO。保存成功后清空 overview 缓存
+    （下一次轮询即返回新顺序）。返回保存后的 {"project_id", "iids"}。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    seen: set[int] = set()
+    out: list[int] = []
+    for iid in body.iids:
+        if not isinstance(iid, int) or iid <= 0 or iid in seen:
+            continue
+        seen.add(iid)
+        out.append(iid)
+        if len(out) >= MAX_MANUAL_ORDERS_PER_REPO:
+            break
+    c.db.replace_manual_orders(row["id"], out)
+    clear_issue_cache()
+    return {"project_id": project_id, "iids": out}
 
 
 def _normalize_label_names(names: list[str] | None) -> list[str]:

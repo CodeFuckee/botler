@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, STATUS_META, shortSha, fmtTime, fmtAgo, fmtSeconds, summarizeToolInput } from '../api.js'
 import IssueDrawer, { ENGINE_META } from '../components/IssueDrawer.jsx'
 import { useI18n } from '../i18n.jsx'
@@ -380,6 +380,58 @@ export function sortIssuesByMethod(issues, method, priority) {
   })
 }
 
+// issue #287：手动调度顺序保存成功后「本地优先」窗口时长——overview
+// 聚合接口带 10 秒缓存，保存（PUT）会清缓存，但轮询请求可能先于 PUT
+// 发出并携带旧缓存返回（晚于 PUT 响应到达时会把已保存的顺序覆盖回弹）。
+// 保存成功后 20 秒内轮询合并保留本地顺序，之后恢复以服务端为准
+// （服务端缓存此时必已重建为新顺序；多标签页并发改动也可在窗口后同步）
+export const MANUAL_ORDER_LOCAL_TTL_MS = 20000
+
+// ---- issue #287：概览页「其他」分组手动调度顺序 ----
+// 在「调度器执行顺序」排序下，「其他」分组（尚未处理/处理中的 issue）
+// 支持拖动 issue 上下移动来手动改变调度顺序：拖动后的整组顺序全量保存
+// 到后端（PUT /api/issues/{project_id}/manual-orders，issue_manual_orders
+// 表），调度器派发时优先按该顺序（语义对齐 scheduler._task_sort_key 的
+// 手动标记/位置），刷新后保持。仅「其他」分组、仅「调度器执行顺序」
+// 排序、无过滤时启用拖动。
+
+// 按手动顺序重排 issue 列表（纯函数，返回新数组不改动入参）：手动列表
+// 中的 issue 按用户拖动后的顺序排在前面（列表里已不存在的 iid 自动
+// 跳过，如已关闭/已进入其他分组的 issue），其余 issue（新开放/未拖动过
+// 的）保持原顺序排在后面。手动列表为空或非数组时原样返回；入参非数组
+// 回空数组（与 sortIssuesByMethod 的防御风格一致）
+export function applyManualOrder(items, manualIids) {
+  const list = Array.isArray(items) ? items : []
+  const order = Array.isArray(manualIids) ? manualIids : []
+  if (order.length === 0) return list
+  const placed = new Set()
+  const out = []
+  for (const iid of order) {
+    const item = list.find((it) => it && it.iid === iid)
+    if (item && !placed.has(iid)) {
+      out.push(item)
+      placed.add(iid)
+    }
+  }
+  for (const it of list) {
+    if (it && it.iid != null && placed.has(it.iid)) continue
+    out.push(it)
+  }
+  return out
+}
+
+// 列表移动元素（纯函数，返回新数组）：把 from 位置的元素移到 to 位置，
+// 其余元素相对顺序不变。越界/相同位置/非数组入参返回安全副本（不改动
+// 入参，供拖拽落点与测试使用）
+export function moveItem(list, from, to) {
+  const arr = Array.isArray(list) ? [...list] : []
+  if (from < 0 || from >= arr.length || to < 0 || to >= arr.length) return arr
+  if (from === to) return arr
+  const [item] = arr.splice(from, 1)
+  arr.splice(to, 0, item)
+  return arr
+}
+
 // 提取 issue 的标签名数组：labels 元素可能是 {name} 对象（后端标准）、
 // 纯字符串或 null/缺 name（旧缓存/异常数据），逐一防御兼容
 export function issueLabelNames(issue) {
@@ -565,6 +617,82 @@ export default function Overview() {
                   issueSort)
   }, [issueSort])
 
+  // issue #287：「其他」分组手动调度顺序——repo_id → iid 数组（数据源为
+  // /api/issues/overview 的 manual_order 字段，拖动保存后本地乐观更新）。
+  // manualSaving 记录保存中的仓库（轮询覆盖时保留乐观顺序，避免旧缓存
+  // 回弹）；manualErrors 记录保存失败提示（点击可关闭）。仅「调度器执行
+  // 顺序」排序 + 「其他」分组 + 无过滤时启用拖动（过滤子集拖动会误清
+  // 未显示条目的顺序，故过滤时禁用）
+  const [manualOrders, setManualOrders] = useState({})
+  const [manualSaving, setManualSaving] = useState(() => new Set())
+  const [manualErrors, setManualErrors] = useState({})
+  // 同步镜像 ref：loadIssues 的 useCallback 依赖保持稳定（[]），轮询
+  // 回调读取 ref 而非 state，避免保存过程中轮询 effect 重建导致的
+  // 请求风暴与旧数据回弹
+  const manualSavingRef = useRef(new Set())
+  // 保存成功后「本地优先」窗口到期时间戳（repo_id → Date.now()+TTL）
+  const manualLocalUntilRef = useRef({})
+  const setManualSavingBoth = (repoId, add) => {
+    if (add) manualSavingRef.current.add(repoId)
+    else manualSavingRef.current.delete(repoId)
+    setManualSaving((prev) => {
+      const next = new Set(prev)
+      if (add) next.add(repoId)
+      else next.delete(repoId)
+      return next
+    })
+  }
+  // 拖拽过程状态：dragFrom = { repoId, from }（拖起位置），
+  // dragOverIndex = 当前悬停目标索引（落点高亮）
+  const [dragFrom, setDragFrom] = useState(null)
+  const [dragOverIndex, setDragOverIndex] = useState(null)
+
+  // 保存手动调度顺序：乐观更新本地顺序，PUT 失败回滚到保存前顺序并提示
+  const saveManualOrder = async (repo, iids, prevIids) => {
+    setManualSavingBoth(repo.repo_id, true)
+    setManualErrors((prev) => {
+      if (prev[repo.repo_id] == null) return prev
+      const next = { ...prev }
+      delete next[repo.repo_id]
+      return next
+    })
+    try {
+      const d = await api.put(
+        `/api/issues/${repo.project_id}/manual-orders`, { iids })
+      setManualOrders((prev) => ({
+        ...prev,
+        [repo.repo_id]: Array.isArray(d && d.iids) ? d.iids : iids,
+      }))
+      // 保存成功：登记本地优先窗口，防止轮询携带旧缓存回弹
+      manualLocalUntilRef.current[repo.repo_id] =
+        Date.now() + MANUAL_ORDER_LOCAL_TTL_MS
+    } catch (e) {
+      setManualOrders((prev) => ({ ...prev, [repo.repo_id]: prevIids }))
+      setManualErrors((prev) => ({
+        ...prev,
+        [repo.repo_id]: tr('overview.manualOrderError', { msg: e.message }),
+      }))
+    } finally {
+      setManualSavingBoth(repo.repo_id, false)
+    }
+  }
+
+  // 拖拽落点提交：把拖动项插入目标位置，整组顺序全量保存
+  const commitManualReorder = async (repo, ordered, toIndex) => {
+    const from = dragFrom && dragFrom.repoId === repo.repo_id
+      ? dragFrom.from : null
+    setDragFrom(null)
+    setDragOverIndex(null)
+    if (from == null || from === toIndex) return
+    const reordered = moveItem(ordered, from, toIndex)
+    const iids = reordered
+      .map((it) => (it && Number.isInteger(it.iid) ? it.iid : null))
+      .filter((v) => v != null)
+    const prevIids = manualOrders[repo.repo_id] || []
+    setManualOrders((prev) => ({ ...prev, [repo.repo_id]: iids }))
+    await saveManualOrder(repo, iids, prevIids)
+  }
+
   // 调度器 issue 标签优先级（issue #286）：从 /api/settings 读取
   // worker.issue_priority（与调度器动态读取同一配置源），用于「调度器
   // 执行顺序」排序；接口失败/未配置回退内置默认（DEFAULT_ISSUE_PRIORITY）
@@ -658,6 +786,25 @@ export default function Overview() {
       setRepoIssues(d.repos || [])
       setIssueErrors(d.errors || [])
       setIssueError('')
+      // issue #287：同步各仓库手动调度顺序（manual_order 字段，旧数据
+      // 缺失时按空列表处理）；保存中的仓库（manualSavingRef）与保存成功
+      // 后 20 秒本地优先窗口内（manualLocalUntilRef）保留本地顺序，防止
+      // 轮询请求先于 PUT 发出的旧缓存回弹（PUT 已清 overview 缓存，窗口
+      // 过后服务端数据必为新顺序，恢复以服务端为准）
+      setManualOrders((prev) => {
+        const next = {}
+        for (const r of d.repos || []) {
+          next[r.repo_id] = Array.isArray(r.manual_order) ? r.manual_order : []
+        }
+        const now = Date.now()
+        for (const rid of manualSavingRef.current) {
+          if (next[rid] !== undefined) next[rid] = prev[rid]
+        }
+        for (const [rid, until] of Object.entries(manualLocalUntilRef.current)) {
+          if (until > now && next[rid] !== undefined) next[rid] = prev[rid]
+        }
+        return next
+      })
     } catch (e) {
       setIssueError(e.message)
     }
@@ -1205,6 +1352,19 @@ export default function Overview() {
                     {/* issue #189：发掘结果——AI 发掘进行中 / 已创建发掘
                         issue 链接列表 / 失败原因 */}
                     {discoverResults[r.repo_id] && <DiscoverResult result={discoverResults[r.repo_id]} />}
+                    {/* issue #287：手动调度顺序保存失败提示——点击可关闭，
+                        与概览页其他 alert 交互一致 */}
+                    {manualErrors[r.repo_id] && (
+                      <div className="alert alert-error issue-manual-error"
+                           title={tr('overview.manualOrderTitle')}
+                           onClick={() => setManualErrors((prev) => {
+                             const next = { ...prev }
+                             delete next[r.repo_id]
+                             return next
+                           })}>
+                        <Icon name="warning" /> {manualErrors[r.repo_id]}
+                      </div>
+                    )}
                     {(r.issues || []).length === 0 ? (
                       <div className="empty-state small">
                         <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
@@ -1221,6 +1381,22 @@ export default function Overview() {
                         // issue #285：分组折叠开关——折叠态隐藏组内 issue
                         // 列表、保留组标题与计数（chevron 方向指示状态）
                         const collapsed = collapsedGroups.has(g.key)
+                        // issue #287：手动调度顺序——仅「调度器执行顺序」
+                        // 排序下应用（其余排序视图按时间重排，手动顺序仍
+                        // 影响实际调度）；「其他」分组 + 无过滤 + 保存中
+                        // 除外时才允许拖动（过滤子集拖动会误清未显示条目
+                        // 的顺序；保存中禁用防并发覆盖）
+                        const manualIids = manualOrders[r.repo_id] || []
+                        const ordered = issueSort === 'scheduler'
+                          ? applyManualOrder(items, manualIids) : items
+                        const repoProjectId = r.project_id != null
+                          ? r.project_id
+                          : (r.issues[0] && r.issues[0].project_id)
+                        const dragEnabled = issueSort === 'scheduler'
+                          && g.key === 'other' && !issueFilterActive
+                          && ordered.length > 1 && repoProjectId != null
+                          && !manualSaving.has(r.repo_id)
+                        const dragging = dragFrom && dragFrom.repoId === r.repo_id
                         return (
                           <div key={g.key} className={'issue-group' + (collapsed ? ' issue-group-collapsed' : '')}>
                             <div className="issue-group-head">
@@ -1235,10 +1411,18 @@ export default function Overview() {
                               <span className="issue-group-title" title={tr(`overview.groupHint.${g.key}`)}><Icon name={g.icon} /> {tr(`overview.group.${g.key}`)}</span>
                               <span className="issue-group-count"
                                     title={tr('overview.groupCountTitle')}>{tr('overview.groupCount', { n: items.length })}</span>
+                              {/* issue #287：「其他」分组拖动排序提示——仅
+                                  调度器执行顺序 + 无过滤 + 多条目时显示 */}
+                              {dragEnabled && (
+                                <span className="issue-drag-note"
+                                      title={tr('overview.manualOrderTitle')}>
+                                  <Icon name="gripVertical" /> {tr('overview.manualOrderHint')}
+                                </span>
+                              )}
                             </div>
                             {!collapsed && (
                             <ul className="issue-list">
-                              {items.map((i) => {
+                              {ordered.map((i, idx) => {
                                 const bot = botStatusKey(i)
                                 const statusMeta = bot ? BOT_STATUS_META[bot] : null
                                 // issue #99：任务（running/retrying）命中则该 issue 高亮
@@ -1246,9 +1430,40 @@ export default function Overview() {
                                 // issue #80：终态标签由状态徽章替代展示，其余标签保留胶囊
                                 const otherLabels = (i.labels || []).filter(
                                   (l) => l && !BOT_STATUS_NAMES.has(l.name))
+                                // issue #287：拖拽状态类——拖起项半透明、
+                                // 悬停目标高亮落点
+                                const isDragging = dragging && dragFrom.from === idx
+                                const isDragOver = dragging && dragOverIndex === idx
+                                const itemCls = (running
+                                  ? 'issue-item issue-item-running'
+                                  : 'issue-item')
+                                  + (isDragging ? ' issue-item-dragging' : '')
+                                  + (isDragOver ? ' issue-item-drag-over' : '')
                                 return (
                                   <li key={i.iid}
-                                      className={running ? 'issue-item issue-item-running' : 'issue-item'}>
+                                      draggable={dragEnabled}
+                                      onDragStart={dragEnabled ? (e) => {
+                                        // HTML5 拖放：标记移动语义 + 记录拖起
+                                        // 位置（按当前渲染索引），拖拽结束后清除
+                                        e.dataTransfer.effectAllowed = 'move'
+                                        e.dataTransfer.setData('text/plain', String(i.iid))
+                                        setDragFrom({ repoId: r.repo_id, from: idx })
+                                      } : undefined}
+                                      onDragOver={dragEnabled ? (e) => {
+                                        // 必须 preventDefault 才允许落点（drop）
+                                        e.preventDefault()
+                                        e.dataTransfer.dropEffect = 'move'
+                                        if (dragOverIndex !== idx) setDragOverIndex(idx)
+                                      } : undefined}
+                                      onDrop={dragEnabled ? (e) => {
+                                        e.preventDefault()
+                                        commitManualReorder(r, ordered, idx)
+                                      } : undefined}
+                                      onDragEnd={dragEnabled ? () => {
+                                        setDragFrom(null)
+                                        setDragOverIndex(null)
+                                      } : undefined}
+                                      className={itemCls}>
                                     {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
                                         标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数
                                         issue #85：标题改为按钮——点击打开右边栏，不再直接
@@ -1256,6 +1471,16 @@ export default function Overview() {
                                         issue #114：issue 行（issue-row）与任务信息块
                                         纵向排布——任务板块删除后任务详情随项展示 */}
                                     <div className="issue-row">
+                                    {/* issue #287：「其他」分组拖动排序手柄——
+                                        装饰性图标（gripVertical），li 整体可拖，
+                                        图标只是视觉提示与抓取点 */}
+                                    {dragEnabled && (
+                                      <span className="issue-drag-handle"
+                                            title={tr('overview.manualOrderTitle')}
+                                            aria-hidden="true">
+                                        <Icon name="gripVertical" />
+                                      </span>
+                                    )}
                                     <div className="issue-main">
                                       <button type="button" className="issue-link"
                                               onClick={() => setSelectedIssue({

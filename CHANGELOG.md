@@ -5,6 +5,51 @@
 ## [Unreleased]
 ### Added
 
+- **概览页「其他」分组拖动调整调度顺序（issue #287）**：
+  概览页「开放 Issue」的「其他」分组（尚未处理/处理中的 issue）在
+  「调度器执行顺序」排序下支持**拖动 issue 上下移动**来手动改变调度顺序：
+  - `backend/botler/database.py`：新增 `issue_manual_orders` 表（repo_id +
+    issue_iid + position，PRIMARY KEY(repo_id, issue_iid)、UNIQUE(repo_id,
+    position)），迁移版本推进到 v19（旧库补建表）；新增
+    `list_manual_orders` / `get_manual_order_position` /
+    `replace_manual_orders`（整组顺序全量替换，position 从 0 连续编号，
+    空列表清空）三个方法；
+  - `backend/botler/api/issues.py`：新增 `GET/PUT
+    /api/issues/{project_id}/manual-orders` 读写接口（PUT 校验：非正整数/
+    重复 iid 剔除保序、空列表清空、超长截断到 200；仓库不存在/未启用
+    404；成功后清空 overview 缓存）；`GET /api/issues/overview` 每个仓库
+    条目新增 `project_id` 与 `manual_order` 字段（iid 按 position 升序，
+    供前端初始渲染与 PUT 定位仓库）；
+  - `backend/botler/scheduler.py`：`_task_sort_key` 增加手动标记/位置
+    前缀 `(手动标记, 手动位置, 标签权重, issue 创建时间, task_id)`——
+    设置过手动顺序的 issue 优先派发（标记 0），按拖动后位置升序；未设置
+    的 issue（标记 1）仍按原默认顺序（标签权重 → 创建时间）排后，实现
+    「手动改变调度顺序」对实际调度的生效；
+  - `frontend/src/pages/Overview.jsx`：新增纯函数 `applyManualOrder`
+    （手动顺序前置、缺失 iid 跳过、其余保持原序）与 `moveItem`（列表
+    移动）；「其他」分组在「调度器执行顺序」排序 + 无过滤 + 多条目时
+    启用 HTML5 拖放（li draggable + gripVertical 手柄 + 拖起半透明/悬停
+    落点高亮 + 组头提示），落点提交整组顺序 PUT 保存（乐观更新、失败
+    回滚并提示）；保存成功 20 秒内轮询合并保留本地顺序，防 overview
+    旧缓存回弹；排序切换/过滤激活/bot 终态分组/单条目时禁用拖动；
+  - `frontend/src/components/Icon.jsx`：新增 `gripVertical` 语义图标
+    （拖动排序手柄）；`frontend/src/styles.css`：拖动手柄/拖拽态/落点
+    高亮/组头提示样式；`frontend/src/locales/zh-CN.json` / `en-US.json`
+    新增拖动排序文案（`overview.manualOrderHint` /
+    `overview.manualOrderTitle` / `overview.manualOrderError` 等）；
+  - **测试**：新增 `backend/tests/test_manual_order.py` 17 例（数据库
+    增删改查与仓库隔离、调度器手动顺序优先于标签权重/相对次序/未设置
+    排后/空顺序不影响默认派发、API 读写往返/非法输入归一化/超长截断/
+    未知仓库 404/未启用 404/overview 透传 manual_order 与 PUT 清缓存），
+    迁移测试版本断言同步更新到 v19；新增
+    `frontend/tests/overview-issue-manual-order.test.mjs` 18 例（纯函数
+    边界、默认调度器排序下可拖/其他排序禁用/bot 分组不可拖/过滤禁用/
+    单条目禁用/project_id 兜底、manual_order 预置初始生效且非调度器
+    排序不影响展示、拖拽落点 PUT 载荷与展示更新、保存失败回滚与提示
+    关闭、i18n 中英文键齐全），图标语义清单同步补 `gripVertical`；
+    前端全量测试 1135 例通过、覆盖率门禁通过，后端全量测试无
+    regression。
+
 - **概览页开放 Issue 排序方法切换（issue #286）**：
   概览页「开放 Issue」板块新增排序方法切换组件，默认按「调度器执行顺序」
   排序——与任务调度器派发语义一致（仓库优先级 → issue 标签优先级 →

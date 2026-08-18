@@ -266,5 +266,13 @@
   "overview.sortBy.created": "创建时间",
   "overview.sortHint.scheduler": "按调度器派发顺序：仓库优先级 → issue 标签优先级（默认 bug > test > feature）→ 创建时间升序",
   "overview.sortHint.updated": "按 issue 最后更新时间降序，最新更新在前",
-  "overview.sortHint.created": "按 issue 创建时间降序，最新创建在前"
+  "overview.sortHint.created": "按 issue 创建时间降序，最新创建在前",
+  "overview.manualOrderHint": "可拖动调整调度顺序",
+  "overview.manualOrderTitle": "拖动 issue 上下移动，手动改变调度顺序（仅「调度器执行顺序」排序且无过滤时可用）",
+  "overview.manualOrderAria": "拖动调整调度顺序",
+  "overview.manualOrderSaving": "保存调度顺序中…",
+  "overview.manualOrderSaved": "调度顺序已保存",
+  "overview.manualOrderError": "保存调度顺序失败：{msg}",
+  "overview.manualOrderDisabledSort": "切换回「调度器执行顺序」后，可在「其他」分组拖动调整调度顺序",
+  "overview.manualOrderDisabledFilter": "清除过滤后，可在「其他」分组拖动调整调度顺序"
 }

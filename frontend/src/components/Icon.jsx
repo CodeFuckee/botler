@@ -9,8 +9,9 @@
 import {
   ArrowLeft, ArrowUp, BarChart3, Bot, Brain, Check, CheckCircle2, ChevronDown,
   ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Eye,
-  FileText, Flag, Folder, FolderOpen, Hourglass, Image as ImageIcon, Keyboard,
-  Lightbulb, Lock, MessageCircle, Mic, Package, Pencil, Pin, Plus, RefreshCw,
+  FileText, Flag, Folder, FolderOpen, GripVertical, Hourglass,
+  Image as ImageIcon, Keyboard, Lightbulb, Lock, MessageCircle, Mic, Package,
+  Pencil, Pin, Plus, RefreshCw,
   Rocket, Search, Settings, Sparkles, Square, Tag, Terminal as TerminalIcon,
   Trash2, TriangleAlert, User, Wallet, Wrench, X, XCircle,
 } from 'lucide-react'
@@ -36,6 +37,7 @@ export const ICONS = {
   flag: Flag,
   folder: Folder,
   folderOpen: FolderOpen,
+  gripVertical: GripVertical,
   hourglass: Hourglass,
   keyboard: Keyboard,
   image: ImageIcon,
