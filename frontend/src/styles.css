@@ -3143,6 +3143,15 @@ code {
   color: var(--primary);
 }
 
+/* ---- 概览页 DeepSeek 余额卡片「每小时余额变化速率」（issue #304）----
+   每个币种条目上的速率文案：弱化展示（小字 + muted），悬浮提示观测
+   窗口（如「2 小时」）；无样本/窗口过短时同样展示该文案位（暂无速率
+   数据），保持条目高度一致 */
+.deepseek-balance-rate {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* ---- 概览页 DeepSeek 余额卡片「去充值」链接按钮（issue #178）：与「刷新」
    按钮并排展示，跳转 DeepSeek 开放平台充值页；复用 .btn / .btn-small 外观，
    按钮间间距由 .form-row 的 gap 提供（不额外加 margin） ---- */

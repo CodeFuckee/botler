@@ -6,6 +6,13 @@ import { Icon } from '../components/Icon.jsx'
 import { fmtTokens, fmtCost } from '../components/UsageCard.jsx'
 import AddIssueModal from '../components/AddIssueModal.jsx'
 import { useShortcuts } from '../keymap.js'
+import {
+  appendBalanceSample,
+  computeBalanceRate,
+  fmtRateWindow,
+  loadBalanceHistory,
+  saveBalanceHistory,
+} from '../balanceRate.js'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
 export const LIVE_STATUSES = ['running', 'retrying']
@@ -132,6 +139,14 @@ export function tasksForIssue(tasks, repoId, iid) {
 // 任务执行引擎展示文案：空值/空白返回空串（旧任务未落库引擎时不
 // 展示引擎信息）；未知值原样兜底。与 IssueDrawer.engineDisplay 同
 // 文案源（ENGINE_META），但列表数据来自任务轮询、无加载态
+// issue #304：余额变化速率观测窗口人话化——按 fmtRateWindow 结果选
+// i18n 单位文案（≥1 小时显示「X 小时」，否则「X 分钟」），tr 由组件传入
+export function fmtRateWindowText(tr, ms) {
+  const w = fmtRateWindow(ms)
+  return tr(w.kind === 'hour' ? 'overview.rateWindowHour' : 'overview.rateWindowMinute',
+            { value: w.value })
+}
+
 export function engineLabel(raw) {
   const v = raw == null ? '' : String(raw).trim()
   if (!v) return ''
@@ -576,6 +591,9 @@ export default function Overview() {
   const [dsBalance, setDsBalance] = useState(null)
   // 余额接口请求失败（网络/后端异常）时的错误文案
   const [dsBalanceError, setDsBalanceError] = useState('')
+  // 每小时余额变化速率（issue #304）：{currency: {ratePerHour, windowMs}}，
+  // 由 balanceRate 模块基于 localStorage 历史观测样本计算（纯前端）
+  const [dsRate, setDsRate] = useState({})
   // Issue 完成耗时统计（issue #180）：null=加载中；{completed_count,
   // avg_seconds, trend} 为 /api/issues/completion-stats 返回
   const [completionStats, setCompletionStats] = useState(null)
@@ -880,6 +898,20 @@ export default function Overview() {
       const d = await api.get('/api/settings/deepseek-balance')
       setDsBalance(d || { configured: false, balance: null, error: null })
       setDsBalanceError('')
+      // issue #304：余额变化速率（按小时）——每次成功获取余额后把观测
+      // 样本追加到 localStorage 历史（键 botler.overview.dsBalanceHistory），
+      // 按最早/最近观测窗口计算每小时平均变化速率；纯前端计算，后端
+      // 无改动；样本不足/窗口过短时速率对象为空，界面展示「暂无速率
+      // 数据」，不影响余额卡片其他内容
+      if (d && d.configured && d.balance
+          && Array.isArray(d.balance.balance_infos)) {
+        const storage = typeof localStorage !== 'undefined' ? localStorage : null
+        const now = Date.now()
+        const history = appendBalanceSample(
+          loadBalanceHistory(storage), now, d.balance.balance_infos)
+        saveBalanceHistory(storage, history)
+        setDsRate(computeBalanceRate(history))
+      }
     } catch (e) {
       // 余额展示尽力而为：接口失败不打扰页面，保留上次数据（未加载
       // 成功过则 dsBalance 保持 null，卡片不渲染）
@@ -1171,7 +1203,11 @@ export default function Overview() {
                     </div>
                   ) : (
                     <ul className="deepseek-balance-list">
-                      {(dsBalance.balance.balance_infos || []).map((info, i) => (
+                      {(dsBalance.balance.balance_infos || []).map((info, i) => {
+                        // issue #304：该币种的每小时余额变化速率（无样本/
+                        // 窗口过短时 undefined，展示「暂无速率数据」）
+                        const rateInfo = dsRate && dsRate[info.currency]
+                        return (
                         <li key={i} className="deepseek-balance-item">
                           <span className="deepseek-balance-currency" title={tr('overview.currency')}>
                             {info.currency || '—'}
@@ -1185,8 +1221,21 @@ export default function Overview() {
                           <span className="muted small" title="充值余额">
                             {tr('overview.rechargeBalance', { amount: info.topped_up_balance ?? '—' })}
                           </span>
+                          <span className="deepseek-balance-rate"
+                                title={rateInfo
+                                  ? tr('overview.rateHint', { window: fmtRateWindowText(tr, rateInfo.windowMs) })
+                                  : tr('overview.rateNone')}>
+                            {rateInfo ? (
+                              rateInfo.ratePerHour < 0
+                                ? tr('overview.rateDecrease', { amount: Math.abs(rateInfo.ratePerHour).toFixed(2) })
+                                : rateInfo.ratePerHour > 0
+                                  ? tr('overview.rateIncrease', { amount: Math.abs(rateInfo.ratePerHour).toFixed(2) })
+                                  : tr('overview.rateStable')
+                            ) : tr('overview.rateNone')}
+                          </span>
                         </li>
-                      ))}
+                        )
+                      })}
                     </ul>
                   )}
                 </div>

@@ -5,6 +5,29 @@
 ## [Unreleased]
 ### Added
 
+- **概览页 DeepSeek 余额卡片增加「每小时余额变化速率」显示（issue #304）**：
+  「如果有账户余额信息时，概览增加账户余额减少（变化）速度显示，按小时
+  为单位」——余额卡片每个币种条目新增速率文案（如「每小时减少 5.00」），
+  数据源为前端观测样本历史，后端无改动：
+  - 新增 `frontend/src/balanceRate.js` 纯函数模块：每次余额轮询/手动刷新
+    成功时把观测样本 `{ts, infos:[{currency, total_balance}]}` 追加到
+    localStorage（键 `botler.overview.dsBalanceHistory`），按最早/最近
+    观测窗口计算每小时平均变化速率（减少为负、增加为正——通常为充值/
+    赠送到账、无变化为 0）；样本容量上限 200 条、有效期 7 天、最短观测
+    窗口 1 分钟（更短噪声大不计速率）；存储不可用/数据损坏时全部兜底
+    回退，不影响页面使用；
+  - `Overview.jsx` 集成：余额加载成功链路追加样本 + 计算速率，卡片每个
+    币种条目渲染速率文案（减少/增加/无变化/暂无速率数据四种态），悬浮
+    提示观测窗口（如「2 小时」「30 分钟」）；
+  - 新增 i18n 文案 7 条（zh-CN / en-US 双语：rateDecrease / rateIncrease /
+    rateStable / rateNone / rateHint / rateWindowHour / rateWindowMinute）
+    与 `.deepseek-balance-rate` 样式；
+  - 新增测试 `frontend/tests/overview-balance-rate.test.mjs` 21 例：balanceRate
+    纯函数（样本追加/清洗/过期丢弃/容量截断/速率计算各分支/窗口格式化）
+    + Overview 源码集成断言 + 渲染级四种文案（减少/增加/无变化/暂无数据）；
+  - 同步更新 README（ai_providers 配置表与 issues API 表补充速率说明）。
+
+
 - **概览页 issue 详情右边栏支持修改负责人并同步 GitLab（issue #303）**：
   「概览页issue详情右边栏，增加可以修改issue的负责人，并同步到gitlab上，
   负责人通过下拉菜单的方式选取，直接通过gitlab api读取项目成员」——
