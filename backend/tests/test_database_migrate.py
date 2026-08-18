@@ -516,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 14, f"user_version 应推进到 14（v14 迁移链：task_progress 账本表），实际 {ver}"
+        assert ver == 15, f"user_version 应推进到 15（v15 迁移链：repos logo 三列），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -606,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 14, f"user_version 应推进到 14（v14 迁移链：task_progress 账本表），实际 {ver}"
+        assert ver == 15, f"user_version 应推进到 15（v15 迁移链：repos logo 三列），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
@@ -671,7 +671,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols, "旧库应补出 tasks.environment 列"
-        assert ver == 14, f"user_version 应推进到 14（v14 迁移链：task_progress 账本表），实际 {ver}"
+        assert ver == 15, f"user_version 应推进到 15（v15 迁移链：repos logo 三列），实际 {ver}"
 
     def test_new_db_has_environment_column(self, tmp_path):
         """新库建表语句应直接含 environment 列（无需迁移）。"""
@@ -680,7 +680,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols
-        assert ver == 14
+        assert ver == 15
 
     def test_set_task_status_accepts_environment(self, tmp_path):
         """set_task_status 应能写入 environment（_TASK_FIELDS 白名单）。"""
@@ -738,7 +738,7 @@ class TestTaskProgressLedger:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "task_progress" in tables, "旧库应补出 task_progress 表"
-        assert ver == 14
+        assert ver == 15
 
     def test_record_and_latest_per_step(self, tmp_path):
         """record/list/latest：只增不改快照式，latest 取每步最新状态。"""
@@ -768,3 +768,41 @@ class TestTaskProgressLedger:
         assert len(db.latest_task_progress(t1)) == 1
         assert db.latest_task_progress(t1)[0]["step_desc"] == "步骤A"
         assert db.latest_task_progress(t2)[0]["step_desc"] == "步骤B"
+
+
+class TestMigrateRepoLogo:
+    """repos 表 logo 三列迁移（issue #188：「生成图标」生成的 logo 元信息）。"""
+
+    def test_old_db_gets_logo_columns(self, tmp_path):
+        """旧库初始化后 repos 表补出 logo_path / logo_updated_at / logo_mime。"""
+        path = tmp_path / "old.db"
+        _build_old_repos_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+        assert "logo_path" in cols, "旧库应补出 logo_path 列"
+        assert "logo_updated_at" in cols, "旧库应补出 logo_updated_at 列"
+        assert "logo_mime" in cols, "旧库应补出 logo_mime 列"
+        # 存量行默认值为 NULL（未生成 logo）
+        assert db.get_repo_by_project_id(42)["logo_path"] is None
+
+    def test_new_db_has_logo_columns(self, tmp_path):
+        """新库建表语句应直接含 logo 三列（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+        assert "logo_path" in cols
+        assert "logo_updated_at" in cols
+        assert "logo_mime" in cols
+
+    def test_update_repo_accepts_logo_fields(self, tmp_path):
+        """update_repo 应支持写入 logo 元信息（生成成功后落库）。"""
+        db = Database(str(tmp_path / "u.db"))
+        repo_id = db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        db.update_repo(repo_id, logo_path="42.png",
+                       logo_updated_at="2026-08-18 10:00:00",
+                       logo_mime="image/png")
+        row = db.get_repo(repo_id)
+        assert row["logo_path"] == "42.png"
+        assert row["logo_updated_at"] == "2026-08-18 10:00:00"
+        assert row["logo_mime"] == "image/png"

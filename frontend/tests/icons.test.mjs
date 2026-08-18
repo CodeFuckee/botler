@@ -28,13 +28,16 @@ function renderIcon(name, props) {
 }
 
 // 语义名清单：与 Icon.jsx 中 ICONS 映射键一一对应（防漏配）
+// issue #188：新增 download（logo 下载）/ image（logo 占位）/
+// sparkles（生成图标按钮）三个语义名，同步补入清单
 const EXPECTED_NAMES = [
   'arrowLeft', 'arrowUp', 'bot', 'brain', 'check', 'checkCircle',
-  'chevronDown', 'chevronRight', 'clipboard', 'coins', 'externalLink',
-  'flag', 'folder', 'folderOpen', 'hourglass', 'lightbulb', 'lock',
-  'message', 'mic', 'package', 'pencil', 'pin', 'plus', 'refresh',
-  'rocket', 'search', 'settings', 'square', 'tag', 'terminal', 'trash', 'user',
-  'wallet', 'warning', 'wrench', 'x', 'xCircle',
+  'chevronDown', 'chevronRight', 'clipboard', 'coins', 'download',
+  'externalLink', 'flag', 'folder', 'folderOpen', 'hourglass', 'image',
+  'lightbulb', 'lock', 'message', 'mic', 'package', 'pencil', 'pin',
+  'plus', 'refresh', 'rocket', 'search', 'settings', 'sparkles', 'square',
+  'tag', 'terminal', 'trash', 'user', 'wallet', 'warning', 'wrench',
+  'x', 'xCircle',
 ]
 
 test('ICONS 映射完整：全部语义名齐全且渲染为 svg', () => {

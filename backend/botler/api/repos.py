@@ -86,6 +86,12 @@ def _repo_row_to_dict(row) -> dict:
         "prompt_template": row["prompt_template"],
         "enabled": bool(row["enabled"]),
         "priority": row["priority"],
+        # issue #188：仓库 logo 元信息（「生成图标」生成后写入；前端按
+        # logo_path 是否非空决定是否展示 logo，logo_updated_at 作 img
+        # src 缓存击穿参数）
+        "logo_path": row["logo_path"],
+        "logo_updated_at": row["logo_updated_at"],
+        "logo_mime": row["logo_mime"],
         "created_at": row["created_at"],
     }
 

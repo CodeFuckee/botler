@@ -807,6 +807,69 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .repo-main { min-width: 0; }
 .repo-name { font-weight: 600; display: flex; align-items: center; gap: var(--space-2); }
 .repo-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+/* issue #188：每个仓库最左侧的 logo——未生成时占位框，已生成时缩略图
+   按钮（点击放大查看 + 下载） */
+.repo-logo { flex-shrink: 0; }
+.repo-logo-btn {
+  display: block;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+  overflow: hidden;
+  cursor: zoom-in;
+  /* apple-design 响应：hover/active 微反馈 */
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.repo-logo-btn:hover {
+  transform: scale(1.04);
+  box-shadow: var(--shadow-sm);
+}
+.repo-logo-btn:active { transform: scale(0.97); }
+.repo-logo-btn img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.repo-logo-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  background: var(--bg-soft);
+  font-size: 18px;
+}
+.logo-btn { white-space: nowrap; }
+/* issue #188：logo 放大查看弹窗——大图自适应居中，不限制固定宽度 */
+.modal.repo-logo-modal { width: fit-content; max-width: min(720px, 92vw); }
+.repo-logo-view {
+  padding: var(--space-4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--bg-soft);
+  border-radius: var(--radius);
+}
+.repo-logo-view img {
+  max-width: min(640px, 80vw);
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: var(--radius);
+  background: #fff;
+  /* apple-design 响应：大图入场微缩放 */
+  animation: logo-zoom-in var(--dur-fast) var(--ease-out);
+}
+@keyframes logo-zoom-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
 .test-chip { padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
 .test-chip.ok { color: var(--ok); background: var(--ok-weak); }
 .test-chip.bad { color: var(--err); background: var(--err-weak); }

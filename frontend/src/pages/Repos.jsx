@@ -24,6 +24,10 @@ export default function Repos() {
   const [testResults, setTestResults] = useState({})
   // 对账结果: repoId -> {scanned/enqueued/note/error}（issue #17）
   const [reconcileResults, setReconcileResults] = useState({})
+  // 生成图标结果（issue #188）: repoId -> {loading/logo_prompt/error}
+  const [logoResults, setLogoResults] = useState({})
+  // 放大查看中的 logo（issue #188）: repo 对象（null = 关闭弹窗）
+  const [viewLogo, setViewLogo] = useState(null)
 
   const load = async () => {
     try {
@@ -132,6 +136,20 @@ export default function Repos() {
       setReconcileResults((r) => ({ ...r, [repo.id]: res }))
     } catch (e) {
       setReconcileResults((r) => ({ ...r, [repo.id]: { error: e.message } }))
+    }
+  }
+
+  // 生成图标（issue #188）：点击调后端同步接口——agent 基于该仓库
+  // README 生成 logo 提示词并调用生图模型生成 logo；成功后刷新列表
+  // 展示新 logo。请求中禁用防重复点击，与「自省」「对账」同风格。
+  const generateLogo = async (repo) => {
+    setLogoResults((r) => ({ ...r, [repo.id]: { loading: true } }))
+    try {
+      const res = await api.post(`/api/repos/${repo.id}/generate-logo`)
+      setLogoResults((r) => ({ ...r, [repo.id]: res }))
+      await load()
+    } catch (e) {
+      setLogoResults((r) => ({ ...r, [repo.id]: { error: e.message } }))
     }
   }
 
@@ -245,6 +263,24 @@ export default function Repos() {
         )}
         {repos.map((repo) => (
           <div key={repo.id} className="repo-item">
+            {/* issue #188：每个仓库最左侧展示已生成 logo——点击放大并
+                支持下载；未生成时显示占位图标，提示可点右侧「生成图标」 */}
+            <div className="repo-logo">
+              {repo.logo_path ? (
+                <button type="button" className="repo-logo-btn"
+                        onClick={() => setViewLogo(repo)}
+                        title="点击放大 logo 并下载">
+                  <img
+                    src={`/api/repos/${repo.id}/logo?v=${encodeURIComponent(repo.logo_updated_at || '')}`}
+                    alt={`${repo.name} logo`}
+                  />
+                </button>
+              ) : (
+                <span className="repo-logo-placeholder" title="尚未生成 logo，点击右侧「生成图标」">
+                  <Icon name="image" />
+                </span>
+              )}
+            </div>
             <div className="repo-main">
               <div className="repo-name">
                 {repo.name}
@@ -263,8 +299,14 @@ export default function Repos() {
               {reconcileResults[repo.id] && (
                 <ReconcileResult result={reconcileResults[repo.id]} />
               )}
+              {logoResults[repo.id] && <LogoResult result={logoResults[repo.id]} />}
             </div>
             <div className="repo-actions">
+              <button className="btn logo-btn" onClick={() => generateLogo(repo)}
+                      disabled={logoResults[repo.id]?.loading}
+                      title="agent 基于该仓库 README 生成 logo 提示词，调用生图模型生成 logo">
+                {logoResults[repo.id]?.loading ? <><Icon name="refresh" /> 生成中…</> : <><Icon name="sparkles" /> 生成图标</>}
+              </button>
               <button className="btn" onClick={() => test(repo)} disabled={testResults[repo.id]?.loading}>
                 {testResults[repo.id]?.loading ? '测试中…' : '测试连通性'}
               </button>
@@ -292,6 +334,9 @@ export default function Repos() {
           }}
         />
       )}
+
+      {/* issue #188：logo 放大查看 + 下载弹窗 */}
+      {viewLogo && <LogoViewModal repo={viewLogo} onClose={() => setViewLogo(null)} />}
     </div>
   )
 }
@@ -321,6 +366,50 @@ function ReconcileResult({ result }) {
         ? <span className="test-chip ok"><Icon name="check" /> {result.enqueued} 个待处理 issue 已入队</span>
         : <span className="test-chip ok"><Icon name="check" /> 无需处理</span>}
       {result.scanned > 0 && <span className="muted">扫描 {result.scanned} 个 issue</span>}
+    </div>
+  )
+}
+
+// 生成图标结果（issue #188）：生成中提示 / 成功（含生成提示词悬浮说明，
+// 点击缩略图可放大下载）/ 失败展示后端错误信息
+function LogoResult({ result }) {
+  if (result.loading) return (
+    <div className="small muted"><Icon name="refresh" /> logo 生成中，请稍候…</div>
+  )
+  if (result.error) return <div className="alert alert-error small">{result.error}</div>
+  return (
+    <div className="small">
+      <span className="test-chip ok"
+            title={result.logo_prompt ? `生成提示词：${result.logo_prompt}` : '已生成 logo'}>
+        <Icon name="check" /> 已生成 logo
+      </span>
+    </div>
+  )
+}
+
+// logo 放大查看 + 下载弹窗（issue #188）：点击仓库最左侧 logo 打开，
+// 大图展示 + 「下载 logo」链接（后端 ?download=1 返回 attachment）
+function LogoViewModal({ repo, onClose }) {
+  const src = `/api/repos/${repo.id}/logo?v=${encodeURIComponent(repo.logo_updated_at || '')}`
+  const downloadHref = `/api/repos/${repo.id}/logo?download=1`
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal repo-logo-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <strong>{repo.name} Logo</strong>
+          <button className="btn modal-close" onClick={onClose} title="关闭"
+                  aria-label="关闭弹窗"><Icon name="x" /></button>
+        </div>
+        <div className="repo-logo-view">
+          <img src={src} alt={`${repo.name} logo`} />
+        </div>
+        <div className="modal-footer">
+          <a className="btn btn-primary" href={downloadHref} download>
+            <Icon name="download" /> 下载 logo
+          </a>
+          <button className="btn" onClick={onClose}>关闭</button>
+        </div>
+      </div>
     </div>
   )
 }

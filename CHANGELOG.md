@@ -5,6 +5,43 @@
 ## [Unreleased]
 ### Changed
 
+- **仓库管理页新增「生成图标」：agent 基于 README 生成 logo 提示词并调用生图模型生成 logo（issue #188）**：
+  需求——在仓库设置页面，每个仓库的右侧增加一个「生成图标」的按钮，点击后让 agent 根据这个项目的
+  readme.md 来生成最适合这个项目的图标的提示词，并使用这个提示词调用生图模型来生成 logo（要求简约
+  美观大方）；生成的 logo 显示在仓库页面每个仓库的最左侧，用户可点击放大并下载——
+  - `backend/botler/api/repo_logo.py`（新增）：`POST /api/repos/{repo_id}/generate-logo` 同步执行——
+    校验仓库（不存在 404 / 软删除与未启用 400）→ 收集 README（复用自省 issue #187 收集链路：本地
+    项目文件夹优先、GitLab 仓库 API 兜底，均缺失时仅基于仓库元信息继续并提示模型合理推断，收集失败
+    不阻塞）→ 调用 AI 对话模型（复用设置页「AI API 供应商」第一个启用且 Key 非空的项，issue #166/
+    #187 同一链路）生成 logo 生成提示词（系统提示词约束：直接输出英文 prompt、简约美观大方、扁平化
+    极简几何风格、≤200 词）→ 调用生图模型（复用设置页「生图模型」第一个启用且 Key 非空的项，issue
+    #135/#137 的 ImageModelClient）生成 logo → 首张图片落盘 `backend/data/logos/<repo_id>.<ext>`
+    （随 docker-compose 挂载持久化）并写 repos 表 `logo_path` / `logo_updated_at` / `logo_mime`；
+    超时 180s；错误映射：未配置 AI 对话模型 / 生图模型 400 引导设置页、AI 提示词失败与空回复 /
+    生图失败与空结果 502；重复点击同名文件覆盖重生成；
+  - `backend/botler/api/repo_logo.py`：`GET /api/repos/{repo_id}/logo` 读取已生成 logo（Content-Type
+    按 logo_mime，img src 直连）；`?download=1` 附加 `Content-Disposition: attachment` 供下载；
+    未生成 404 / 文件缺失 404 引导重新生成；
+  - `backend/botler/database.py`：repos 表新增 `logo_path` / `logo_updated_at` / `logo_mime` 三列
+    （_SCHEMA 覆盖新库，_migrate v15 为旧库补列），`update_repo` 支持写入；`api/repos.py`
+    `_repo_row_to_dict` 输出 logo 元信息（前端按 `logo_path` 是否非空决定展示、`logo_updated_at`
+    作 img src 缓存击穿参数）；
+  - `frontend/src/pages/Repos.jsx`：仓库管理页每个仓库行最左侧展示已生成 logo（未生成时虚线占位框，
+    点击「生成图标」生成），右侧操作组新增「生成图标」按钮（请求中禁用并显示「生成中…」，成功后
+    刷新列表并显示「已生成 logo」结果，失败展示后端错误）；点击 logo 打开放大弹窗（大图 + 「下载
+    logo」按钮，走 `?download=1`）；`frontend/src/components/Icon.jsx` 新增 `download` / `image` /
+    `sparkles` 三个 Lucide 语义图标；
+  - `frontend/src/styles.css`：新增 `.repo-logo` / `.repo-logo-btn` / `.repo-logo-placeholder` /
+    `.logo-btn` / `.modal.repo-logo-modal` / `.repo-logo-view` 样式（缩略图 hover/active 微反馈、
+    大图入场微缩放，apple-design 动效节奏）；
+  - **测试**：新增 `backend/tests/test_api_repo_logo.py` 19 例（正常路径本地 README / GitLab 兜底 /
+    无 README 元信息兜底 / 收集故障降级 / 重复生成覆盖 / 列表带 logo 字段 / 读取接口与下载头 /
+    各类 400/404/502 边界）与 `backend/tests/test_database_migrate.py` 迁移 3 例（旧库补列 / 新库
+    建表 / update_repo 写入），更新既有迁移测试 user_version 断言 14 → 15；新增
+    `frontend/tests/repos-generate-logo.test.mjs` 6 例（源码/样式断言 / 渲染缩略图与占位 / 请求中
+    禁用 / 成功刷新 / 失败提示 / 放大弹窗与下载），更新 `icons.test.mjs` 语义名清单；前后端全量测试
+    通过、覆盖率达标，无 regression。
+
 - **灵感组件保持原始位置，AI agent 对话保持右侧边栏形式（issue #293）**：
   issue #184 曾把概览页改为双栏布局——灵感板块移入右侧常驻边栏、AI 对话改为
   右侧抽屉；本次按 issue #293 要求回退布局——「灵感组件还是和原来一样，放在

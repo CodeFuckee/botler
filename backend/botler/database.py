@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS repos (
   enabled INTEGER DEFAULT 1,
   priority INTEGER DEFAULT 100,
   deleted_at TEXT,
+  logo_path TEXT,
+  logo_updated_at TEXT,
+  logo_mime TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -392,6 +395,21 @@ class Database:
                    ON task_progress(task_id, step_no)""")
             conn.execute("PRAGMA user_version = 14")
 
+        if ver < 15:
+            # issue #188：仓库 logo（生成图标）——「生成图标」按钮调用 AI 生成
+            # 的 logo 图片落库信息：logo_path（LOGO 目录内相对文件名）、
+            # logo_updated_at（生成时间，前端用作 img src 缓存击穿参数）、
+            # logo_mime（图片 MIME 类型，读取接口回传 Content-Type）。
+            # 旧库（user_version=14）补列；新库 _SCHEMA 已含三列。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+            if "logo_path" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN logo_path TEXT")
+            if "logo_updated_at" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN logo_updated_at TEXT")
+            if "logo_mime" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN logo_mime TEXT")
+            conn.execute("PRAGMA user_version = 15")
+
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
 
@@ -626,7 +644,7 @@ class Database:
                    WHERE id=?""", (repo_id,))
 
     def update_repo(self, repo_id: int, **fields) -> None:
-        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "priority"}
+        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "priority", "logo_path", "logo_updated_at", "logo_mime"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return
