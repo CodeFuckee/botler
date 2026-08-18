@@ -5,6 +5,25 @@
 ## [Unreleased]
 ### Changed
 
+- **修复 dsh 引擎重试/恢复时 SDK 会话 id collision 导致任务反复失败：碰撞即如实降级
+  为全新会话（issue #291）**：任务 #388/#390/#391 首次运行失败后，重试与平台重启
+  恢复均复用 `tasks.dsh_session_id` 已落库 id 调 `harness.run(prompt, session_id=)`
+  断点续跑，但 deepseek-harness SDK 0.1.0rc6 的 runtime 语义是「跨进程 resume 的
+  seed 必须与磁盘已持久化的事件前缀逐事件一致（seq-aligned 重放）」，botler 的恢复
+  引导语必然不匹配 → 每次重试必撞 `already has a persisted log on disk that does
+  not match this live session (id collision)` → 3 次重试耗尽 → 任务 failed（生产
+  日志 task_388/390/391 证实：每次尝试 1 秒内被打回，`attempt_count=3`）——
+  - `backend/botler/executor.py`：新增 `_dsh_collision` 识别 SDK id collision
+    （结果行 `finish_reason=error` 且输出含 `id collision` 特征）；`_run_dsh_once`
+    提取 `_run_round` 内部函数承载「构造 runner → 等待 → 收尾」单轮执行，碰撞检测
+    命中即生成新会话 id 落库、以全新提示词（不含恢复引导语）重跑一次，聊天记录
+    同步重置为全新会话视角；降级不无限递归（重跑再撞则如实失败），如实记 warn 日志
+    说明降级原因；
+  - **测试**：新增碰撞降级复现用例 4 例（`test_executor_dsh.py`：resume 撞 collision
+    换新 id + fresh prompt 重跑成功、二次碰撞直接失败防死循环、普通 error 不误降级、
+    `_dsh_collision` 判定单测），修复前全部失败、修复后通过；后端全量 pytest
+    （1788 例）与前端测试（854 例）通过，无 regression。
+
 - **新增 CHANGELOG.md 发布轮转机制（issue #289）**：此前 `CHANGELOG.md` 遵循 Keep a
   Changelog 约定却没有任何发布/重置机制，所有条目永远堆积在 `[Unreleased]` 下（曾达
   4500+ 行、200+ 条），版本节从未生成、历史也不会归档，文件无限膨胀。本次新增发版工具：

@@ -1849,13 +1849,18 @@ class ClaudeExecutor:
             _dsh_accumulate(line)
             _dsh_persist()
 
-        try:
+        def _run_round(session_id: str, round_prompt: str) -> tuple[int, bool, bool]:
+            """跑一轮 dsh：构造 runner、启动、等待完成（停止/超时强制终止）。
+
+            返回 (exit_code, stopped, timed_out)；SDK 未安装抛
+            ExecutorError（run_task 捕获重试）。
+            """
             try:
                 # issue #115：dsh 段未配 key 时回退设置页「AI 供应商」的
                 # deepseek 项（用户已在该处配过 key，此前未被消费）
                 dsh_api_key, dsh_base_url = self._dsh_credentials(cfg)
                 runner = DshRunner(
-                    prompt=prompt, session_id=dsh_sid,
+                    prompt=round_prompt, session_id=session_id,
                     provider=cfg.dsh_provider, model=cfg.dsh_model,
                     max_tokens=cfg.dsh_max_tokens,
                     # 推理等级（issue #123）：dsh.reasoning_effort 经
@@ -1873,19 +1878,53 @@ class ClaudeExecutor:
                 raise ExecutorError(str(e))
 
             deadline = time.time() + cfg.task_timeout_seconds
-            timed_out = False
-            stopped = False
+            round_timed_out = False
+            round_stopped = False
             while not runner.done():
                 if self._stop_requested(task_id):
-                    stopped = True
+                    round_stopped = True
                     runner.stop()
                     break
                 if time.time() >= deadline:
-                    timed_out = True
+                    round_timed_out = True
                     runner.stop()
                     break
                 time.sleep(0.05)
-            exit_code = runner.finish()
+            return runner.finish(), round_stopped, round_timed_out
+
+        try:
+            exit_code, stopped, timed_out = _run_round(dsh_sid, prompt)
+            # issue #291：SDK 会话 id collision（磁盘残留与 live 会话不
+            # 匹配）→ 会话实际不可恢复，如实降级为全新会话重跑一次。
+            # 背景：dsh SDK 0.1.0rc6 的 runtime 要求跨进程 resume 的输入
+            # 与磁盘已持久化事件前缀逐事件一致（seq-aligned 重放），
+            # botler 恢复引导语必然不匹配 → 每次 resume 必 collision，
+            # 旧逻辑交给重试循环后仍复用同一落库 id 反复撞，重试耗尽
+            # 任务失败（任务 #388/#390/#391）。降级不无限递归：新 id 无
+            # 磁盘残留，重跑再撞则如实失败（防死循环）。
+            output = "\n".join(lines)
+            if (not stopped and not timed_out
+                    and self._dsh_collision(output)):
+                old_sid = dsh_sid
+                dsh_sid = self._new_dsh_session_id(task_id)
+                self.db.set_task_status(
+                    task_id, None, dsh_session_id=dsh_sid)
+                self.db.add_log(
+                    task_id, "warn",
+                    f"SDK 报告会话 {old_sid[:8]}… 无法恢复（id collision，"
+                    f"磁盘残留与 live 会话不匹配），降级为全新会话 "
+                    f"{dsh_sid[:8]}… 重跑（issue #291 诚实降级）")
+                prompt = (self._build_prompt(repo, issue)
+                          + PROGRESS_REPORT_INSTRUCTION)
+                # 聊天记录重置为全新会话视角（首条 user 消息 = 新提示词）；
+                # 流式回复缓冲一并清空（碰撞轮无文本，防御性收口）
+                _dsh_flush_pending()
+                dsh_messages = [{
+                    "role": "user", "text": prompt,
+                    "ts": _dsh_utc_ts(), "truncated": False}]
+                self._persist_dsh_transcript(task_id, prompt, dsh_messages)
+                exit_code, stopped, timed_out = _run_round(dsh_sid, prompt)
+
             # issue #119：事件行拼接必须保留换行分隔（与日志落盘 line + "\n"
             # 一致）。DshRunner 的 on_line 回调行尾无换行，若用 ''.join 拼接，
             # output 整串无换行 → _last_json_object 按行扫描只解析到首个事件
@@ -1936,6 +1975,21 @@ class ClaudeExecutor:
         if self._is_unresolvable(final_response):
             return "unresolvable"
         return "success"
+
+    def _dsh_collision(self, output: str) -> bool:
+        """识别 SDK 会话 id collision（issue #291）：结果行 error 且输出含
+        「id collision」特征（runtime 报「already has a persisted log on
+        disk that does not match this live session (id collision)」等变体）。
+
+        跨进程 resume 在 dsh SDK 0.1.0rc6 下必撞该错误（seed 必须与磁盘
+        已持久化事件前缀逐事件一致），命中即会话不可恢复，应降级全新会话，
+        不应交给重试循环反复撞同一 id。
+        """
+        if "id collision" not in output:
+            return False
+        data = self._last_json_object(output)
+        return bool(data and not data.get("error")
+                    and data.get("finish_reason") == "error")
 
     def _new_dsh_session_id(self, task_id: int) -> str:
         """预生成 dsh 会话 id（issue #281 §4.7）：botler-<task_id>-<ts>-<rand>。

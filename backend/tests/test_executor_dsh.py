@@ -104,18 +104,25 @@ class _FakeRunner:
 
     实例由 _run_dsh_once 内部构造，测试通过类级 preset 预设行为：
     preset_lines = 新实例回放的行；preset_done = 新实例 done() 返回值。
+    preset_queue = 行组队列（issue #291 降级重跑场景）：每实例化一次弹出
+    一组行回放，队列空时回退 preset_lines；collision 降级会构造第二个
+    实例（全新会话重跑），需要两组不同输出时用队列预设。
     """
 
     instances: list["_FakeRunner"] = []
     preset_lines: list[str] = []
     preset_done: bool = True
+    preset_queue: list[list[str]] = []
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self._exit = 0
         self._done = _FakeRunner.preset_done
         self.stop_calls = 0
-        self.result_lines = list(_FakeRunner.preset_lines)
+        if _FakeRunner.preset_queue:
+            self.result_lines = list(_FakeRunner.preset_queue.pop(0))
+        else:
+            self.result_lines = list(_FakeRunner.preset_lines)
         _FakeRunner.instances.append(self)
 
     def start(self):
@@ -138,6 +145,7 @@ def fake_runner(monkeypatch):
     _FakeRunner.instances.clear()
     _FakeRunner.preset_lines = []
     _FakeRunner.preset_done = True
+    _FakeRunner.preset_queue = []
     monkeypatch.setattr("botler.executor.DshRunner", _FakeRunner)
     monkeypatch.setattr("botler.executor.DshSdkNotInstalledError",
                         type("DshSdkNotInstalledError", (Exception,), {}))
@@ -407,6 +415,99 @@ class TestRunDshOnce:
         from botler.executor import ExecutorError
         with pytest.raises(ExecutorError):
             dsh_executor._run_dsh_once(1, _REPO, _ISSUE)
+
+    # ---- issue #291：SDK 会话 id collision 降级为全新会话 ----
+
+    @staticmethod
+    def _collision_lines(session_id: str) -> list[str]:
+        """SDK 报告 id collision 的真实输出形态（任务 #390/#391 日志）。"""
+        return [
+            json.dumps({"event": "status",
+                        "message": "dsh 会话状态: running"},
+                       ensure_ascii=False),
+            json.dumps({"event": "status",
+                        "message": f"回合结束: error（session "
+                                   f'"{session_id}" already has a persisted '
+                                   f"log on disk that does not match this "
+                                   f"live session (id collision)）"},
+                       ensure_ascii=False),
+            json.dumps({"event": "status",
+                        "message": "dsh 会话状态: idle"},
+                       ensure_ascii=False),
+            json.dumps({"final_response": "", "finish_reason": "error",
+                        "session_id": session_id}, ensure_ascii=False),
+        ]
+
+    def test_collision_downgrades_to_fresh_session(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """resume 撞 SDK id collision → 换新 id + fresh prompt 重跑并成功。
+
+        复现任务 #390/#391：resume 会话时 SDK 报「already has a persisted
+        log on disk that does not match this live session (id collision)」，
+        旧逻辑把该错误当普通失败交给重试循环，重试仍用同一落库 id →
+        每次必撞 → 重试耗尽 failed。修复后 collision 检测命中即降级为
+        全新会话（新 id + 全新提示词）重跑，任务得以完成。
+        """
+        task_id = _mk_task(dsh_executor)
+        dsh_executor.db.set_task_status(task_id, None, dsh_session_id="old-sid")
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_queue = [
+            self._collision_lines("old-sid"),  # 第 1 轮：resume 撞 collision
+            [_RESULT_LINE],                    # 第 2 轮：全新会话成功
+        ]
+        code, output = dsh_executor._run_dsh_once(
+            task_id, _REPO, _ISSUE, resume_session="old-sid")
+        assert code == 0
+        assert dsh_executor._dsh_result(output) == "success"
+        # 两个 runner 实例：第 1 个 resume 旧 id，第 2 个全新 id + 全新提示词
+        assert len(fake_runner.instances) == 2
+        first, second = fake_runner.instances
+        assert first.kwargs["session_id"] == "old-sid"
+        assert second.kwargs["session_id"] != "old-sid"
+        assert second.kwargs["session_id"].startswith("botler-")
+        assert "继续处理" not in second.kwargs["prompt"]  # fresh prompt 无恢复引导语
+        # 新 id 已落库（任务详情展示实际会话）
+        row = dsh_executor.db.get_task(task_id)
+        assert row["dsh_session_id"] == "dsh-sess-1"
+
+    def test_collision_downgrade_second_collision_fails_once(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """降级重跑再撞 collision → 直接失败返回，不无限降级（防死循环）。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_queue = [
+            self._collision_lines("s-a"),
+            self._collision_lines("s-b"),
+        ]
+        code, output = dsh_executor._run_dsh_once(
+            task_id, _REPO, _ISSUE, resume_session="s-a")
+        assert code == 0  # 退出码语义不变（失败由结果行判定）
+        assert dsh_executor._dsh_result(output) == "failed"
+        assert len(fake_runner.instances) == 2  # 只重跑一次，不递归降级
+
+    def test_plain_error_no_downgrade(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """非 collision 的运行错误不触发降级（正常失败交重试循环）。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_lines = [
+            json.dumps({"final_response": "", "finish_reason": "error",
+                        "session_id": "s-1"}, ensure_ascii=False),
+        ]
+        code, output = dsh_executor._run_dsh_once(
+            task_id, _REPO, _ISSUE, resume_session="s-1")
+        assert code == 0
+        assert dsh_executor._dsh_result(output) == "failed"
+        assert len(fake_runner.instances) == 1  # 无降级重跑
+
+    def test_collision_detector(self, dsh_executor):
+        """_dsh_collision：id collision 输出 → True；普通错误/成功 → False。"""
+        assert dsh_executor._dsh_collision(
+            "\n".join(self._collision_lines("x"))) is True
+        assert dsh_executor._dsh_collision(
+            json.dumps({"final_response": "", "finish_reason": "error",
+                        "session_id": "x"}, ensure_ascii=False)) is False
+        assert dsh_executor._dsh_collision(_RESULT_LINE) is False
 
     def test_sse_events_published_from_event_lines(
             self, dsh_executor, monkeypatch, tmp_path, fake_runner):
