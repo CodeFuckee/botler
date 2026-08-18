@@ -3,6 +3,8 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+
+## [1.3.63] - 2026-08-19
 ### Added
 
 - **新增《插件开发指南》文档（issue #305）**：
