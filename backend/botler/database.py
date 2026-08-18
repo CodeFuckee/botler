@@ -40,7 +40,7 @@ DEFAULT_PRIORITY = 100
 _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
                 "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript",
-                "engine", "environment"}
+                "engine", "environment", "base_sha"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   engine TEXT DEFAULT '',
   dsh_transcript TEXT,
   environment TEXT,
+  base_sha TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -457,6 +458,17 @@ class Database:
                 """CREATE INDEX IF NOT EXISTS idx_task_usage_engine
                    ON task_usage(engine)""")
             conn.execute("PRAGMA user_version = 16")
+
+        if ver < 17:
+            # issue #252：任务改动基线提交——任务首次执行开始时工作区 HEAD
+            # （prepare_workspace 已重置到远端默认主分支最新提交），收尾时
+            # 用 git diff base_sha..HEAD 采集「相对 main 的改动文件与行数」
+            # 渲染结构化执行报告评论。旧库（user_version=16）补列；新库
+            # _SCHEMA 已含。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "base_sha" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN base_sha TEXT")
+            conn.execute("PRAGMA user_version = 17")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。

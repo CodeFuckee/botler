@@ -418,6 +418,9 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 提示词模版支持变量占位符：`{repo_name}` `{issue_title}` `{issue_body}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}`。
 全局默认模版 + 仓库级覆盖可在 Web UI「模版」页编辑。
 中断恢复模版（平台重启/中断后恢复会话的引导语，claude/hermes/dsh 三引擎通用）同机制可编辑：留空保存即恢复内置默认（issue #116）。
+结果评论模版（issue #252：任务收尾时在 issue 上留的结构化执行报告——改动文件表格 / 测试摘要 / commit 链接 / 用时）同机制可编辑，额外支持
+`{diff_stat}` `{test_summary}` `{commit_link}` `{commit_sha}` `{duration}` `{result_summary}` `{error_message}` `{log_tail}` 占位符
+（仅评论模版生效，渲染后为空的段落自动隐藏）：留空保存即恢复内置默认。
 
 ## API 一览
 

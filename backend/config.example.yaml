@@ -120,6 +120,12 @@ templates:
   # （claude/hermes/dsh 三引擎通用），支持与 default 相同的全部占位符。
   # 可选：不配置/留空 = 使用内置默认（Web UI 模版页可编辑，留空保存即恢复内置默认）。
   resume: ""
+  # 结果评论模版（issue #252）：任务收尾时在 issue 上留的结构化执行报告
+  # 评论（改动文件表格 / 测试摘要 / commit 链接 / 用时）。占位符见
+  # templates.PLACEHOLDERS（diff_stat/test_summary/commit_link/duration 等，
+  # 仅评论模版生效）；渲染后为空的段落自动隐藏（无改动/无测试数据不报错）。
+  # 可选：不配置/留空 = 使用内置默认（Web UI 模版页可编辑，留空保存即恢复内置默认）。
+  comment: ""
 
 browse:
   # 目录选择对话框的初始定位目录（"添加仓库 → 本地文件夹 → 浏览…"）。

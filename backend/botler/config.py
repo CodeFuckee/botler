@@ -199,6 +199,12 @@ class Settings:
     # 设置 API / Web UI 模版页编辑；为空或未配置时归一为内置默认
     # DEFAULT_RESUME_PROMPT（中断恢复必须有引导语，不允许空模版）
     resume_template: str = ""
+    # 结果评论模版（issue #252）：任务收尾时按结构化执行报告模版在 issue
+    # 留评论（改动文件/diff 统计/测试摘要/commit 链接/用时）。为空或未配置
+    # 时使用内置默认（report.DEFAULT_COMMENT_TEMPLATE / 失败用
+    # DEFAULT_FAILURE_COMMENT_TEMPLATE）；支持 {diff_stat}/{test_summary}
+    # 等占位符（见 templates.PLACEHOLDERS），空段落自动隐藏。
+    comment_template: str = ""
     browse_default_path: str | None = None
     backup_enabled: bool = True
     backup_retention_days: int = 30
@@ -296,7 +302,7 @@ KNOWN_FIELDS = {
     "claude": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
             "session_root", "cordis", "runtime_bin", "base_url", "api_key"},
-    "templates": {"default", "resume"},
+    "templates": {"default", "resume", "comment"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
     "ui": {"timezone", "show_disabled_repos", "theme"},
@@ -504,6 +510,9 @@ class ConfigManager:
             default_template=tpl.get("default", DEFAULT_TEMPLATE),
             # 中断恢复模版（issue #116）：缺失/空串均归一为内置默认
             resume_template=tpl.get("resume", "") or DEFAULT_RESUME_PROMPT,
+            # 结果评论模版（issue #252）：缺失/空串 = 内置默认（收尾评论
+            # 渲染层 fallback，见 executor._build_report_comment）
+            comment_template=tpl.get("comment", ""),
             browse_default_path=browse.get("default_path") or None,
             backup_enabled=bool(backup.get("enabled", True)),
             backup_retention_days=int(backup.get("retention_days", 30)),
@@ -715,6 +724,24 @@ class ConfigManager:
             templates["resume"] = text
         else:
             templates.pop("resume", None)
+        self.save()
+        self.settings = self._to_settings(self._data)
+        return self.settings
+
+    def update_comment_template(self, text: str) -> Settings:
+        """更新结果评论模版并写回（issue #252）。
+
+        与 update_resume_template 同模式：空白文本 = 移除自定义键恢复
+        内置默认（收尾评论渲染层 fallback 到 report 模块的内置模版，
+        不允许空模版导致评论无结构）；非空则写入 templates.comment。
+        """
+        self._reload_from_disk()
+        templates = self._data.setdefault("templates", {})
+        text = text.strip()
+        if text:
+            templates["comment"] = text
+        else:
+            templates.pop("comment", None)
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings

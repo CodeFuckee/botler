@@ -2408,3 +2408,58 @@ class TestPauseWindowsSettings:
         assert resp.status_code == 200
         assert resp.json()["worker"]["max_concurrent_repos"] == 5
         assert resp.json()["worker"]["pause_windows"] == ["09:00-12:00"]
+
+
+class TestCommentTemplateSettings:
+    """templates.comment 段（issue #252）：结果评论模版可配置。
+
+    与 resume 同机制：GET 返回当前值、PUT 落盘 config.yaml、清空恢复
+    内置默认（渲染层 fallback 内置模版）、非字符串 400。
+    """
+
+    def test_get_settings_includes_comment(self, client):
+        """未配置时返回空串（渲染层 fallback 内置模版）。"""
+        tc, _ = client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        assert resp.json()["templates"]["comment"] == ""
+
+    def test_update_comment_persists(self, client):
+        """PUT templates.comment 自定义文本写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        custom = "## 改动文件\n{diff_stat}\n\n## 测试摘要\n{test_summary}"
+        resp = tc.put("/api/settings", json={"templates": {"comment": custom}})
+        assert resp.status_code == 200
+        assert resp.json()["templates"]["comment"] == custom
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        # YAML 序列化会重排多行字符串缩进，校验关键片段即可
+        assert "comment:" in config_text
+        assert "{diff_stat}" in config_text and "{test_summary}" in config_text
+
+    def test_update_comment_blank_restores_default(self, client):
+        """清空/纯空白 = 移除自定义键，恢复内置默认。"""
+        tc, tmp_path = client
+        assert tc.put("/api/settings", json={
+            "templates": {"comment": "自定义评论"}}).status_code == 200
+        resp = tc.put("/api/settings", json={"templates": {"comment": "   "}})
+        assert resp.status_code == 200
+        assert resp.json()["templates"]["comment"] == ""
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "comment:" not in config_text
+
+    def test_update_comment_rejects_non_string(self, client):
+        """非字符串（数字/布尔/对象）400 拒绝。"""
+        tc, _ = client
+        for bad in (123, True, ["文本"], {"x": 1}):
+            resp = tc.put("/api/settings", json={"templates": {"comment": bad}})
+            assert resp.status_code == 400, f"取值 {bad!r} 应拒绝"
+            assert "必须是字符串" in resp.json()["detail"]
+
+    def test_update_comment_keeps_resume_template(self, client):
+        """单独更新 comment 不影响 templates.resume（部分更新）。"""
+        tc, _ = client
+        before = tc.get("/api/settings").json()["templates"]["resume"]
+        assert tc.put("/api/settings", json={
+            "templates": {"comment": "新评论模版"}}).status_code == 200
+        after = tc.get("/api/settings").json()["templates"]["resume"]
+        assert after == before

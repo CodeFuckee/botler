@@ -20,6 +20,7 @@ git 凭据通过 GIT_ASKPASS 注入：askpass 脚本（0700）保留在工作区
 
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import os
@@ -53,6 +54,17 @@ from .gitlab_client import (
 from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
                          list_local_remotes, parse_remote_url)
 from .templates import TemplateRenderer
+from .report import (
+    DEFAULT_COMMENT_TEMPLATE,
+    DEFAULT_FAILURE_COMMENT_TEMPLATE,
+    EMPTY_DIFF,
+    build_diff_table,
+    collect_diff_data,
+    format_duration,
+    format_test_summary,
+    parse_test_summary,
+    render_comment,
+)
 from .usage import finalize_usage, parse_claude_result_usage
 from .plugins import (
     PluginKind,
@@ -1373,6 +1385,32 @@ class ClaudeExecutor:
         except Exception as e:  # noqa: BLE001 落库失败也不阻塞任务执行
             logger.warning("任务 %s 环境快照落库失败: %s", task_id, e)
 
+    def _capture_base_sha(self, task_id: int, workdir: Path,
+                         git_env: dict | None = None) -> None:
+        """任务首次执行开始时记录工作区基线提交（issue #252）。
+
+        prepare_workspace 已把工作区重置到远端默认主分支最新提交，此时
+        HEAD 即「任务开始前 main 基线」；收尾时用 git diff base_sha..HEAD
+        采集任务改动（相对 main 的改动文件与行数）。只采一次：重试/断点
+        续跑不覆盖首次基线（同 issue #276 环境快照的首次语义），保证
+        diff 边界稳定。采集失败不阻塞任务执行——无基线时评论隐藏改动
+        段落（report.collect_diff_data 返回空，验收标准 3 不报错）。
+        """
+        task = self.db.get_task(task_id)
+        if task is not None and _row_get(task, "base_sha"):
+            return
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workdir), "rev-parse", "HEAD"],
+                env=git_env, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                self.db.set_task_status(task_id, None,
+                                        base_sha=result.stdout.strip())
+                self.db.add_log(task_id, "info",
+                                "已记录任务改动基线提交（结构化报告 diff 采集用）")
+        except Exception as e:  # noqa: BLE001 采集失败不阻塞任务执行
+            logger.warning("任务 %s 基线提交采集失败: %s", task_id, e)
+
     def _run_once(self, task_id: int, repo: dict, issue: dict,
                   resume_session: str | None = None,
                   resume_history: list | None = None) -> tuple[int, str]:
@@ -1457,6 +1495,7 @@ class ClaudeExecutor:
         cfg = self.config.get()
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         self._capture_env_snapshot(task_id, workdir)
+        self._capture_base_sha(task_id, workdir, git_env)
         if resume_session:
             prompt = self._resume_prompt(repo, issue, task_id)
             self.db.add_log(
@@ -1659,6 +1698,7 @@ class ClaudeExecutor:
         cfg = self.config.get()
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_history))
         self._capture_env_snapshot(task_id, workdir)
+        self._capture_base_sha(task_id, workdir, _git_env)
         if resume_history:
             prompt = self._resume_prompt(repo, issue, task_id)
             self.db.add_log(
@@ -1787,6 +1827,7 @@ class ClaudeExecutor:
         cfg = self.config.get()
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         self._capture_env_snapshot(task_id, workdir)
+        self._capture_base_sha(task_id, workdir, _git_env)
         # issue #281 §4.7：resume 前校验会话可恢复性——session_root 目录
         # 已配置但不存在 = 会话必然丢失，如实降级为全新会话（不假装「对话
         # 已保留」）；未配置 session_root 时无法校验，按可恢复处理（现状）。
@@ -2745,6 +2786,79 @@ class ClaudeExecutor:
         self._emit_task_event(task_id, "task_succeeded")
         logger.info("任务 %s 成功", task_id)
 
+    def _task_duration_text(self, task: dict) -> str:
+        """任务用时文案（created_at → finished_at，UTC 串，issue #252）。
+
+        与前端 fmtDuration 同语义：系统接收到 issue → 收尾打 bot-done
+        标记；finished_at 缺失（异常收尾/打标失败兜底）时返回空串
+        （渲染层隐藏用时行）。
+        """
+        created = _row_get(task, "created_at") or ""
+        finished = _row_get(task, "finished_at") or ""
+        if not created or not finished:
+            return ""
+        try:
+            start = calendar.timegm(time.strptime(created, "%Y-%m-%d %H:%M:%S"))
+            end = calendar.timegm(time.strptime(finished, "%Y-%m-%d %H:%M:%S"))
+        except (ValueError, TypeError):
+            return ""
+        return format_duration(max(0, end - start))
+
+    def _build_report_comment(self, task: dict, output: str, *,
+                              repo: dict | None = None,
+                              failed: bool = False,
+                              reason: str = "",
+                              log_tail: str = "") -> str:
+        """按可配置评论模版渲染结构化执行报告（issue #252）。
+
+        采集：任务改动（相对任务开始前 main 基线 base_sha 的 git diff，
+        改动文件表格 + 新增/删除列表）、测试摘要（从执行输出日志提取
+        pass/fail 计数）、提交链接、用时。无基线/无数据 → 对应占位符
+        为空，渲染后段落自动隐藏（验收标准 3），全程不抛错阻塞收尾
+        （采集/渲染失败记 warn 后回退内置模版）。
+        """
+        base_sha = _row_get(task, "base_sha") or ""
+        diff = EMPTY_DIFF
+        workdir = None
+        if repo is not None:
+            try:
+                workdir = self._repo_workdir(repo)
+            except Exception:  # noqa: BLE001 工作区不可用 → 隐藏改动段落
+                workdir = None
+        if workdir is not None and base_sha:
+            try:
+                diff = collect_diff_data(workdir, base_sha)
+            except Exception as e:  # noqa: BLE001 采集失败不阻塞收尾
+                self.db.add_log(task["id"], "warn", f"采集任务改动失败: {e}")
+        cfg = self.config.get()
+        template = (cfg.comment_template or
+                    (DEFAULT_FAILURE_COMMENT_TEMPLATE if failed
+                     else DEFAULT_COMMENT_TEMPLATE))
+        sha = _row_get(task, "commit_sha") or ""
+        commit_link = ""
+        if sha:
+            short = sha[:8]
+            url = f"{cfg.gitlab_url.rstrip('/')}/-/commit/{sha}"
+            commit_link = f"[{short}]({url})"
+        variables = {
+            "result_summary": "" if failed else self._success_summary(output),
+            "diff_stat": build_diff_table(diff),
+            "test_summary": format_test_summary(parse_test_summary(output)),
+            "commit_link": commit_link,
+            "commit_sha": sha[:8] if sha else "",
+            "duration": self._task_duration_text(task),
+            "error_message": reason,
+            "log_tail": log_tail,
+        }
+        try:
+            return render_comment(template, variables)
+        except Exception as e:  # noqa: BLE001 用户模版写坏 → 回退内置
+            self.db.add_log(task["id"], "warn",
+                            f"渲染结果评论失败（回退内置模版）: {e}")
+            return render_comment(
+                DEFAULT_FAILURE_COMMENT_TEMPLATE if failed
+                else DEFAULT_COMMENT_TEMPLATE, variables)
+
     def _leave_success_comment(self, task: dict, output: str,
                                repo: dict | None = None) -> None:
         """任务成功时平台兜底写完成评论（issue #79）。
@@ -2772,16 +2886,12 @@ class ClaudeExecutor:
         if last_author in bot_ids:
             self.db.add_log(task["id"], "info", "Claude 已留结果评论，平台不重复写")
             return
-        parts = ["🤖 Botler 自动回复：任务已完成。"]
-        sha = (task["commit_sha"] or "")[:8]  # task 为 sqlite3.Row，用索引访问
-        if sha:
-            parts.append(f"提交: {sha}")
-        summary = self._success_summary(output)
-        if summary:
-            parts.append(f"结果摘要:\n{summary}")
-        parts.append("开发已完成，请确认后手动关闭本 issue"
-                     "（平台已打 bot-done 标签）。")
-        body = "\n\n".join(parts)
+        body = self._build_report_comment(task, output, repo=repo)
+        if not body.strip():
+            # 兜底：渲染为空（极端场景）时保留最小可读文案，不写空评论
+            body = ("🤖 Botler 自动回复：任务已完成。\n\n"
+                    "开发已完成，请确认后手动关闭本 issue"
+                    "（平台已打 bot-done 标签）。")
         try:
             self._call_with_fallback(
                 repo, lambda c: c.add_comment(project_id, issue_iid, body))
@@ -2910,10 +3020,18 @@ class ClaudeExecutor:
 
         # 在 issue 上留失败评论 + 打标签
         if task:
-            summary = reason
+            # issue #252：失败任务输出结构化失败报告（失败原因 + 相关文件 +
+            # 测试摘要 + 日志尾部）；无改动/无测试数据时对应段落自动隐藏
             tail = self._tail_output(output)
+            log_tail = ""
             if tail and tail != output.strip():
-                summary += f"\n\n日志尾部：\n```\n{tail[-COMMENT_TAIL_CHARS:]}\n```"
+                log_tail = f"```\n{tail[-COMMENT_TAIL_CHARS:]}\n```"
+            body = self._build_report_comment(
+                task, output, repo=repo, failed=True,
+                reason=reason, log_tail=log_tail)
+            if not body.strip():
+                # 兜底：渲染为空（极端场景）时保留最小可读文案
+                body = f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{reason}"
             # issue #280：GitLab 短暂不可用时评论/标签只试一次会因 502 发不出
             # （08-17 事故：失败评论与 bot-failed 标签全部 502 失败，issue 上
             # 「没有任何回复评论」）。瞬时故障退避重试，恢复后仍能送达。
@@ -2922,8 +3040,7 @@ class ClaudeExecutor:
                     "留失败评论",
                     lambda: self._call_with_fallback(
                         repo, lambda c: c.add_comment(
-                            task["project_id"], task["issue_iid"],
-                            f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{summary}")))
+                            task["project_id"], task["issue_iid"], body)))
                 self.db.add_log(task_id, "info", "已在 issue 上留失败评论")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"留失败评论失败: {e}")

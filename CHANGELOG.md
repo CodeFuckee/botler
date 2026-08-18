@@ -5,6 +5,35 @@
 ## [Unreleased]
 ### Added
 
+- **结构化执行报告评论：任务收尾在 issue 留改动文件 / diff 统计 / 测试摘要（issue #252）**：
+  任务完成后执行器只在 issue 留模版决定的通用收尾语，用户要了解「改了什么、改了哪些文件、测试跑没跑过」
+  得去任务详情页翻日志。本次打通「采集 → 渲染 → 可配置模版」全链路：
+  - `backend/botler/report.py`（新增）：采集与渲染纯函数——`collect_diff_data`（git diff --numstat /
+    --name-status 相对任务开始前 main 基线，解析改动文件表 + 新增/删除列表 + 行数合计）、
+    `parse_test_summary`（从执行日志提取 pytest / jest / flutter / go test 的 pass/fail/error/skipped
+    计数，多轮取最新）、`build_diff_table`（Markdown 文件/增/删表格）、`render_comment` +
+    `strip_empty_sections`（占位符替换后空段落自动隐藏，无数据不报错）、内置默认成功/失败评论模版；
+  - `backend/botler/database.py`：tasks 表新增 `base_sha` 列（任务首次执行开始时工作区 HEAD，迁移 v17，
+    旧库启动自动补列）；
+  - `backend/botler/executor.py`：三引擎（claude / hermes / dsh）执行入口 `_capture_base_sha` 采集基线
+    （重试/续跑不覆盖首次值，采集失败不阻塞任务）；成功收尾 `_leave_success_comment` 与失败收尾
+    `_finish_failed` 改为 `_build_report_comment` 按模版渲染结构化评论（成功：结果摘要 / 改动文件 / 测试
+    摘要 / 提交链接 / 用时；失败：失败原因 / 相关文件 / 测试摘要 / 日志尾部）；渲染失败回退内置模版，
+    写评论失败仍不阻塞任务收尾；
+  - `backend/botler/templates.py`：PLACEHOLDERS 新增 `{diff_stat}` / `{test_summary}` /
+    `{commit_link}` / `{commit_sha}` / `{duration}` / `{result_summary}` / `{error_message}` /
+    `{log_tail}`（仅评论模版生效）；
+  - `backend/botler/config.py` + `api/settings.py` + `config.example.yaml`：新增 `templates.comment`
+    结果评论模版配置（留空保存 = 恢复内置默认，非字符串 400），设置 API GET/PUT 打通；
+  - 前端：`frontend/src/pages/Templates.jsx` 新增「结果评论模版」页签（与全局默认/中断恢复同机制，
+    支持全部占位符，留空保存恢复内置默认）；
+  - **测试**：后端新增 `backend/tests/test_report.py` 22 例（numstat/name-status 解析、无基线/无工作区
+    空结果、pytest/jest/flutter/go 摘要提取、表格与时长渲染、空段落隐藏、默认成功/失败模版无数据不报错）、
+    `backend/tests/test_executor_report.py` 7 例（base_sha 首次/续跑/失败、成功评论含 diff 与测试摘要、
+    失败评论含原因与相关文件、无 diff 隐藏段落、自定义模版生效）、`test_database_migrate.py` 迁移 v17
+    补列断言、`test_api_settings.py` comment 模版读写/清空/400；前端单元测试 976 例全通过。
+
+
 - **任务执行 token 用量采集与费用统计：三引擎（claude / hermes / dsh）任务详情展示用量卡片，概览页按仓库/引擎/时间段聚合（issue #235）**：
   需求——每个任务都会调用大模型 API，但任务详情只展示状态/日志/提交信息，完全没有记录每次执行消耗了多少 token、调用
   了哪些模型、估算费用是多少；claude CLI 的 stream-json 输出、dsh SDK 的 usage 字段、hermes 的消息记录里都含用量

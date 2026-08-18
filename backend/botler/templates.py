@@ -22,6 +22,17 @@ PLACEHOLDERS = {
     "project_path_encoded": "仓库路径 URL 编码（chenkaidi%2Fbotler）",
     "gitlab_host": "GitLab 主机 host:port（无 scheme）",
     "progress_summary": "中断恢复进度交接单（issue #281：任务进度账本渲染的确定性已完成/下一步摘要，仅恢复引导语模版使用）",
+    # 结果评论模版占位符（issue #252）：结构化执行报告评论（改动文件/diff
+    # 统计/测试结果），仅在 templates.comment 评论模版中生效，提示词模版
+    # 不含这些变量（渲染时保持字面量，不影响 agent 提示词）。
+    "result_summary": "任务结果摘要（执行输出 result/final_response，仅评论模版）",
+    "diff_stat": "改动文件表格（文件/增/删行数 + 新增/删除文件列表，相对任务开始前 main 基线，仅评论模版）",
+    "test_summary": "测试结果摘要（从执行日志提取的 pass/fail/error/skipped 计数，仅评论模版）",
+    "commit_link": "提交链接（Markdown 格式，仅评论模版）",
+    "commit_sha": "提交短 sha（8 位，仅评论模版）",
+    "duration": "任务用时（系统接收到 issue → 收尾，仅评论模版）",
+    "error_message": "失败原因（仅失败评论模版）",
+    "log_tail": "日志尾部（仅失败评论模版）"
 }
 
 

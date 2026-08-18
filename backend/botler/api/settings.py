@@ -113,6 +113,9 @@ def get_settings(request: Request):
             # 中断恢复模版（issue #116）：与全局默认模版同机制可编辑，
             # 未配置/清空时返回内置默认（中断恢复必须有引导语）
             "resume": s.resume_template,
+            # 结果评论模版（issue #252）：未配置/清空时返回空串，
+            # 前端展示内置默认说明，渲染层 fallback 内置模版
+            "comment": s.comment_template,
             # 全局模板也可用全部占位符（issue #25：模板页全局视图
             # 占位符表格此前为空，用户误以为占位符未生效）
             "placeholders": PLACEHOLDERS,
@@ -275,6 +278,12 @@ def update_settings(request: Request, body: dict):
             if not isinstance(tpl["resume"], str):
                 raise HTTPException(400, "templates.resume 必须是字符串")
             c.config.update_resume_template(tpl["resume"])
+        if "comment" in tpl:
+            # issue #252：结果评论模版必须是字符串；空白由
+            # update_comment_template 归一为内置默认
+            if not isinstance(tpl["comment"], str):
+                raise HTTPException(400, "templates.comment 必须是字符串")
+            c.config.update_comment_template(tpl["comment"])
 
     browse = body.get("browse")
     if browse is not None:

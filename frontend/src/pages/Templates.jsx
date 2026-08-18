@@ -10,6 +10,9 @@ export default function Templates() {
   const [globalTemplate, setGlobalTemplate] = useState('')
   // 中断恢复模版（issue #116）：与全局默认模版同机制可编辑
   const [resumeTemplate, setResumeTemplate] = useState('')
+  // 结果评论模版（issue #252）：结构化执行报告评论（改动文件/diff 统计/
+  // 测试结果），未配置时后端返回空串、渲染层 fallback 内置模版
+  const [commentTemplate, setCommentTemplate] = useState('')
   const [globalPlaceholders, setGlobalPlaceholders] = useState({})
   const [placeholders, setPlaceholders] = useState({})
   // kind: 'default' 全局默认 / 'resume' 中断恢复 / 'repo' 仓库级
@@ -31,6 +34,8 @@ export default function Templates() {
     setGlobalTemplate(settings.templates.default)
     // 中断恢复模版（issue #116）：未配置时后端返回内置默认，作为可编辑基线
     setResumeTemplate(settings.templates.resume || '')
+    // 结果评论模版（issue #252）：未配置时后端返回空串，渲染层 fallback 内置模版
+    setCommentTemplate(settings.templates.comment || '')
     // 全局模板同样支持占位符（issue #25：此前全局视图占位符表格为空，
     // 用户误以为占位符未生效）
     const phs = settings.templates.placeholders || {}
@@ -65,6 +70,10 @@ export default function Templates() {
         // 中断恢复模版（issue #116）：留空保存 = 恢复内置默认
         const settings = await api.put('/api/settings', { templates: { resume: text } })
         setResumeTemplate(settings.templates.resume || '')
+      } else if (selected.kind === 'comment') {
+        // 结果评论模版（issue #252）：留空保存 = 恢复内置默认
+        const settings = await api.put('/api/settings', { templates: { comment: text } })
+        setCommentTemplate(settings.templates.comment || '')
       } else {
         const settings = await api.get('/api/settings')
         await api.put('/api/settings', { templates: { default: text } })
@@ -99,6 +108,13 @@ export default function Templates() {
     setPlaceholders(globalPlaceholders)
   }
 
+  const selectComment = () => {
+    // 结果评论模版（issue #252）：与全局默认同机制，支持全部占位符
+    setSelected({ repoId: null, kind: 'comment', isOverride: false })
+    setText(commentTemplate)
+    setPlaceholders(globalPlaceholders)
+  }
+
   return (
     <div>
       <h1>提示词模版</h1>
@@ -118,6 +134,12 @@ export default function Templates() {
           >
             中断恢复模版
           </button>
+          <button
+            className={'btn ' + (selected?.kind === 'comment' ? 'btn-primary' : '')}
+            onClick={selectComment}
+          >
+            结果评论模版
+          </button>
           {repos.map((r) => (
             <button
               key={r.id}
@@ -132,7 +154,10 @@ export default function Templates() {
         <p className="muted small">
           {selected?.kind === 'resume'
             ? '中断恢复模版：平台重启/中断后恢复会话时的引导语（claude/hermes/dsh 三引擎通用）。留空保存即恢复内置默认。'
-            : selected?.kind === 'repo'
+            : selected?.kind === 'comment'
+              ? '结果评论模版：任务收尾时在 issue 上留的结构化执行报告（改动文件表格 / 测试摘要 / commit 链接 / 用时）。'
+                + '占位符 {diff_stat} / {test_summary} / {commit_link} / {duration} 等仅评论模版生效，空段落自动隐藏。留空保存即恢复内置默认。'
+              : selected?.kind === 'repo'
               ? selected?.isOverride
                 ? '仓库级模版：覆盖全局默认。'
                 : '该仓库未配置覆盖，当前显示全局默认模版。编辑并保存即创建覆盖。'
