@@ -37,7 +37,7 @@
     文案），`test_database_migrate.py` 补 failure_category 迁移 3 例，
     `test_api_stats.py` 补分类聚合 2 例，`test_api_tasks.py` 补详情分类/兜底 2 例，
     `test_executor_report.py` 补失败评论分类前缀与落库 2 例；既有 user_version 断言
-    更新至 v18；前端测试 1064 例全通过，后端全量测试无 regression。
+    更新至 v18；前端测试 1069 例全通过（新增 `frontend/tests/failure-categories.test.mjs` 5 例），后端全量测试无 regression。
 
 - **右上角展示当前登录用户信息与退出入口（issue #271）**：
   SSO 启用后登录流程完整但界面没有当前登录用户展示（多账号/多人共用时身份混淆、
