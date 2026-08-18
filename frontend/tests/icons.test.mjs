@@ -36,7 +36,7 @@ function renderIcon(name, props) {
 const EXPECTED_NAMES = [
   'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle',
   'chevronDown', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
-  'externalLink', 'flag', 'folder', 'folderOpen', 'hourglass', 'image',
+  'externalLink', 'eye', 'fileText', 'flag', 'folder', 'folderOpen', 'hourglass', 'image',
   'lightbulb', 'lock', 'message', 'mic', 'package', 'pencil', 'pin',
   'keyboard', 'plus', 'refresh', 'rocket', 'search', 'settings', 'sparkles', 'square',
   'tag', 'terminal', 'trash', 'user', 'wallet', 'warning', 'wrench',
