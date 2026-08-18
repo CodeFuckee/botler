@@ -500,6 +500,24 @@
 
 ### Changed
 
+- **CI 后端测试 pytest-xdist 并行加速，1500+ 用例串行改并行（issue #211）**：
+  背景——`backend:test` 串行跑全部 pytest 用例（流水线 #1169 实测 2112 例），
+  步骤4（运行测试）用时 327 秒且随用例增长线性上升，CI 反馈慢：
+  - `backend/requirements.txt`：新增 `pytest-xdist>=3.0`（多进程分片，与
+    pytest-cov 兼容，各 worker 覆盖率自动合并）；
+  - `.gitlab-ci.yml` `backend:test` 步骤4：`pytest -n "${PYTEST_WORKERS:-auto}"`——
+    默认 `auto`（CPU 核数，code01 为 16 核），可用 CI 变量 `PYTEST_WORKERS`
+    覆盖为固定值（如 4 / 8）；日志新增并行 worker 数与「改造前串行基线 327 秒 →
+    本次并行用时」对比行（验收标准「对比并行前后耗时，记录到 job 日志」）；
+  - **数据库测试隔离确认**：backend/tests 各用例使用独立 `tmp_path` SQLite 临时库
+    （per-test 隔离），无共享状态，并行安全（验收标准「全量用例并行下无 flaky」）；
+  - `frontend/package.json`：`npm test` / `npm run test:coverage` 的 `node --test`
+    增加 `--test-concurrency=8` 显式并行（node --test 默认已按核数并行，显式固定
+    8 worker 平衡并行度与同 stage 其他 job 资源占用）；
+  - `README.md`「测试」章节同步补充并行运行方式；
+  - **测试结果一致**：并行模式 2135 例全量通过、覆盖率门禁（70%）不受影响，
+    coverage.xml 合并上报正常，无 flaky。
+
 - **任务列表/详情页新增单任务「停止」与详情页「重试」操作，解决单任务操作入口分散（issue #214）**：
   需求——概览页 issue 右边栏有「重试」（issue #117）与「关闭 issue」，调度器支持单任务
   `request_stop`（executor 已实现）但任务列表/详情页 UI 无「停止当前任务」按钮，用户只能

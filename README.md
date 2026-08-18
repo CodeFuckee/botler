@@ -166,10 +166,13 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 ## 测试
 
 ```bash
-# 后端单元测试（pytest，API 单测 + 执行器 + 数据库迁移等）
-cd backend && .venv/bin/python -m pytest tests/ -q
+# 后端单元测试（pytest，API 单测 + 执行器 + 数据库迁移等；
+# 并行加速 issue #211：pytest-xdist -n auto 按 CPU 核数分片，各用例独立
+# tmp_path SQLite 临时库可安全并行，串行跑法去掉 -n auto 即可）
+cd backend && .venv/bin/python -m pytest tests/ -q -n auto
 
-# 前端单元测试（node --test：源码静态断言 + react-test-renderer 渲染断言）
+# 前端单元测试（node --test：源码静态断言 + react-test-renderer 渲染断言，
+# --test-concurrency=8 显式并行，issue #211）
 cd frontend && npm test
 
 # 覆盖率（issue #210）：pytest-cov 统计后端、c8（v8 原生）统计前端

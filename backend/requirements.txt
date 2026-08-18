@@ -8,6 +8,10 @@ APScheduler>=3.10,<4
 python-dotenv>=1.0
 pytest>=8.0
 pytest-cov>=6.0
+# 并行执行（issue #211）：pytest-xdist 提供 -n auto / -n 4 多进程分片，
+# 加速 CI backend:test 与本地全量测试（各用例使用独立 tmp_path SQLite 临时库，
+# 无共享状态，可安全并行）
+pytest-xdist>=3.0
 minio>=7.2
 # Web 终端（issue #183）：terminado 提供标准 WebSocket 终端服务，Tornado 承载
 tornado>=6.4

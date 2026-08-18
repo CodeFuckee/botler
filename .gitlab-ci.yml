@@ -875,12 +875,23 @@ backend:test:
       echo "⏱️  步骤3 (安装依赖) 用时: $((STEP3_END - STEP3_START)) 秒"
 
       STEP4_START=$(date +%s)
-      echo "=== 4. 运行测试（pytest-cov 覆盖率统计，issue #210）==="
-      # 覆盖率门禁：总覆盖率低于 --cov-fail-under=70 时 pytest 非零退出，
-      # 流水线阻断；term-missing 输出核心模块（executor/gitlab_client/
-      # scheduler 等）逐文件覆盖情况，xml 供 GitLab coverage_report 摄入
+      echo "=== 4. 运行测试（pytest-xdist 并行 + pytest-cov 覆盖率，issue #210/#211）==="
+      # 并行加速（issue #211）：pytest-xdist -n 多进程分片，默认 auto（CPU 核数），
+      # 但封顶 8 worker——code01 上 backend:test 与 frontend:build / harmony:build
+      # 同 stage 并行，本地实测 16 worker 因资源争抢反而略慢（16→72s vs 8→69s，
+      # 串行基线 350s）；可用 CI 变量 PYTEST_WORKERS 覆盖为固定值（如 4）。
+      # 各用例使用独立 tmp_path SQLite 临时库（backend/tests 均为 per-test 隔离），
+      # 无共享状态，可安全并行；pytest-cov 与 xdist 兼容，各 worker 覆盖率自动合并，
+      # --cov-fail-under 门禁仍基于合并后总覆盖率判定
+      # （改造前串行基线：CI 2112 例 327 秒 / 流水线 #1169 实测）
+      PYTEST_WORKERS="${PYTEST_WORKERS:-auto}"
+      if [ "$PYTEST_WORKERS" = "auto" ]; then
+        NPROC=$(nproc)
+        PYTEST_WORKERS=$(( NPROC > 8 ? 8 : NPROC ))
+      fi
       if [ -d tests ]; then
-        $PYTHON -m pytest tests/ -v --tb=short \
+        echo "→ pytest-xdist 并行 worker 数: ${PYTEST_WORKERS}（CPU 核数: $(nproc)）"
+        $PYTHON -m pytest tests/ -v --tb=short -n "${PYTEST_WORKERS}" \
           --cov=botler --cov-report=term-missing --cov-report=xml \
           --cov-fail-under=70
       else
@@ -906,6 +917,10 @@ backend:test:
       echo "  步骤3 (安装依赖):         $((STEP3_END - STEP3_START)) 秒"
       echo "  步骤4 (运行测试):         $((STEP4_END - STEP4_START)) 秒"
       echo "========================================="
+      # 并行前后耗时对比（issue #211 验收标准）：改造前串行基线 2112 例用时 327 秒
+      # （流水线 #1169，2026-08-19 实测）；本次并行（worker=${PYTEST_WORKERS}）用时见上。
+      echo "📊 并行对比（issue #211）：改造前串行基线 327 秒 → 本次并行 $((STEP4_END - STEP4_START)) 秒"
+      echo "   （基线：流水线 #1169 backend:test 步骤4，2112 passed in 324.70s）"
   # 覆盖率报告（issue #210）：上传 GitLab coverage_report，MR 页面展示
   # 覆盖率对比；when: always 保证即使阈值未达（job 失败）报告也可下载查看
   artifacts:
