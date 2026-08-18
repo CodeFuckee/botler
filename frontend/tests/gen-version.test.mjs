@@ -74,6 +74,10 @@ test('nextVersion：300+ 平台版本高位加一（1.0.310 → 1.3.11）', () =
   assert.equal(nextVersion('1.0.310'), '1.3.11')
 })
 
+test('nextVersion：平台版本恰为 300 高位版本号加一（1.0.300 → 1.3.1，issue #283）', () => {
+  assert.equal(nextVersion('1.0.300'), '1.3.1')
+})
+
 test('nextVersion：patch 进位后 minor 随之到 100 逐级进位（1.99.150 → 2.0.51）', () => {
   assert.equal(nextVersion('1.99.150'), '2.0.51')
 })
