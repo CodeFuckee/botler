@@ -30,9 +30,10 @@ function renderIcon(name, props) {
 // 语义名清单：与 Icon.jsx 中 ICONS 映射键一一对应（防漏配）
 // issue #188：新增 download（logo 下载）/ image（logo 占位）/
 // sparkles（生成图标按钮）三个语义名，同步补入清单
+// issue #189：新增 compass（概览页「发掘」按钮）语义名，同步补入清单
 const EXPECTED_NAMES = [
   'arrowLeft', 'arrowUp', 'bot', 'brain', 'check', 'checkCircle',
-  'chevronDown', 'chevronRight', 'clipboard', 'coins', 'download',
+  'chevronDown', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
   'externalLink', 'flag', 'folder', 'folderOpen', 'hourglass', 'image',
   'lightbulb', 'lock', 'message', 'mic', 'package', 'pencil', 'pin',
   'plus', 'refresh', 'rocket', 'search', 'settings', 'sparkles', 'square',

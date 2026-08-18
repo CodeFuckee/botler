@@ -5,6 +5,40 @@
 ## [Unreleased]
 ### Changed
 
+- **概览页仓库卡片新增「发掘」：agent 根据项目实现的功能去 GitHub 搜索类似仓库、翻找用户需求 issue，整理成若干条需求写入该仓库 issue（issue #189）**：
+  需求——概览页面，仓库的右边增加一个「发掘」按钮，点击之后根据项目的实现的功能，去 GitHub 上搜索类似仓库，
+  并翻找类似仓库里 issue，查看用户对类似项目提出的需求，整理成若干条需求后，把需求写到对应仓库的 issue 里，
+  分配人选择仓库的 owner，一条需求一个 issue——
+  - `backend/botler/api/discover.py`（新增）：`POST /api/repos/{repo_id}/discover` 同步执行——
+    校验仓库（不存在 404 / 软删除与未启用 400）→ 收集项目上下文（复用自省 issue #187 收集链路：本地
+    项目文件夹优先、GitLab 仓库 API 兜底，均缺失时仅基于仓库元信息继续并提示模型如实说明，收集失败
+    不阻塞）→ 调 AI 对话模型（复用设置页「AI API 供应商」第一个启用且 Key 非空的项，issue #166/#187
+    同一链路）基于项目功能生成 GitHub 搜索关键词（严格 JSON 数组，取前 4 个）→ 调 GitHub REST API
+    search/repositories 搜索类似仓库（按 star 降序取前 5、跨关键词去重、最多考察 5 个）→ 翻找类似仓库
+    开放 issue（issues API 每仓前 15 条、过滤 pull_request、总量封顶 40 条）→ 调 AI 对话模型把原始需求
+    整理成若干条需求（严格 JSON 数组：标题 + 说明 + 参考来源；去重、封顶 8 条）→ 逐条创建 GitLab issue：
+    标题带【发掘】前缀（超 255 字符截断）、标签 feature（需求语义）、分配人 = 仓库 owner（与自省同一
+    解析链路：GitLab 项目 owner 优先、仓库 remote 用户名兜底、解析失败不指定分配人）、描述含需求说明
+    与参考来源链接；写 issue 与概览页其他 issue 编辑一致（`_issue_edit_call`）：必须使用 owner token，
+    绝不回退 bot token；创建成功后清空概览缓存。GitHub 匿名调用（可选环境变量 `GITHUB_TOKEN` 提升
+    限额），限流 403/429 与网络错误 502 明确报错引导；错误映射：未配置 AI 对话模型 400 引导设置页、
+    AI 失败/空回复/搜索词或需求解析失败 502、无相似仓库/无需求 issue 502、创建 issue 失败 502（提示
+    已创建条数）；
+  - `backend/botler/api/__init__.py`：注册 discover 路由；
+  - `frontend/src/pages/Overview.jsx`：每个仓库卡片右上角操作组（`.issue-repo-actions`）在「自省」
+    按钮后新增「发掘」按钮（compass 图标，请求中禁用并显示「发掘中…」，成功后刷新开放 issue 列表），
+    新增 `DiscoverResult` 结果组件（加载中 / 已创建 N 个发掘 issue 链接列表 / 失败原因）；
+  - `frontend/src/components/Icon.jsx`：新增 `compass`（发掘按钮）Lucide 语义图标；
+  - `frontend/src/styles.css`：新增 `.discover-btn` / `.discover-result` 样式（与自省按钮同风格，
+    白字不换行、结果小字提示与跳转链接 hover 下划线）；
+  - **测试**：新增 `backend/tests/test_api_discover.py` 31 例（正常路径本地上下文 / GitLab 兜底 /
+    跨关键词仓库去重 / 分配人三种解析路径 / 需求标题去重与条数封顶 / 标题截断 / 概览缓存失效 /
+    GitHub 限流与网络错误 / 无相似仓库 / 无需求 issue / AI 失败空回复与解析失败 / 创建 issue 失败 /
+    GitHub 请求头 GITHUB_TOKEN 可选 / JSON 数组解析兼容代码围栏与前后缀），新增
+    `frontend/tests/overview-discover.test.mjs` 11 例（源码/样式断言 / 渲染按钮成组 / 点击接口参数 /
+    请求中禁用 / 成功链接列表与刷新 / 失败提示），更新 `icons.test.mjs` 语义名清单补 `compass`；
+    前后端全量测试通过，无 regression。
+
 - **仓库管理页新增「生成图标」：agent 基于 README 生成 logo 提示词并调用生图模型生成 logo（issue #188）**：
   需求——在仓库设置页面，每个仓库的右侧增加一个「生成图标」的按钮，点击后让 agent 根据这个项目的
   readme.md 来生成最适合这个项目的图标的提示词，并使用这个提示词调用生图模型来生成 logo（要求简约

@@ -207,6 +207,10 @@ export default function Overview() {
   // 自省结果（issue #187）: repoId -> {loading/created/error}——点击
   // 「自省」按钮调用 agent 审查仓库并把建议写入该仓库 issue 的结果
   const [introspectResults, setIntrospectResults] = useState({})
+  // 发掘结果（issue #189）: repoId -> {loading/created/error}——点击
+  // 「发掘」按钮让 agent 根据仓库实现的功能去 GitHub 搜索类似仓库、翻找
+  // 用户需求，整理成需求写入该仓库 issue 的结果
+  const [discoverResults, setDiscoverResults] = useState({})
   // 灵感（issue #131）：概览页「灵感」板块——按仓库随手记录新功能灵感，
   // 仅保存在 Botler 本地数据库，不提交到 GitLab issue
   const [inspirationRepos, setInspirationRepos] = useState([])
@@ -539,6 +543,22 @@ export default function Overview() {
     }
   }, [loadIssues])
 
+  // 发掘（issue #189）：调用后端同步发掘接口——AI agent 根据该仓库实现的
+  // 功能去 GitHub 搜索类似仓库、翻找用户需求 issue，整理成若干条需求写入
+  // 该仓库的 issue（分配人 = 仓库 owner，一条需求一个 issue）。同步请求
+  // 耗时较长（AI 两轮 + GitHub 采集 + 建 issue），请求中禁用按钮防重复
+  // 点击；成功后刷新开放 issue 列表（新 issue 立即出现在列表顶部）。
+  const discoverRepo = useCallback(async (repo) => {
+    setDiscoverResults((prev) => ({ ...prev, [repo.repo_id]: { loading: true } }))
+    try {
+      const res = await api.post(`/api/repos/${repo.repo_id}/discover`)
+      setDiscoverResults((prev) => ({ ...prev, [repo.repo_id]: { created: res.issues } }))
+      await loadIssues()
+    } catch (e) {
+      setDiscoverResults((prev) => ({ ...prev, [repo.repo_id]: { error: e.message } }))
+    }
+  }, [loadIssues])
+
   // 各任务信息块实时输出自动滚动到底部（issue #114：任务板块删除后
   // 任务块迁入开放 issue 列表项内；SSR 测试环境无 document 时跳过）
   useEffect(() => {
@@ -677,6 +697,17 @@ export default function Overview() {
                                 title="调用 AI agent 审查该仓库的功能与实现情况，并把改进建议写入该仓库的 issue（分配人 = 仓库 owner）">
                           {introspectResults[r.repo_id]?.loading ? <><Icon name="refresh" /> 自省中…</> : <><Icon name="search" /> 自省</>}
                         </button>
+                        {/* issue #189：卡片右上角「发掘」按钮——让 agent
+                            根据该仓库实现的功能去 GitHub 搜索类似仓库、翻找
+                            用户需求 issue，整理成需求写入该仓库 issue（分配人
+                            = 仓库 owner，一条需求一个 issue）。请求中禁用防
+                            重复点击，与「自省」按钮同风格 */}
+                        <button type="button" className="btn btn-small discover-btn"
+                                onClick={() => discoverRepo(r)}
+                                disabled={discoverResults[r.repo_id]?.loading}
+                                title="根据该仓库实现的功能去 GitHub 搜索类似仓库、翻找用户需求 issue，整理成若干条需求写入该仓库的 issue（分配人 = 仓库 owner，一条需求一个 issue）">
+                          {discoverResults[r.repo_id]?.loading ? <><Icon name="refresh" /> 发掘中…</> : <><Icon name="compass" /> 发掘</>}
+                        </button>
                         <button type="button" className="btn btn-small reconcile-btn"
                                 onClick={() => reconcileRepo(r)}
                                 disabled={reconcileResults[r.repo_id]?.loading}
@@ -696,6 +727,9 @@ export default function Overview() {
                     {/* issue #187：自省结果——AI 审查进行中 / 已创建自省
                         issue（带跳转链接）/ 失败原因 */}
                     {introspectResults[r.repo_id] && <IntrospectResult result={introspectResults[r.repo_id]} />}
+                    {/* issue #189：发掘结果——AI 发掘进行中 / 已创建发掘
+                        issue 链接列表 / 失败原因 */}
+                    {discoverResults[r.repo_id] && <DiscoverResult result={discoverResults[r.repo_id]} />}
                     {(r.issues || []).length === 0 ? (
                       <div className="empty-state small">
                         <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
@@ -1175,6 +1209,27 @@ function IntrospectResult({ result }) {
            title="在 GitLab 中打开自省 issue">
           #{result.created.iid} <Icon name="externalLink" />
         </a>
+      </div>
+    )
+  }
+  return null
+}
+
+// 发掘结果（issue #189）：AI 发掘进行中显示加载提示；成功显示已创建的
+// 发掘 issue 链接列表（点击跳转 GitLab）；失败显示后端错误信息
+function DiscoverResult({ result }) {
+  if (result.error) return <div className="alert alert-error small discover-result">{result.error}</div>
+  if (result.loading) return <div className="small muted discover-result"><Icon name="refresh" /> AI 发掘中，请稍候…</div>
+  if (result.created?.length) {
+    return (
+      <div className="small discover-result">
+        <span className="test-chip ok"><Icon name="check" /> 已创建 {result.created.length} 个发掘 issue</span>{' '}
+        {result.created.map((issue, i) => (
+          <a key={issue.web_url || i} href={issue.web_url} target="_blank" rel="noreferrer"
+             title="在 GitLab 中打开发掘 issue">
+            #{issue.iid}{i < result.created.length - 1 ? '、' : ''} <Icon name="externalLink" />
+          </a>
+        ))}
       </div>
     )
   }

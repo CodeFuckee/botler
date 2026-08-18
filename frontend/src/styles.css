@@ -2073,6 +2073,24 @@ code {
 .introspect-result a:hover {
   text-decoration: underline;
 }
+/* issue #189：仓库卡片右上角「发掘」按钮——调用 AI agent 根据项目功能去
+   GitHub 搜索类似仓库、翻找用户需求，整理成需求写入该仓库 issue；与自省
+   按钮同风格防文字换行 */
+.discover-btn {
+  white-space: nowrap;
+}
+/* issue #189：发掘结果小字提示——加载中/成功链接列表/失败原因，与自省
+   结果同一视觉层级（卡片头下方与 issue 分组之间留间距） */
+.discover-result {
+  margin-bottom: var(--space-2);
+}
+.discover-result a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.discover-result a:hover {
+  text-decoration: underline;
+}
 /* issue #92：添加 issue 弹窗——字段竖排（与 .repo-edit 一致），
    标签多选横向流式排布 */
 .add-issue .edit-field {
