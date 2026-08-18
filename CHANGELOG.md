@@ -5,6 +5,30 @@
 ## [Unreleased]
 ### Added
 
+- **新增《插件开发指南》文档（issue #305）**：
+  issue「在项目文档中增加，关于插件开发相关信息的文档，单独的一个文件，然后
+  在 readme 中添加指引」为纯文档需求，本期新增 `docs/插件开发指南.md`（插件
+  开发完整指引，与既有 `docs/插件体系设计方案.md` 互补）：
+  - **插件模型与注册表 API**：PluginKind 四类插件分类（executor / model_provider /
+    vision_model_provider / notifier）、Plugin 基类字段、register_plugin / get_plugin /
+    has_plugin / list_plugins / plugin_names 便捷函数、PluginRegistry 完整方法表、
+    重复注册 / 未注册两类异常；
+  - **四类插件接口逐一详解**（附最小可运行示例与启用配置）：ExecutorPlugin.run
+    （worker.engine 引用，未注册回退 claude）、ImageProviderPlugin.generate
+    （resolve_request_url 自定义 Base URL 语义，issue #150）、
+    VisionProviderPlugin.describe（supports_image_url / MinIO 强制 http URL，
+    issue #163/#164）、NotifierPlugin.send_*（未启用返回 None、失败不阻塞收尾、
+    幂等建议）；
+  - **外部插件加载机制**：worker.plugin_paths 启动加载（失败仅记日志不阻塞启动）+
+    插件管理页安装 / 卸载 / 重载 / 设置（issue #145）；
+  - **测试与调试**：现有插件测试文件清单、自定义插件单元测试示例、全量回归命令；
+  - **最佳实践与 FAQ**：向后兼容 / 最小侵入 / 容错 / 幂等 / 中文注释等约定，
+    重复注册冲突、未注册查询、引擎回退、自定义 Base URL 404、热加载等常见问题；
+  - README「插件体系」章节新增指向该指南的入口（目录结构 docs/ 行同步补充）；
+  - 纯文档变更（新增指南文档 + README 指引 + CHANGELOG），无代码 / 测试改动，
+    docs-only 提交跳过构建与部署流水线（issue #57）。
+
+
 - **自动发版机制：中间版本号 +1 时发布新版本并重置 CHANGELOG（issue #294）**：
   新增发版脚本并集成到 CI/CD，每次 main 分支 push 流水线成功后自动检测
   「中间版本号（minor）进位」触发发版——构建版本号由

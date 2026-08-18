@@ -89,7 +89,7 @@ frontend/e2e/        Playwright 浏览器级 E2E（issue #212）：tests/ 用例
 harmony/             HarmonyOS NEXT 鸿蒙端（Web 套壳，issue #173）：系统 Web
                      组件加载 Web 前端 + 加载动画/失败重试/返回键历史回退；
                      CI 经 hvigorw 真实编译（详见 harmony/README.md）
-docs/                文档（设计方案 / UI 优化参考 / Synology SSO 配置指南）
+docs/                文档（设计方案 / 插件开发指南 / UI 优化参考 / Synology SSO 配置指南）
 deploy/              pm2 与 systemd 配置
 workspace/           仓库工作区（运行时生成）
 logs/                任务执行日志（运行时生成）
@@ -399,6 +399,11 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
   默认接口 / 模型预设。
 
 完整设计见 [`docs/插件体系设计方案.md`](docs/插件体系设计方案.md)（接口定义 / 迁移清单 / 测试计划 / 演进方向）。
+
+**插件开发指南**：从零开发新插件（执行引擎 / 生图 / 识图供应商 / 消息发送通道）的
+完整指引——插件模型与注册表 API、四类插件接口签名与最小示例、外部插件加载
+（`worker.plugin_paths` / 插件管理页）、配置启用、测试调试与 FAQ，见
+[`docs/插件开发指南.md`](docs/插件开发指南.md)。
 
 ## 技能管理（issue #282）
 
