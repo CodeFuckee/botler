@@ -236,8 +236,9 @@ class SsoGuardMiddleware(BaseHTTPMiddleware):
     webhook 路径不在 /api/ 前缀下，天然放行（GitLab 外部调用）。
     """
 
-    # 放行前缀：登录流程自身 / 健康检查（部署监控）
-    PUBLIC_API_PREFIXES = ("/api/auth/", "/api/health")
+    # 放行前缀：登录流程自身 / 健康检查（部署监控；/api/terminal/health
+    # 为终端服务探活端点，issue #183：与 /api/health 同语义，SSO 场景放行）
+    PUBLIC_API_PREFIXES = ("/api/auth/", "/api/health", "/api/terminal/health")
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
         path = request.url.path

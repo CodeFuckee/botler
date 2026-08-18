@@ -194,3 +194,11 @@ class TestTerminalProxy:
             with pytest.raises(WebSocketDisconnect):
                 while True:
                     ws.receive_text()
+
+
+class TestHealthExemption:
+    def test_health_exempt_when_sso_enabled(self, sso_client, term_upstream):
+        # SSO 启用时健康检查端点应放行（部署监控探活，与 /api/health 同语义）
+        resp = sso_client.get("/api/terminal/health")
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
