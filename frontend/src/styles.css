@@ -3273,3 +3273,127 @@ code {
 .usage-stats-table td {
   font-size: 13px;
 }
+
+/* ---- 统计看板页（issue #264）---- */
+.stats-page {
+  max-width: 1080px;
+}
+.stats-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.stats-header h1 {
+  margin: 0;
+}
+.stats-range {
+  min-width: 160px;
+}
+/* 总览卡片：任务总数 / 成功率 / 平均耗时 / 失败数 */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+.stats-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.stats-card-label {
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stats-card-value {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+/* 分组对比区块 */
+.stats-section {
+  margin-top: var(--space-5);
+}
+.stats-section h2 {
+  font-size: 16px;
+  margin: 0 0 var(--space-2);
+}
+.stats-table {
+  margin: 0;
+}
+.stats-table th,
+.stats-table td {
+  font-size: 13px;
+}
+.stats-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* 纯 CSS 条形图（issue #264：避免引入 recharts 等重依赖） */
+.stats-bar-track {
+  display: inline-block;
+  width: 120px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  overflow: hidden;
+  vertical-align: middle;
+}
+.stats-bar {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--primary);
+  transition: width var(--dur-fast, 0.15s) var(--ease-out, ease-out);
+}
+.stats-bar-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.stats-bar-cell b {
+  min-width: 44px;
+}
+/* 失败原因 Top 分布 */
+.stats-reasons {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.stats-reasons li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.stats-reason-rank {
+  flex: 0 0 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--primary-weak);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.stats-reason-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

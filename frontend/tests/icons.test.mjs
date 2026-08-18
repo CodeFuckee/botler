@@ -31,8 +31,9 @@ function renderIcon(name, props) {
 // issue #188：新增 download（logo 下载）/ image（logo 占位）/
 // sparkles（生成图标按钮）三个语义名，同步补入清单
 // issue #189：新增 compass（概览页「发掘」按钮）语义名，同步补入清单
+// issue #264：新增 chart（统计看板空态与总览卡片）语义名，同步补入清单
 const EXPECTED_NAMES = [
-  'arrowLeft', 'arrowUp', 'bot', 'brain', 'check', 'checkCircle',
+  'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle',
   'chevronDown', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
   'externalLink', 'flag', 'folder', 'folderOpen', 'hourglass', 'image',
   'lightbulb', 'lock', 'message', 'mic', 'package', 'pencil', 'pin',

@@ -5,6 +5,32 @@
 ## [Unreleased]
 ### Added
 
+- **统计分析看板页：成功率 / 引擎对比 / 仓库排行（issue #264）**：
+  平台积累了任务执行数据（status/engine/时长/来源）但只有概览页的 DeepSeek 余额卡片与单仓库平均耗时
+  （issue #180），任务成功率、各引擎表现对比、仓库处理量排行都无聚合视图。本次新增独立「统计」页
+  （导航入口），数据来自本地任务表聚合，无 GitLab 请求压力：
+  - `backend/botler/api/stats.py`（新增）：`GET /api/stats/dashboard`——overview（任务总数/成功率/
+    平均耗时/失败数/中断数）+ by_engine / by_repo / by_source（分组对比，空引擎显示「未指定」、
+    来源展示 webhook/手动/对账）+ failure_reasons（失败原因 Top 10，failed/interrupted 任务
+    error_message 空白归一化 + 截断，与 #40 失败分类口径联动）；days 参数 0=全部 / N=最近 N 天；
+    复用概览页 10 秒 TTL 缓存模式（按 days 分桶）；
+  - `backend/botler/database.py`：新增 `dashboard_task_rows`（按创建时间 UTC 过滤 + LEFT JOIN 仓库名）
+    与 `dashboard_stats`，聚合逻辑为模块级纯函数 `aggregate_dashboard` / `_task_duration_seconds`
+    （耗时口径与任务列表「处理用时」及 issue #180 一致：finished_at - created_at，缺字段/非法/负值
+    防御性剔除），成功率/耗时/失败原因口径与任务列表同表同源（验收标准 1）；
+  - `frontend/src/pages/Stats.jsx`（新增）：总览卡片（任务总数/成功率/平均耗时/失败数）+ 引擎对比 +
+    仓库排行 + 来源分布（纯 CSS 条形图，避免引入 recharts 等重依赖）+ 失败原因 Top 分布；时间段选择
+    （最近 7 天 / 30 天 / 全部）localStorage 持久化（刷新后保持）；无任务数据渲染空态不报错；接口失败
+    显示错误提示不崩溃；`frontend/src/components/Icon.jsx` 注册 chart 图标（BarChart3）；
+  - `frontend/src/App.jsx`：导航新增「统计」入口与 `/stats` 路由；`frontend/src/styles.css`：统计页
+    卡片/条形图/分组表格/失败原因列表样式（跟随深浅色主题变量）；
+  - **测试**：后端新增 `backend/tests/test_api_stats.py` 25 例（耗时口径、失败原因归一化/截断/Top 上限、
+    空输入合法结构、按引擎/仓库/来源分组与排序、days 时间段过滤、API 空库零值结构/days 参数 422）；
+    前端新增 `frontend/tests/stats-page.test.mjs` 12 例（源码断言：接口路径/days 参数/时间段持久化/
+    五个板块/纯 CSS 条形图/导航路由/样式类；渲染断言：默认 days=7、有数据渲染各分组、空态、错误提示、
+    切换时间段重拉）。
+
+
 - **结构化执行报告评论：任务收尾在 issue 留改动文件 / diff 统计 / 测试摘要（issue #252）**：
   任务完成后执行器只在 issue 留模版决定的通用收尾语，用户要了解「改了什么、改了哪些文件、测试跑没跑过」
   得去任务详情页翻日志。本次打通「采集 → 渲染 → 可配置模版」全链路：

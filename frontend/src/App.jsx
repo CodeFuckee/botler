@@ -5,6 +5,7 @@ import Overview from './pages/Overview.jsx'
 import Templates from './pages/Templates.jsx'
 import Labels from './pages/Labels.jsx'
 import Tasks from './pages/Tasks.jsx'
+import Stats from './pages/Stats.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
 import Plugins from './pages/Plugins.jsx'
@@ -146,6 +147,10 @@ export default function App() {
         <NavLink to="/tasks" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           任务
         </NavLink>
+        {/* 统计看板页（issue #264）：成功率/引擎对比/仓库排行聚合视图 */}
+        <NavLink to="/stats" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+          统计
+        </NavLink>
         <NavLink to="/templates" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           模版
         </NavLink>
@@ -181,6 +186,7 @@ export default function App() {
           <Route path="/repos" element={<Repos />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/tasks/:id" element={<TaskDetail />} />
+          <Route path="/stats" element={<Stats />} />
           <Route path="/templates" element={<Templates />} />
           <Route path="/labels" element={<Labels />} />
           <Route path="/plugins" element={<Plugins />} />

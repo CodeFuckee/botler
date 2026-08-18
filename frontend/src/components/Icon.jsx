@@ -7,7 +7,7 @@
 // - 例外：供应商品牌 logo（providers.jsx 的内联 SVG 圆底图形）属于品牌标识，
 //   Lucide 无对应图形，不在图标替换范围内。
 import {
-  ArrowLeft, ArrowUp, Bot, Brain, Check, CheckCircle2, ChevronDown,
+  ArrowLeft, ArrowUp, BarChart3, Bot, Brain, Check, CheckCircle2, ChevronDown,
   ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Flag,
   Folder, FolderOpen, Hourglass, Image as ImageIcon, Lightbulb, Lock,
   MessageCircle, Mic, Package, Pencil, Pin, Plus, RefreshCw, Rocket, Search,
@@ -19,6 +19,7 @@ import {
 export const ICONS = {
   arrowLeft: ArrowLeft,
   arrowUp: ArrowUp,
+  chart: BarChart3,
   bot: Bot,
   brain: Brain,
   check: Check,

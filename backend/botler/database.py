@@ -1221,6 +1221,39 @@ class Database:
             "by_date": [dict(r) for r in by_date],
         }
 
+    def dashboard_task_rows(self, days: int = 0) -> list[sqlite3.Row]:
+        """拉取统计看板窗口内的任务行（issue #264）。
+
+        days=0 表示全部时间段；days>0 按任务创建时间（UTC）最近 N 天过滤
+        （与任务列表同表同口径，保证「统计页数字与任务列表一致」）。
+        返回行含 id/repo_id/status/engine/triggered_by/created_at/
+        finished_at/error_message 与仓库名（LEFT JOIN repos，软删仓库
+        保留名称展示）。
+        """
+        sql = """SELECT t.id AS id, t.repo_id AS repo_id, t.status AS status,
+                        t.engine AS engine, t.triggered_by AS triggered_by,
+                        t.created_at AS created_at, t.finished_at AS finished_at,
+                        t.error_message AS error_message,
+                        COALESCE(r.name, '') AS repo_name
+                 FROM tasks t LEFT JOIN repos r ON r.id = t.repo_id WHERE 1=1"""
+        params: list = []
+        if days and days > 0:
+            # 时间戳为 UTC 串（_parse_db_ts 语义），datetime('now') 亦为 UTC，
+            # 字符串比较即时间比较
+            sql += " AND t.created_at >= datetime('now', ?)"
+            params.append(f"-{days} days")
+        sql += " ORDER BY t.id ASC"
+        with self._conn() as conn:
+            return conn.execute(sql, params).fetchall()  # nosec B608
+
+    def dashboard_stats(self, days: int = 0) -> dict:
+        """统计看板聚合（issue #264）：本地任务表聚合，无 GitLab 依赖。
+
+        数据源与任务列表同表（tasks），保证验收标准 1「统计页各维度数字
+        与任务列表一致」；时间段按任务创建时间（UTC）过滤，days=0 为全部。
+        聚合细节见模块级 aggregate_dashboard（纯函数，可单测）。
+        """
+        return aggregate_dashboard(self.dashboard_task_rows(days))
     def task_stats(self) -> dict:
         with self._conn() as conn:
             rows = conn.execute(
@@ -1258,3 +1291,145 @@ class Database:
                    WHERE repo_name=? AND type=?
                    ORDER BY id DESC LIMIT 1""", (repo_name, type_)).fetchone()
             return row
+
+
+# ---- issue #264：统计看板聚合（模块级纯函数，可单测）----
+
+# 失败原因 Top 分布条数上限
+FAILURE_REASON_TOP_N = 10
+
+# triggered_by 来源展示名（webhook/手动/对账，issue #224 来源维度）
+_SOURCE_DISPLAY = {"webhook": "webhook", "manual": "手动", "reconcile": "对账"}
+
+
+def _task_duration_seconds(created_at: str | None,
+                           finished_at: str | None) -> float | None:
+    """任务耗时秒数：finished_at - created_at。
+
+    口径与任务列表「处理用时」（fmtDuration(created_at, finished_at)）及
+    issue #180 一致；缺字段 / 格式非法（_parse_db_ts 返回 None）/ 结束早于
+    开始（时钟异常）返回 None，由调用方剔除，不影响整体统计。
+    """
+    c = _parse_db_ts(created_at) if created_at else None
+    f = _parse_db_ts(finished_at) if finished_at else None
+    if c is None or f is None:
+        return None
+    sec = (f - c).total_seconds()
+    return round(sec, 3) if sec >= 0 else None
+
+
+def _normalize_failure_reason(msg: str) -> str:
+    """失败原因归一化：空白折叠为单空格并截断到 100 字符。
+
+    同一失败文案（换行/缩进差异）聚合到同一原因桶，Top 分布去噪；
+    截断避免超长错误堆叠占满看板。
+    """
+    text = " ".join((msg or "").split())
+    return text[:100]
+
+
+def aggregate_dashboard(rows) -> dict:
+    """由任务行聚合统计看板数据（issue #264）。
+
+    rows 为 dashboard_task_rows 的查询结果（含 id/repo_id/status/engine/
+    triggered_by/created_at/finished_at/error_message/repo_name）。返回：
+    - overview: {task_count, succeeded_count, failed_count,
+      interrupted_count, success_rate, avg_duration_seconds}
+      success_rate = succeeded / task_count（保留 4 位小数，无任务为 None）；
+      avg_duration_seconds 只统计有合法耗时的任务（无合法耗时任务为 None）；
+    - by_engine / by_repo / by_source: 分组列表 [{key, name, task_count,
+      succeeded_count, failed_count, interrupted_count, success_rate,
+      avg_duration_seconds}]，按 task_count 降序、并列按名称升序；
+      engine 为空显示「未指定」，triggered_by 未知显示原名（'' 显示「其他」）；
+    - failure_reasons: 失败/中断任务 error_message 归一化后的 Top N
+      [{reason, count}]，按 count 降序、count 相同按原因升序。
+    成功率/耗时/失败原因口径与任务列表一致（失败原因展示口径：failed +
+    interrupted 且有 error_message，见 Tasks.jsx）。
+    """
+    total = {"task_count": 0, "succeeded": 0, "failed": 0, "interrupted": 0}
+    durations: list[float] = []
+    by_engine: dict = {}
+    by_repo: dict = {}
+    by_source: dict = {}
+    reasons: dict[str, int] = {}
+
+    for row in rows:
+        status = row["status"] or ""
+        dur = _task_duration_seconds(row["created_at"], row["finished_at"])
+        total["task_count"] += 1
+        if status == STATUS_SUCCEEDED:
+            total["succeeded"] += 1
+        elif status == STATUS_FAILED:
+            total["failed"] += 1
+        elif status == STATUS_INTERRUPTED:
+            total["interrupted"] += 1
+        if dur is not None:
+            durations.append(dur)
+
+        engine = row["engine"] or "未指定"
+        src_raw = row["triggered_by"] or ""
+        src = src_raw or "其他"
+        repo_id = row["repo_id"]
+        for bucket, key, name in (
+            (by_engine, engine, engine),
+            (by_repo, repo_id, row["repo_name"] or f"仓库 {repo_id}"),
+            (by_source, src, _SOURCE_DISPLAY.get(src_raw, src)),
+        ):
+            g = bucket.setdefault(key, {
+                "key": key, "name": name, "task_count": 0,
+                "succeeded": 0, "failed": 0, "interrupted": 0, "durations": [],
+            })
+            g["task_count"] += 1
+            if status == STATUS_SUCCEEDED:
+                g["succeeded"] += 1
+            elif status == STATUS_FAILED:
+                g["failed"] += 1
+            elif status == STATUS_INTERRUPTED:
+                g["interrupted"] += 1
+            if dur is not None:
+                g["durations"].append(dur)
+
+        if status in (STATUS_FAILED, STATUS_INTERRUPTED) \
+                and (row["error_message"] or "").strip():
+            reason = _normalize_failure_reason(row["error_message"])
+            reasons[reason] = reasons.get(reason, 0) + 1
+
+    def _group(bucket: dict) -> list[dict]:
+        out = []
+        for g in bucket.values():
+            n = g["task_count"]
+            out.append({
+                "key": g["key"],
+                "name": g["name"],
+                "task_count": n,
+                "succeeded_count": g["succeeded"],
+                "failed_count": g["failed"],
+                "interrupted_count": g["interrupted"],
+                "success_rate": round(g["succeeded"] / n, 4) if n else None,
+                "avg_duration_seconds": (
+                    round(sum(g["durations"]) / len(g["durations"]), 3)
+                    if g["durations"] else None),
+            })
+        out.sort(key=lambda x: (-x["task_count"], str(x["name"])))
+        return out
+
+    n = total["task_count"]
+    return {
+        "overview": {
+            "task_count": n,
+            "succeeded_count": total["succeeded"],
+            "failed_count": total["failed"],
+            "interrupted_count": total["interrupted"],
+            "success_rate": round(total["succeeded"] / n, 4) if n else None,
+            "avg_duration_seconds": (
+                round(sum(durations) / len(durations), 3) if durations else None),
+        },
+        "by_engine": _group(by_engine),
+        "by_repo": _group(by_repo),
+        "by_source": _group(by_source),
+        "failure_reasons": [
+            {"reason": r, "count": c}
+            for r, c in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))
+            [:FAILURE_REASON_TOP_N]
+        ],
+    }

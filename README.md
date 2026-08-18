@@ -77,6 +77,7 @@ backend/
     api/introspection.py 概览页「自省」API（issue #187）：POST /api/repos/{id}/introspect——收集项目上下文（文件树/README/清单文件）→ 调 AI 对话模型审查 → 把改进建议写入该仓库 issue（分配人 = 仓库 owner）
     api/repo_logo.py  仓库 logo 生成 API（issue #188）：POST /api/repos/{id}/generate-logo——agent 基于仓库 README 生成 logo 提示词 → 调用生图模型（设置页「生图模型」配置）生成 logo 落盘并写 repos 表；GET /api/repos/{id}/logo 读取图片（?download=1 触发下载）
     api/discover.py  概览页「发掘」API（issue #189）：POST /api/repos/{id}/discover——AI 基于项目功能生成 GitHub 搜索词 → 搜索类似仓库并翻找其开放 issue（过滤 PR）→ AI 整理成若干条需求 → 逐条写入该仓库 issue（分配人 = 仓库 owner，一条需求一个 issue；可选环境变量 GITHUB_TOKEN 提升 GitHub 限额）
+    api/stats.py     统计看板 API（issue #264）：GET /api/stats/dashboard——本地任务表聚合（任务总数/成功率/平均耗时/失败数 + 按引擎/仓库/来源分组 + 失败原因 Top），10 秒 TTL 缓存，与任务列表同表同口径
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
     api/             REST API（repos / tasks / settings / auth）
   config.example.yaml
@@ -451,6 +452,7 @@ GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额�
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment；?include_usage=1 可选附带 token 用量字段，issue #235）
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url/environment——执行环境快照 JSON：引擎版本/模型/起始提交/平台版本/配置哈希，issue #276；usage——任务 token 用量：engine/model/prompt_tokens/completion_tokens/total_tokens/estimated_cost/currency/raw_usage，无用量数据为 null，issue #235）
 GET    /api/usage/stats               任务 token 用量统计（按 repo_id/engine/since/until 过滤，返回 summary + by_repo/by_engine/by_date 聚合，issue #235）
+GET    /api/stats/dashboard           统计看板（issue #264）：本地任务表聚合——overview（任务总数/成功率/平均耗时/失败数）+ by_engine/by_repo/by_source（分组对比）+ failure_reasons（失败原因 Top 10，failed/interrupted 的 error_message 归一化）；days 参数 0=全部/N=最近 N 天，10 秒 TTL 缓存
 GET    /api/tasks/{id}/logs           任务日志
 GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
 GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/文本/工具调用/结果逐事件；终态任务连接后回放历史事件；思考过程默认隐藏，任务详情页事件流右侧勾选「显示思考过程」后展开显示，见实时输出功能）
