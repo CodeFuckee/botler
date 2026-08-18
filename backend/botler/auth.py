@@ -68,7 +68,9 @@ def _sign(payload_b64: str, secret: str) -> str:
 def create_session(user: dict[str, Any], days: int, secret: str, now: float | None = None) -> str:
     """签发会话 cookie：base64url(JSON payload).HMAC-SHA256 签名。"""
     now = time.time() if now is None else now
-    payload = {k: user.get(k) for k in ("sub", "username", "name", "email")}
+    payload = {k: user.get(k) for k in ("sub", "username", "name", "email", "picture")}
+    # picture（OIDC claims，issue #271）：头像链接随会话携带，前端 /api/auth/me
+    # 读取展示；缺失/加载失败由前端回退首字母占位
     payload["exp"] = int(now) + int(days) * 86400
     data = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     return f"{data}.{_sign(data, secret)}"
@@ -284,7 +286,7 @@ def create_terminal_token(
     secret = secret or get_session_secret()
     now = time.time() if now is None else now
     payload = {"typ": "term"}
-    payload.update({k: user.get(k) for k in ("sub", "username", "name", "email")})
+    payload.update({k: user.get(k) for k in ("sub", "username", "name", "email", "picture")})
     payload["exp"] = int(now) + int(ttl_seconds)
     data = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     return f"{data}.{_sign(data, secret)}"

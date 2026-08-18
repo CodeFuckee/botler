@@ -5,6 +5,29 @@
 ## [Unreleased]
 ### Added
 
+- **右上角展示当前登录用户信息与退出入口（issue #271）**：
+  SSO 启用后登录流程完整但界面没有当前登录用户展示（多账号/多人共用时身份混淆、
+  退出只能清 cookie）。本次在顶部导航右侧落地完整用户区：
+  - `frontend/src/components/UserMenu.jsx`（新增）：导航栏用户区组件——SSO 登录后
+    显示 OIDC claims 的 name/picture（昵称/头像）与「退出登录」按钮（调用现有
+    POST /api/auth/logout，成功后回登录页）；头像加载失败或无 picture 时回退首字母
+    占位（验收标准 3）；会话过期时间 tooltip 展示（exp 为 unix 秒，fmtTime 兼容
+    转换，与 #221 过期提示联动）；未启用 SSO 时显示「未登录（开放模式）」弱提示
+    （验收标准 2，不打扰）；用户信息复用 /api/auth/me 获取（刷新失败回退
+    /api/auth/status 探测结果，不报错）；
+  - `backend/botler/auth.py`：会话 cookie 与终端 token 的 payload 增加 picture
+    字段（OIDC claims 头像随会话携带，旧会话缺失时前端回退首字母）；
+  - `frontend/src/api.js`：fmtTime 兼容 unix 秒级数字时间戳（会话过期 exp）；
+  - `frontend/src/App.jsx`：导航栏右侧以 UserMenu 组件承接原 user-chip 职责；
+    `frontend/src/styles.css`：用户头像 / 首字母占位 / 昵称截断 / 开放模式弱提示
+    样式；i18n：nav.notLoggedIn / nav.sessionExpiry 中英字典；
+  - **测试**：新增 `frontend/tests/user-menu.test.mjs` 8 例（昵称头像展示、复用
+    /api/auth/me、无 picture 与加载失败回退首字母、过期时间 tooltip、未启用 SSO
+    弱提示、me 失败降级、退出调用与跳转），`fmt-time.test.mjs` 补 unix 秒/毫秒/
+    非法数字 3 例，后端 `test_auth.py` 补 picture 断言；更新
+    `version-badge-settings-page.test.mjs`（user-chip 迁入 UserMenu 组件后改查
+    组件源码，行为契约不变）。
+
 - **键盘快捷键（概览页 / 任务页常用操作，issue #269）**：
   平台所有操作依赖鼠标点击（新建 issue 点按钮、刷新点按钮、打开任务详情点行），高频
   操作无快捷键效率低。本次引入全局 keydown 监听 + 集中管理的 keymap.js，低成本覆盖

@@ -1912,6 +1912,38 @@ code {
   font-size: 13px;
   color: var(--muted);
 }
+/* 导航栏用户头像（issue #271）：SSO OIDC claims picture；加载失败或无
+   picture 时回退首字母占位（验收标准 3） */
+.user-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.user-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-soft);
+  border: 1px solid var(--hairline);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+/* 昵称截断保护：窄视口下过长昵称省略号而不是撑破导航（overflow-x 滚动） */
+.user-chip-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 未启用 SSO 的开放模式弱提示（issue #271）：弱化不打扰 */
+.user-chip-guest {
+  opacity: 0.7;
+  font-size: 12px;
+}
 /* 导航栏界面语言快捷切换（issue #268）：紧凑下拉，置于右上角用户区左侧；
    margin-left:auto 与 user-chip 共同把切换器推到导航最右（无用户信息时
    单独占据最右侧） */

@@ -14,6 +14,23 @@ test('fmtTime 空值返回占位符', () => {
   assert.equal(fmtTime(null), '—')
 })
 
+// ---- unix 秒时间戳（issue #271：会话过期时间 exp 展示）----
+
+test('fmtTime 数字秒级时间戳 → 正常格式化（会话过期 exp）', () => {
+  // 1785542400 = 2026-08-01 00:00:00 UTC
+  assert.equal(fmtTime(1785542400, 'Asia/Shanghai'), '2026-08-01 08:00:00')
+  assert.equal(fmtTime(1785542400, 'UTC'), '2026-08-01 00:00:00')
+})
+
+test('fmtTime 数字毫秒级时间戳原样使用（不重复乘 1000）', () => {
+  assert.equal(fmtTime(1785542400000, 'UTC'), '2026-08-01 00:00:00')
+})
+
+test('fmtTime 非法数字兜底：NaN（falsy）→ 占位符，Infinity → 原样', () => {
+  assert.equal(fmtTime(NaN), '—')
+  assert.equal(fmtTime(Infinity), 'Infinity')
+})
+
 // ---- 任务执行时长 fmtDuration（issue #23：任务页面显示完成 issue 所用时长）----
 
 const S = '2026-08-12 01:00:00' // UTC 基准时刻

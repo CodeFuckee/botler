@@ -12,6 +12,7 @@ import Plugins from './pages/Plugins.jsx'
 import Terminal from './pages/Terminal.jsx'
 import Login from './pages/Login.jsx'
 import DialogHost from './components/DialogHost.jsx'
+import UserMenu from './components/UserMenu.jsx'
 import ShortcutHelpModal from './components/ShortcutHelpModal.jsx'
 import { useShortcuts } from './keymap.js'
 import { api, setDisplayTz, setSsoEnabled, shortSha } from './api.js'
@@ -140,11 +141,6 @@ export default function App() {
   }
   if (auth.enabled && !auth.user) return <Login />
 
-  const logout = async () => {
-    try { await api.post('/api/auth/logout') } catch { /* 忽略 */ }
-    window.location.href = '/login'
-  }
-
   return (
     <div className="app">
       {/* 版本更新提示（issue #233）：新版部署完成后页面提示刷新，
@@ -223,12 +219,10 @@ export default function App() {
         >
           <Icon name="keyboard" /> {t('shortcuts.helpBtn')}
         </button>
-        {auth.user && (
-          <span className="navlink user-chip" title={t('nav.userTitle')}>
-            <Icon name="user" /> {auth.user.username || auth.user.name || auth.user.sub}
-            <button className="btn btn-sm" onClick={logout}>{t('nav.logout')}</button>
-          </span>
-        )}
+        {/* 登录用户区（issue #271）：SSO 登录后右上角显示昵称/头像与「退出
+            登录」按钮（头像失败回退首字母），未启用 SSO 时弱提示「未登录
+            （开放模式）」；会话过期时间 tooltip 展示（与 #221 联动） */}
+        <UserMenu user={auth.user} ssoEnabled={auth.enabled} />
       </nav>
       {/* 快捷键跳转（issue #269）：redirect 非空时切换路由并立即清空 */}
       {redirect && <Navigate to={redirect} replace />}

@@ -128,9 +128,16 @@ export function setDisplayTz(tz) {
 
 export function fmtTime(ts, tz = displayTz) {
   if (!ts) return '—'
-  // 后端 SQLite datetime('now') 存 UTC 无时区后缀（如 '2026-08-12 01:25:54'），
-  // 补 Z 解析为 UTC 时刻，再按配置时区（缺省 = 浏览器本机）格式化
-  const date = new Date(String(ts).replace(' ', 'T') + 'Z')
+  // 数字时间戳（issue #271）：会话过期 exp 等 unix 秒级（<1e12）自动转
+  // 毫秒；毫秒级原样使用。字符串按既有规则：后端 SQLite datetime('now')
+  // 存 UTC 无时区后缀（如 '2026-08-12 01:25:54'），补 Z 解析为 UTC 时刻，
+  // 再按配置时区（缺省 = 浏览器本机）格式化
+  let date
+  if (typeof ts === 'number' && Number.isFinite(ts)) {
+    date = new Date(ts < 1e12 ? ts * 1000 : ts)
+  } else {
+    date = new Date(String(ts).replace(' ', 'T') + 'Z')
+  }
   if (Number.isNaN(date.getTime())) return String(ts) // 非标准格式原样兜底
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: tz || undefined,

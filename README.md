@@ -474,7 +474,8 @@ GET    /api/auth/status               登录状态探测（SSO 是否启用 + �
 GET    /api/auth/login                跳转群晖 SSO 登录页（302）
 GET    /api/auth/callback             OIDC 回调（换 token 建会话，302 回首页）
 POST   /api/auth/logout               退出登录
-GET    /api/auth/me                   当前登录用户
+GET    /api/auth/me                   当前登录用户（含 OIDC claims 的 name/picture 与会话过期
+                                   exp，导航栏用户区展示用，issue #271）
 GET    /api/issues/overview           概览页开放 issue 聚合（已启用仓库，10 秒 TTL 缓存，issue #64）
 GET    /api/issues/form-meta/{id}     添加 issue 表单元数据：项目成员（含继承，members/all）+ 项目标签（issue #92）
 POST   /api/issues                    在指定仓库创建 issue（标题/分配人/标签必填、描述选填，描述为空时发送 GitLab API 自动填充标题；成功后清缓存，issue #92/#103）
@@ -499,6 +500,13 @@ SSO 登录」卡片填写 Well-known URL / Application ID / Secret 并启用后�
 
 群晖侧创建 OIDC 应用的完整步骤、Botler 侧配置与常见问题见
 [`docs/Synology-SSO-配置指南.md`](docs/Synology-SSO-配置指南.md)。
+
+登录后顶部导航右侧展示当前用户区（issue #271）：昵称/头像（OIDC claims 的
+name/picture，头像加载失败或无头像时回退首字母占位）、会话过期时间 tooltip
+（与过期提示联动）与「退出登录」按钮（调用 POST /api/auth/logout，成功后回
+登录页）；未启用 SSO 时右侧弱提示「未登录（开放模式）」，不打扰。用户信息
+复用 /api/auth/me 获取（会话 cookie 携带 picture/exp，旧会话缺失 picture 时
+自动回退首字母）。
 
 ## 安全说明
 

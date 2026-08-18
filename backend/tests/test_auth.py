@@ -74,6 +74,7 @@ def _oidc_handler(request: httpx.Request) -> httpx.Response:
             "username": "zhangsan",
             "name": "张三",
             "email": "zs@example.com",
+            "picture": "https://nas.example.com/avatar/zhangsan.png",
         })
     return httpx.Response(404, json={"error": "not found"})
 
@@ -229,6 +230,8 @@ class TestLoginFlow:
         assert me["username"] == "zhangsan"
         assert me["name"] == "张三"
         assert me["email"] == "zs@example.com"
+        # picture（issue #271）：OIDC claims 头像随会话携带，前端右上角展示
+        assert me["picture"] == "https://nas.example.com/avatar/zhangsan.png"
 
 
 class TestSessionSecurity:

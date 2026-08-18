@@ -250,5 +250,7 @@
   "shortcuts.goSettings": "前往设置页",
   "shortcuts.scope.global": "全站",
   "shortcuts.scope.overview": "概览页",
-  "shortcuts.scope.tasks": "任务页"
+  "shortcuts.scope.tasks": "任务页",
+  "nav.notLoggedIn": "未登录（开放模式）",
+  "nav.sessionExpiry": "会话有效期至 {time}"
 }

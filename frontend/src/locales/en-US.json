@@ -250,5 +250,7 @@
   "shortcuts.goSettings": "Go to settings",
   "shortcuts.scope.global": "Global",
   "shortcuts.scope.overview": "Overview",
-  "shortcuts.scope.tasks": "Tasks"
+  "shortcuts.scope.tasks": "Tasks",
+  "nav.notLoggedIn": "Not signed in (open mode)",
+  "nav.sessionExpiry": "Session valid until {time}"
 }
