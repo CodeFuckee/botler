@@ -34,6 +34,11 @@
   - **测试**：新增 id 前置落库/降级/账本解析/交接单渲染/表迁移等 13 例
     （`test_executor_dsh.py` +9、`test_database_migrate.py` +4），后端全量
     pytest 通过，无 regression。
+  - **任务详情展示 dsh 会话 id（Phase 1 补全）**：任务详情/列表 API 返回
+    `dsh_session_id` 字段（未落库返回 null），`resumed` 标记由「仅 claude」
+    扩展为「claude 或 dsh 任一恢复过会话即为 true」；前端任务详情页与
+    列表抽屉新增「dsh 会话」行展示会话 id（供人工确认恢复链路），新增
+    API 数据契约测试 2 例。
 
 - **补登 300+ 平台版本逢百进位显式复现用例（issue #283）**：
   `frontend/tests/gen-version.test.mjs` 在既有 300+ 场景用例（1.0.310 → 1.3.11、

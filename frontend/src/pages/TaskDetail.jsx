@@ -287,6 +287,18 @@ export default function TaskDetail() {
                 )}
               </td>
             </tr>
+            <tr>
+              {/* issue #281：dsh 会话 id 任务开始即落库，中断恢复凭此 id
+                  经 DeepSeek Harness SDK resume；仅 dsh 引擎任务有值 */}
+              <th>dsh 会话</th>
+              <td>
+                {task.dsh_session_id ? (
+                  <code title={`完整会话 id: ${task.dsh_session_id}`}>{task.dsh_session_id.slice(0, 12)}…</code>
+                ) : (
+                  <span className="muted">—</span>
+                )}
+              </td>
+            </tr>
             {task.error_message && (
               <tr><th>错误信息</th><td className="pre-wrap">{task.error_message}</td></tr>
             )}

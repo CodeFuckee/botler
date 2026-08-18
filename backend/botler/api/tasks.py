@@ -76,7 +76,12 @@ def _task_to_dict(row, repo: dict | None = None) -> dict:
         "exit_code": row["exit_code"],
         "error_message": row["error_message"],
         "error_detail": detail,
-        "resumed": bool(row["claude_session_id"]),  # 会话断点续跑标记（issue #8）
+        "resumed": bool(row["claude_session_id"] or row["dsh_session_id"]),
+        # 会话断点续跑标记（issue #8 claude / issue #84 dsh；任一引擎恢复
+        # 过会话即为 true。issue #281 起 dsh 会话 id 任务开始即落库）
+        "dsh_session_id": row["dsh_session_id"] or None,
+        # issue #281：dsh 引擎会话 id（任务开始即落库，中断恢复凭此 id
+        # 经 DeepSeek Harness SDK resume；前端任务详情页展示供人工排查）
         # issue #120：执行引擎按任务落库——任务页/概览页展示该任务实际
         # 使用的引擎（claude / hermes / dsh；未执行或旧任务可能为空串）
         "engine": row["engine"] or "",

@@ -110,6 +110,42 @@ class TestListTasks:
         assert by_iid[1]["resumed"] is False
         assert by_iid[2]["resumed"] is True
 
+    def test_list_returns_dsh_session_id_and_resumed(self, client):
+        """issue #281：dsh 会话 id 任务开始即落库，API 需返回该字段供任务
+        详情页展示；dsh 恢复过会话的任务 resumed 标记应为 true。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        _mk_task(db, repo_id, issue_iid=1, title="dsh 普通任务")
+        _mk_task(db, repo_id, issue_iid=2, title="dsh 恢复任务")
+        db.set_task_status(_mk_task(db, repo_id, issue_iid=3, title="claude 普通任务"),
+                           "running", dsh_session_id="botler-7-20260818090101-abcd1234")
+        db.set_task_status(_mk_task(db, repo_id, issue_iid=4, title="dsh 已落库"),
+                           "running", dsh_session_id="botler-8-20260818090102-ef567890")
+
+        body = app_client.get("/api/tasks").json()
+        by_iid = {t["issue_iid"]: t for t in body["tasks"]}
+        # 未落库 dsh 会话 id → 返回 None，resumed=false
+        assert by_iid[1]["dsh_session_id"] is None
+        assert by_iid[1]["resumed"] is False
+        # 任务 3 有 dsh_session_id（issue #281 前置落库）→ 返回原值，resumed=true
+        assert by_iid[3]["dsh_session_id"] == "botler-7-20260818090101-abcd1234"
+        assert by_iid[3]["resumed"] is True
+        # 任务 4 同样返回原值（详情页展示供人工排查）
+        assert by_iid[4]["dsh_session_id"] == "botler-8-20260818090102-ef567890"
+        # 列表项字段契约（前端依赖 dsh_session_id）
+        for key in ("dsh_session_id", "resumed"):
+            assert key in by_iid[1], f"列表项缺少字段 {key}"
+
+    def test_detail_returns_dsh_session_id(self, client):
+        """issue #281：任务详情接口同样返回 dsh_session_id。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        tid = _mk_task(db, repo_id, issue_iid=1, title="dsh 任务")
+        db.set_task_status(tid, "running", dsh_session_id="botler-9-20260818090103-11223344")
+        body = app_client.get(f"/api/tasks/{tid}").json()
+        assert body["dsh_session_id"] == "botler-9-20260818090103-11223344"
+        assert body["resumed"] is True
+
     def test_list_returns_error_detail_object(self, client):
         """列表项 error_detail 应解析为结构化对象（「查看详细原因」按钮的数据契约）。"""
         app_client, db = client
