@@ -5,6 +5,38 @@
 ## [Unreleased]
 ### Changed
 
+- **任务列表/详情页新增单任务「停止」与详情页「重试」操作，解决单任务操作入口分散（issue #214）**：
+  需求——概览页 issue 右边栏有「重试」（issue #117）与「关闭 issue」，调度器支持单任务
+  `request_stop`（executor 已实现）但任务列表/详情页 UI 无「停止当前任务」按钮，用户只能
+  「一键停止所有任务」（issue #35）或等任务自然结束；任务详情页也无法重试失败任务——
+  - `backend/botler/database.py`：新增 `stop_task(task_id)`——单任务手动停止：活跃任务
+    （queued/running/retrying）标记 interrupted（写 `用户手动停止（单任务停止）` 错误信息
+    与 finished_at、落 warn 日志），终态任务拒绝（bad_state）、不存在 not_found；条件
+    UPDATE 兜底并发，与 `stop_active_tasks`（issue #35）语义一致：interrupted 为终态，
+    平台重启后不会自动恢复执行；
+  - `backend/botler/scheduler.py`：新增 `remove_queued(task_id)`——单任务停止时把排队中
+    任务从调度器内存队列移除（否则派发后 worker claim_task 状态不匹配跳过，stats queued
+    计数失真）；
+  - `backend/botler/api/tasks.py`：新增 `POST /api/tasks/{task_id}/stop`——404（任务不
+    存在）/ 400（非活跃状态不可停止）/ 200（先落库 interrupted → `executor.request_stop`
+    登记停止请求并终止引擎进程（幂等）→ `scheduler.remove_queued` 移除排队任务），返回
+    `{task_id, status: "interrupted"}`；顺序保证与 stop_all 一致（先落库再登记停止请求）；
+  - `frontend/src/pages/Tasks.jsx`：任务列表操作列新增「停止」按钮（仅 running 任务，危险
+    样式，点击弹确认框——停止不可逆，确认后调 `POST /api/tasks/{id}/stop`，请求中禁用
+    显示「停止中…」，成功提示 `任务 #N 已停止` 并刷新列表，失败行内报错）；
+  - `frontend/src/pages/TaskDetail.jsx`：任务详情页 kv 表格新增「操作」行——running 任务
+    显示「停止」按钮（确认框 + 危险样式 + 请求中禁用），failed/interrupted 任务显示
+    「重试」按钮（复用任务列表页手动重试 issue #36 的 `POST /api/tasks/{id}/retry` 逻辑，
+    接续断点续跑会话）；操作成功/失败行内横幅反馈（失败不整页替换，加载错误仍走整页提示）；
+  - **测试**：新增 `backend/tests/test_task_stop_single.py` 15 例（db 层三种活跃状态停止落库 /
+    终态与不存在拒绝 / 重复停止拒绝；API 200/400/404 / 停止后状态与日志 / 排队任务从调度
+    队列移除 / executor.request_stop 调用链路）；新增 `frontend/tests/tasks-stop-button.test.mjs`
+    7 例（源码断言 / 仅 running 渲染 / 确认取消不调用 / 确认后调用并提示 / 失败提示 /
+    请求中禁用）、`frontend/tests/task-detail-stop-retry.test.mjs` 11 例（源码断言 /
+    running 显示停止 / failed 与 interrupted 显示重试 / succeeded 无操作 / 停止确认取消 /
+    停止与重试调用与成功提示 / 停止失败行内提示不整页替换 / 请求中禁用）；前后端全量测试
+    通过，无 regression。
+
 - **概览页仓库卡片新增「发掘」：agent 根据项目实现的功能去 GitHub 搜索类似仓库、翻找用户需求 issue，整理成若干条需求写入该仓库 issue（issue #189）**：
   需求——概览页面，仓库的右边增加一个「发掘」按钮，点击之后根据项目的实现的功能，去 GitHub 上搜索类似仓库，
   并翻找类似仓库里 issue，查看用户对类似项目提出的需求，整理成若干条需求后，把需求写到对应仓库的 issue 里，

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon.jsx'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { api, openTaskEventStream, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
+import { confirmDialog } from '../dialog.js'
 
 // 任务仍可能产出新日志/聊天的状态（活跃期间持续轮询）
 const LIVE_STATUSES = ['queued', 'running', 'retrying']
@@ -150,6 +151,12 @@ export default function TaskDetail() {
   const location = useLocation()
   const [task, setTask] = useState(null)
   const [error, setError] = useState('')
+  // 单任务停止/重试操作反馈（issue #214）：成功/失败提示独立于加载错误
+  // （加载错误走整页替换，操作错误走行内横幅不打断页面）
+  const [actionMsg, setActionMsg] = useState('') // 操作成功提示
+  const [actionErr, setActionErr] = useState('') // 操作失败提示
+  const [stopping, setStopping] = useState(false) // 停止请求进行中
+  const [retrying, setRetrying] = useState(false) // 重试请求进行中
   const [showPrompt, setShowPrompt] = useState(false)
   const [showFileLog, setShowFileLog] = useState(true)
   // 区块折叠状态（issue #52）：事件流/聊天记录/执行日志默认展开
@@ -184,6 +191,55 @@ export default function TaskDetail() {
     const t = setInterval(load, 5000) // 执行中自动刷新
     return () => clearInterval(t)
   }, [id])
+
+  // 单任务停止（issue #214）：仅执行中（running）任务可停止；确认后调
+  // 后端 POST /api/tasks/{id}/stop——状态落库 interrupted 并强制终止执行
+  // 中的引擎进程（停止不可逆），成功后刷新详情。请求中禁用防重复点击。
+  const stopTask = async () => {
+    if (!task) return
+    if (!(await confirmDialog({
+      message: `确定停止任务 #${task.id}（issue #${task.issue_iid} ${task.issue_title || ''}）吗？执行中的引擎进程将被强制终止，任务状态标记为已中断，停止不可逆。`,
+      danger: true,
+    }))) {
+      return
+    }
+    setStopping(true)
+    setActionMsg('')
+    setActionErr('')
+    try {
+      await api.post(`/api/tasks/${task.id}/stop`)
+      setActionMsg(`任务 #${task.id} 已停止`)
+      await load()
+    } catch (e) {
+      setActionErr(e.message)
+    } finally {
+      setStopping(false)
+    }
+  }
+
+  // 手动重试（issue #214）：失败/中断任务重新入队执行，复用任务列表页
+  // 手动重试（issue #36）的 POST /api/tasks/{id}/retry 逻辑（接续上次
+  // claude 会话断点续跑）；确认后调用，成功后刷新详情。
+  const retryTask = async () => {
+    if (!task) return
+    if (!(await confirmDialog({
+      message: `确定重试任务 #${task.id}（issue #${task.issue_iid} ${task.issue_title || ''}）吗？任务将重新入队执行，并接续上次 claude 会话继续处理。`,
+    }))) {
+      return
+    }
+    setRetrying(true)
+    setActionMsg('')
+    setActionErr('')
+    try {
+      await api.post(`/api/tasks/${task.id}/retry`)
+      setActionMsg(`任务 #${task.id} 已重新入队，开始重试`)
+      await load()
+    } catch (e) {
+      setActionErr(e.message)
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   // 实时执行轮询（3s）：日志增量（字节偏移续读）+ 聊天记录（全量替换）。
   // 事件流改走 SSE（下方独立 effect），此处仅保留 transcript 部分
@@ -260,6 +316,9 @@ export default function TaskDetail() {
         <Link to="/tasks"><Icon name="arrowLeft" /> 返回任务列表</Link>
       </p>
 
+      {actionErr && <div className="alert alert-error" onClick={() => setActionErr('')}>{actionErr}</div>}
+      {actionMsg && <div className="alert alert-ok" onClick={() => setActionMsg('')}>{actionMsg}</div>}
+
       <div className="card">
         <table className="table kv">
           <tbody>
@@ -302,6 +361,37 @@ export default function TaskDetail() {
             {task.error_message && (
               <tr><th>错误信息</th><td className="pre-wrap">{task.error_message}</td></tr>
             )}
+            {/* 操作（issue #214）：执行中任务可停止（不可逆，需确认）；
+                失败/中断任务可重试（重新入队执行）；其余状态无操作 */}
+            <tr>
+              <th>操作</th>
+              <td>
+                {task.status === 'running' && (
+                  <button
+                    className="btn btn-mini btn-danger"
+                    onClick={stopTask}
+                    disabled={stopping}
+                    title="手动停止：强制终止该任务的执行进程并标记为已中断（停止不可逆）"
+                  >
+                    {stopping ? '停止中…' : '停止'}
+                  </button>
+                )}
+                {(task.status === 'failed' || task.status === 'interrupted') && (
+                  <button
+                    className="btn btn-mini"
+                    onClick={retryTask}
+                    disabled={retrying}
+                    title="手动重试：重新入队执行该任务（接续上次 claude 会话）"
+                  >
+                    {retrying ? '重试中…' : '重试'}
+                  </button>
+                )}
+                {task.status !== 'running' &&
+                 task.status !== 'failed' && task.status !== 'interrupted' && (
+                  <span className="muted">—</span>
+                )}
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>

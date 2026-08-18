@@ -144,6 +144,8 @@ export default function Tasks() {
   const [detailTask, setDetailTask] = useState(null) // 正在查看详细失败原因的任务
   const [stopMsg, setStopMsg] = useState('') // 一键停止成功提示（issue #35）
   const [stopping, setStopping] = useState(false) // 停止请求进行中
+  const [stopId, setStopId] = useState(null) // 正在单任务停止的任务 id（issue #214，请求中禁用）
+  const [stopTaskMsg, setStopTaskMsg] = useState('') // 单任务停止成功提示（issue #214）
   const [retryMsg, setRetryMsg] = useState('') // 手动重试成功提示（issue #36）
   const [retryId, setRetryId] = useState(null) // 正在重试的任务 id（请求中禁用）
   const [reconcileMsg, setReconcileMsg] = useState('') // 一键对账成功提示（issue #38）
@@ -252,6 +254,29 @@ export default function Tasks() {
     }
   }
 
+  // 单任务停止（issue #214）：仅执行中（running）任务可停止；确认后调
+  // 后端 POST /api/tasks/{id}/stop——状态落库 interrupted 并强制终止执行
+  // 中的引擎进程（停止不可逆），随后刷新列表。请求中禁用防重复点击。
+  const stopTask = async (t) => {
+    if (!(await confirmDialog({
+      message: `确定停止任务 #${t.id}（issue #${t.issue_iid} ${t.issue_title || ''}）吗？执行中的引擎进程将被强制终止，任务状态标记为已中断，停止不可逆。`,
+      danger: true,
+    }))) {
+      return
+    }
+    setStopId(t.id)
+    setStopTaskMsg('')
+    try {
+      await api.post(`/api/tasks/${t.id}/stop`)
+      setStopTaskMsg(`任务 #${t.id} 已停止`)
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setStopId(null)
+    }
+  }
+
   // 一键对账所有启用仓库（issue #38）：同步扫描全部启用仓库把漏单补入队列。
   // 与仓库页对账按钮一致为低危操作（无需确认）；部分仓库失败时展示失败明细。
   const reconcileAll = async () => {
@@ -288,6 +313,7 @@ export default function Tasks() {
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {stopMsg && <div className="alert alert-ok" onClick={() => setStopMsg('')}>{stopMsg}</div>}
       {retryMsg && <div className="alert alert-ok" onClick={() => setRetryMsg('')}>{retryMsg}</div>}
+      {stopTaskMsg && <div className="alert alert-ok" onClick={() => setStopTaskMsg('')}>{stopTaskMsg}</div>}
       {reconcileMsg && <div className="alert alert-ok" onClick={() => setReconcileMsg('')}>{reconcileMsg}</div>}
 
       <div className="stats-row">
@@ -419,6 +445,19 @@ export default function Tasks() {
                   <td>
                     <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
                           title="实时查看 agent 执行进度与聊天记录（issue #20）">执行</Link>
+                    {/* 单任务停止（issue #214）：仅执行中（running）任务可停止，
+                        确认后标记 interrupted 并强制终止引擎进程（不可逆），
+                        请求中禁用防重复点击 */}
+                    {t.status === 'running' && (
+                      <button
+                        className="btn btn-mini btn-danger btn-gap-left"
+                        onClick={() => stopTask(t)}
+                        disabled={stopId === t.id}
+                        title="手动停止：强制终止该任务的执行进程并标记为已中断（停止不可逆）"
+                      >
+                        {stopId === t.id ? '停止中…' : '停止'}
+                      </button>
+                    )}
                     {/* 手动重试（issue #36）：仅失败/中断任务可重试，请求中禁用防重复点击 */}
                     {(t.status === 'failed' || t.status === 'interrupted') && (
                       <button

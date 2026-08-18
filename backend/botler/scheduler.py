@@ -108,6 +108,28 @@ class TaskScheduler:
         logger.info("一键停止所有任务：%s 个活跃任务已标记 interrupted", len(stopped))
         return stopped
 
+    def remove_queued(self, task_id: int) -> bool:
+        """从内存队列移除单个排队任务（issue #214 单任务停止）。
+
+        单任务停止时排队中的任务已落库为 interrupted，若仍留在调度器
+        内存队列，_dispatch 派发后 worker 的 claim_task 会因状态不匹配
+        跳过（功能上无害），但 stats 的 queued 计数与队列长度会失真；
+        这里直接移除，返回是否曾在队列中。running 任务不在此队列
+        （在 _running 中登记），由 executor.request_stop 终止进程。
+        """
+        removed = False
+        with self._lock:
+            for repo_id, q in list(self._queues.items()):
+                try:
+                    q.remove(task_id)
+                    removed = True
+                except ValueError:
+                    continue
+                if not q:
+                    self._queues.pop(repo_id, None)
+                break
+        return removed
+
     # ---- 定时暂停窗口（issue #169）----
 
     @staticmethod

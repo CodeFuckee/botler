@@ -876,6 +876,36 @@ class Database:
                     [(tid, "任务已停止：用户一键停止所有任务") for tid in stopped])
         return stopped
 
+    def stop_task(self, task_id: int) -> str:
+        """单任务手动停止（issue #214）：queued/running/retrying → interrupted。
+
+        返回结果码：
+        - "not_found"：任务不存在
+        - "bad_state"：状态非活跃（终态任务不可停止）
+        - "ok"：停止成功
+        与 stop_active_tasks 语义一致：interrupted 为终态（requeue_interrupted
+        只捞 running/retrying），用户手动停止的任务不会在平台重启后被重新
+        入队执行；同时写入 warn 日志供任务详情页追溯。条件 UPDATE 兜底并发：
+        多请求同时停止同一任务时先到者生效。
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                return "not_found"
+            if row["status"] not in (STATUS_QUEUED, STATUS_RUNNING, STATUS_RETRYING):
+                return "bad_state"
+            conn.execute(
+                """UPDATE tasks SET status='interrupted',
+                   error_message='用户手动停止（单任务停止）',
+                   finished_at=datetime('now')
+                   WHERE id=? AND status IN ('queued','running','retrying')""",
+                (task_id,))
+            conn.execute(
+                "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'warn', ?)",
+                (task_id, "任务已停止：用户手动停止当前任务"))
+        return "ok"
+
     def retry_task(self, task_id: int) -> str:
         """手动重试（issue #36）：终态失败任务重置为 queued，返回结果码。
 

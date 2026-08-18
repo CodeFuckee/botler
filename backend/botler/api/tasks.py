@@ -181,6 +181,29 @@ def retry_task(request: Request, task_id: int):
     return {"task_id": task_id, "status": "queued"}
 
 
+@router.post("/{task_id}/stop")
+def stop_task(request: Request, task_id: int):
+    """手动停止单个任务（issue #214：任务列表/详情页「停止」按钮）。
+
+    仅活跃任务（queued/running/retrying）可停止：状态落库为 interrupted
+    （终态，重启后不会自动恢复执行）→ 登记停止请求并终止执行中引擎
+    进程（executor.request_stop，幂等：进程未创建时仅登记，worker 领取
+    时 _stop_requested 检查命中即 _finish_stopped）→ 排队中的任务从
+    调度器内存队列移除。顺序保证与 stop_all 一致：先落库再登记停止请求，
+    worker 感知停止请求时状态必已 interrupted。
+    停止不可逆：与一键停止（issue #35）一致，用户需在 UI 确认后调用。
+    """
+    c = ctx_of(request)
+    result = c.db.stop_task(task_id)
+    if result == "not_found":
+        raise HTTPException(404, "任务不存在")
+    if result == "bad_state":
+        raise HTTPException(400, "仅排队中（queued）、执行中（running）或重试中（retrying）的任务可停止")
+    c.executor.request_stop(task_id)
+    c.scheduler.remove_queued(task_id)
+    return {"task_id": task_id, "status": "interrupted"}
+
+
 @router.get("/{task_id}")
 def get_task(request: Request, task_id: int):
     c = ctx_of(request)
