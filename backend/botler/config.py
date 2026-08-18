@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-from .pause_window import parse_window
+from .pause_window import normalize_window, parse_window
 
 logger = logging.getLogger("botler.config")
 
@@ -72,7 +72,7 @@ def _pause_windows(worker: dict) -> list[str]:
     val = worker.get("pause_windows")
     if not isinstance(val, list):
         return []
-    cleaned = [str(w).strip() for w in val if isinstance(w, str)]
+    cleaned = [normalize_window(str(w).strip()) for w in val if isinstance(w, str)]
     return [w for w in cleaned if parse_window(w) is not None]
 
 

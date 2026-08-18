@@ -14,6 +14,11 @@
 
 防御策略：窗口串格式非法（手动编辑 config.yaml 写坏）时忽略该条，
 全部非法 = 视为未配置（不暂停），保证调度服务可用性优先。
+
+全角字符兼容（issue #284）：中文输入法/需求描述（issue #169 原文
+"9:00—12:00"）常用全角冒号（：）、全角破折号（—）、en-dash（–）、
+全角连字符（－）、波浪号（～）等，解析前统一归一化为半角，避免
+窗口串被误判非法导致暂停窗口静默失效、调度器继续派发新任务。
 """
 
 from __future__ import annotations
@@ -25,6 +30,24 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 _WINDOW_RE = re.compile(
     r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
 
+# 全角字符归一化表（issue #284）：中文标点/分隔符 → 半角，避免窗口串
+# 解析失败。覆盖：全角冒号/分号/逗号/括号、全角破折号（—）、en-dash
+# （–）、全角连字符（－）、全角/半角波浪号（～/~）、全角空格（U+3000）。
+_FULLWIDTH_TRANS = str.maketrans({
+    "：": ":", "；": ";", "，": ",", "（": "(", "）": ")",
+    "—": "-", "–": "-", "－": "-", "～": "-", "~": "-",
+    "　": " ",
+})
+
+
+def normalize_window(raw: str) -> str:
+    """窗口串字符归一化：全角标点/分隔符 → 半角，其余字符原样保留。
+
+    供 parse_window 解析前调用，也供保存侧（settings API / config 读取）
+    把全角输入规范化为半角后落盘，保证 config.yaml 中窗口串格式统一。
+    """
+    return raw.translate(_FULLWIDTH_TRANS)
+
 
 def parse_window(raw: str) -> tuple[int, int] | None:
     """解析窗口串 "HH:MM-HH:MM" → (start_minutes, end_minutes)。
@@ -34,7 +57,7 @@ def parse_window(raw: str) -> tuple[int, int] | None:
       由 in_pause_window 按跨天语义判断；
     - 格式非法 / 超出 0-23 时 / 分钟超出 0-59 时返回 None（防御坏配置）。
     """
-    m = _WINDOW_RE.match(raw or "")
+    m = _WINDOW_RE.match(normalize_window(raw or ""))
     if m is None:
         return None
     sh, sm, eh, em = (int(g) for g in m.groups())

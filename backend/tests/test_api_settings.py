@@ -2229,6 +2229,34 @@ class TestPauseWindowsSettings:
         assert "pause_windows" in config_text
         assert "pause_timezone: Asia/Shanghai" in config_text
 
+    def test_update_fullwidth_windows_normalized(self, client):
+        """全角窗口串（issue #284）：保存 200 且归一化为半角落盘。
+
+        中文输入法/需求描述（issue #169 原文 "9:00—12:00"）常用全角
+        冒号/破折号，修复前 parse_window 返回 None 导致 400 拒绝或
+        配置剔除，暂停窗口静默失效、调度器继续运行新任务。
+        """
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_windows": ["09：00—12：00", "14:00–18:00"],
+            "pause_weekdays": [],
+            "pause_timezone": "Asia/Shanghai",
+        }})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["worker"]["pause_windows"] == [
+            "09:00-12:00", "14:00-18:00"]
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "09:00-12:00" in config_text
+        assert "09：00—12：00" not in config_text
+
+    def test_update_fullwidth_invalid_still_rejected(self, client):
+        """全角归一化后仍非法的窗口串照常 400（不放松校验）。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_windows": ["09:00—25:00"],
+        }})
+        assert resp.status_code == 400
+
     def test_update_empty_windows_disables(self, client):
         """空数组 = 关闭定时暂停（回退不暂停行为）。"""
         tc, tmp_path = client

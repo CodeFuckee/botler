@@ -171,3 +171,56 @@ class TestInPauseWindow:
                 pause_tz="Mars/Olympus")
         now = _now("2026-08-18T10:00:00")  # Asia/Shanghai 10:00，窗口内
         assert in_pause_window(s, now) is True
+
+
+# ---- 全角字符兼容（issue #284）----
+
+class TestParseWindowFullwidth:
+    """中文输入场景全角字符兼容：全角冒号/破折号/en-dash/全角空格。
+
+    issue #284：用户在设置页按需求描述（issue #169 原文 "9:00—12:00"
+    使用全角破折号）输入窗口串，后端解析返回 None 导致保存被拒或
+    配置被剔除，暂停窗口静默失效、调度器继续运行新任务。
+    """
+
+    def test_parse_fullwidth_dash(self):
+        """全角破折号 —— 与半角连字符等价。"""
+        assert parse_window("09:00—12:00") == (540, 720)
+
+    def test_parse_fullwidth_colon(self):
+        """全角冒号与半角冒号等价。"""
+        assert parse_window("09：00-12：00") == (540, 720)
+
+    def test_parse_fullwidth_both(self):
+        """全角冒号 + 全角破折号组合。"""
+        assert parse_window("09：00—12：00") == (540, 720)
+
+    def test_parse_en_dash(self):
+        """en-dash（–，Unicode U+2013）与连字符等价。"""
+        assert parse_window("09:00–12:00") == (540, 720)
+
+    def test_parse_fullwidth_hyphen_minus(self):
+        """全角连字符减号（－，U+FF0D）。"""
+        assert parse_window("09:00－12:00") == (540, 720)
+
+    def test_parse_tilde(self):
+        """波浪号（～）宽松兼容为分隔符。"""
+        assert parse_window("09:00～12:00") == (540, 720)
+
+    def test_parse_fullwidth_space(self):
+        """全角空格（U+3000）容忍。"""
+        assert parse_window("09:00　-　12:00") == (540, 720)
+
+    def test_parse_single_digit_fullwidth(self):
+        """单位数小时 + 全角破折号（照 issue #169 描述 9:00—12:00）。"""
+        assert parse_window("9:00—12:00") == (540, 720)
+
+    def test_parse_cross_midnight_fullwidth(self):
+        """跨天窗口全角破折号。"""
+        assert parse_window("22:00—02:00") == (1320, 120)
+
+    def test_in_pause_window_fullwidth(self):
+        """in_pause_window 对全角窗口串正确判断（窗口内 True/窗口外 False）。"""
+        s = _mk("2026-08-18T10:00:00", windows=["09：00—12：00"])
+        assert in_pause_window(s, _now("2026-08-18T10:00:00")) is True
+        assert in_pause_window(s, _now("2026-08-18T13:00:00")) is False

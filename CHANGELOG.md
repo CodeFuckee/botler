@@ -5,6 +5,22 @@
 ## [Unreleased]
 ### Changed
 
+- **修复定时暂停窗口对全角字符的兼容性：中文输入法常见格式（如「9:00—12:00」全角
+  破折号、全角冒号）此前被窗口串解析器判为非法，保存被拒或配置被剔除，导致「设置了
+  暂停窗口、到点后仍在运行新任务」（issue #284）**：`parse_window` 解析前对窗口串做
+  全角字符归一化（全角冒号/分号/逗号/括号、全角破折号 —、en-dash –、全角连字符 －、
+  波浪号 ～/~、全角空格 U+3000 → 半角），并同步到保存侧——
+  - `backend/botler/pause_window.py`：新增 `normalize_window` 归一化函数，解析前
+    统一转换，`in_pause_window` 运行期判断自动兼容全角配置；
+  - `backend/botler/api/settings.py`：设置页保存全角窗口串不再 400，落盘前归一化为
+    半角规范格式（config.yaml 保持 `HH:MM-HH:MM`）；
+  - `backend/botler/config.py`：读取 config.yaml 时同样归一化，手动编辑写全角也能
+    生效（不再被防御性剔除）；
+  - **测试**：新增全角兼容复现用例 11 例（`test_pause_window.py` +9、API 保存归一化
+    +2：全角保存 200 且落盘半角、归一化后仍非法照常 400），修复前全部失败、修复后
+    通过；后端全量 pytest 与前端测试通过，无 regression。
+
+
 - **中断恢复机制 Phase 1 落地：dsh 引擎「会话 id 任务开始即落库 + SDK resume + 进度账本交接单」（issue #281）**：
   按 issue #281 用户补充意见（「支持以指定 id 创建全新会话，按照技术方案开始实现」）
   落地 `docs/中断恢复机制改进方案.md`（v1.1）Phase 1，仅改造 dsh / DeepSeek Harness

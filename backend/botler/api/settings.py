@@ -19,7 +19,7 @@ from ..config import KNOWN_FIELDS
 from ..plugins import PluginKind, list_plugins
 from ..gitlab_client import GitLabClient, GitLabError
 from ..labels import validate_label
-from ..pause_window import in_pause_window, parse_window
+from ..pause_window import in_pause_window, normalize_window, parse_window
 from ..templates import PLACEHOLDERS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -596,7 +596,7 @@ def _validate_worker(patch: dict) -> None:
                              '（如 ["09:00-12:00", "14:00-18:00"]）')
                 cleaned: list[str] = []
                 for w in val:
-                    w = w.strip()
+                    w = normalize_window(w.strip())
                     if not w:
                         continue
                     if parse_window(w) is None:
