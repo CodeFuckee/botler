@@ -440,7 +440,7 @@ class TestRunDshOnce:
 
     def test_collision_downgrades_to_fresh_session(
             self, dsh_executor, monkeypatch, tmp_path, fake_runner):
-        """resume 撞 SDK id collision → 换新 id + fresh prompt 重跑并成功。
+        """resume 撞 SDK id collision → 换新 id + 全新提示词重跑并成功。
 
         复现任务 #390/#391：resume 会话时 SDK 报「already has a persisted
         log on disk that does not match this live session (id collision)」，
@@ -465,10 +465,38 @@ class TestRunDshOnce:
         assert first.kwargs["session_id"] == "old-sid"
         assert second.kwargs["session_id"] != "old-sid"
         assert second.kwargs["session_id"].startswith("botler-")
-        assert "继续处理" not in second.kwargs["prompt"]  # fresh prompt 无恢复引导语
+        assert "继续处理" not in second.kwargs["prompt"]  # 无恢复引导语（不声称对话保留）
         # 新 id 已落库（任务详情展示实际会话）
         row = dsh_executor.db.get_task(task_id)
         assert row["dsh_session_id"] == "dsh-sess-1"
+
+    def test_collision_downgrade_prompt_carries_progress_ledger(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """降级全新会话仍携带进度账本交接单（issue #291 补充）：对话历史
+        丢失但账本与工作区保留，新会话按账本接续，禁止重做 done 步骤，
+        避免「平台重启 → 全新对话 → 从头重复实现」。
+        """
+        task_id = _mk_task(dsh_executor)
+        dsh_executor.db.set_task_status(task_id, None, dsh_session_id="old-sid")
+        # 上次会话已落库的进度账本（跨会话持久化，与 dsh 会话无关）
+        dsh_executor.db.record_task_progress(
+            task_id, 1, "复现测试", "done", evidence="commit abc1234")
+        dsh_executor.db.record_task_progress(task_id, 2, "修复实现", "doing")
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_queue = [
+            self._collision_lines("old-sid"),
+            [_RESULT_LINE],
+        ]
+        dsh_executor._run_dsh_once(
+            task_id, _REPO, _ISSUE, resume_session="old-sid")
+        second = fake_runner.instances[1]
+        prompt = second.kwargs["prompt"]
+        # 交接单携带账本内容：已完成步骤 + 证据 + 下一步 + 禁止重做
+        assert "对话历史已丢失" in prompt  # 如实说明，不假装对话保留
+        assert "步骤 1「复现测试」→ done" in prompt
+        assert "commit abc1234" in prompt
+        assert "步骤 2「修复实现」" in prompt
+        assert "禁止重新检查/重做" in prompt
 
     def test_collision_downgrade_second_collision_fails_once(
             self, dsh_executor, monkeypatch, tmp_path, fake_runner):

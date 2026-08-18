@@ -18,11 +18,16 @@
     提取 `_run_round` 内部函数承载「构造 runner → 等待 → 收尾」单轮执行，碰撞检测
     命中即生成新会话 id 落库、以全新提示词（不含恢复引导语）重跑一次，聊天记录
     同步重置为全新会话视角；降级不无限递归（重跑再撞则如实失败），如实记 warn 日志
-    说明降级原因；
-  - **测试**：新增碰撞降级复现用例 4 例（`test_executor_dsh.py`：resume 撞 collision
-    换新 id + fresh prompt 重跑成功、二次碰撞直接失败防死循环、普通 error 不误降级、
-    `_dsh_collision` 判定单测），修复前全部失败、修复后通过；后端全量 pytest
-    （1788 例）与前端测试（854 例）通过，无 regression。
+    说明降级原因；**降级不丢进度记忆**：新增 `_dsh_downgrade_prompt` 把
+    `task_progress` 进度账本交接单渲染进降级提示词（已完成步骤 + 证据 / 下一步 /
+    禁止重做已标记 done 的步骤），配合保留的工作区，新会话按账本接续而非从头
+    重复实现（issue #281 用户抱怨的原始痛点——平台重启必然打断运行中的任务，
+    若恢复即失忆，每次部署都会造成 agent 从头重做）；
+  - **测试**：新增碰撞降级复现用例 5 例（`test_executor_dsh.py`：resume 撞 collision
+    换新 id + fresh prompt 重跑成功、降级提示词携带进度账本交接单、二次碰撞直接
+    失败防死循环、普通 error 不误降级、`_dsh_collision` 判定单测），修复前全部
+    失败、修复后通过；后端全量 pytest（1789 例）与前端测试（854 例）通过，
+    无 regression。
 
 - **新增 CHANGELOG.md 发布轮转机制（issue #289）**：此前 `CHANGELOG.md` 遵循 Keep a
   Changelog 约定却没有任何发布/重置机制，所有条目永远堆积在 `[Unreleased]` 下（曾达

@@ -1914,7 +1914,7 @@ class ClaudeExecutor:
                     f"SDK 报告会话 {old_sid[:8]}… 无法恢复（id collision，"
                     f"磁盘残留与 live 会话不匹配），降级为全新会话 "
                     f"{dsh_sid[:8]}… 重跑（issue #291 诚实降级）")
-                prompt = (self._build_prompt(repo, issue)
+                prompt = (self._dsh_downgrade_prompt(repo, issue, task_id)
                           + PROGRESS_REPORT_INSTRUCTION)
                 # 聊天记录重置为全新会话视角（首条 user 消息 = 新提示词）；
                 # 流式回复缓冲一并清空（碰撞轮无文本，防御性收口）
@@ -1990,6 +1990,23 @@ class ClaudeExecutor:
         data = self._last_json_object(output)
         return bool(data and not data.get("error")
                     and data.get("finish_reason") == "error")
+
+    def _dsh_downgrade_prompt(self, repo: dict, issue: dict,
+                              task_id: int) -> str:
+        """collision 降级后的全新会话提示词（issue #291 补充）：基础任务
+        提示词 + 进度账本交接单。
+
+        降级丢的只是对话历史（SDK id collision 无法恢复），task_progress
+        账本（运行中增量落库，跨会话持久化）与保留的工作区是可靠的——
+        如实说明后引导新会话按账本接续，禁止重做已标记 done 的步骤，
+        避免全新对话从头重复实现（issue #281 用户抱怨的原始痛点）。
+        """
+        handoff = self._render_progress_handoff(task_id)
+        return (self._build_prompt(repo, issue)
+                + "\n\n【会话恢复失败，全新会话接续】上次 dsh 会话因 SDK "
+                "限制无法恢复（id collision），对话历史已丢失；但平台进度"
+                "账本与保留的工作区是可靠的，按以下记录直接接续：\n"
+                + handoff)
 
     def _new_dsh_session_id(self, task_id: int) -> str:
         """预生成 dsh 会话 id（issue #281 §4.7）：botler-<task_id>-<ts>-<rand>。
