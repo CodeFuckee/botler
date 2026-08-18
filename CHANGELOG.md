@@ -5,6 +5,27 @@
 ## [Unreleased]
 ### Added
 
+- **SQLite 连接复用与统一连接管理（issue #191）**：`database.py` 的 `_conn()`
+  每次调用都执行 `sqlite3.connect(timeout=30)` + `PRAGMA journal_mode=WAL` +
+  row_factory 设置，高频路径（任务列表、概览轮询、通知拉取、日志写入）每秒
+  打开/关闭连接纯属浪费；改为每线程一条长连接复用、写事务跨线程串行化：
+  - 连接复用：`threading.local` 按线程各持一条连接（`_get_connection()`），
+    WAL + busy_timeout + row_factory 只在首次创建时设置一次（journal_mode 为
+    数据库级持久属性），复用不再重复 PRAGMA；`check_same_thread` 保持默认
+    True——每个连接只被所属线程使用；
+  - 写串行化：写路径 `_conn(write=True)` 先取进程级写锁（`_write_lock`）再
+    显式 `BEGIN IMMEDIATE` 抢占写锁（避免 DEFERRED 事务升级写锁与并发写冲突），
+    WAL 下读事务不受写锁影响可并发；新增 `close()` 供测试清理/优雅停机；
+  - 嵌套兼容：同一线程外层已进入 `_conn` 时内层透传同一连接、事务由最外层
+    统一收口，既有调用模式（测试中 `with db._conn()` 内再调写方法）行为不变；
+  - 新增测试 `backend/tests/test_database_conn_reuse.py` 7 例：同线程复用
+    只 connect 一次（无重复 PRAGMA）、跨线程连接隔离、并发写无
+    `database is locked`（8 线程压测全部落库）、写事务回滚后可复用、
+    嵌套透传、纯读不开事务、设置生效一次；
+  - 新增基准脚本 `backend/scripts/benchmark_db.py`：同负载混合读写
+    （list_tasks + add_log）实测 ops/sec 56 → 225（约 4 倍）、P95 延迟
+    19.2ms → 5.1ms（本机对比连接复用前后）。
+
 - **概览页 DeepSeek 余额卡片增加「每小时余额变化速率」显示（issue #304）**：
   「如果有账户余额信息时，概览增加账户余额减少（变化）速度显示，按小时
   为单位」——余额卡片每个币种条目新增速率文案（如「每小时减少 5.00」），

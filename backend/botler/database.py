@@ -253,9 +253,14 @@ class Database:
 
     def __init__(self, path: str = DB_PATH):
         self.path = path
-        # 默认连接隔离：每个连接独立，写操作走各自的事务
+        # issue #191：连接复用——每线程各持一条长连接（threading.local），
+        # 连接只初始化一次（WAL/busy_timeout/row_factory），后续复用不再
+        # 重复 PRAGMA；写事务通过 _write_lock 跨线程串行化（WAL 下读可
+        # 并发、写串行），从根本上消除 database is locked。
+        self._local = threading.local()
+        self._write_lock = threading.Lock()
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.executescript(_SCHEMA)
             self._migrate(conn)
 
@@ -559,20 +564,83 @@ class Database:
                     fixed += 1
         return fixed
 
-    @contextmanager
-    def _conn(self):
-        conn = sqlite3.connect(self.path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
+    def _get_connection(self) -> sqlite3.Connection:
+        """获取当前线程的复用连接；首次调用时创建并一次性初始化。
+
+        issue #191：连接按线程隔离（threading.local），每线程只创建一次，
+        WAL + busy_timeout + row_factory 只在创建时设置一次，后续复用不再
+        重复 PRAGMA（journal_mode 为数据库级持久属性，设置一次即长期生效）；
+        check_same_thread 保持默认 True——每个连接只被其所属线程使用，
+        跨线程安全语义由「读并发 + 写串行化」保证。
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.path, timeout=30)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            self._local.conn = conn
+        return conn
+
+    def close(self) -> None:
+        """关闭当前线程持有的复用连接（仅影响调用线程）。
+
+        issue #191：连接随线程存续；进程退出/线程退出时由 GC 兜底释放，
+        本方法供测试清理与优雅停机显式关闭。其他线程的连接在该线程
+        退出时随 threading.local 自动释放。
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
             conn.close()
+            self._local.conn = None
+
+    @contextmanager
+    def _conn(self, write: bool = False):
+        """获取当前线程的复用连接（issue #191）。
+
+        write=False（默认）：读/一般路径——直接复用连接，退出时提交
+        （纯读无事务时 commit 为空操作），异常回滚；
+        write=True：写事务路径——先取进程级写锁（_write_lock）把写事务
+        跨线程串行化，再显式 BEGIN IMMEDIATE 抢占写锁（避免 DEFERRED
+        事务在升级写锁时与并发写冲突产生 database is locked），退出时
+        提交/回滚；WAL 模式下读事务可与写事务并发，不受写锁影响。
+
+        嵌套兼容：同一线程外层已进入 _conn 时（如测试中 `with db._conn()`
+        内再调用写方法），内层不再重复 BEGIN/COMMIT，直接透传同一连接，
+        事务由最外层统一收口——与既有调用模式行为一致。
+        """
+        conn = self._get_connection()
+        depth = getattr(self._local, "depth", 0)
+        if depth > 0:
+            # 嵌套复用：内层不管理事务，避免打断外层事务
+            try:
+                yield conn
+            except Exception:
+                raise
+            return
+        self._local.depth = 1
+        try:
+            if not write:
+                try:
+                    yield conn
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+            else:
+                with self._write_lock:
+                    # 复用连接必须处于无事务状态才能显式 BEGIN；防御性清理
+                    if conn.in_transaction:
+                        conn.rollback()
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        yield conn
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        raise
+        finally:
+            self._local.depth = 0
 
     # ---- inspirations（issue #131）----
     # 概览页「灵感」板块数据：按仓库随手记录新功能灵感，仅存本地数据库。
@@ -604,7 +672,7 @@ class Database:
 
     def create_inspiration(self, repo_id: int, content: str) -> int:
         """创建灵感，返回新记录 id。"""
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             cur = conn.execute(
                 """INSERT INTO inspirations (repo_id, content)
                    VALUES (?, ?)""", (repo_id, content))
@@ -612,7 +680,7 @@ class Database:
 
     def update_inspiration(self, inspiration_id: int, content: str) -> bool:
         """更新灵感内容并刷新 updated_at；记录不存在返回 False。"""
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             cur = conn.execute(
                 """UPDATE inspirations SET content=?, updated_at=datetime('now')
                    WHERE id=?""", (content, inspiration_id))
@@ -624,7 +692,7 @@ class Database:
         灵感删除后其 AI 对话（inspiration_messages）不再有展示入口，
         一并删除避免孤儿数据；同一连接同一事务内先删灵感再删消息
         （灵感不存在时直接返回 False，不动消息表）。"""
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             cur = conn.execute("DELETE FROM inspirations WHERE id=?", (inspiration_id,))
             if cur.rowcount == 0:
                 return False
@@ -668,7 +736,7 @@ class Database:
     def add_inspiration_message(self, inspiration_id: int, role: str,
                                 content: str) -> int:
         """保存一条灵感对话消息，返回新记录 id。"""
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             cur = conn.execute(
                 """INSERT INTO inspiration_messages (inspiration_id, role, content)
                    VALUES (?, ?, ?)""", (inspiration_id, role, content))
@@ -676,7 +744,7 @@ class Database:
 
     def delete_inspiration_message(self, message_id: int) -> bool:
         """删除单条灵感对话消息（AI 调用失败时回滚用户消息）；不存在返回 False。"""
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             cur = conn.execute(
                 "DELETE FROM inspiration_messages WHERE id=?", (message_id,))
             return cur.rowcount > 0
@@ -689,7 +757,7 @@ class Database:
                     remote_name: str | None = None,
                     remote_username: str | None = None,
                     priority: int = DEFAULT_PRIORITY) -> int:
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.execute(
                 """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, remote_username, priority)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -743,7 +811,7 @@ class Database:
         list_repos 默认过滤，仓库列表/概览流水线/对账不再出现该仓库。
         重新添加同 project_id 的仓库时 upsert 会清除删除标记。
         """
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.execute(
                 """UPDATE repos SET deleted_at=datetime('now'), enabled=0
                    WHERE id=?""", (repo_id,))
@@ -754,12 +822,12 @@ class Database:
         if not sets:
             return
         cols = ", ".join(f"{k}=?" for k in sets)
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.execute(f"UPDATE repos SET {cols} WHERE id=?",  # nosec B608
                          (*sets.values(), repo_id))
 
     def delete_repo(self, repo_id: int) -> None:
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.execute("DELETE FROM repos WHERE id=?", (repo_id,))
 
     # ---- issue_manual_orders（issue #287）----
@@ -793,7 +861,7 @@ class Database:
         同一事务内先删旧行再逐条插入，position 按入参顺序从 0 连续编号；
         传入空列表清空手动顺序（恢复调度器默认排序）。返回按 position
         排序后的 iid 列表（即入参原序）。"""
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.execute("DELETE FROM issue_manual_orders WHERE repo_id=?", (repo_id,))
             for pos, iid in enumerate(iids):
                 conn.execute(
@@ -818,7 +886,7 @@ class Database:
         权重时调度器按创建时间升序选任务（创建早的 issue 先处理）。
         """
         labels_json = json.dumps(issue_labels or [], ensure_ascii=False)
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             dup = conn.execute(
                 """SELECT id FROM tasks WHERE project_id=? AND issue_iid=?
                    AND status IN ('queued','running','retrying')""",
@@ -972,7 +1040,7 @@ class Database:
         if not cols:
             return
         vals.append(task_id)
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.execute(f"UPDATE tasks SET {', '.join(cols)} WHERE id=?", vals)  # nosec B608
 
     def claim_task(self, task_id: int) -> bool:
@@ -982,7 +1050,7 @@ class Database:
         是否抢到；已是 running（其他实例已领取）或已终态时抢不到。
         跨实例安全：SQLite 写事务串行化保证条件判断与更新原子。
         """
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             cur = conn.execute(
                 "UPDATE tasks SET status=? WHERE id=? AND status IN (?, ?)",
                 (STATUS_RUNNING, task_id, STATUS_QUEUED, STATUS_RETRYING))
@@ -1002,7 +1070,7 @@ class Database:
                 cols.append(f"{k}=?")
                 vals.append(v)
         vals.extend([task_id, STATUS_RUNNING, STATUS_RETRYING])
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             cur = conn.execute(
                 f"UPDATE tasks SET {', '.join(cols)} WHERE id=? AND status IN (?, ?)",  # nosec B608
                 vals)
@@ -1016,7 +1084,7 @@ class Database:
         重新入队执行。
         """
         stopped: list[int] = []
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             for row in conn.execute(
                     "SELECT id FROM tasks WHERE status IN ('queued','running','retrying')"):
                 stopped.append(row["id"])
@@ -1043,7 +1111,7 @@ class Database:
         入队执行；同时写入 warn 日志供任务详情页追溯。条件 UPDATE 兜底并发：
         多请求同时停止同一任务时先到者生效。
         """
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             row = conn.execute(
                 "SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
             if row is None:
@@ -1075,7 +1143,7 @@ class Database:
         上次会话）与 log_path（日志文件重试时覆盖重写）。
         条件 UPDATE 兜底并发：多请求同时重试时先到者生效。
         """
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if row is None:
                 return "not_found"
@@ -1105,7 +1173,7 @@ class Database:
     def requeue_interrupted(self) -> list[int]:
         """重启恢复：queued 保持不变，running/retrying 标记 interrupted 后重新入队。"""
         restored: list[int] = []
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             for row in conn.execute(
                     "SELECT id FROM tasks WHERE status IN ('running','retrying')"):
                 restored.append(row["id"])
@@ -1126,7 +1194,7 @@ class Database:
     # ---- task_logs ----
 
     def add_log(self, task_id: int, level: str, message: str) -> None:
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.execute(
                 "INSERT INTO task_logs (task_id, level, message) VALUES (?, ?, ?)",
                 (task_id, level, message))
@@ -1139,7 +1207,7 @@ class Database:
 
     def add_logs(self, task_id: int, entries: list[tuple[str, str]]) -> None:
         """批量写日志：entries 为 [(level, message), ...]"""
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.executemany(
                 "INSERT INTO task_logs (task_id, level, message) VALUES (?, ?, ?)",
                 [(task_id, lv, msg) for lv, msg in entries])
@@ -1155,7 +1223,7 @@ class Database:
         中断恢复时 executor 按每步最新状态行渲染确定性交接单（§4.4），
         避免 agent 反复检查实现/重复实现。返回新行 id。
         """
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             cur = conn.execute(
                 """INSERT INTO task_progress
                      (task_id, step_no, step_desc, status, evidence, files, verified_at)
@@ -1196,7 +1264,7 @@ class Database:
         一个任务只跑一种引擎（issue #120），重试/续跑以最后一次执行
         为准（与 tasks.engine 覆盖语义一致）；统计页按 task_usage 行聚合。
         """
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             conn.execute("DELETE FROM task_usage WHERE task_id=?", (task_id,))
             conn.execute(
                 """INSERT INTO task_usage
@@ -1362,7 +1430,7 @@ class Database:
                          repo_name: str | None = None, task_id: int | None = None,
                          data: str | None = None) -> int | None:
         """记录一条通知事件，返回 id；同一 task_id 重复记录返回 None（幂等）。"""
-        with self._conn() as conn:
+        with self._conn(write=True) as conn:
             try:
                 cur = conn.execute(
                     """INSERT INTO notification_events (type, title, body, repo_name, task_id, data)
