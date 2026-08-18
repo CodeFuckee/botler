@@ -7,11 +7,14 @@
 // 2. 页面展示默认标签清单（标记「默认」、无删除按钮）；
 // 3. 页面提供自定义标签添加表单与删除按钮；
 // 4. 后端 /api/labels 提供 GET/POST/DELETE 接口。
-import { test } from 'node:test'
+import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { createServer } from 'vite'
+import React from 'react'
+import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
@@ -71,4 +74,135 @@ test('后端提供 /api/labels 的 GET/POST/DELETE 接口', () => {
   assert.match(apiLabels, /@router\.post\(""\)/, '应有 POST /api/labels')
   assert.match(apiLabels, /@router\.delete\("\/\{name\}"\)/, '应有 DELETE /api/labels/{name}')
   assert.match(apiLabels, /默认标签，不可删除/, '删除默认标签应被拒绝')
+})
+
+// ---- 默认标签一键同步（issue #307） ----
+
+const vite = await createServer({
+  server: { middlewareMode: true },
+  appType: 'custom',
+  logLevel: 'error',
+})
+const { api } = await vite.ssrLoadModule('/src/api.js')
+const { default: Labels } = await vite.ssrLoadModule('/src/pages/Labels.jsx')
+after(() => vite.close())
+
+const LABELS_DATA = {
+  default: [
+    { name: 'bug', color: '#d9534f', description: '缺陷修复' },
+    { name: 'feature', color: '#009966', description: '新功能' },
+  ],
+  custom: [],
+}
+
+function treeText(renderer) {
+  const walk = (n) => {
+    if (n == null) return ''
+    if (typeof n === 'string' || typeof n === 'number') return String(n)
+    if (Array.isArray(n)) return n.map(walk).join('')
+    return walk(n.children)
+  }
+  return walk(renderer.toJSON())
+}
+
+function syncBtns(renderer) {
+  return renderer.root.findAll((n) => n.type === 'button'
+    && String(n.props.title || '').includes('所有已添加仓库'))
+}
+
+async function renderLabels({ labels = LABELS_DATA } = {}) {
+  mock.method(api, 'get', async (pathname) => {
+    if (pathname === '/api/labels') return labels
+    throw new Error('unexpected ' + pathname)
+  })
+  let renderer = null
+  let renderError = null
+  await TestRenderer.act(async () => {
+    try {
+      renderer = TestRenderer.create(React.createElement(Labels))
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    } catch (e) {
+      renderError = e
+    }
+  })
+  return { renderer, renderError }
+}
+
+test('默认标签提供「同步到所有仓库」按钮（issue #307）', () => {
+  assert.match(labels, /同步到所有仓库/, '默认标签应有「同步到所有仓库」按钮')
+  assert.match(
+    labels,
+    /api\.post\(`\/api\/labels\/\$\{encodeURIComponent\(label\.name\)\}\/sync`\)/,
+    '点击后应调 POST /api/labels/{name}/sync',
+  )
+  assert.match(labels, /disabled=\{syncing !== null\}/, '同步请求中应禁用按钮')
+  assert.match(labels, /同步中…/, '请求中应显示「同步中…」')
+  assert.match(labels, /包括启用和未启用的|含启用与未启用的/, '应说明同步范围含启用与未启用仓库')
+})
+
+test('后端提供 POST /api/labels/{name}/sync 接口（issue #307）', () => {
+  assert.match(apiLabels, /@router\.post\("\/\{name\}\/sync"\)/, '应有 POST /api/labels/{name}/sync')
+  assert.match(apiLabels, /DEFAULT_LABELS/, '同步逻辑应基于内置默认清单')
+  assert.match(apiLabels, /list_repos\(\)/, '应遍历全部已添加仓库（含启用与未启用）')
+  assert.match(apiLabels, /build_repo_client/, '应优先使用 per-repo client')
+  assert.match(apiLabels, /c\.gitlab/, '无 per-repo client 时应回退全局 bot client')
+})
+
+test('渲染：每个默认标签渲染「同步到所有仓库」按钮', async () => {
+  const { renderer, renderError } = await renderLabels()
+  assert.equal(renderError, null, String(renderError || ''))
+  assert.equal(syncBtns(renderer).length, 2, '默认标签数量应等于同步按钮数量')
+})
+
+test('点击「同步到所有仓库」调用后端并展示同步结果', async () => {
+  const { renderer } = await renderLabels()
+  const postCalls = []
+  mock.method(api, 'post', async (pathname) => {
+    postCalls.push(pathname)
+    if (pathname === '/api/labels/bug/sync') {
+      return {
+        label: { name: 'bug' },
+        total_repos: 2,
+        created: ['repo-a', 'repo-b'],
+        already_exists: [],
+        failed: [],
+      }
+    }
+    throw new Error('unexpected ' + pathname)
+  })
+  const btn = syncBtns(renderer)[0]
+  await TestRenderer.act(async () => {
+    btn.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  assert.deepEqual(postCalls, ['/api/labels/bug/sync'], '应调用同步接口')
+  assert.match(treeText(renderer), /已同步「bug」到 2 个仓库/, '成功应显示同步汇总')
+  assert.match(treeText(renderer), /新建 2 个/, '应显示新建数量')
+})
+
+test('同步失败展示后端错误信息', async () => {
+  const { renderer } = await renderLabels()
+  mock.method(api, 'post', async () => {
+    throw new Error('GitLab API 错误 403: 权限不足')
+  })
+  const btn = syncBtns(renderer)[0]
+  await TestRenderer.act(async () => {
+    btn.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  assert.match(treeText(renderer), /同步「bug」失败/, '应展示失败提示')
+  assert.match(treeText(renderer), /403/, '应透传后端错误详情')
+})
+
+test('同步请求中按钮禁用并显示「同步中…」', async () => {
+  const { renderer } = await renderLabels()
+  // post 挂起不返回：保持 loading 状态，断言请求中禁用
+  mock.method(api, 'post', async () => new Promise(() => {}))
+  const btn = syncBtns(renderer)[0]
+  await TestRenderer.act(async () => {
+    btn.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  assert.equal(syncBtns(renderer)[0].props.disabled, true, '请求中按钮应禁用')
+  assert.match(treeText(renderer), /同步中…/, '请求中应显示「同步中…」')
 })
