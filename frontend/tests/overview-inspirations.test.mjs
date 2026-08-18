@@ -71,8 +71,8 @@ const INSPIRATIONS_PAYLOAD = {
 // ---- 数据流源码断言 ----
 
 test('源码：灵感板块轮询 /api/inspirations/overview 并使用独立轮询常量', () => {
-  assert.match(overview, /api\.get\('\/api\/inspirations\/overview'\)/,
-               '应调用 /api/inspirations/overview 聚合接口')
+  assert.match(overview, /api\.get\('\/api\/inspirations\/overview', \{ silent: true \}\)/,
+               '应调用 /api/inspirations/overview 聚合接口（轮询静默，issue #226）')
   assert.match(overview, /INSPIRATION_POLL_MS/, '应使用 INSPIRATION_POLL_MS 轮询常量')
   assert.equal(INSPIRATION_POLL_MS, 15000, '灵感板块轮询间隔应为 15 秒')
 })

@@ -36,8 +36,8 @@ after(() => vite.close())
 // ---- 数据流源码断言 ----
 
 test('概览页轮询 GET /api/issues/overview 聚合开放 issue', () => {
-  assert.match(overview, /api\.get\('\/api\/issues\/overview'\)/,
-               '应调用 /api/issues/overview 聚合接口')
+  assert.match(overview, /api\.get\('\/api\/issues\/overview', \{ silent: true \}\)/,
+               '应调用 /api/issues/overview 聚合接口（轮询静默，issue #226）')
   assert.match(overview, /ISSUE_POLL_MS/, '应使用 ISSUE_POLL_MS 轮询常量')
   assert.equal(ISSUE_POLL_MS, 15000, 'issue 板块轮询间隔应为 15 秒')
 })

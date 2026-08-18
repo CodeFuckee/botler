@@ -184,7 +184,7 @@ export default function TaskDetail() {
 
   const load = async () => {
     try {
-      setTask(await api.get(`/api/tasks/${id}`))
+      setTask(await api.get(`/api/tasks/${id}`, { silent: true }))
     } catch (e) { setError(e.message) }
   }
 
@@ -248,7 +248,7 @@ export default function TaskDetail() {
   const pollLive = useCallback(async () => {
     const cur = liveRef.current
     try {
-      const d = await api.get(`/api/tasks/${id}/execution?after_byte=${cur.offset}`)
+      const d = await api.get(`/api/tasks/${id}/execution?after_byte=${cur.offset}`, { silent: true })
       cur.offset = d.log_offset
       cur.lines = cur.lines.concat(d.log_delta)
       if (d.transcript?.length) cur.transcript = d.transcript

@@ -1,5 +1,7 @@
 // 后端 API 封装
 
+import { showToast } from './toast.js'
+
 // SSO 是否启用（issue #27 第五轮）：由 App 从 /api/auth/status 探测后设置。
 // 401 兜底仅在 SSO 启用时跳登录页——非 SSO 场景（或探测完成前）的 401 不应
 // 跳转，否则与页面重载叠加会形成无限刷新循环。
@@ -9,31 +11,77 @@ export function setSsoEnabled(v) {
   ssoEnabled = !!v
 }
 
-async function request(method, path, body) {
+// 请求失败自动重试（issue #226）：仅 GET 生效，最多重试 1 次（间隔
+// 500ms），只对网络错误（fetch 拒绝）与 HTTP 5xx 重试，4xx 等业务错误
+// 不重试——内网/ZeroTier 网络抖动导致的轮询偶发假失败重试即可消除，
+// 重试成功对用户无感知。
+const RETRY_DELAY_MS = 500
+const GET_MAX_ATTEMPTS = 2
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// 构造 fetch 选项：JSON 序列化 / multipart 由浏览器自动带 boundary
+function buildFetchOpts(method, body) {
   const opts = { method, headers: {} }
   if (body !== undefined) {
     if (body instanceof FormData) {
-      // multipart（如识图模型测试上传图片，issue #152）：不手动设置
-      // Content-Type，由浏览器自动带 boundary
       opts.body = body
     } else {
       opts.headers['Content-Type'] = 'application/json'
       opts.body = JSON.stringify(body)
     }
   }
-  const resp = await fetch(path, opts)
-  let data = null
-  try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
-  if (!resp.ok) {
-    // 会话失效兜底（issue #27）：SSO 启用时未登录访问受保护 API → 401，
-    // 跳登录页（登录流程自身端点除外，避免死循环）
-    if (resp.status === 401 && ssoEnabled && !path.startsWith('/api/auth/')) {
-      window.location.href = '/login'
+  return opts
+}
+
+// 网络层失败统一文案（fetch 原生 TypeError 文案对用户无意义）
+function networkErrorMessage() {
+  return '网络请求失败，请检查网络连接'
+}
+
+// 统一请求入口（issue #226）：
+//   opts = { silent } —— silent: true 用于轮询类接口：失败不弹 toast，
+//   由页面保留上次数据并展示「刷新失败」错误文本，避免每几秒弹一次骚扰。
+// 非 2xx 且非 silent 时自动 toast 错误信息；401 SSO 会话失效仍跳登录页
+// （登录页自身端点除外，避免死循环，issue #27）。
+async function request(method, path, body, opts = {}) {
+  const silent = !!opts.silent
+  const maxAttempts = method === 'GET' ? GET_MAX_ATTEMPTS : 1
+  for (let attempt = 1; ; attempt++) {
+    let resp
+    try {
+      resp = await fetch(path, buildFetchOpts(method, body))
+    } catch (e) {
+      // 网络层失败（断网/超时/连接重置）：GET 重试一次，最终失败 toast
+      if (attempt < maxAttempts) {
+        await sleep(RETRY_DELAY_MS)
+        continue
+      }
+      if (!silent) showToast(networkErrorMessage(), { type: 'error' })
+      throw e
     }
-    const msg = data?.error || data?.detail || `HTTP ${resp.status}`
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    let data = null
+    try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
+    if (!resp.ok) {
+      // 会话失效兜底（issue #27）：SSO 启用时未登录访问受保护 API → 401，
+      // 跳登录页（登录流程自身端点除外，避免死循环）
+      if (resp.status === 401 && ssoEnabled && !path.startsWith('/api/auth/')) {
+        window.location.href = '/login'
+      }
+      const msg = data?.error || data?.detail || `HTTP ${resp.status}`
+      const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      // 5xx（服务端瞬时故障）GET 重试一次；4xx 业务错误不重试
+      if (attempt < maxAttempts && resp.status >= 500) {
+        await sleep(RETRY_DELAY_MS)
+        continue
+      }
+      if (!silent) showToast(err.message, { type: 'error' })
+      throw err
+    }
+    return data
   }
-  return data
 }
 
 // 订阅任务事件流（SSE 实时输出）：后端逐事件推送执行过程
@@ -66,10 +114,10 @@ export function openTaskEventStream(taskId, handlers = {}) {
 }
 
 export const api = {
-  get: (path) => request('GET', path),
-  post: (path, body) => request('POST', path, body),
-  put: (path, body) => request('PUT', path, body),
-  del: (path) => request('DELETE', path),
+  get: (path, opts) => request('GET', path, undefined, opts),
+  post: (path, body, opts) => request('POST', path, body, opts),
+  put: (path, body, opts) => request('PUT', path, body, opts),
+  del: (path, opts) => request('DELETE', path, undefined, opts),
   openTaskEventStream,
   // 下载备份文件（blob，不走 JSON 解析）
   download: async (path, filename) => {

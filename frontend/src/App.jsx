@@ -8,6 +8,7 @@ import {
   Settings, Plugins, Skills, Terminal, Login,
 } from './pages/lazy.jsx'
 import DialogHost from './components/DialogHost.jsx'
+import ToastHost from './components/ToastHost.jsx'
 import UserMenu from './components/UserMenu.jsx'
 import ShortcutHelpModal from './components/ShortcutHelpModal.jsx'
 import { useShortcuts } from './keymap.js'
@@ -113,8 +114,8 @@ export default function App() {
   useEffect(() => {
     if (!auth || (auth.enabled && !auth.user)) return
     const poller = createNotifyPoller({
-      getEvents: (after) => api.get(`/api/notifications/events?after=${after}`),
-      getSettings: () => api.get('/api/settings'),
+      getEvents: (after) => api.get(`/api/notifications/events?after=${after}`, { silent: true }),
+      getSettings: () => api.get('/api/settings', { silent: true }),
     })
     poller.poll()
     const timer = setInterval(poller.poll, POLL_INTERVAL_MS)
@@ -276,6 +277,7 @@ export default function App() {
       {/* 自定义对话框宿主（issue #105）：替代浏览器原生 alert/confirm，
           挂在根部全局唯一，供 confirmDialog / alertDialog 渲染 */}
       <DialogHost />
+      <ToastHost />
     </div>
   )
 }

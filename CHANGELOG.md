@@ -5,7 +5,28 @@
 ## [Unreleased]
 ### Added
 
-- **任务模板占位符新增 URL 编码版本与正文注入控制（issue #223）**：issue
+- **前端 API 请求统一错误处理与 GET 自动重试（issue #226）**：`frontend/src/api.js`
+  的 `request()` 原先无统一错误提示与重试，页面各自处理失败态（部分显示错误
+  文本、部分静默），内网/ZeroTier 网络抖动时轮询接口偶发失败直接展示失败。
+  本次优化：
+  - 统一错误提示：非 2xx 请求最终失败时自动 toast 错误信息（新增
+    `frontend/src/toast.js` + `ToastHost.jsx` 全局 toast 基础设施，右上角
+    堆叠展示、3.5s 自动消失或手动 × 关闭，样式复用 `--err/--ok` 语义色）；
+    轮询类接口可通过 `{ silent: true }` 配置静默（页面保留上次数据并展示
+    「刷新失败」错误文本，避免每几秒弹一次骚扰）；
+  - GET 自动重试：网络错误 / HTTP 5xx 自动重试 1 次（间隔 500ms），4xx
+    业务错误不重试；重试成功对用户无感知，不弹 toast；仅 GET 生效，
+    POST/PUT/DELETE 不重试（写操作语义不允许隐式重复）；
+  - 轮询接口迁移：概览页全部慢轮询、任务列表 5s 刷新、任务详情 5s/3s
+    刷新、通知轮询（10s）统一标记 silent，失败保留上次数据 + 错误文本；
+  - 401 SSO 会话失效跳登录逻辑保持不变（issue #27）；
+  - 新增测试 `tests/toast.test.mjs` 8 例 + `tests/api-request.test.mjs`
+    15 例：重试成功/失败、4xx 不重试、silent 静默、toast 生命周期、401
+    跳转回归保护；既有渲染测试适配（`settings-nav-labels` 失败 mock 由
+    网络层 reject 改为 4xx 响应、`app-hooks` / `app-shortcuts` 补 fetch
+    mock、`overview-*` 源码断言同步 `silent: true` 写法）。
+
+新增 URL 编码版本与正文注入控制（issue #223）**：issue
   标题/描述常含 `#`、`%`、反引号、换行等特殊字符，直接拼进 prompt 可能破坏
   模板结构或被模型误解（标题 255 截断 issue #186 已证明标题内容边界问题
   真实存在）。本次新增：

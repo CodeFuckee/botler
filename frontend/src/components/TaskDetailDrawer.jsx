@@ -156,7 +156,7 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
     if (taskId == null) return
     const cur = liveRef.current
     try {
-      const d = await api.get(`/api/tasks/${taskId}/execution?after_byte=${cur.offset}`)
+      const d = await api.get(`/api/tasks/${taskId}/execution?after_byte=${cur.offset}`, { silent: true })
       cur.offset = d.log_offset
       if (Array.isArray(d.transcript) && d.transcript.length > 0) {
         cur.transcript = d.transcript

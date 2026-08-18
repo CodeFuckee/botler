@@ -763,7 +763,7 @@ export default function Overview() {
   const load = useCallback(async () => {
     try {
       const q = new URLSearchParams({ status: 'running,retrying', limit: '200' })
-      const d = await api.get('/api/tasks?' + q)
+      const d = await api.get('/api/tasks?' + q, { silent: true })
       setTasks(d.tasks || [])
       setError('')
     } catch (e) {
@@ -800,7 +800,7 @@ export default function Overview() {
   // 所有配置仓库的最新流水线状态（issue #39，独立慢轮询）
   const loadPipelines = useCallback(async () => {
     try {
-      const d = await api.get('/api/pipelines/overview')
+      const d = await api.get('/api/pipelines/overview', { silent: true })
       setPipelines(d.pipelines || [])
       setPipeErrors(d.errors || [])
       setPipeError('')
@@ -824,7 +824,7 @@ export default function Overview() {
   // 已启用仓库的开放 issue 聚合（issue #64，独立慢轮询）
   const loadIssues = useCallback(async () => {
     try {
-      const d = await api.get('/api/issues/overview')
+      const d = await api.get('/api/issues/overview', { silent: true })
       setRepoIssues(d.repos || [])
       setIssueErrors(d.errors || [])
       setIssueError('')
@@ -876,7 +876,7 @@ export default function Overview() {
   // 提交成功后手动刷新，轮询兜底多标签页并发场景
   const loadInspirations = useCallback(async () => {
     try {
-      const d = await api.get('/api/inspirations/overview')
+      const d = await api.get('/api/inspirations/overview', { silent: true })
       setInspirationRepos(d.repos || [])
       setInspirationError('')
     } catch (e) {
@@ -895,7 +895,7 @@ export default function Overview() {
   // 未配置时后端返回 configured=false，前端不渲染余额卡片
   const loadDeepSeekBalance = useCallback(async () => {
     try {
-      const d = await api.get('/api/settings/deepseek-balance')
+      const d = await api.get('/api/settings/deepseek-balance', { silent: true })
       setDsBalance(d || { configured: false, balance: null, error: null })
       setDsBalanceError('')
       // issue #304：余额变化速率（按小时）——每次成功获取余额后把观测
@@ -930,7 +930,7 @@ export default function Overview() {
   // 上次数据并展示错误提示，不影响页面其他板块
   const loadCompletionStats = useCallback(async () => {
     try {
-      const d = await api.get('/api/issues/completion-stats')
+      const d = await api.get('/api/issues/completion-stats', { silent: true })
       setCompletionStats(d || { completed_count: 0, avg_seconds: null, trend: [] })
       setCompletionStatsError('')
     } catch (e) {
@@ -956,7 +956,7 @@ export default function Overview() {
         .toISOString().slice(0, 10))
     }
     try {
-      const d = await api.get('/api/usage/stats?' + q)
+      const d = await api.get('/api/usage/stats?' + q, { silent: true })
       setUsageStats(d || { summary: {}, by_repo: [], by_engine: [], by_date: [] })
       setUsageStatsError('')
     } catch (e) {

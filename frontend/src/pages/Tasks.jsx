@@ -186,7 +186,7 @@ export default function Tasks() {
       if (search.trim()) q.set('search', search.trim())
       if (repoId) q.set('repo_id', repoId)
       if (showUsage) q.set('include_usage', '1')
-      const d = await api.get('/api/tasks?' + q)
+      const d = await api.get('/api/tasks?' + q, { silent: true })
       setData(d)
     } catch (e) {
       setError(e.message)

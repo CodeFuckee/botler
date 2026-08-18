@@ -329,10 +329,12 @@ function pendingFetch() {
   return { restore: () => { global.fetch = originalFetch } }
 }
 
-/** fetch 立即失败：模拟加载失败（卡片应展示错误 + 可点击重试，而不是消失） */
+/** fetch 立即失败：模拟加载失败（卡片应展示错误 + 可点击重试，而不是消失）。
+ *  返回 4xx 而非网络层 reject——GET 自动重试（issue #226）只对网络错误/5xx
+ *  生效，4xx 业务错误不重试，测试才能确定性地快速进入失败态 */
 function rejectFetch() {
   const originalFetch = global.fetch
-  global.fetch = async () => { throw new Error('network down') }
+  global.fetch = async () => ({ ok: false, status: 404, json: async () => ({ error: 'network down' }) })
   return { restore: () => { global.fetch = originalFetch } }
 }
 

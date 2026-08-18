@@ -21,7 +21,16 @@ const vite = await createServer({
 const { default: App } = await vite.ssrLoadModule('/src/App.jsx')
 
 // 测试结束后关闭 vite server，否则进程不退出
-after(() => vite.close())
+// fetch 快速失败 mock（issue #226）：request() 对网络错误新增 GET 自动重试
+// （500ms），node 环境相对路径 fetch 立即抛 TypeError 触发重试，auth 状态
+// 流转会延迟超过本测试 20ms 等待窗口。改用 4xx 响应让请求快速失败
+// （4xx 不重试），保持「请求失败 → App 快速回退渲染主界面」的测试意图。
+const originalFetch = globalThis.fetch
+globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({ error: 'not found' }) })
+after(() => {
+  globalThis.fetch = originalFetch
+  vite.close()
+})
 
 test('App 在 auth 状态流转后不崩溃且渲染主界面（回归 issue #27 白屏）', async () => {
   let renderer = null
