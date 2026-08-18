@@ -5,6 +5,23 @@
 ## [Unreleased]
 ### Changed
 
+- **灵感组件保持原始位置，AI agent 对话保持右侧边栏形式（issue #293）**：
+  issue #184 曾把概览页改为双栏布局——灵感板块移入右侧常驻边栏、AI 对话改为
+  右侧抽屉；本次按 issue #293 要求回退布局——「灵感组件还是和原来一样，放在
+  开放 issue 组件的下方」，仅保留 AI 对话的右侧边栏抽屉形式——
+  - `frontend/src/pages/Overview.jsx`：移除双栏布局容器（`overview-layout` /
+    `overview-main` / `overview-sidebar`），灵感板块（`inspirations-section`）
+    从右侧常驻边栏移回主流程，位于「开放 Issue」板块（`issues-section`）与
+    「CI/CD 流水线」板块（`pipelines-section`）之间；灵感 AI 对话面板保持
+    右侧边栏抽屉（`drawer chat-drawer`）不变；
+  - `frontend/src/styles.css`：删除 `.overview-layout` / `.overview-main` /
+    `.overview-sidebar` 双栏布局样式（含 ≥1180px 双栏断点与边栏吸附），
+    灵感板块样式恢复全宽板块（位于开放 Issue 与 CI/CD 流水线之间）；
+  - **测试**：更新 `overview-inspirations.test.mjs` 布局断言（源码与渲染均
+    断言灵感板块位于开放 Issue 与 CI/CD 流水线之间、不再有双栏容器与右侧
+    边栏）与 `overview-issue-task.test.mjs` 板块顺序断言（开放 Issue →
+    灵感 → CI/CD 流水线 → Issue 完成耗时），全量前端测试通过，无 regression。
+
 - **概览页仓库卡片新增「自省」按钮：调用 AI agent 审查项目并写入改进建议 issue（issue #187）**：
   需求——概览页仓库的右边增加一个「自省」按钮，点击后调用 agent 审查项目的功能和实现情况，
   对项目的改进提出建议，并把建议写到对应仓库的 issue 里，分配人选择仓库的 owner——

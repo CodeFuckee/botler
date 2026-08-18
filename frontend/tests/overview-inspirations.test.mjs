@@ -1,17 +1,20 @@
-// 概览页「灵感」板块测试（issue #131/#184）：issue #184 起灵感板块
-// 移入概览页右侧常驻边栏（overview-sidebar，aside），AI 对话面板由
-// 居中 modal 改为右侧边栏抽屉（drawer-overlay + drawer chat-drawer）；
-// 灵感仅保存在 Botler 本地数据库（/api/inspirations/*），不提交到
-// GitLab issue。
+// 概览页「灵感」板块测试（issue #131/#293）：灵感组件保持原始位置——
+// 位于「开放 Issue」板块下方、CI/CD 流水线上方（issue #293 明确
+// 「灵感组件还是和原来一样，放在开放issue组建的下方」；issue #184
+// 曾把灵感板块整体移入右侧常驻边栏，本次回退该布局调整）；灵感 AI
+// 对话面板保持右侧边栏抽屉形式（drawer-overlay + drawer chat-drawer，
+// issue #166/#184）；灵感仅保存在 Botler 本地数据库
+// （/api/inspirations/*），不提交到 GitLab issue。
 //
 // 断言：
 // 1. 源码：Overview.jsx 轮询 GET /api/inspirations/overview，增删改分别
-//    调用 POST / PUT / DELETE /api/inspirations；双栏布局
-//    overview-main（左列：开放 Issue / CI/CD 流水线 / Issue 完成耗时）
-//    + overview-sidebar（右侧边栏：灵感板块）；对话面板为右侧抽屉；
+//    调用 POST / PUT / DELETE /api/inspirations；单列布局——灵感板块
+//    （inspirations-section）位于开放 Issue（issues-section）与 CI/CD
+//    流水线（pipelines-section）之间，无 overview-layout / overview-main
+//    / overview-sidebar 双栏标记；对话面板为右侧抽屉；
 // 2. 渲染：仓库卡片显示灵感内容/条数/更新时间，无灵感仓库显示空状态
 //    + 随手记录表单，未启用仓库显示「未启用」徽章，空仓库列表显示
-//    板块空状态；灵感板块标题与内容位于右侧边栏内；
+//    板块空状态；板块渲染顺序为 开放 Issue → 灵感 → CI/CD 流水线；
 // 3. 交互：输入内容提交 → POST /api/inspirations 并刷新列表；编辑 →
 //    文本域回填、保存调 PUT、取消退出编辑态；删除 → DELETE 并刷新；
 // 4. 边界：空白内容不发请求；接口失败显示错误且不崩溃。
@@ -80,21 +83,21 @@ test('源码：增删改分别调用 POST / PUT / DELETE /api/inspirations', () 
                '删除应调用 DELETE /api/inspirations/{id}')
 })
 
-test('源码：灵感板块在右侧边栏（overview-sidebar）内，主板块在左列（overview-main）（issue #184）', () => {
-  const main = overview.indexOf('className="overview-main"')
-  const sidebar = overview.indexOf('className="overview-sidebar"')
+test('源码：灵感板块位于开放 Issue 下方、CI/CD 流水线上方，无右侧边栏（issue #293）', () => {
   const insp = overview.indexOf('className="inspirations-section"')
   const issues = overview.indexOf('className="issues-section"')
   const pipes = overview.indexOf('className="pipelines-section"')
   const completion = overview.indexOf('className="completion-stats-section"')
-  assert.ok(main >= 0 && sidebar >= 0, '双栏布局标记都应存在')
   assert.ok(insp >= 0 && issues >= 0 && pipes >= 0 && completion >= 0,
             '四个板块标记都应存在')
-  assert.ok(main < sidebar, 'overview-main 应位于 overview-sidebar 之前（DOM：左列在前、边栏在后）')
-  assert.ok(issues > main && issues < sidebar, '开放 Issue 板块应位于 overview-main 内')
-  assert.ok(pipes > main && pipes < sidebar, 'CI/CD 流水线板块应位于 overview-main 内')
-  assert.ok(completion > main && completion < sidebar, 'Issue 完成耗时板块应位于 overview-main 内')
-  assert.ok(insp > sidebar, '灵感板块应位于 overview-sidebar 内（右侧边栏）')
+  assert.ok(issues < insp && insp < pipes,
+            '灵感板块应位于开放 Issue 板块（issues-section）与 CI/CD 流水线板块（pipelines-section）之间（开放 Issue 下方）')
+  assert.ok(!overview.includes('className="overview-sidebar"'),
+            '不应再有右侧常驻边栏（overview-sidebar）——灵感组件保持原始位置')
+  assert.ok(!overview.includes('className="overview-layout"'),
+            '不应再有双栏布局容器（overview-layout）')
+  assert.ok(!overview.includes('className="overview-main"'),
+            '不应再有左列容器（overview-main）')
 })
 
 // ---- 渲染辅助 ----
@@ -209,20 +212,23 @@ function findEditButton(renderer) {
 
 // ---- 渲染级断言 ----
 
-test('渲染：灵感板块渲染在右侧边栏（overview-sidebar）内，主内容在左列（issue #184）', async () => {
+test('渲染：灵感板块位于开放 Issue 下方、CI/CD 流水线上方（issue #293）', async () => {
   const r = await renderOverview()
   try {
     assert.equal(r.renderError, null, `渲染抛错：${r.renderError?.message || r.renderError}`)
-    const mains = findByClass(r.renderer, 'overview-main')
     const sidebars = findByClass(r.renderer, 'overview-sidebar')
-    assert.equal(mains.length, 1, '应渲染一个 overview-main 左列')
-    assert.equal(sidebars.length, 1, '应渲染一个 overview-sidebar 右侧边栏')
-    const mainText = textOf(mains[0].props.children)
-    const sidebarText = textOf(sidebars[0].props.children)
-    assert.ok(mainText.includes('开放 Issue'), '左列应包含「开放 Issue」板块')
-    assert.ok(mainText.includes('CI/CD 流水线'), '左列应包含「CI/CD 流水线」板块')
-    assert.ok(sidebarText.includes('灵感'), '右侧边栏应包含「灵感」板块标题')
-    assert.ok(sidebarText.includes('支持批量处理 issue'), '右侧边栏应渲染灵感内容')
+    assert.equal(sidebars.length, 0, '不应渲染右侧常驻边栏（overview-sidebar）')
+    const mains = findByClass(r.renderer, 'overview-main')
+    assert.equal(mains.length, 0, '不应渲染左列容器（overview-main）')
+    const text = treeText(r.renderer)
+    const issueTitle = text.indexOf('开放 Issue')
+    const inspTitle = text.indexOf('灵感')
+    const pipeTitle = text.indexOf('CI/CD 流水线')
+    assert.ok(issueTitle >= 0 && inspTitle >= 0 && pipeTitle >= 0,
+              '三个板块标题都应渲染')
+    assert.ok(issueTitle < inspTitle, '「开放 Issue」板块应位于「灵感」板块之前')
+    assert.ok(inspTitle < pipeTitle, '「灵感」板块应位于「CI/CD 流水线」板块之前')
+    assert.ok(text.includes('支持批量处理 issue'), '应渲染灵感内容')
     // 轮询到了灵感接口
     assert.ok(r.getCalls.includes('/api/inspirations/overview'),
               '应轮询 /api/inspirations/overview')

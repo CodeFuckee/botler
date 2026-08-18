@@ -2310,40 +2310,10 @@ code {
   color: var(--muted);
 }
 
-/* ---- 概览页双栏布局（issue #184）：灵感板块移入右侧常驻边栏，
-   主内容（DeepSeek 余额 / 开放 Issue / CI/CD 流水线 / Issue 完成耗时）
-   在左列。宽屏（≥1180px）双栏，右侧边栏 360px 并随页面滚动吸附顶部；
-   窄视口单列堆叠，边栏在主内容下方 ---- */
-.overview-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-5);
-  align-items: start;
-}
-.overview-main {
-  min-width: 0;
-}
-.overview-sidebar {
-  min-width: 0;
-}
-@media (min-width: 1180px) {
-  .overview-layout {
-    grid-template-columns: minmax(0, 1fr) 360px;
-  }
-  .overview-sidebar {
-    /* apple-design：长页面下边栏随滚动吸附顶部，灵感/对话入口始终可达 */
-    position: sticky;
-    top: var(--space-4);
-  }
-  /* 双栏时边栏头部与左列首板块对齐（间距由 grid gap 承担） */
-  .overview-sidebar .inspirations-section {
-    margin-top: 0;
-  }
-}
-
-/* ---- 概览页灵感板块（issue #131/#184）：位于概览页右侧常驻边栏
-   （overview-sidebar）内，每仓库一张卡，沿用开放 issue 板块的卡片/
-   网格/空状态视觉语言；窄视口单列堆叠在主内容下方 ---- */
+/* ---- 概览页灵感板块（issue #131/#293）：位于开放 Issue 与 CI/CD
+   流水线之间（issue #293：灵感组件还是和原来一样，放在开放 issue 组件的
+   下方；issue #184 曾改为右侧常驻边栏，本次回退）。每仓库一张卡，沿用
+   开放 issue 板块的卡片/网格/空状态视觉语言 ---- */
 .inspirations-section {
   margin-top: var(--space-5);
 }

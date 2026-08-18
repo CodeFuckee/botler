@@ -552,11 +552,9 @@ export default function Overview() {
     <div>
       <h1>概览</h1>
 
-      {/* issue #184：概览页双栏布局——主内容（DeepSeek 余额 / 开放 Issue /
-          CI/CD 流水线 / Issue 完成耗时）在左列，灵感板块移入右侧常驻边栏；
-          AI 对话面板以右侧抽屉打开（见下方 issue #166 区块） */}
-      <div className="overview-layout">
-        <div className="overview-main">
+      {/* issue #293：灵感组件保持原始位置——位于「开放 Issue」板块下方、
+          CI/CD 流水线上方（灵感组件还是和原来一样，放在开放 issue 组件
+          的下方）；AI 对话面板以右侧抽屉打开（见下方 issue #166 区块） */}
 
           {/* issue #138：DeepSeek 账户余额——设置里配置了 deepseek api 时
               在概览页展示（未配置时整卡不渲染，页面保持简洁）。数据由后端
@@ -624,7 +622,8 @@ export default function Overview() {
           )}
 
           {/* issue #68：板块排序调整——开放 Issue 置于页面顶部，
-              其后为 CI/CD 流水线。
+              其后为灵感板块（issue #293：灵感组件放在开放 issue 组件的
+              下方）、再后为 CI/CD 流水线。
               issue #114：独立任务板块删除，正在运行任务的信息（状态徽章
               / 引擎 / 实时输出）整合进本板块 running 组的 issue 项内，
               任务轮询错误一并在此展示 */}
@@ -844,113 +843,11 @@ export default function Overview() {
             )}
           </section>
 
-          {/* issue #114：独立任务板块已删除——正在运行任务的信息（状态徽章
-              / 执行引擎 / 实时输出）整合进上方开放 Issue 板块 running 组的
-              issue 项内，任务轮询与 SSE 数据流保持不变 */}
-          <section className="pipelines-section">
-            <h2>CI/CD 流水线</h2>
-            <p className="muted">所有配置仓库的最新流水线（每 {PIPELINE_POLL_MS / 1000} 秒自动刷新）</p>
-            {pipeError && (
-              <div className="alert alert-error" onClick={() => setPipeError('')}>{pipeError}</div>
-            )}
-            {pipeErrors.length > 0 && (
-              <div className="alert alert-error">
-                {pipeErrors.map((e, i) => <div key={i}>{e}</div>)}
-              </div>
-            )}
-            {pipelines.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon" aria-hidden="true"><Icon name="rocket" /></span>
-                <p className="muted">暂无流水线</p>
-              </div>
-            ) : (
-              <div className="pipelines-list">
-                {pipelines.map((p) => {
-                  const pl = p.pipeline
-                  const meta = pl
-                    ? (PIPELINE_STATUS_META[pl.status] || { label: pl.status, cls: '' })
-                    : null
-                  return (
-                    <div key={p.repo_id} className="card pipeline-card">
-                      <div className="pipeline-head">
-                        <span className="pipeline-repo" title="仓库"><Icon name="folder" /> {p.repo_name || '（已删除）'}</span>
-                        {p.enabled === false && (
-                          <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
-                        )}
-                        {meta ? (
-                          <span className={'badge ' + meta.cls}>{meta.label}</span>
-                        ) : (
-                          <span className="muted">暂无流水线</span>
-                        )}
-                      </div>
-                      {pl && (
-                        <a className="pipeline-link" href={pl.web_url} target="_blank"
-                           rel="noreferrer" title="在 GitLab 中打开流水线">
-                          <span className="pipeline-ref" title={`分支 ${pl.ref} · 提交 ${pl.sha}`}>
-                            {pl.ref} · {shortSha(pl.sha)}
-                          </span>
-                          {/* 最近流水线对应提交的提交时间 + 距今多久（issue #43） */}
-                          {p.commit_time && (
-                            <span className="pipeline-commit-time">
-                              {fmtTime(p.commit_time)}（{fmtAgo(p.commit_time) || '—'}）
-                            </span>
-                          )}
-                          <div className="pipeline-stages">
-                            {(p.stages || []).map((s, i) => (
-                              <span key={i}
-                                    className={`pipeline-stage ${stageClass(s.status)}`}
-                                    title={`${s.name}: ${s.status}`}>
-                                <span className="pipeline-stage-name">{s.name}</span>
-                                <span className="pipeline-stage-dot" />
-                              </span>
-                            ))}
-                          </div>
-                        </a>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </section>
-
-          {/* issue #180：Issue 完成耗时——平均每个 issue 完成所需的时间
-              （成功任务的处理用时：系统接收时间 → bot-done 打标时间，与任务
-              详情「处理用时」issue #49 语义一致）与逐日平均走势图，置于
-              概览页最下方。数据来自本地 tasks 表成功终态任务
-              （GET /api/issues/completion-stats），无 GitLab 请求压力 */}
-          <section className="completion-stats-section">
-            <h2>Issue 完成耗时</h2>
-            <p className="muted">平均每个 issue 完成所需时间（处理用时：系统接收 → bot-done 打标）与逐日走势（每 {COMPLETION_STATS_POLL_MS / 1000} 秒自动刷新）</p>
-            {completionStatsError && (
-              <div className="alert alert-error" onClick={() => setCompletionStatsError('')}>{completionStatsError}</div>
-            )}
-            {completionStats && completionStats.completed_count === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon" aria-hidden="true"><Icon name="hourglass" /></span>
-                <p className="muted">暂无已完成 issue</p>
-              </div>
-            ) : completionStats ? (
-              <>
-                <div className="completion-stats-summary">
-                  <span className="completion-stats-value"
-                        title="全部已完成 issue 的平均完成耗时">
-                    {fmtSeconds(completionStats.avg_seconds) || <span className="muted">—</span>}
-                  </span>
-                  <span className="muted">平均完成耗时（{completionStats.completed_count} 个已完成 issue）</span>
-                </div>
-                <CompletionTrendChart trend={completionStats.trend} />
-              </>
-            ) : null}
-          </section>
-        </div>
-
-        <aside className="overview-sidebar" aria-label="灵感与 AI 对话">
-          {/* issue #131/#184：灵感板块——概览页右侧常驻边栏（issue #184
-              由全宽板块改为右侧边栏）：按仓库随手记录关于对应仓库的新功能
-              灵感，仅保存在 Botler 本地数据库，不提交到 GitLab issue。
-              每个仓库一张卡：灵感列表（编辑/删除/对话）+ 底部随手记录表单；
-              窄视口单列堆叠在主内容下方 */}
+          {/* issue #131/#293：灵感板块——位于开放 Issue 下方、CI/CD
+              流水线上方（issue #293：灵感组件还是和原来一样，放在开放
+              issue 组件的下方）：按仓库随手记录关于对应仓库的新功能灵感，
+              仅保存在 Botler 本地数据库，不提交到 GitLab issue。每个仓库
+              一张卡：灵感列表（编辑/删除/对话）+ 底部随手记录表单 */}
           <section className="inspirations-section">
             <h2><Icon name="lightbulb" /> 灵感</h2>
             <p className="muted">按仓库随手记录新功能灵感，仅保存在本地数据库；可一键将灵感提交为 GitLab issue（默认标签 feature、ui；每 {INSPIRATION_POLL_MS / 1000} 秒自动刷新）</p>
@@ -1060,8 +957,106 @@ export default function Overview() {
               </div>
             )}
           </section>
-        </aside>
-      </div>
+
+          {/* issue #114：独立任务板块已删除——正在运行任务的信息（状态徽章
+              / 执行引擎 / 实时输出）整合进上方开放 Issue 板块 running 组的
+              issue 项内，任务轮询与 SSE 数据流保持不变 */}
+          <section className="pipelines-section">
+            <h2>CI/CD 流水线</h2>
+            <p className="muted">所有配置仓库的最新流水线（每 {PIPELINE_POLL_MS / 1000} 秒自动刷新）</p>
+            {pipeError && (
+              <div className="alert alert-error" onClick={() => setPipeError('')}>{pipeError}</div>
+            )}
+            {pipeErrors.length > 0 && (
+              <div className="alert alert-error">
+                {pipeErrors.map((e, i) => <div key={i}>{e}</div>)}
+              </div>
+            )}
+            {pipelines.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true"><Icon name="rocket" /></span>
+                <p className="muted">暂无流水线</p>
+              </div>
+            ) : (
+              <div className="pipelines-list">
+                {pipelines.map((p) => {
+                  const pl = p.pipeline
+                  const meta = pl
+                    ? (PIPELINE_STATUS_META[pl.status] || { label: pl.status, cls: '' })
+                    : null
+                  return (
+                    <div key={p.repo_id} className="card pipeline-card">
+                      <div className="pipeline-head">
+                        <span className="pipeline-repo" title="仓库"><Icon name="folder" /> {p.repo_name || '（已删除）'}</span>
+                        {p.enabled === false && (
+                          <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
+                        )}
+                        {meta ? (
+                          <span className={'badge ' + meta.cls}>{meta.label}</span>
+                        ) : (
+                          <span className="muted">暂无流水线</span>
+                        )}
+                      </div>
+                      {pl && (
+                        <a className="pipeline-link" href={pl.web_url} target="_blank"
+                           rel="noreferrer" title="在 GitLab 中打开流水线">
+                          <span className="pipeline-ref" title={`分支 ${pl.ref} · 提交 ${pl.sha}`}>
+                            {pl.ref} · {shortSha(pl.sha)}
+                          </span>
+                          {/* 最近流水线对应提交的提交时间 + 距今多久（issue #43） */}
+                          {p.commit_time && (
+                            <span className="pipeline-commit-time">
+                              {fmtTime(p.commit_time)}（{fmtAgo(p.commit_time) || '—'}）
+                            </span>
+                          )}
+                          <div className="pipeline-stages">
+                            {(p.stages || []).map((s, i) => (
+                              <span key={i}
+                                    className={`pipeline-stage ${stageClass(s.status)}`}
+                                    title={`${s.name}: ${s.status}`}>
+                                <span className="pipeline-stage-name">{s.name}</span>
+                                <span className="pipeline-stage-dot" />
+                              </span>
+                            ))}
+                          </div>
+                        </a>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* issue #180：Issue 完成耗时——平均每个 issue 完成所需的时间
+              （成功任务的处理用时：系统接收时间 → bot-done 打标时间，与任务
+              详情「处理用时」issue #49 语义一致）与逐日平均走势图，置于
+              概览页最下方。数据来自本地 tasks 表成功终态任务
+              （GET /api/issues/completion-stats），无 GitLab 请求压力 */}
+          <section className="completion-stats-section">
+            <h2>Issue 完成耗时</h2>
+            <p className="muted">平均每个 issue 完成所需时间（处理用时：系统接收 → bot-done 打标）与逐日走势（每 {COMPLETION_STATS_POLL_MS / 1000} 秒自动刷新）</p>
+            {completionStatsError && (
+              <div className="alert alert-error" onClick={() => setCompletionStatsError('')}>{completionStatsError}</div>
+            )}
+            {completionStats && completionStats.completed_count === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true"><Icon name="hourglass" /></span>
+                <p className="muted">暂无已完成 issue</p>
+              </div>
+            ) : completionStats ? (
+              <>
+                <div className="completion-stats-summary">
+                  <span className="completion-stats-value"
+                        title="全部已完成 issue 的平均完成耗时">
+                    {fmtSeconds(completionStats.avg_seconds) || <span className="muted">—</span>}
+                  </span>
+                  <span className="muted">平均完成耗时（{completionStats.completed_count} 个已完成 issue）</span>
+                </div>
+                <CompletionTrendChart trend={completionStats.trend} />
+              </>
+            ) : null}
+          </section>
 
       {/* issue #166/#184：灵感 AI 对话——与 AI agent 探讨当前灵感。
           右侧边栏抽屉形式（issue #184），复用 .drawer 右侧抽屉体系
