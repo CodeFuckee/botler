@@ -5,6 +5,31 @@
 ## [Unreleased]
 ### Changed
 
+- **概览页仓库卡片新增「自省」按钮：调用 AI agent 审查项目并写入改进建议 issue（issue #187）**：
+  需求——概览页仓库的右边增加一个「自省」按钮，点击后调用 agent 审查项目的功能和实现情况，
+  对项目的改进提出建议，并把建议写到对应仓库的 issue 里，分配人选择仓库的 owner——
+  - `backend/botler/api/introspection.py`（新增）：`POST /api/repos/{repo_id}/introspect`
+    同步执行审查——校验仓库（不存在 404 / 软删除与未启用 400）→ 收集项目上下文（本地
+    项目文件夹优先：文件树 + README + 关键清单文件，深度/条目/长度封顶；无本地文件夹时
+    回退 GitLab 仓库 API 的文件树 + README，收集失败仅记日志不阻塞）→ 调用 AI 对话模型
+    （复用设置页「AI API 供应商」第一个启用且 Key 非空的项，与灵感对话 issue #166 同一
+    链路，超时 120s）生成审查报告 → 在仓库创建 issue（标题带【自省】前缀与时间戳、描述
+    为审查报告、标签 `optimize`、分配人 = 仓库 owner：GitLab 项目 owner 优先、仓库 remote
+    用户名兜底、解析失败不指定分配人不阻塞）→ 清空概览缓存；写 issue 走 owner token
+    （`_issue_edit_call`，与概览页其他 issue 编辑一致，未配置返回 400 引导设置）；
+    标题超长按 GitLab 255 字符硬上限截断（复用 issue #186 规则）；
+  - `frontend/src/pages/Overview.jsx`：开放 Issue 板块仓库卡片右上角操作组新增「自省」
+    按钮（与「对账」「添加 Issue」并排），点击调 `POST /api/repos/{repo_id}/introspect`，
+    请求中禁用并显示「自省中…」防重复点击；成功后刷新开放 issue 列表并展示「已创建自省
+    issue」+ GitLab 跳转链接，失败展示后端错误信息；
+  - `frontend/src/styles.css`：新增 `.introspect-btn` / `.introspect-result` 样式
+    （与对账按钮/结果同一视觉层级）；
+  - **测试**：新增 `backend/tests/test_api_introspection.py` 17 例（正常路径本地上下文 /
+    GitLab 上下文兜底 / 上下文失败降级 / 分配人四种解析路径 / 标题 255 上限 / 缓存失效 /
+    AI 失败与空回复 502 / 创建失败 502 / 未配置 AI 模型与 owner token 400 等）与
+    `frontend/tests/overview-introspect.test.mjs` 7 例（渲染 / 点击参数 / 请求中禁用 /
+    成功刷新与跳转链接 / 失败提示），前后端全量测试通过，无 regression。
+
 - **概览页「灵感」板块与 AI agent 对话改为右侧边栏形式（issue #184）**：此前灵感
   板块是横贯全宽的网格、AI 对话是居中弹窗——长页面上灵感要上下滚动寻找，对话弹窗
   还会遮挡整页内容；本次将概览页改为双栏布局，灵感组件与 AI 对话都以「右侧边栏」

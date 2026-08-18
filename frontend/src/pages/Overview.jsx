@@ -204,6 +204,9 @@ export default function Overview() {
   const [addIssueRepo, setAddIssueRepo] = useState(null)
   // 对账结果: repoId -> {loading/scanned/enqueued/note/error}（issue #134）
   const [reconcileResults, setReconcileResults] = useState({})
+  // 自省结果（issue #187）: repoId -> {loading/created/error}——点击
+  // 「自省」按钮调用 agent 审查仓库并把建议写入该仓库 issue 的结果
+  const [introspectResults, setIntrospectResults] = useState({})
   // 灵感（issue #131）：概览页「灵感」板块——按仓库随手记录新功能灵感，
   // 仅保存在 Botler 本地数据库，不提交到 GitLab issue
   const [inspirationRepos, setInspirationRepos] = useState([])
@@ -521,6 +524,21 @@ export default function Overview() {
     }
   }, [])
 
+  // 自省（issue #187）：调用后端同步审查接口——AI agent 审查该仓库的
+  // 功能与实现情况，把改进建议写入该仓库的 issue（分配人 = 仓库 owner）。
+  // 审查 + 建 issue 为同步请求（最长约 2 分钟），请求中禁用按钮防重复
+  // 点击；成功后刷新开放 issue 列表（新 issue 立即出现在列表顶部）。
+  const introspectRepo = useCallback(async (repo) => {
+    setIntrospectResults((prev) => ({ ...prev, [repo.repo_id]: { loading: true } }))
+    try {
+      const res = await api.post(`/api/repos/${repo.repo_id}/introspect`)
+      setIntrospectResults((prev) => ({ ...prev, [repo.repo_id]: { created: res.issue } }))
+      await loadIssues()
+    } catch (e) {
+      setIntrospectResults((prev) => ({ ...prev, [repo.repo_id]: { error: e.message } }))
+    }
+  }, [loadIssues])
+
   // 各任务信息块实时输出自动滚动到底部（issue #114：任务板块删除后
   // 任务块迁入开放 issue 列表项内；SSR 测试环境无 document 时跳过）
   useEffect(() => {
@@ -650,6 +668,16 @@ export default function Overview() {
                       {/* issue #134：卡片右上角操作组——「对账」按钮 + issue #92
                           「添加 Issue」按钮，整体推到卡片头最右侧 */}
                       <div className="issue-repo-actions">
+                        {/* issue #187：卡片右上角「自省」按钮——调用 AI
+                            agent 审查仓库功能与实现，把改进建议写入该仓库
+                            issue（分配人 = 仓库 owner）。请求中禁用防重复
+                            点击，与「对账」按钮同风格 */}
+                        <button type="button" className="btn btn-small introspect-btn"
+                                onClick={() => introspectRepo(r)}
+                                disabled={introspectResults[r.repo_id]?.loading}
+                                title="调用 AI agent 审查该仓库的功能与实现情况，并把改进建议写入该仓库的 issue（分配人 = 仓库 owner）">
+                          {introspectResults[r.repo_id]?.loading ? <><Icon name="refresh" /> 自省中…</> : <><Icon name="search" /> 自省</>}
+                        </button>
                         <button type="button" className="btn btn-small reconcile-btn"
                                 onClick={() => reconcileRepo(r)}
                                 disabled={reconcileResults[r.repo_id]?.loading}
@@ -666,6 +694,9 @@ export default function Overview() {
                     {/* issue #134：对账结果——与仓库页对账结果一致，小字展示
                         扫描/补入队结果，请求失败显示错误 */}
                     {reconcileResults[r.repo_id] && <ReconcileResult result={reconcileResults[r.repo_id]} />}
+                    {/* issue #187：自省结果——AI 审查进行中 / 已创建自省
+                        issue（带跳转链接）/ 失败原因 */}
+                    {introspectResults[r.repo_id] && <IntrospectResult result={introspectResults[r.repo_id]} />}
                     {(r.issues || []).length === 0 ? (
                       <div className="empty-state small">
                         <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
@@ -1134,6 +1165,25 @@ function ReconcileResult({ result }) {
       {result.scanned > 0 && <span className="muted">扫描 {result.scanned} 个 issue</span>}
     </div>
   )
+}
+
+// 自省结果（issue #187）：AI 审查进行中显示加载提示；成功显示已创建的
+// 自省 issue 链接（点击跳转 GitLab）；失败显示后端错误信息
+function IntrospectResult({ result }) {
+  if (result.error) return <div className="alert alert-error small introspect-result">{result.error}</div>
+  if (result.loading) return <div className="small muted introspect-result"><Icon name="refresh" /> AI 审查中，请稍候…</div>
+  if (result.created?.web_url) {
+    return (
+      <div className="small introspect-result">
+        <span className="test-chip ok"><Icon name="check" /> 已创建自省 issue</span>{' '}
+        <a href={result.created.web_url} target="_blank" rel="noreferrer"
+           title="在 GitLab 中打开自省 issue">
+          #{result.created.iid} <Icon name="externalLink" />
+        </a>
+      </div>
+    )
+  }
+  return null
 }
 
 // 走势图（issue #180）：轻量 SVG 折线图，无第三方图表库依赖——

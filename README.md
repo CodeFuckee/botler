@@ -74,6 +74,7 @@ backend/
     vision_models.py 识图模型调用接口封装（Gemini 视觉 / OpenAI 视觉 / 自定义 OpenAI 兼容视觉，统一 VisionModelClient，issue #152，含测试端点：上传图片调用模型描述图片；issue #163 起支持图片先哈希上传 MinIO、识图请求传 http URL；issue #164 起 OpenAI 兼容识图模型禁止 base64 内联，未启用 MinIO 时明确报错引导）
     minio_client.py  MinIO 对象存储客户端（issue #163：识图图片 SHA-256 哈希命名上传，返回 http URL，配合 vision_models 使用；issue #164：默认桶 public、不存在自动创建并自动设为公开只读）
     chat_models.py   灵感 AI 对话模型调用封装（issue #166：复用设置页「AI API 供应商」配置，支持 OpenAI 兼容 chat/completions / Gemini generateContent / Anthropic messages 三种协议，统一 ChatModelClient）
+    api/introspection.py 概览页「自省」API（issue #187）：POST /api/repos/{id}/introspect——收集项目上下文（文件树/README/清单文件）→ 调 AI 对话模型审查 → 把改进建议写入该仓库 issue（分配人 = 仓库 owner）
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
     api/             REST API（repos / tasks / settings / auth）
   config.example.yaml
@@ -424,6 +425,7 @@ PUT    /api/repos/{id}                更新仓库（名称/启用/优先级/模
 DELETE /api/repos/{id}                删除仓库
 POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook）
 POST   /api/repos/{id}/reconcile     立即扫描该仓库，把「assignee 是 bot 但任务表无活跃记录」的 open issues 补入队列（仓库页与概览页「对账」按钮，issue #17/#134）
+POST   /api/repos/{id}/introspect   概览页仓库卡片「自省」按钮（issue #187）：调用 AI agent 审查该仓库的功能与实现情况（本地文件夹/工作区收集文件树+README+清单文件，无本地文件夹时 GitLab 仓库 API 兜底），把改进建议写入该仓库 issue（标题带【自省】前缀、标签 optimize、分配人 = 仓库 owner；写 issue 走 owner token）
 POST   /api/repos/{id}/remote-user   读取仓库 remote url 获取仓库用户（remote url userinfo 用户名，如 https://user:token@host/... 的 user；读取顺序：local_path 的 git remote → workspace 克隆 → 存储 url；结果落库并作为灵感「添加 Issue」的默认分配人，issue #153）
 GET/PUT /api/repos/{id}/template      仓库模版
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）

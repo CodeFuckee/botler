@@ -1993,6 +1993,23 @@ code {
 .reconcile-result {
   margin-bottom: var(--space-2);
 }
+/* issue #187：仓库卡片右上角「自省」按钮——调用 AI agent 审查仓库并把
+   改进建议写入该仓库 issue；与对账/添加按钮同风格防文字换行 */
+.introspect-btn {
+  white-space: nowrap;
+}
+/* issue #187：自省结果小字提示——加载中/成功链接/失败原因，与对账结果
+   同一视觉层级（卡片头下方与 issue 分组之间留间距） */
+.introspect-result {
+  margin-bottom: var(--space-2);
+}
+.introspect-result a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.introspect-result a:hover {
+  text-decoration: underline;
+}
 /* issue #92：添加 issue 弹窗——字段竖排（与 .repo-edit 一致），
    标签多选横向流式排布 */
 .add-issue .edit-field {
