@@ -5,6 +5,42 @@
 ## [Unreleased]
 ### Added
 
+- **自动发版机制：中间版本号 +1 时发布新版本并重置 CHANGELOG（issue #294）**：
+  新增发版脚本并集成到 CI/CD，每次 main 分支 push 流水线成功后自动检测
+  「中间版本号（minor）进位」触发发版——构建版本号由
+  `frontend/scripts/gen-version.mjs` 每次构建自增 patch 位（逢百进位，
+  issue #179/#283），当 patch 从 99 进位到 minor（如 1.3.99 → 1.4.0）或
+  尚无任何版本 tag（首次发版）时，执行发版：
+  - `backend/botler/release.py`：发版判定与执行核心——`parse_version`
+    严格解析 x.y.z；`latest_released_version` 从 git tag（v 前缀 +
+    语义版本）识别最近发布版本；`should_release` 判定触发条件（无 tag
+    首次发版 / 当前 minor > 最近发布 minor 触发，patch 自增跳过、版本
+    倒退报错）；`run_release` 编排发版——复用 issue #289 的
+    `release_changelog()` 把 [Unreleased] 封版为版本节 `## [x.y.z] - 日期`
+    并重置 [Unreleased]、归档超龄版本，随后提交 CHANGELOG 变更
+    （`chore: 发布 vX.Y.Z 并重置 CHANGELOG（issue #294）`，全角括号引用
+    不触发 autoclose）、打 git tag `vX.Y.Z` 标记里程碑、推送主分支 + tag；
+    支持 `--dry-run` 预览（不写盘/不提交/不打 tag）、`--no-push` 本地演练、
+    `--force` 强制发版；
+  - `scripts/release.py`：发版 CLI 入口——版本号缺省按
+    `--version-json`（CI 用 frontend:build 产物 `frontend/dist/version.json`）
+    > `--version-file`（默认 `<仓库>/data/version.txt`）顺序读取；
+    `--push-url` 推送地址（CI 用 `GITLAB_BOT_TOKEN` 构造），缺少推送凭据
+    时报错中止而非静默跳过；
+  - `.gitlab-ci.yml`：新增 `release` stage（sync 之后）与 `release:auto`
+    job——仅 main 分支 push 且含代码变更的流水线执行（docs-only 提交 /
+    tag / MR / 其他分支流水线跳过），stage 顺序保证 deploy 成功后才发版，
+    只下载 frontend:build 的 dist 产物读取本次构建版本，发版提交仅改
+    CHANGELOG/归档文档 → 触发 docs-only 流水线自动跳过构建（避免循环）；
+  - **测试**：新增 `backend/tests/test_release.py` 23 例（版本解析合法/
+    非法、最近发布版本识别（最高语义版本/前缀过滤/无匹配）、触发判定
+    （首次发版/minor 进位触发、patch 自增跳过、major 进位触发、版本倒退
+    与非法格式报错）、版本来源读取优先级与容错、run_release 全流程
+    （封版重置打 tag 提交/tag 指向发版提交/提交信息规范）、dry-run 不改
+    动任何文件、force 强制发版、缺少推送凭据报错、版本缺失报错）；
+    后端全量测试无 regression。
+
+
 - **概览页「Issue 完成耗时」增加每个开启仓库的平均耗时与走势（issue #288）**：
   概览页「Issue 完成耗时」板块（issue #180）在原有全局平均耗时 + 逐日走势图
   基础上，新增**每个已开启仓库**的平均耗时与走势拆分展示：

@@ -236,6 +236,39 @@ python3 scripts/release_changelog.py --dry-run
 > 约定：版本号与 `data/version.txt` 对齐（构建时 `frontend/scripts/gen-version.mjs`
 > 每次构建自增 patch 位，发布取该版本即可）。发版后可打 Git tag 标记里程碑。
 
+### 自动发版机制（issue #294）
+
+版本号每次构建自增 patch 位（`gen-version.mjs` 逢百进位：1.3.99 → 1.4.0），
+**中间版本号（minor）+1 时自动发布新版本并重置 CHANGELOG**——这是发版时机，
+不是每次构建都发版（patch 自增不发版）。CI/CD（`.gitlab-ci.yml` 的
+`release:auto` job，`release` stage）在每次 main 分支 push 流水线**全部成功后**
+自动检测触发条件并执行发版：
+
+- **触发条件**（`backend/botler/release.py` `should_release`）：
+  - 尚无任何版本 tag → **首次发版**，发布当前版本；
+  - 当前版本 minor > 最近发布版本 minor → 发版（1.3.99 → 1.4.0 发布 v1.4.0）；
+  - 仅 patch 自增（1.3.61 → 1.3.62）→ 跳过，发版保留到下次 minor 进位；
+  - 版本号倒退 / 非法格式 → 报错中止（不误发版）。
+- **发版动作**：复用 issue #289 轮转机制封版 `[Unreleased]` → 版本节并重置、
+  归档超龄版本；提交 CHANGELOG 变更（`chore: 发布 vX.Y.Z 并重置 CHANGELOG（issue #294）`）；
+  打 git tag `vX.Y.Z` 标记里程碑；推送主分支 + tag。
+- **手动发版 / 演练**：
+
+```bash
+# 预览（只判定，不写盘不打 tag）
+python3 scripts/release.py --dry-run
+
+# 本地发版（封版 + 提交 + 打 tag，不推送）
+python3 scripts/release.py --no-push
+
+# 强制发版（跳过触发条件，版本校验仍生效）
+python3 scripts/release.py --force --no-push
+```
+
+> CI 发版读 `frontend/dist/version.json`（frontend:build 构建产物，与部署
+> 版本一致）；本地缺省读 `data/version.txt`。发版提交仅改 CHANGELOG/归档
+> 文档，触发的 docs-only 流水线自动跳过构建（无循环）。
+
 ## 部署（10.0.0.122，Ubuntu 24.04）
 
 前置条件：
