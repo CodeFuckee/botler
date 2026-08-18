@@ -187,13 +187,17 @@ class TestTerminalProxy:
             assert "proxy-echo" in got, f"stdout 未包含回显: {got!r}"
 
     def test_ws_proxy_forged_token_rejected(self, open_client, term_upstream):
+        # 伪造 token：终端服务以 close code 4001 拒绝，代理必须以相同
+        # 关闭码结束浏览器端连接（此前遗漏显式 close，浏览器端永远
+        # 收不到断开事件导致挂起）
         from starlette.websockets import WebSocketDisconnect
         with open_client.websocket_connect(
             "/api/terminal/ws/tab-2?token=forged.token"
         ) as ws:
-            with pytest.raises(WebSocketDisconnect):
+            with pytest.raises(WebSocketDisconnect) as exc_info:
                 while True:
                     ws.receive_text()
+        assert exc_info.value.code == 4001
 
 
 class TestHealthExemption:

@@ -611,6 +611,26 @@
 
 ### Fixed
 
+- **Web 终端反向代理遗漏显式关闭——终端服务拒绝（伪造/过期 token）时浏览器端永远收不到断开事件导致挂起（issue #183）**：
+  Web 终端（issue #183）WebSocket 反向代理 `_pump` 在终端服务以非 1000 关闭码
+  （如 token 校验失败 close 4001）结束时，`to_client` 捕获 `ConnectionClosed`
+  后异常被吞掉，endpoint 的 try 块随之**正常完成但从未调用 `websocket.close()`**
+  ——starlette 在 WebSocket endpoint 正常返回时不会自动向客户端发送 close，
+  浏览器端 `receive()` 永远阻塞收不到断开事件：前端终端标签一直停留在「连接中」、
+  后端 `test_ws_proxy_forged_token_rejected` 无限挂起（CI backend:test 卡死超时）。
+  修复：
+  - **实现**：`backend/botler/api/terminal.py` `_pump` 改为返回终端服务会话的
+    WebSocket 关闭码（`ConnectionClosed` 时取上游 `rcvd.code`，正常结束默认 1000）；
+    endpoint 在 `finally` 中**显式关闭浏览器端连接**并原样传递上游关闭码与原因
+    （认证拒绝 4001 → 浏览器端也收到 4001），同时保留上游连接异常（`connect`
+    失败等）以 1011 关闭的兜底；
+  - **测试**：`backend/tests/test_api_terminal.py`
+    `test_ws_proxy_forged_token_rejected` 补充断言 `WebSocketDisconnect.code == 4001`
+    （修复前该用例无限挂起，可复现失败；修复后 0.6s 通过）；终端相关三组测试
+    （test_api_terminal / test_terminal_service / test_terminal_token，24 例）与后端
+    全量测试（1723 例）均通过，覆盖率 88.46%（阈值 70%），无 regression。
+
+
 - **config.yaml 保存改为原子写 + 重载失败不污染内存——修复并发读半截文件导致设置保存偶发 500（issue #181 CI 诊断）**：
   E2E settings 测试偶发失败的根因：`ConfigManager.save()` 此前直接 `open(path, "w")`
   截断写盘，并发读（`get()` 的 mtime 自动重载 / `update_*` 写盘前 `_reload_from_disk`）

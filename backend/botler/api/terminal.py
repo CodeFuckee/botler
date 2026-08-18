@@ -81,14 +81,26 @@ async def _pump(websocket: WebSocket, remote) -> None:
 
     任一方向结束（浏览器断开 / 终端服务关闭）即取消另一方，保证连接
     及时回收；文本与二进制消息原样透传（terminado 协议消息）。
+
+    返回终端服务会话结束时的 WebSocket 关闭码：上游以非 1000 码关闭
+    （如认证拒绝 4001）时原样返回，供调用方以相同语义关闭浏览器端。
     """
 
+    close_code = 1000
+
     async def to_client():
-        async for msg in remote:
-            if isinstance(msg, (bytes, bytearray)):
-                await websocket.send_bytes(bytes(msg))
-            else:
-                await websocket.send_text(str(msg))
+        nonlocal close_code
+        try:
+            async for msg in remote:
+                if isinstance(msg, (bytes, bytearray)):
+                    await websocket.send_bytes(bytes(msg))
+                else:
+                    await websocket.send_text(str(msg))
+        except websockets.exceptions.ConnectionClosed as e:
+            # 终端服务侧主动关闭：保留其关闭码（4001 认证拒绝等）
+            if e.rcvd is not None and e.rcvd.code:
+                close_code = e.rcvd.code
+            raise
 
     async def to_server():
         while True:
@@ -113,6 +125,7 @@ async def _pump(websocket: WebSocket, remote) -> None:
             await task
         except Exception:  # noqa: BLE001 —— 任一方向失败由另一方结束连接
             pass
+    return close_code
 
 
 @router.websocket("/ws/{name}")
@@ -128,12 +141,26 @@ async def terminal_ws_proxy(websocket: WebSocket, name: str):
         f"{_term_ws_upstream()}/terminal/ws/{urllib.parse.quote(name, safe='')}"
         + (f"?{query}" if query else "")
     )
+    close_code = 1011
+    close_reason = "终端服务连接失败"
     try:
         async with websockets.connect(upstream, ping_interval=20, ping_timeout=20) as remote:
-            await _pump(websocket, remote)
+            close_code = await _pump(websocket, remote)
+            close_reason = "终端会话已结束"
+    except websockets.exceptions.ConnectionClosed as e:
+        # 上游连接异常关闭（如 token 校验失败 4001）：原样传递关闭码
+        if e.rcvd is not None and e.rcvd.code:
+            close_code = e.rcvd.code
+            close_reason = e.rcvd.reason or close_reason
+        logger.warning("终端 WebSocket 上游关闭: code=%s reason=%s", close_code, close_reason)
     except Exception as e:  # noqa: BLE001
         logger.warning("终端 WebSocket 代理失败: %s", e)
+        close_reason = f"终端服务连接失败: {e}"
+    finally:
+        # 无论上游会话如何结束，浏览器端连接都必须显式关闭（starlette
+        # 在 endpoint 正常返回时不会自动发送 close，遗漏会导致客户端
+        # 永远收不到断开事件而挂起）
         try:
-            await websocket.close(code=1011, reason=f"终端服务连接失败: {e}")
+            await websocket.close(code=close_code, reason=close_reason)
         except Exception:  # noqa: BLE001
             pass
