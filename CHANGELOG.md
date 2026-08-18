@@ -5,6 +5,28 @@
 ## [Unreleased]
 ### Added
 
+- **发掘按钮无论是否找到用户需求 issue 都列出相似仓库（issue #301）**：
+  「点击发掘按钮时，无论是否找到用户需求issue，都把相似仓库列出」——
+  概览页「发掘」不再因相似仓库里翻不到用户需求 issue 而报错，响应始终
+  返回相似仓库列表，前端在发掘结果区展示：
+  - 后端 `POST /api/repos/{id}/discover` 响应新增 `similar_repos` 字段
+    （{full_name, html_url, description, stars}，与 GitHub 搜索去重后的
+    相似仓库一一对应）；相似仓库翻不到任何用户需求 issue 时跳过 AI 需求
+    整理与建 issue，返回 201 + `issues: []` + `count: 0` + `similar_repos`
+    （原为 502「相似仓库暂未翻找到用户需求 issue」）；找到用户需求时照常
+    整理创建 issue，响应同时携带 `similar_repos`；
+  - 前端 `DiscoverResult` 结果组件改造：有创建 issue 时保留「已创建 N 个
+    发掘 issue」+ 编号链接，未找到用户需求 issue 时显示「未找到用户需求
+    issue」提示，两种情况下方均列出相似仓库（仓库名跳转链接 + star +
+    描述，新增 i18n key `overview.discoverRepos` / `overview.discoverNoIssue`
+    / `overview.openSimilarRepo`，样式 `.discover-repos` 系列）；
+  - 同步更新 README 发掘接口文档（模块清单 + API 一览两处）；
+  - 新增测试：后端「无需求 issue 返回相似仓库列表（201、count=0、仅一轮
+    AI、不建 issue）」「多相似仓库仅部分有需求时全部列出」，成功路径断言
+    similar_repos 字段，原「无需求 issue 502」用例改写；前端「成功展示
+    相似仓库列表」「count=0 提示未找到用户需求 issue 并列出相似仓库」，
+    源码/样式断言同步补相似仓库相关规则，全量测试无 regression。
+
 - **前端 API 请求统一错误处理与 GET 自动重试（issue #226）**：`frontend/src/api.js`
   的 `request()` 原先无统一错误提示与重试，页面各自处理失败态（部分显示错误
   文本、部分静默），内网/ZeroTier 网络抖动时轮询接口偶发失败直接展示失败。

@@ -287,5 +287,8 @@
   "overview.pinIssuePinned": "Pinned — the scheduler will process this issue first",
   "overview.completionPerRepoTitle": "Per-repo average & trend",
   "overview.repoNoData": "No data",
-  "overview.repoTrendAria": "Average completion time trend for this repo"
+  "overview.repoTrendAria": "Average completion time trend for this repo",
+  "overview.discoverNoIssue": "No user request issues found, similar repositories listed",
+  "overview.discoverRepos": "Similar repositories",
+  "overview.openSimilarRepo": "Open similar repository on GitHub"
 }

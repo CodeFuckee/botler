@@ -1126,7 +1126,10 @@ export default function Overview() {
     setDiscoverResults((prev) => ({ ...prev, [repo.repo_id]: { loading: true } }))
     try {
       const res = await api.post(`/api/repos/${repo.repo_id}/discover`)
-      setDiscoverResults((prev) => ({ ...prev, [repo.repo_id]: { created: res.issues } }))
+      // issue #301：响应同时携带 similar_repos 与 count，一并存入结果
+      // （无论是否找到用户需求 issue，相似仓库列表都随响应返回）
+      setDiscoverResults((prev) => ({ ...prev, [repo.repo_id]: {
+        created: res.issues, count: res.count, similar_repos: res.similar_repos } }))
       await loadIssues()
     } catch (e) {
       setDiscoverResults((prev) => ({ ...prev, [repo.repo_id]: { error: e.message } }))
@@ -2143,26 +2146,48 @@ function IntrospectResult({ result }) {
   return null
 }
 
-// 发掘结果（issue #189）：AI 发掘进行中显示加载提示；成功显示已创建的
-// 发掘 issue 链接列表（点击跳转 GitLab）；失败显示后端错误信息
+// 发掘结果（issue #189）：AI 发掘进行中显示加载提示；失败显示后端错误信息；
+// 成功时无论是否创建了需求 issue，都展示相似仓库列表（issue #301）——
+// 有创建的 issue 时显示「已创建 N 个发掘 issue」+ 跳转链接；未找到用户需求
+// issue 时提示「未找到用户需求 issue」，两种情况下方均列出相似仓库
+// （仓库名链接 + star + 描述）
 function DiscoverResult({ result }) {
   const { tr } = useI18n()
   if (result.error) return <div className="alert alert-error small discover-result">{result.error}</div>
   if (result.loading) return <div className="small muted discover-result"><Icon name="refresh" /> {tr('overview.discoverLoading')}</div>
-  if (result.created?.length) {
-    return (
-      <div className="small discover-result">
-        <span className="test-chip ok"><Icon name="check" /> {tr('overview.discoverCreated', { n: result.created.length })}</span>{' '}
-        {result.created.map((issue, i) => (
-          <a key={issue.web_url || i} href={issue.web_url} target="_blank" rel="noreferrer"
-             title={tr('overview.openDiscoverInGitlab')}>
-            #{issue.iid}{i < result.created.length - 1 ? '、' : ''} <Icon name="externalLink" />
-          </a>
+  // issue #301：响应始终携带 similar_repos（后端保证），无列表则视为无结果
+  if (!result.similar_repos?.length) return null
+  const createdCount = result.created?.length || 0
+  return (
+    <div className="small discover-result">
+      {createdCount > 0 ? (
+        <div className="discover-created-line">
+          <span className="test-chip ok"><Icon name="check" /> {tr('overview.discoverCreated', { n: createdCount })}</span>{' '}
+          {result.created.map((issue, i) => (
+            <a key={issue.web_url || i} href={issue.web_url} target="_blank" rel="noreferrer"
+               title={tr('overview.openDiscoverInGitlab')}>
+              #{issue.iid}{i < createdCount - 1 ? '、' : ''} <Icon name="externalLink" />
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="muted discover-no-issue">{tr('overview.discoverNoIssue')}</div>
+      )}
+      <div className="discover-repos">
+        <div className="discover-repos-title">{tr('overview.discoverRepos')}</div>
+        {result.similar_repos.map((repo, i) => (
+          <div key={repo.full_name || i} className="discover-repo">
+            <a href={repo.html_url} target="_blank" rel="noreferrer"
+               title={tr('overview.openSimilarRepo')}>
+              {repo.full_name} <Icon name="externalLink" />
+            </a>
+            {repo.stars != null && <span className="muted discover-repo-stars">⭐ {repo.stars}</span>}
+            {repo.description && <span className="muted discover-repo-desc">— {repo.description}</span>}
+          </div>
         ))}
       </div>
-    )
-  }
-  return null
+    </div>
+  )
 }
 
 // 走势图（issue #180）：轻量 SVG 折线图，无第三方图表库依赖——

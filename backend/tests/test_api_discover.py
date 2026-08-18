@@ -18,6 +18,10 @@ owner，一条需求一个 issue。
   GitHub 限流与网络错误 502 / 无相似仓库 502 / 无需求 issue 502 / 需求
   整理解析失败与空结果 502 / GitLab 创建 issue 失败 502 / 标题超长截断 /
   需求标题去重 / 条数封顶 / 创建成功后清空概览缓存；
+- 无论是否找到用户需求 issue 都把相似仓库列出（issue #301）：未翻到
+  用户需求 issue 时不报 502，跳过 AI 整理与建 issue，返回 201 + 空
+  issues + count=0 + similar_repos；找到时返回 201 + issues + count
+  + similar_repos；
 - GitHub 请求头：配置 GITHUB_TOKEN 时带 Authorization，未配置不带。
 """
 
@@ -231,7 +235,7 @@ def _default_github(fake):
         "full_name": "a/b",
         "html_url": "https://github.com/a/b",
         "description": "相似项目",
-        "stars": 100,
+        "stargazers_count": 100,
     }]
     fake.issues_by_repo = {"a/b": [
         {"title": "用户需求：增加通知",
@@ -341,6 +345,12 @@ class TestDiscover:
         data = r.json()
         assert data["count"] == 2
         assert len(data["issues"]) == 2
+        # issue #301：相似仓库列表随响应返回
+        assert len(data["similar_repos"]) == 1
+        assert data["similar_repos"][0]["full_name"] == "a/b"
+        assert data["similar_repos"][0]["html_url"] == "https://github.com/a/b"
+        assert data["similar_repos"][0]["description"] == "相似项目"
+        assert data["similar_repos"][0]["stars"] == 100
         # 两轮 AI 调用（_chat_once 每次新建 ChatModelClient 实例）：
         # 第一轮搜索词 + 第二轮需求整理，共 2 次 chat
         assert len(StubChatClient.instances) == 2
@@ -384,7 +394,7 @@ class TestDiscover:
         tc, stub, gh, db = discover_env
         gh.search_results = [
             {"full_name": "a/b", "html_url": "https://github.com/a/b",
-             "description": "sim", "stars": 100},
+             "description": "sim", "stargazers_count": 100},
         ]
         gh.issues_by_repo = {"a/b": [
             {"title": "需求", "body": "正文",
@@ -562,13 +572,26 @@ class TestDiscoverErrors:
         assert r.status_code == 502
         assert "未找到功能相似的仓库" in r.json()["detail"]
 
-    def test_no_issues_found_returns_502(self, discover_env):
+    def test_no_issues_found_returns_similar_repos(self, discover_env):
+        """issue #301：相似仓库翻不到任何用户需求 issue 时不报 502——跳过
+        AI 整理与建 issue，返回 201 + 空 issues + count=0 + similar_repos
+        （相似仓库始终列出）。"""
         tc, stub, gh, db = discover_env
         gh.issues_by_repo = {"a/b": []}
         repo_id = _add_repo(db, 42, "botler")
         r = tc.post(f"/api/repos/{repo_id}/discover")
-        assert r.status_code == 502
-        assert "未翻找到用户需求 issue" in r.json()["detail"]
+        assert r.status_code == 201, r.text
+        data = r.json()
+        assert data["count"] == 0
+        assert data["issues"] == []
+        # 相似仓库列表随响应返回
+        assert len(data["similar_repos"]) == 1
+        assert data["similar_repos"][0]["full_name"] == "a/b"
+        assert data["similar_repos"][0]["stars"] == 100
+        # 只走第一轮 AI（搜索词），未触发需求整理第二轮
+        assert len(StubChatClient.instances) == 1
+        # 未创建任何 GitLab issue
+        assert stub.create_calls == []
 
     def test_aggregate_unparseable_returns_502(self, discover_env):
         tc, stub, gh, db = discover_env
@@ -585,6 +608,30 @@ class TestDiscoverErrors:
         r = tc.post(f"/api/repos/{repo_id}/discover")
         assert r.status_code == 502
         assert "未整理出有效的需求" in r.json()["detail"]
+
+    def test_no_issues_in_one_repo_still_lists_all_similar_repos(self, discover_env):
+        """issue #301：多个相似仓库中仅部分有用户需求 issue 时，响应仍列出
+        全部相似仓库；有需求的照常整理创建。"""
+        tc, stub, gh, db = discover_env
+        gh.search_results = [
+            {"full_name": "a/b", "html_url": "https://github.com/a/b",
+             "description": "sim1", "stargazers_count": 100},
+            {"full_name": "c/d", "html_url": "https://github.com/c/d",
+             "description": "sim2", "stargazers_count": 50},
+        ]
+        gh.issues_by_repo = {
+            "a/b": [],
+            "c/d": [{"title": "需求", "body": "正文",
+                     "html_url": "https://github.com/c/d/issues/1"}],
+        }
+        repo_id = _add_repo(db, 42, "botler")
+        r = tc.post(f"/api/repos/{repo_id}/discover")
+        assert r.status_code == 201, r.text
+        data = r.json()
+        assert data["count"] == 2
+        # 两个相似仓库都列出
+        assert [x["full_name"] for x in data["similar_repos"]] == ["a/b", "c/d"]
+        assert len(stub.create_calls) == 2
 
     def test_create_issue_failure_returns_502(self, discover_env):
         tc, stub, gh, db = discover_env

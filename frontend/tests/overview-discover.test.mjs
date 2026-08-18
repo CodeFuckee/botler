@@ -5,14 +5,20 @@
 // 需求一个 issue）；请求中禁用按钮防重复点击，成功后刷新开放 issue 列表
 // 并展示已创建发掘 issue 的跳转链接列表。
 //
+// issue #301：无论是否找到用户需求 issue，都把相似仓库列出——响应始终
+// 携带 similar_repos；未找到用户需求 issue（count=0）时显示「未找到用户
+// 需求 issue」提示，有创建时显示「已创建 N 个发掘 issue」+ 编号链接，
+// 两种情况下方均列出相似仓库（名称链接 + star + 描述）。
+//
 // 断言：
 // 1. 渲染：每个仓库卡片头右上角渲染「发掘」按钮，与「自省」「对账」
 //    「添加 Issue」按钮并排成组（.issue-repo-actions）；
 // 2. 点击：POST /api/repos/{repo_id}/discover 参数正确（repo_id 对
 //    应被点击仓库）；请求中按钮禁用并显示「发掘中…」；
-// 3. 成功：显示「已创建 N 个发掘 issue」+ issue 编号链接列表，并刷新
-//    开放 issue 列表（再次请求 /api/issues/overview）；
-// 4. 失败：接口异常显示错误信息。
+// 3. 成功：显示「已创建 N 个发掘 issue」+ issue 编号链接列表 + 相似
+//    仓库列表，并刷新开放 issue 列表（再次请求 /api/issues/overview）；
+// 4. 无需求 issue：count=0 时显示「未找到用户需求 issue」+ 相似仓库列表；
+// 5. 失败：接口异常显示错误信息。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -125,9 +131,17 @@ test('源码含「发掘」按钮、发掘接口调用与结果提示', () => {
   assert.match(overviewSrc, /tr\('overview\.discovering'\)/, '「发掘中…」应经 t() 国际化')
   assert.equal(zhCN['overview.discovering'], '发掘中…', '中文「发掘中…」文案应保留')
   assert.match(overviewSrc, /DiscoverResult/, '应渲染发掘结果组件')
-  assert.match(overviewSrc, /tr\('overview\.discoverCreated', \{ n: result\.created\.length \}\)/,
+  assert.match(overviewSrc, /tr\('overview\.discoverCreated', \{ n: createdCount \}\)/,
                '「已创建 N 个发掘 issue」应经 t() 国际化并插值数量')
   assert.ok(zhCN['overview.discoverCreated'].includes('个发掘 issue'), '中文文案应保留')
+  // issue #301：无论是否找到用户需求 issue，都展示相似仓库列表
+  assert.match(overviewSrc, /result\.similar_repos/, '应读取响应中的相似仓库列表')
+  assert.match(overviewSrc, /tr\('overview\.discoverRepos'\)/, '相似仓库标题应经 t() 国际化')
+  assert.equal(zhCN['overview.discoverRepos'], '相似仓库', '中文「相似仓库」文案应保留')
+  assert.match(overviewSrc, /tr\('overview\.discoverNoIssue'\)/, '「未找到用户需求 issue」应经 t() 国际化')
+  assert.ok(zhCN['overview.discoverNoIssue'].includes('未找到用户需求 issue'), '中文文案应保留')
+  assert.match(overviewSrc, /tr\('overview\.openSimilarRepo'\)/, '相似仓库链接应经 t() 国际化')
+  assert.ok(zhCN['overview.openSimilarRepo'].includes('相似仓库'), '中文文案应保留')
   assert.match(overviewSrc, /compass/, '发掘按钮应使用 compass 图标')
 })
 
@@ -136,6 +150,8 @@ test('styles.css：发掘按钮与结果样式', () => {
   assert.ok(btn, 'styles.css 应有 .discover-btn 规则')
   assert.match(btn[1], /white-space:\s*nowrap/, '发掘按钮不应换行')
   assert.ok(styles.includes('.discover-result'), 'styles.css 应有 .discover-result 规则')
+  assert.ok(styles.includes('.discover-repos-title'), 'styles.css 应有 .discover-repos-title 规则')
+  assert.ok(styles.includes('.discover-repo'), 'styles.css 应有 .discover-repo 规则')
 })
 
 // ---- 渲染与点击 ----
@@ -168,7 +184,9 @@ test('点击：POST /api/repos/{repo_id}/discover 参数正确（对应对被点
     const postCalls = []
     await clickDiscover(renderer, 1, async (pathname) => {
       postCalls.push(pathname)
-      return { issues: [{ iid: 77, web_url: 'https://gitlab.example.com/x/-/issues/77' }], count: 1 }
+      return { issues: [{ iid: 77, web_url: 'https://gitlab.example.com/x/-/issues/77' }], count: 1,
+               similar_repos: [{ full_name: 'a/b', html_url: 'https://github.com/a/b',
+                                description: '相似项目', stars: 100 }] }
     })
     assert.deepEqual(postCalls, ['/api/repos/2/discover'],
                      '应只调用被点击仓库（repo_id=2）的发掘接口')
@@ -194,7 +212,9 @@ test('请求中：按钮禁用并显示「发掘中…」防重复点击，完�
     assert.ok(treeText(renderer).includes('发掘中'), '请求中应显示「发掘中…」')
     // 请求完成：结果展示 + 按钮恢复可点击
     await TestRenderer.act(async () => {
-      resolvePost({ issues: [{ iid: 77, web_url: 'https://gitlab.example.com/x/-/issues/77' }], count: 1 })
+      resolvePost({ issues: [{ iid: 77, web_url: 'https://gitlab.example.com/x/-/issues/77' }], count: 1,
+                   similar_repos: [{ full_name: 'a/b', html_url: 'https://github.com/a/b',
+                                     description: '相似项目', stars: 100 }] })
       await new Promise((resolve) => setTimeout(resolve, 30))
     })
     const after = discoverBtns(renderer)
@@ -217,6 +237,10 @@ test('成功：显示已创建发掘 issue 链接列表并刷新开放 issue 列
         { iid: 89, web_url: 'https://gitlab.example.com/x/-/issues/89' },
       ],
       count: 2,
+      similar_repos: [
+        { full_name: 'a/b', html_url: 'https://github.com/a/b', description: '相似项目', stars: 100 },
+        { full_name: 'c/d', html_url: 'https://github.com/c/d', description: null, stars: 50 },
+      ],
     }))
     const text = treeText(renderer)
     assert.ok(text.includes('已创建 2 个发掘 issue'), '应显示已创建发掘 issue 数量')
@@ -229,6 +253,38 @@ test('成功：显示已创建发掘 issue 链接列表并刷新开放 issue 列
               '应提供第二个发掘 issue 的跳转链接')
     const issuesAfter = getCalls.filter((p) => p === '/api/issues/overview').length
     assert.ok(issuesAfter > issuesBefore, '成功后应刷新开放 issue 列表')
+    // issue #301：相似仓库列表随结果展示（名称链接 + star）
+    assert.ok(text.includes('相似仓库'), '应展示相似仓库标题')
+    assert.ok(text.includes('a/b'), '应展示第一个相似仓库名')
+    assert.ok(text.includes('c/d'), '应展示第二个相似仓库名')
+    assert.ok(text.includes('100'), '应展示相似仓库 star')
+    const repoLinks = renderer.root.findAll(
+      (n) => n.type === 'a' && String(n.props.href || '').includes('github.com/'))
+    assert.ok(repoLinks.some((a) => String(a.props.href) === 'https://github.com/a/b'),
+              '应提供相似仓库跳转链接')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('无需求 issue：count=0 时显示「未找到用户需求 issue」并列出相似仓库', async () => {
+  const { renderer, renderError } = await renderOverview()
+  try {
+    assert.equal(renderError, null)
+    await clickDiscover(renderer, 0, async () => ({
+      issues: [],
+      count: 0,
+      similar_repos: [
+        { full_name: 'x/y', html_url: 'https://github.com/x/y', description: '无需求仓库', stars: 7 },
+      ],
+    }))
+    const text = treeText(renderer)
+    assert.ok(text.includes('未找到用户需求 issue'), 'count=0 应提示未找到用户需求 issue')
+    assert.ok(text.includes('相似仓库'), '应展示相似仓库标题')
+    assert.ok(text.includes('x/y'), '应列出相似仓库名')
+    assert.ok(text.includes('无需求仓库'), '应列出相似仓库描述')
+    assert.ok(!text.includes('已创建'), '未创建需求时不应显示「已创建」')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

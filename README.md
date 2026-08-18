@@ -76,7 +76,7 @@ backend/
     chat_models.py   灵感 AI 对话模型调用封装（issue #166：复用设置页「AI API 供应商」配置，支持 OpenAI 兼容 chat/completions / Gemini generateContent / Anthropic messages 三种协议，统一 ChatModelClient）
     api/introspection.py 概览页「自省」API（issue #187）：POST /api/repos/{id}/introspect——收集项目上下文（文件树/README/清单文件）→ 调 AI 对话模型审查 → 把改进建议写入该仓库 issue（分配人 = 仓库 owner）
     api/repo_logo.py  仓库 logo 生成与同步 API（issue #188/#297）：POST /api/repos/{id}/generate-logo——agent 基于仓库 README 生成 logo 提示词 → 调用生图模型（设置页「生图模型」配置）生成 logo 落盘并写 repos 表；GET /api/repos/{id}/logo 读取图片（?download=1 触发下载）；POST /api/repos/{id}/sync-logo 把已生成 logo 上传为 GitLab 项目图标（头像）
-    api/discover.py  概览页「发掘」API（issue #189）：POST /api/repos/{id}/discover——AI 基于项目功能生成 GitHub 搜索词 → 搜索类似仓库并翻找其开放 issue（过滤 PR）→ AI 整理成若干条需求 → 逐条写入该仓库 issue（分配人 = 仓库 owner，一条需求一个 issue；可选环境变量 GITHUB_TOKEN 提升 GitHub 限额）
+    api/discover.py  概览页「发掘」API（issue #189/#301）：POST /api/repos/{id}/discover——AI 基于项目功能生成 GitHub 搜索词 → 搜索类似仓库并翻找其开放 issue（过滤 PR）→ AI 整理成若干条需求 → 逐条写入该仓库 issue（分配人 = 仓库 owner，一条需求一个 issue；无论是否找到用户需求 issue 都返回相似仓库列表，未找到时 count=0 不建 issue，issue #301；可选环境变量 GITHUB_TOKEN 提升 GitHub 限额）
     api/stats.py     统计看板 API（issue #264/#274）：GET /api/stats/dashboard——本地任务表聚合（任务总数/成功率/平均耗时/失败数 + 按引擎/仓库/来源分组 + 失败原因 Top（附分类）+ 失败原因分类分布），10 秒 TTL 缓存，与任务列表同表同口径
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
     api/             REST API（repos / tasks / settings / auth）
@@ -537,7 +537,7 @@ DELETE /api/repos/{id}                删除仓库
 POST   /api/repos/{id}/test           测试连通性（token + 项目 + webhook）
 POST   /api/repos/{id}/reconcile     立即扫描该仓库，把「assignee 是 bot 但任务表无活跃记录」的 open issues 补入队列（仓库页与概览页「对账」按钮，issue #17/#134）
 POST   /api/repos/{id}/introspect   概览页仓库卡片「自省」按钮（issue #187）：调用 AI agent 审查该仓库的功能与实现情况（本地文件夹/工作区收集文件树+README+清单文件，无本地文件夹时 GitLab 仓库 API 兜底），把改进建议写入该仓库 issue（标题带【自省】前缀、标签 optimize、分配人 = 仓库 owner；写 issue 走 owner token）
-POST   /api/repos/{id}/discover   概览页仓库卡片「发掘」按钮（issue #189）：AI 基于该仓库实现的功能生成 GitHub 搜索关键词 → 搜索 GitHub 类似仓库（按 star 排序、跨关键词去重）→ 翻找其开放 issue（过滤 PR）→ AI 整理成若干条需求 → 逐条写入该仓库 issue（标题带【发掘】前缀、标签 feature、分配人 = 仓库 owner，一条需求一个 issue，封顶 8 条；写 issue 走 owner token；GitHub 匿名调用，可选环境变量 GITHUB_TOKEN 提升限额）
+POST   /api/repos/{id}/discover   概览页仓库卡片「发掘」按钮（issue #189）：AI 基于该仓库实现的功能生成 GitHub 搜索关键词 → 搜索 GitHub 类似仓库（按 star 排序、跨关键词去重）→ 翻找其开放 issue（过滤 PR）→ AI 整理成若干条需求 → 逐条写入该仓库 issue（标题带【发掘】前缀、标签 feature、分配人 = 仓库 owner，一条需求一个 issue，封顶 8 条；写 issue 走 owner token；GitHub 匿名调用，可选环境变量 GITHUB_TOKEN 提升限额）。无论是否找到用户需求 issue，响应都返回相似仓库列表 similar_repos（未找到时 issues=[]、count=0 不建 issue，issue #301），前端一并展示
 POST   /api/repos/{id}/generate-logo 仓库管理页「生成图标」按钮（issue #188）：agent 基于该仓库 README（本地文件夹优先，GitLab 仓库 API 兜底，均缺失时基于仓库元信息）生成 logo 提示词 → 调用生图模型（设置页「生图模型」第一个启用且 Key 非空的项）生成 logo，首张落盘 backend/data/logos/ 并写 repos 表 logo_path / logo_updated_at / logo_mime；重复点击覆盖重生成
 GET    /api/repos/{id}/logo         读取该仓库已生成的 logo 图片（img src 直连，前端按 logo_updated_at 拼缓存击穿参数）；?download=1 返回 Content-Disposition attachment 供下载
 POST   /api/repos/{id}/sync-logo   仓库管理页「同步到 GitLab」按钮（issue #297）：把已生成 logo 上传为 GitLab 项目图标（头像）——读取本地 logo 文件，经 GitLab API PUT /projects/{id} 的 avatar 文件参数上传；身份复用 issue 创建链路（仓库 remote URL 内嵌 token 优先，无 token 回退全局 bot token）；成功返回 ok + 项目 path_with_namespace + avatar_url

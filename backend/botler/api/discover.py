@@ -27,14 +27,19 @@ owner，一条需求一个 issue。
   8. 创建成功后清空概览缓存，前端刷新即可看到新 issue。写 issue 与
      概览页其他 issue 编辑一致（_issue_edit_call）：必须使用 owner
      token，绝不回退 bot token。
+- 无论是否找到用户需求 issue，都把相似仓库列表随响应返回（issue #301）：
+  未翻找到任何用户需求 issue 时跳过 AI 整理与建 issue，返回
+  {issues: [], count: 0, similar_repos: [...]}（201）；找到时返回
+  {issues, count, similar_repos}，前端一并展示。
 
 GitHub 访问：匿名调用（可选环境变量 GITHUB_TOKEN 提升限额），限流
 403/429 明确报错引导；网络错误 502；未配置 GitHub Token 不影响任务启动。
 
 错误映射：仓库不存在 → 404；仓库已删除/未启用 → 400；未配置 AI 对话
 模型 → 400（引导设置页配置）；AI 调用失败/回复为空/解析失败 → 502；
-GitHub 搜索失败/限流/无相似仓库 → 502；GitHub issue 采集失败/无需求
-issue → 502；GitLab 创建 issue 失败 → 502；网络错误 → 502。
+GitHub 搜索失败/限流/无相似仓库 → 502；GitHub issue 采集失败 → 502；
+未找到用户需求 issue 时不报错，直接返回相似仓库列表（count=0，不建
+issue，issue #301）；GitLab 创建 issue 失败 → 502；网络错误 → 502。
 """
 
 from __future__ import annotations
@@ -272,7 +277,9 @@ def discover_repo(request: Request, repo_id: int):
     分配人为仓库 owner，一条需求一个 issue。
 
     同步执行（AI 两轮 + GitHub 采集 + 创建 issue 一次请求完成）；返回
-    创建的 issue 精简对象列表与需求总数，前端展示成功提示与跳转链接。
+    创建的 issue 精简对象列表、需求总数与相似仓库列表（issue #301：无论
+    是否找到用户需求 issue 都把相似仓库返回，未找到时 count=0 不建 issue），
+    前端展示成功提示、跳转链接与相似仓库清单。
     """
     c = request.app.state.ctx
     row = c.db.get_repo(repo_id)
@@ -356,40 +363,48 @@ def discover_repo(request: Request, repo_id: int):
                 break
         if len(raw_issues) >= MAX_RAW_ISSUES:
             break
-    if not raw_issues:
-        raise HTTPException(502, "相似仓库暂未翻找到用户需求 issue，"
-                                 "请稍后重试")
 
-    # 5. AI 第二轮：把原始需求整理成若干条需求（严格 JSON 数组）
-    reply_agg = _chat_once(c, provider_cfg, DISCOVER_AGGREGATE_SYSTEM_PROMPT,
-                           _build_requirements_prompt(row, raw_issues),
-                           DISCOVER_TIMEOUT_AGGREGATE)
-    parsed_agg = _parse_json_array(reply_agg)
+    # 5. 无论是否找到用户需求 issue，都把相似仓库返回给前端展示
+    #    （issue #301）：未翻找到任何用户需求 issue 时跳过 AI 整理与建
+    #    issue，直接返回相似仓库列表（count=0），不再报 502。
     requirements: list[dict] = []
-    seen_titles: set[str] = set()
-    for item in parsed_agg or []:
-        if not isinstance(item, dict):
-            continue
-        # 标题单行化：去掉换行/回车（GitLab issue 标题应为单行），去空白
-        title = re.sub(r"[\r\n\t]+", " ", str(item.get("title") or "")).strip()
-        if not title or title.lower() in seen_titles:
-            continue
-        seen_titles.add(title.lower())
-        sources = item.get("sources") or []
-        if not isinstance(sources, list):
-            sources = []
-        requirements.append({
-            "title": title,
-            "detail": str(item.get("detail") or "").strip(),
-            "sources": [str(s).strip() for s in sources
-                        if isinstance(s, str) and str(s).strip()],
-        })
-        if len(requirements) >= MAX_DISCOVER_ISSUES:
-            break
-    if not requirements:
-        raise HTTPException(502, "AI 未整理出有效的需求，请稍后重试")
+    if raw_issues:
+        # 5.1 AI 第二轮：把原始需求整理成若干条需求（严格 JSON 数组）
+        reply_agg = _chat_once(c, provider_cfg, DISCOVER_AGGREGATE_SYSTEM_PROMPT,
+                               _build_requirements_prompt(row, raw_issues),
+                               DISCOVER_TIMEOUT_AGGREGATE)
+        parsed_agg = _parse_json_array(reply_agg)
+        seen_titles: set[str] = set()
+        for item in parsed_agg or []:
+            if not isinstance(item, dict):
+                continue
+            # 标题单行化：去掉换行/回车（GitLab issue 标题应为单行），去空白
+            title = re.sub(r"[\r\n\t]+", " ", str(item.get("title") or "")).strip()
+            if not title or title.lower() in seen_titles:
+                continue
+            seen_titles.add(title.lower())
+            sources = item.get("sources") or []
+            if not isinstance(sources, list):
+                sources = []
+            requirements.append({
+                "title": title,
+                "detail": str(item.get("detail") or "").strip(),
+                "sources": [str(s).strip() for s in sources
+                            if isinstance(s, str) and str(s).strip()],
+            })
+            if len(requirements) >= MAX_DISCOVER_ISSUES:
+                break
+        if not requirements:
+            raise HTTPException(502, "AI 未整理出有效的需求，请稍后重试")
+    else:
+        logger.info("发掘：未翻找到用户需求 issue（repo=%s），"
+                    "仅返回相似仓库列表", row["id"])
 
-    # 6. 逐条创建 GitLab issue：分配人 = 仓库 owner（解析失败不阻塞）
+    # 6. 未整理出任何需求（未找到用户需求 issue）：直接返回相似仓库列表
+    if not requirements:
+        return {"issues": [], "count": 0, "similar_repos": similar_repos}
+
+    # 7. 逐条创建 GitLab issue：分配人 = 仓库 owner（解析失败不阻塞）
     try:
         assignee_id = _resolve_owner_assignee(c, row, client)
     except Exception:  # noqa: BLE001 防御性兜底：分配人解析失败不阻塞
@@ -430,4 +445,6 @@ def discover_repo(request: Request, repo_id: int):
                      f"{str(e)[:200]}") from e
         created.append(_trim_issue(issue, {}))
     clear_issue_cache()
-    return {"issues": created, "count": len(created)}
+    # 无论是否找到用户需求 issue，都把相似仓库列表随响应返回（issue #301）
+    return {"issues": created, "count": len(created),
+            "similar_repos": similar_repos}

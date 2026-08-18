@@ -2303,6 +2303,39 @@ code {
 .discover-result a:hover {
   text-decoration: underline;
 }
+/* issue #301：发掘结果相似仓库列表——无论是否找到用户需求 issue 都展示；
+   标题小字加粗、每条仓库一行（名称链接 + star + 描述，过长省略） */
+.discover-created-line {
+  margin-bottom: var(--space-1);
+}
+.discover-no-issue {
+  margin-bottom: var(--space-1);
+}
+.discover-repos {
+  margin-top: var(--space-1);
+  border-top: 1px dashed var(--border-color, #ddd);
+  padding-top: var(--space-1);
+}
+.discover-repos-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.discover-repo {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.discover-repo a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.discover-repo a:hover {
+  text-decoration: underline;
+}
+.discover-repo-stars,
+.discover-repo-desc {
+  font-size: 0.92em;
+}
 /* issue #92：添加 issue 弹窗——字段竖排（与 .repo-edit 一致），
    标签多选横向流式排布 */
 .add-issue .edit-field {
