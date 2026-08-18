@@ -95,6 +95,27 @@
     无 regression。
 
 ### Added
+- **修订《中断恢复机制改进方案》v1.1：dsh / DeepSeek Harness SDK 引擎先行（issue #281）**：
+  按 issue #281 用户补充意见（「deepseek harness sdk 引擎先行……每次开始任务的
+  时候想把会话 id 写入到任务详情中，终端恢复后如果发现有会话 id，直接使用
+  resume 会话 id 来继续任务，使用 deepseek harness sdk 的方式实现，而不是
+  cli 的方式」）修订 `docs/中断恢复机制改进方案.md`：
+  - **dsh（DeepSeek Harness SDK）引擎先行**：Phase 1 由「claude 引擎先行」
+    调整为「dsh 先行」——任务开始（run 启动前）即原子写落库
+    `tasks.dsh_session_id` 并在任务详情展示会话 id，杜绝「进程被强杀时 id
+    尚未落库、恢复退化为全新会话」；
+  - **SDK resume 恢复路径**：终端/进程恢复后若发现任务详情有会话 id，经
+    `DshRunner(session_id=<id>)` SDK 进程内接续会话（等价 CLI
+    `dsh --profile tui --resume <id>` 语义，以 SDK 方式而非 CLI 子进程实现），
+    会话文件缺失时如实降级；
+  - **根因补充**：新增「dsh 会话 id 执行结束后才落库（`_persist_dsh_session_id`
+    在收尾路径解析结果行），强杀/重启时收尾不执行 → id 丢失 → 全新会话」
+    分析；
+  - **待确认问题更新**：Phase 1 开工前探测 SDK 是否支持「以指定 id 创建全新
+    会话」，不支持则退化为「run 返回 id 立即补写 + 执行中心跳续写」；
+  文档修订为 v1.1，仍为 docs-only 方案文档（`docs/中断恢复机制改进方案.md` +
+  `CHANGELOG.md`），未改动任何功能代码。
+
 - **新增《中断恢复机制改进方案》设计文档（issue #281）**：
   issue「现在的中断恢复机制，会频繁的造成 agent 反复的检查实现和重复实现，
   帮我思考一下有没有更好的中断恢复机制，类似 hermes -c 命令，不需要实现，
