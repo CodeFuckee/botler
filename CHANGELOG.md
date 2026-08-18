@@ -1059,6 +1059,31 @@
 
 ### Fixed
 
+- **webhook 推送渲染非法 JSON 导致推送失败——修复 issue 描述含换行/引号等特殊字符时飞书返回 HTTP 400（issue #298）**：
+  线上现象——用户在设置页关闭「网页通知」后，发现「消息推送 Webhook」也不再推送了
+  （飞书收不到任务完成消息）。诊断：webhook 推送与网页通知开关在代码上完全独立
+  （`notifications.enabled` 只影响浏览器系统通知，`webhook.enabled` 独立控制推送），
+  二者无耦合；实际根因是任务收尾推送时 payload 渲染缺陷——`WebhookPusher.build_payload`
+  对占位符做逐项原始 `str.replace`，issue 描述含换行时 `body` 字段出现裸换行，渲染出
+  非法 JSON，飞书等目标以 HTTP 400（code 9499 Bad Request）拒绝（推送仍在尝试，仅
+  目标拒绝）。本地数据库 task_logs 20 条推送记录 100% 相关：全部失败任务（#183/#210/
+  #212/#214/#217/#230）的 issue 描述均含换行，全部成功任务均无换行；用户关闭网页通知
+  后恰好连续 3 个收尾任务的描述都含多行，推送连续失败，感知为「关闭网页通知导致
+  webhook 也不推送」（时间巧合，非因果关系）。本次修复：
+  - `backend/botler/webhook_push.py`：`build_payload` 改为 JSON 感知渲染——模板按
+    JSON 解析后在字符串值上替换占位符、再整体 `json.dumps` 序列化，issue 正文/标题
+    中的换行、双引号、反斜杠等特殊字符被正确转义，渲染结果始终是合法 JSON；
+  - **飞书双编码模板兼容**：`content` 等字段是「JSON 字符串内嵌 JSON 文本」的常见
+    写法，修复对这类值先判定（占位符换安全哨兵后仍可解析为 JSON 对象/数组）再按
+    JSON 转义变量后替换，内外层 JSON 都合法，标题含引号也能正常推送；
+  - **非 JSON 模板兼容**：body_template 不是合法 JSON 时退回逐项字符串替换
+    （历史行为不变），不影响既有配置；
+  - **测试**：`backend/tests/test_webhook_push.py` 新增 `TestBuildPayloadJsonEscaping`
+    4 例（多行正文 / 引号与反斜杠 / 默认模板多行 / 飞书双编码模板内外层均合法），
+    修复前全部可复现失败（渲染出非法 JSON，`json.loads` 抛
+    `Invalid control character` / `Expecting ',' delimiter`），修复后通过；既有渲染
+    断言同步适配序列化格式（键冒号后空格，内容不变）；后端全量测试通过，无 regression。
+
 - **GitLab 瞬时故障（502/限流/网络抖动）退避重试——修复排队任务批量失败且 issue 无任何回复评论（issue #280 诊断修复）**：
   08-17 生产事故诊断：GitLab（SafeLine WAF 前置）短暂不可用返回 502
   （`GitLab is not responding` / WAF 兜底页），botler 任务启动阶段拉取 issue

@@ -146,9 +146,9 @@ class TestBuildPayload:
         variables = enabled_config.build_variables(
             TASK, repo_name=REPO["name"], repo_url=REPO["url"], issue=ISSUE)
         payload = enabled_config.build_payload(variables)
-        assert '"repo":"my/repo"' in payload
-        assert '"issue":"修复登录页崩溃"' in payload
-        assert '"url":"https://gitlab.example.com/my/repo/-/issues/7"' in payload
+        assert '"repo": "my/repo"' in payload
+        assert '"issue": "修复登录页崩溃"' in payload
+        assert '"url": "https://gitlab.example.com/my/repo/-/issues/7"' in payload
         # 无未替换占位符残留（逐项检查 PLACEHOLDERS，JSON 花括号是合法字符）
         from botler.templates import PLACEHOLDERS
         for key in PLACEHOLDERS:
@@ -187,7 +187,7 @@ class TestSend:
         assert captured["url"] == "https://example.com/hooks/botler"
         assert captured["headers"]["Content-Type"] == "application/json"
         assert captured["headers"]["Authorization"] == "Bearer secret-token"
-        assert '"issue":"修复登录页崩溃"' in captured["content"]
+        assert '"issue": "修复登录页崩溃"' in captured["content"]
 
     def test_send_non_2xx_raises(self, enabled_config, monkeypatch):
         """非 2xx 响应抛 WebhookPushError（含状态码与响应体摘要）。"""
@@ -275,4 +275,76 @@ class TestSendTest:
         result = enabled_config.send_test()
         assert result["status_code"] == 200
         assert "测试推送" in captured["content"]
-        assert '"issue":"测试推送（Botler 设置页）"' in captured["content"]
+        assert '"issue": "测试推送（Botler 设置页）"' in captured["content"]
+
+
+class TestBuildPayloadJsonEscaping:
+    """webhook payload JSON 转义回归（issue #298）。
+
+    线上现象：用户关闭网页通知后，发现 webhook 通知也不推送了——实际是
+    任务收尾推送时，issue 描述含换行/引号等特殊字符的任务全部渲染出
+    非法 JSON，被飞书等目标以 HTTP 400（code 9499）拒绝（与
+    notifications.enabled 无关，纯属时间巧合）。本组用例保证任意
+    特殊字符下渲染结果始终是合法 JSON。
+    """
+
+    def test_multiline_description_renders_valid_json(self, enabled_config):
+        """issue 描述含换行时渲染结果仍是合法 JSON（外层可正常解析）。"""
+        import json
+        multiline = dict(ISSUE, description="## 背景 / 现状\n\n第一行\n第二行")
+        variables = enabled_config.build_variables(
+            TASK, repo_name=REPO["name"], repo_url=REPO["url"], issue=multiline)
+        payload = enabled_config.build_payload(variables)
+        parsed = json.loads(payload)  # 非法 JSON 在此抛异常
+        assert parsed["repo"] == "my/repo"
+        assert parsed["issue"] == "修复登录页崩溃"
+
+    def test_quotes_and_backslashes_renders_valid_json(self, enabled_config):
+        """issue 标题含引号与反斜杠时渲染结果仍是合法 JSON，值完整保留。"""
+        import json
+        nasty = dict(ISSUE,
+                     title='含"双引号"与\\反斜杠的标题',
+                     description='正文含"双引号"和\\反斜杠\n第二行')
+        variables = enabled_config.build_variables(
+            TASK, repo_name=REPO["name"], repo_url=REPO["url"], issue=nasty)
+        payload = enabled_config.build_payload(variables)
+        parsed = json.loads(payload)
+        assert parsed["issue"] == nasty["title"]
+
+    def test_default_template_multiline_body_valid_json(self, pusher):
+        """内置默认模板（body 字段）多行正文渲染后仍是合法 JSON。"""
+        import json
+        multiline = dict(ISSUE, description="第一行\n第二行")
+        variables = pusher.build_variables(
+            TASK, repo_name=REPO["name"], repo_url=REPO["url"], issue=multiline)
+        payload = pusher.build_payload(variables)
+        parsed = json.loads(payload)
+        assert parsed["issue"]["body"] == "第一行\n第二行"
+
+    def test_feishu_double_encoded_content_valid(self, tmp_path):
+        """飞书风格模板（content 为 JSON 字符串内嵌 JSON）内外层均合法。
+
+        线上配置即此类模板：content 字段是「JSON 字符串里再嵌 JSON 文本」，
+        标题含引号时内层 JSON 也要正确转义，否则飞书仍返回 HTTP 400。
+        """
+        import json
+        text = CONFIG_TEXT + """\
+webhook:
+  enabled: true
+  url: https://example.com/hooks/botler
+  content_type: application/json
+  body_template: '{"msg_type":"text","content":"{\\"text\\":\\"{repo_name} {issue_title} 完成了\\"}","body":"{issue_body}"}'
+"""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(text, encoding="utf-8")
+        config = ConfigManager(str(config_path))
+        config.load()
+        pusher = WebhookPusher(config)
+        nasty = dict(ISSUE, title='含"引号"的标题', description="第一行\n第二行")
+        variables = pusher.build_variables(
+            TASK, repo_name=REPO["name"], repo_url=REPO["url"], issue=nasty)
+        payload = pusher.build_payload(variables)
+        parsed = json.loads(payload)          # 外层 JSON 合法
+        inner = json.loads(parsed["content"])  # 内层 content 也合法
+        assert inner["text"] == f'{REPO["name"]} {nasty["title"]} 完成了'
+        assert parsed["body"] == nasty["description"]
