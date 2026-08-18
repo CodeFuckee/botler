@@ -1,5 +1,7 @@
 // 图标统一组件测试（issue #177）：项目内所有 UI 图标改用 Lucide 系列。
 // - ICONS 语义映射：每个语义名对应一个 Lucide 组件，渲染产出 <svg>；
+// - issue #183 新增 Web 终端后补登 terminal 图标（terminal: TerminalIcon），
+//   同步语义名清单；
 // - Icon 组件：按 name 渲染对应图标；未知名回退 ×（不渲染空白）；
 // - size / aria-label 等 props 透传到 svg；装饰性图标默认 aria-hidden。
 import { after, test } from 'node:test'
@@ -31,7 +33,7 @@ const EXPECTED_NAMES = [
   'chevronDown', 'chevronRight', 'clipboard', 'coins', 'externalLink',
   'flag', 'folder', 'folderOpen', 'hourglass', 'lightbulb', 'lock',
   'message', 'mic', 'package', 'pencil', 'pin', 'plus', 'refresh',
-  'rocket', 'search', 'settings', 'square', 'tag', 'trash', 'user',
+  'rocket', 'search', 'settings', 'square', 'tag', 'terminal', 'trash', 'user',
   'wallet', 'warning', 'wrench', 'x', 'xCircle',
 ]
 

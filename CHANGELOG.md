@@ -29,6 +29,15 @@
     1.150.5 → 2.50.6、1.0.305 → 1.3.6）；前端全量测试与后端全量测试通过，
     无 regression。
 
+- **图标语义清单补登 Web 终端 terminal 图标，修复既有用例失败（issue #183）**：
+  `frontend/src/components/Icon.jsx` 自 issue #183 集成 Web 终端起已提供
+  `terminal` 语义图标（`terminal: TerminalIcon`），但 `frontend/tests/icons.test.mjs`
+  的 `EXPECTED_NAMES` 语义清单未同步补登，导致「ICONS 键集合应与语义清单完全一致」
+  用例失败（CI 前端测试步骤中该用例一直失败，因 c8 吞掉失败退出码而 job 仍报
+  success，主分支静默带病运行）。本次在语义清单中补登 `terminal`（位于 `tag` 与
+  `trash` 之间，保持字母序），并注明来源；前端全量测试 853 例全部通过。
+
+
 - **构建版本自增规则改为「逢100进一」（issue #179）**：
   需求「修改一下版本自增到规则，逢100进一，意思就是1.0.99的下个版本号是1.1.0，
   1.99.99的下一个版本号是2.0.0」。此前 `frontend/scripts/gen-version.mjs` 每次构建
