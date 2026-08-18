@@ -25,6 +25,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 源码断言改为「i18n key + 字典中文值」双重校验
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+const lazyPages = readFileSync(path.join(ROOT, 'src/pages/lazy.jsx'), 'utf8')
 const plugins = readFileSync(path.join(ROOT, 'src/pages/Plugins.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 const apiPlugins = readFileSync(path.join(ROOT, '../backend/botler/api/plugins.py'), 'utf8')
@@ -46,7 +47,8 @@ test('顶部导航包含「插件」入口', () => {
 
 test('App.jsx 注册 /plugins 路由并挂载 Plugins 页面', () => {
   assert.match(app, /Route path="\/plugins" element={<Plugins \/>}/, '应有 /plugins 路由')
-  assert.match(app, /import Plugins from '\.\/pages\/Plugins\.jsx'/, '应导入 Plugins 页面组件')
+  assert.match(app, /from '\.\/pages\/lazy\.jsx'/, 'App 页面应统一经 lazy.jsx 按路由懒加载')
+  assert.match(lazyPages, /export const Plugins = lazy\(\(\) => import\('\.\/Plugins\.jsx'\)\)/, 'lazy.jsx 应包装 Plugins 页面')
 })
 
 test('页面按分类分组展示插件（分类标题/描述/内置徽章/外部路径）', () => {

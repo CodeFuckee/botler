@@ -17,6 +17,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 源码断言改为「i18n key + 字典中文值」双重校验
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+const lazyPages = readFileSync(path.join(ROOT, 'src/pages/lazy.jsx'), 'utf8')
 const page = readFileSync(path.join(ROOT, 'src/pages/Terminal.jsx'), 'utf8')
 const view = readFileSync(path.join(ROOT, 'src/terminal/TerminalView.jsx'), 'utf8')
 const icons = readFileSync(path.join(ROOT, 'src/components/Icon.jsx'), 'utf8')
@@ -39,7 +40,8 @@ test('App.jsx 顶部导航含「终端」入口并注册路由', () => {
   assert.match(app, /t\('nav\.terminal'\)/, '导航链接应经 t() 国际化')
   assert.equal(zhCN['nav.terminal'], '终端', '中文文案应为「终端」')
   assert.match(app, /Route path="\/terminal" element={<Terminal \/>}/, '应有 /terminal 路由')
-  assert.match(app, /import Terminal from '\.\/pages\/Terminal\.jsx'/, '应导入 Terminal 页面')
+  assert.match(app, /from '\.\/pages\/lazy\.jsx'/, 'App 页面应统一经 lazy.jsx 按路由懒加载')
+  assert.match(lazyPages, /export const Terminal = lazy\(\(\) => import\('\.\/Terminal\.jsx'\)\)/, 'lazy.jsx 应包装 Terminal 页面')
 })
 
 test('Icon.jsx 注册 terminal 图标（Lucide Terminal）', () => {

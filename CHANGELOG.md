@@ -260,7 +260,33 @@
 
 ### Changed
 
-- **调整 CI/CD 执行流程：e2e 阶段移至 deploy 之后、sync 之前（issue #306）**：
+- **前端路由级代码分割，首屏 JS 体积下降约 42%（gzip）（issue #202）**：
+  `frontend/src/App.jsx` 原本静态 import 全部 12 个页面组件，Vite 构建为单个
+  大 bundle（首屏一次性下载全部页面代码，483.79 kB / gzip 142.79 kB）。改为
+  React.lazy + Suspense 按路由懒加载：
+  - 新增 `frontend/src/pages/lazy.jsx`：全部页面（概览/仓库/任务/任务详情/
+    统计/模版/标记库/插件/技能/设置/终端/登录）统一 React.lazy 包装，
+    App.jsx 按路由懒加载，页面切换期间 `<Suspense>` fallback 展示轻量
+    loading 态（`.page-loading` 居中 spinner + 「加载中…」，复用 HIG 既有
+    spinner/muted 视觉，含 aria-live 播报）；
+  - `vite.config.js` 增加 `manualChunks` vendor 拆分：react/react-dom/scheduler
+    独立 `react-vendor` chunk、react-router 独立 `router-vendor` chunk、
+    lucide-react 独立 `icons-vendor` chunk、@xterm 独立 `xterm-vendor` chunk
+    （仅终端页按需加载）——共享依赖缓存稳定，任一页面改动不再影响 vendor
+    chunk hash；
+  - 构建产物验证：`dist/assets` 由「1 个主 bundle」变为 12 个按页面划分的
+    chunk + 4 个 vendor chunk；首屏 JS（入口 + react-vendor + router-vendor +
+    icons-vendor）由 483.79 kB 降至 247.58 kB（gzip 142.79 kB → 83.13 kB，
+    raw 下降约 48.8%、gzip 下降约 41.8%）；终端重依赖（@xterm 291 kB）确认
+    不在首屏预加载清单，仅打开终端页时按需下载；
+  - 测试同步：新增 `frontend/tests/app-lazy-routes.test.mjs`（懒加载不影响
+    渲染：目标页面按路由渲染、未访问页面不进入渲染树、不同路由按需加载各自
+    chunk、lazy.jsx 导出全部 lazy 包装）；`app-default-page` / `app-shortcuts`
+    增加懒加载轮询等待消除 chunk 异步时序抖动；labels/overview/plugins/skills/
+    stats/terminal/apple-design 等源码断言测试改为校验 lazy.jsx 包装写法；
+    前端全量测试通过（仅既有 1 例源码头文件断言失败，与本次改动无关）。
+
+
   原流水线阶段顺序 security → build → e2e → deploy → sync → release
   （e2e 在部署前执行，E2E 未通过不部署）。现调整为
   security → build → deploy → e2e → sync → release：

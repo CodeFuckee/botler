@@ -1860,6 +1860,19 @@ code {
 }
 .app-loading p { margin: 0; }
 
+/* 路由懒加载加载态（issue #202）：页面 chunk 加载期间的轻量占位，
+   与 .app-loading 同视觉语言（居中 spinner + 文案），高度收缩为内容区 */
+.page-loading {
+  min-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--muted);
+}
+.page-loading p { margin: 0; }
+
 /* ---- 触控目标（HIG 灵活：移动端最小 44×44px）----
    仅触屏设备生效，桌面鼠标操作不受影响 */
 @media (pointer: coarse) {

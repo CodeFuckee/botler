@@ -25,6 +25,7 @@ import path from 'node:path'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 const appSrc = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+const lazyPages = readFileSync(path.join(ROOT, 'src/pages/lazy.jsx'), 'utf8')
 
 // 提取 styles.css 首个 :root 块（浅色主题）
 function firstRootBlock(css) {
@@ -237,10 +238,11 @@ test('路由：8 个页面全部可用（概览/仓库/任务/任务详情/模�
     assert.ok(appSrc.includes(`path="${route}"`), `App 路由应包含 ${route}`)
   }
   // 登录页非路由：SSO 启用且未登录时条件渲染（issue #27），断言导入与渲染分支
-  assert.match(appSrc, /import\s+Login\s+from\s+'.\/pages\/Login\.jsx'/,
-    'App 应导入 Login 页面')
-  assert.match(appSrc, /auth\.enabled\s+&&\s+!auth\.user\s*\)\s*return\s+<Login\s*\/>/,
-    'SSO 未登录时应渲染 <Login />')
+  assert.match(appSrc, /from '\.\/pages\/lazy\.jsx'/, 'App 页面应统一经 lazy.jsx 按路由懒加载')
+  assert.match(lazyPages, /export const Login = lazy\(\(\) => import\('\.\/Login\.jsx'\)\)/,
+    'lazy.jsx 应包装 Login 页面')
+  assert.match(appSrc, /auth\.enabled\s+&&\s+!auth\.user/, '应有 SSO 未登录分支')
+  assert.match(appSrc, /<Suspense[\s\S]*?<Login\s*\/>[\s\S]*?<\/Suspense>/, 'SSO 未登录时应经 Suspense 渲染 <Login />')
   // 页面组件文件都存在（防止某页被移除后样式残留）
   for (const file of ['Overview', 'Repos', 'Tasks', 'TaskDetail', 'Templates', 'Labels', 'Settings', 'Login']) {
     const p = path.join(ROOT, `src/pages/${file}.jsx`)

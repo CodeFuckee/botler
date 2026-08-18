@@ -21,6 +21,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 源码断言改为「i18n key + 字典中文值」双重校验
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+const lazyPages = readFileSync(path.join(ROOT, 'src/pages/lazy.jsx'), 'utf8')
 const labels = readFileSync(path.join(ROOT, 'src/pages/Labels.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 const apiLabels = readFileSync(path.join(ROOT, '../backend/botler/api/labels.py'), 'utf8')
@@ -33,7 +34,8 @@ test('顶部导航包含「标记库」入口', () => {
 
 test('App.jsx 注册 /labels 路由并挂载 Labels 页面', () => {
   assert.match(app, /Route path="\/labels" element={<Labels \/>}/, '应有 /labels 路由')
-  assert.match(app, /import Labels from '\.\/pages\/Labels\.jsx'/, '应导入 Labels 页面组件')
+  assert.match(app, /from '\.\/pages\/lazy\.jsx'/, 'App 页面应统一经 lazy.jsx 按路由懒加载')
+  assert.match(lazyPages, /export const Labels = lazy\(\(\) => import\('\.\/Labels\.jsx'\)\)/, 'lazy.jsx 应包装 Labels 页面')
 })
 
 test('标记库页展示默认清单，默认标签标记「默认」且无删除按钮', () => {

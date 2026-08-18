@@ -27,5 +27,24 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // 路由级代码分割（issue #202）：react/react-dom 等全站共享依赖
+        // 独立 vendor chunk（缓存稳定，页面改动不影响其 hash）；其余
+        // node_modules 依赖按需并入对应页面 chunk，避免把终端等重依赖
+        // 塞进首屏
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          // 注意顺序：react-router* 先于 react 匹配（其 id 含 'react'）
+          if (id.includes('react-router')) return 'router-vendor'
+          if (id.includes('/react/') || id.includes('/react-dom/') ||
+              id.includes('/scheduler/') || id.includes('/react-is/')) {
+            return 'react-vendor'
+          }
+          if (id.includes('@xterm')) return 'xterm-vendor'
+          if (id.includes('lucide-react')) return 'icons-vendor'
+        },
+      },
+    },
   },
 })

@@ -20,6 +20,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const enUS = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/en-US.json'), 'utf8'))
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+const lazyPages = readFileSync(path.join(ROOT, 'src/pages/lazy.jsx'), 'utf8')
 const skills = readFileSync(path.join(ROOT, 'src/pages/Skills.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 const apiSkills = readFileSync(path.join(ROOT, '../backend/botler/api/skills.py'), 'utf8')
@@ -42,7 +43,8 @@ test('顶部导航包含「技能」入口（i18n 中英文文案）', () => {
 
 test('App.jsx 注册 /skills 路由并挂载 Skills 页面', () => {
   assert.match(app, /Route path="\/skills" element={<Skills \/>}/, '应有 /skills 路由')
-  assert.match(app, /import Skills from '\.\/pages\/Skills\.jsx'/, '应导入 Skills 页面组件')
+  assert.match(app, /from '\.\/pages\/lazy\.jsx'/, 'App 页面应统一经 lazy.jsx 按路由懒加载')
+  assert.match(lazyPages, /export const Skills = lazy\(\(\) => import\('\.\/Skills\.jsx'\)\)/, 'lazy.jsx 应包装 Skills 页面')
 })
 
 test('页面按引擎分组展示技能（引擎 tab / 技能列表 / 文件 chips / 编辑器）', () => {

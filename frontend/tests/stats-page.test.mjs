@@ -28,6 +28,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const statsSrc = readFileSync(path.join(ROOT, 'src/pages/Stats.jsx'), 'utf8')
 const appSrc = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+const lazyPages = readFileSync(path.join(ROOT, 'src/pages/lazy.jsx'), 'utf8')
 const iconSrc = readFileSync(path.join(ROOT, 'src/components/Icon.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -81,7 +82,8 @@ test('源码：纯 CSS 条形图（不引入 recharts 等重依赖）', () => {
 })
 
 test('App.jsx 提供统计页导航入口与路由', () => {
-  assert.match(appSrc, /import Stats from '\.\/pages\/Stats\.jsx'/, '应导入 Stats 页面')
+  assert.match(appSrc, /from '\.\/pages\/lazy\.jsx'/, 'App 页面应统一经 lazy.jsx 按路由懒加载')
+  assert.match(lazyPages, /export const Stats = lazy\(\(\) => import\('\.\/Stats\.jsx'\)\)/, 'lazy.jsx 应包装 Stats 页面')
   assert.match(appSrc, /to="\/stats"/, '应有 /stats 导航入口')
   assert.match(appSrc, /t\('nav\.stats'\)/, '导航文案应经 t() 国际化')
   assert.equal(zhCN['nav.stats'], '统计', '中文文案应为「统计」')

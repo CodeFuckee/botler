@@ -1,17 +1,12 @@
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
-import Repos from './pages/Repos.jsx'
-import Overview from './pages/Overview.jsx'
-import Templates from './pages/Templates.jsx'
-import Labels from './pages/Labels.jsx'
-import Tasks from './pages/Tasks.jsx'
-import Stats from './pages/Stats.jsx'
-import TaskDetail from './pages/TaskDetail.jsx'
-import Settings from './pages/Settings.jsx'
-import Plugins from './pages/Plugins.jsx'
-import Skills from './pages/Skills.jsx'
-import Terminal from './pages/Terminal.jsx'
-import Login from './pages/Login.jsx'
+// 路由级代码分割（issue #202）：页面组件全部经 pages/lazy.jsx 的
+// React.lazy 包装按路由懒加载——首屏只加载当前页面 chunk，其余页面
+// 代码按需下载；页面切换期间由 <Suspense> fallback 展示轻量加载态
+import {
+  Overview, Repos, Templates, Labels, Tasks, Stats, TaskDetail,
+  Settings, Plugins, Skills, Terminal, Login,
+} from './pages/lazy.jsx'
 import DialogHost from './components/DialogHost.jsx'
 import UserMenu from './components/UserMenu.jsx'
 import ShortcutHelpModal from './components/ShortcutHelpModal.jsx'
@@ -22,6 +17,19 @@ import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 import { createVersionChecker } from './version-update.js'
 import { Icon } from './components/Icon.jsx'
 import { useI18n, LANG_LABELS } from './i18n.jsx'
+
+// 路由懒加载加载态（issue #202）：页面 chunk 异步加载期间的轻量占位，
+// 复用 HIG 既有 .spinner / .muted 视觉（居中 spinner + 「加载中…」），
+// 避免路由切换出现空白闪烁；role=status 供屏幕阅读器播报
+function PageLoading() {
+  const { t } = useI18n()
+  return (
+    <div className="page-loading" role="status" aria-live="polite">
+      <span className="spinner" aria-hidden="true" />
+      <p className="muted">{t('common.loading')}</p>
+    </div>
+  )
+}
 
 export default function App() {
   // SSO 登录状态（issue #27）：null = 检测中；{enabled, user} = 结果。
@@ -140,7 +148,13 @@ export default function App() {
       </div>
     )
   }
-  if (auth.enabled && !auth.user) return <Login />
+  if (auth.enabled && !auth.user) {
+    return (
+      <Suspense fallback={<PageLoading />}>
+        <Login />
+      </Suspense>
+    )
+  }
 
   return (
     <div className="app">
@@ -232,22 +246,24 @@ export default function App() {
       {/* 快捷键跳转（issue #269）：redirect 非空时切换路由并立即清空 */}
       {redirect && <Navigate to={redirect} replace />}
       <main className="content">
-        <Routes>
-          {/* issue #54：默认页面改到概览页——/ 重定向到 /overview，
-              仓库页迁至 /repos（replace 避免后退键卡在重定向环） */}
-          <Route path="/" element={<Navigate to="/overview" replace />} />
-          <Route path="/overview" element={<Overview />} />
-          <Route path="/repos" element={<Repos />} />
-          <Route path="/tasks" element={<Tasks />} />
-          <Route path="/tasks/:id" element={<TaskDetail />} />
-          <Route path="/stats" element={<Stats />} />
-          <Route path="/templates" element={<Templates />} />
-          <Route path="/labels" element={<Labels />} />
-          <Route path="/plugins" element={<Plugins />} />
-          <Route path="/skills" element={<Skills />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/terminal" element={<Terminal />} />
-        </Routes>
+        <Suspense fallback={<PageLoading />}>
+          <Routes>
+            {/* issue #54：默认页面改到概览页——/ 重定向到 /overview，
+                仓库页迁至 /repos（replace 避免后退键卡在重定向环） */}
+            <Route path="/" element={<Navigate to="/overview" replace />} />
+            <Route path="/overview" element={<Overview />} />
+            <Route path="/repos" element={<Repos />} />
+            <Route path="/tasks" element={<Tasks />} />
+            <Route path="/tasks/:id" element={<TaskDetail />} />
+            <Route path="/stats" element={<Stats />} />
+            <Route path="/templates" element={<Templates />} />
+            <Route path="/labels" element={<Labels />} />
+            <Route path="/plugins" element={<Plugins />} />
+            <Route path="/skills" element={<Skills />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/terminal" element={<Terminal />} />
+          </Routes>
+        </Suspense>
       </main>
       {/* 快捷键帮助弹窗（issue #269）：右上角按钮打开，展示键位与
           启用开关；Esc / 遮罩 / × 关闭（组件内自行监听 Esc） */}

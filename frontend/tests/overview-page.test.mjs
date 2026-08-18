@@ -24,6 +24,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+const lazyPages = readFileSync(path.join(ROOT, 'src/pages/lazy.jsx'), 'utf8')
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -58,7 +59,8 @@ test('顶部导航「概览」位于「仓库」tab 左边', () => {
 
 test('App.jsx 注册 /overview 路由并挂载 Overview 页面', () => {
   assert.match(app, /Route path="\/overview" element={<Overview \/>}/, '应有 /overview 路由')
-  assert.match(app, /import Overview from '\.\/pages\/Overview\.jsx'/, '应导入 Overview 页面组件')
+  assert.match(app, /from '\.\/pages\/lazy\.jsx'/, 'App 页面应统一经 lazy.jsx 按路由懒加载')
+  assert.match(lazyPages, /export const Overview = lazy\(\(\) => import\('\.\/Overview\.jsx'\)\)/, 'lazy.jsx 应包装 Overview 页面')
 })
 
 // ---- Overview 数据流源码断言 ----

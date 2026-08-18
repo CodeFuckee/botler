@@ -65,6 +65,17 @@ async function renderAt(initialPath) {
   return renderer
 }
 
+// 路由懒加载等待（issue #202）：页面 chunk 异步加载完成后才渲染出页面
+// 组件，轮询等待其出现，保证快捷键跳转断言确定性
+async function waitForPage(renderer, Page, timeout = 2000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (renderer.root.findAllByType(Page).length > 0) return true
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  return false
+}
+
 // 向全部 keydown 监听派发按键（BODY 目标 = 非输入框）
 function press(key) {
   const ev = {
@@ -102,10 +113,10 @@ test('渲染：导航栏「快捷键帮助」按钮打开帮助面板（键位�
 test('行为：按 t 跳转任务列表页', async () => {
   const renderer = await renderAt('/')
   try {
-    assert.equal(renderer.root.findAllByType(Overview).length, 1, '初始应在概览页')
+    assert.equal(await waitForPage(renderer, Overview), true, '初始应在概览页')
     press('t')
     await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-    assert.equal(renderer.root.findAllByType(Tasks).length, 1, '按 t 应跳转任务列表页')
+    assert.equal(await waitForPage(renderer, Tasks), true, '按 t 应跳转任务列表页')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
   }
@@ -114,15 +125,15 @@ test('行为：按 t 跳转任务列表页', async () => {
 test('行为：g o / g s 组合键跳转概览 / 设置页', async () => {
   const renderer = await renderAt('/tasks')
   try {
-    assert.equal(renderer.root.findAllByType(Tasks).length, 1, '初始应在任务页')
+    assert.equal(await waitForPage(renderer, Tasks), true, '初始应在任务页')
     press('g')
     press('o')
     await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-    assert.equal(renderer.root.findAllByType(Overview).length, 1, 'g o 应跳转概览页')
+    assert.equal(await waitForPage(renderer, Overview), true, 'g o 应跳转概览页')
     press('g')
     press('s')
     await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
-    assert.equal(renderer.root.findAllByType(Settings).length, 1, 'g s 应跳转设置页')
+    assert.equal(await waitForPage(renderer, Settings), true, 'g s 应跳转设置页')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
   }
@@ -136,11 +147,11 @@ test('开关：localStorage 关闭时按 t 不跳转（一键禁用生效）', a
   try {
     const renderer = await renderAt('/')
     try {
-      assert.equal(renderer.root.findAllByType(Overview).length, 1, '初始应在概览页')
+      assert.equal(await waitForPage(renderer, Overview), true, '初始应在概览页')
       press('t')
       await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
       assert.equal(renderer.root.findAllByType(Tasks).length, 0, '开关关闭时按 t 不应跳转')
-      assert.equal(renderer.root.findAllByType(Overview).length, 1, '应停留在概览页')
+      assert.equal(await waitForPage(renderer, Overview), true, '应停留在概览页')
     } finally {
       await TestRenderer.act(() => renderer.unmount())
     }

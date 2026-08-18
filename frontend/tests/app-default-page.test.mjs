@@ -34,14 +34,22 @@ async function renderAt(path) {
   return renderer
 }
 
+// 路由懒加载等待（issue #202）：页面 chunk 异步加载完成后才渲染出
+// 页面组件，轮询等待其出现（vite SSR 动态 import 通常毫秒级完成，
+// 轮询保证断言确定性，避免偶发时序失败）
+async function waitForPage(renderer, Page, timeout = 2000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (renderer.root.findAllByType(Page).length > 0) return true
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  return false
+}
+
 test('访问 / 时默认显示概览页而非仓库页（issue #54）', async () => {
   const renderer = await renderAt('/')
   try {
-    assert.equal(
-      renderer.root.findAllByType(Overview).length,
-      1,
-      '根路径应重定向渲染概览页'
-    )
+    assert.equal(await waitForPage(renderer, Overview), true, '根路径应重定向渲染概览页（懒加载后）')
     assert.equal(
       renderer.root.findAllByType(Repos).length,
       0,
@@ -55,11 +63,7 @@ test('访问 / 时默认显示概览页而非仓库页（issue #54）', async ()
 test('仓库页仍可通过 /repos 访问（issue #54 迁址）', async () => {
   const renderer = await renderAt('/repos')
   try {
-    assert.equal(
-      renderer.root.findAllByType(Repos).length,
-      1,
-      '/repos 应渲染仓库页'
-    )
+    assert.equal(await waitForPage(renderer, Repos), true, '/repos 应渲染仓库页（懒加载后）')
     assert.equal(
       renderer.root.findAllByType(Overview).length,
       0,
