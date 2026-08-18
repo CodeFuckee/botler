@@ -534,401 +534,513 @@ export default function Overview() {
     <div>
       <h1>概览</h1>
 
-      {/* issue #138：DeepSeek 账户余额——设置里配置了 deepseek api 时
-          在概览页展示（未配置时整卡不渲染，页面保持简洁）。数据由后端
-          代调 https://api.deepseek.com/user/balance 获取，Key 不外发 */}
-      {dsBalance && dsBalance.configured && (
-        <section className="deepseek-balance-section">
-          <h2>DeepSeek 账户余额</h2>
-          <p className="muted">
-            来自 DeepSeek user/balance 接口（每 {DEEPSEEK_BALANCE_POLL_MS / 1000} 秒自动刷新）
-          </p>
-          {(dsBalance.error || dsBalanceError) && (
-            <div className="alert alert-error" role="alert">
-              {dsBalance.error || dsBalanceError}
-            </div>
-          )}
-          {dsBalance.balance && (
-            <div className="deepseek-balance-body">
-              <div className="deepseek-balance-head">
-                {dsBalance.balance.is_available ? (
-                  <span className="ok-text"><Icon name="check" /> 账户可用</span>
-                ) : (
-                  <span className="muted">账户不可用</span>
-                )}
-                {dsBalance.balance.fetched_at && (
-                  <span className="muted small" title="查询时间">
-                    更新于 {fmtTime(dsBalance.balance.fetched_at)}
-                  </span>
-                )}
-              </div>
-              {(dsBalance.balance.balance_infos || []).length === 0 ? (
-                <div className="empty-state small">
-                  <span className="empty-icon" aria-hidden="true"><Icon name="wallet" /></span>
-                  <p className="muted">暂无余额信息</p>
-                </div>
-              ) : (
-                <ul className="deepseek-balance-list">
-                  {(dsBalance.balance.balance_infos || []).map((info, i) => (
-                    <li key={i} className="deepseek-balance-item">
-                      <span className="deepseek-balance-currency" title="币种">
-                        {info.currency || '—'}
-                      </span>
-                      <span className="deepseek-balance-total" title="总余额">
-                        {info.total_balance != null ? `${info.total_balance}` : '—'}
-                      </span>
-                      <span className="muted small" title="赠送余额">
-                        赠送 {info.granted_balance ?? '—'}
-                      </span>
-                      <span className="muted small" title="充值余额">
-                        充值 {info.topped_up_balance ?? '—'}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-          <div className="form-row">
-            <button type="button" className="btn btn-small"
-                    onClick={loadDeepSeekBalance}><Icon name="refresh" /> 刷新</button>
-            <a className="btn btn-small deepseek-topup-link"
-               href={DEEPSEEK_TOPUP_URL} target="_blank" rel="noreferrer"
-               title="前往 DeepSeek 开放平台充值"><Icon name="externalLink" /> 去充值</a>
-          </div>
-        </section>
-      )}
+      {/* issue #184：概览页双栏布局——主内容（DeepSeek 余额 / 开放 Issue /
+          CI/CD 流水线 / Issue 完成耗时）在左列，灵感板块移入右侧常驻边栏；
+          AI 对话面板以右侧抽屉打开（见下方 issue #166 区块） */}
+      <div className="overview-layout">
+        <div className="overview-main">
 
-      {/* issue #68：板块排序调整——开放 Issue 置于页面顶部，
-          其后为 CI/CD 流水线。
-          issue #114：独立任务板块删除，正在运行任务的信息（状态徽章
-          / 引擎 / 实时输出）整合进本板块 running 组的 issue 项内，
-          任务轮询错误一并在此展示 */}
-      <section className="issues-section">
-        <h2>开放 Issue</h2>
-        <p className="muted">已启用仓库的开放 issue，按仓库优先级排序，正在运行的 issue 置顶展示任务执行详情（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
-        {ownerTokenOk === false && (
-          <div className="alert alert-warning" role="alert">
-            <Icon name="warning" /> <strong>Owner GitLab Token 未配置</strong>：概览页的 issue 编辑
-            （关闭 issue / 编辑标签 / 添加评论 / 回复评论 / 添加 issue）必须使用
-            owner token，未配置时操作会被拦截（不会以 code01 身份发布）。
-            请先在「设置」页配置 <code>gitlab.owner_token</code> 后再操作。
-          </div>
-        )}
-        {issueError && (
-          <div className="alert alert-error" onClick={() => setIssueError('')}>{issueError}</div>
-        )}
-        {error && (
-          <div className="alert alert-error" onClick={() => setError('')}>{error}</div>
-        )}
-        {issueErrors.length > 0 && (
-          <div className="alert alert-error">
-            {issueErrors.map((e, i) => <div key={i}>{e}</div>)}
-          </div>
-        )}
-        {repoIssues.length === 0 || repoIssues.every((r) => !r.issues || r.issues.length === 0) ? (
-          <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
-            <p className="muted">暂无开放 issue</p>
-          </div>
-        ) : (
-          <div className="issues-list">
-            {repoIssues.map((r) => (
-              <div key={r.repo_id} className="card issue-repo-card">
-                <div className="issue-repo-head">
-                  <span className="issue-repo-name" title="仓库"><Icon name="folder" /> {r.repo_name || '（已删除）'}</span>
-                  <span className="badge badge-muted" title="仓库优先级：数字越小越优先">
-                    优先级 {r.priority ?? 100}
-                  </span>
-                  <span className="muted">{r.issues.length} 个开放 issue</span>
-                  {/* issue #134：卡片右上角操作组——「对账」按钮 + issue #92
-                      「添加 Issue」按钮，整体推到卡片头最右侧 */}
-                  <div className="issue-repo-actions">
-                    <button type="button" className="btn btn-small reconcile-btn"
-                            onClick={() => reconcileRepo(r)}
-                            disabled={reconcileResults[r.repo_id]?.loading}
-                            title="立即扫描该仓库开放 issue，把分配给了 bot 但还没有任务的 issue 补入任务队列">
-                      {reconcileResults[r.repo_id]?.loading ? <><Icon name="refresh" /> 对账中…</> : <><Icon name="refresh" /> 对账</>}
-                    </button>
-                    {/* issue #92：卡片右上角「添加 Issue」按钮——打开弹窗，
-                        提交后调用 GitLab API 在对应仓库创建 issue */}
-                    <button type="button" className="btn btn-small add-issue-btn"
-                            onClick={() => setAddIssueRepo(r)}
-                            title="在该仓库创建新 issue"><Icon name="plus" /> 添加 Issue</button>
-                  </div>
+          {/* issue #138：DeepSeek 账户余额——设置里配置了 deepseek api 时
+              在概览页展示（未配置时整卡不渲染，页面保持简洁）。数据由后端
+              代调 https://api.deepseek.com/user/balance 获取，Key 不外发 */}
+          {dsBalance && dsBalance.configured && (
+            <section className="deepseek-balance-section">
+              <h2>DeepSeek 账户余额</h2>
+              <p className="muted">
+                来自 DeepSeek user/balance 接口（每 {DEEPSEEK_BALANCE_POLL_MS / 1000} 秒自动刷新）
+              </p>
+              {(dsBalance.error || dsBalanceError) && (
+                <div className="alert alert-error" role="alert">
+                  {dsBalance.error || dsBalanceError}
                 </div>
-                {/* issue #134：对账结果——与仓库页对账结果一致，小字展示
-                    扫描/补入队结果，请求失败显示错误 */}
-                {reconcileResults[r.repo_id] && <ReconcileResult result={reconcileResults[r.repo_id]} />}
-                {(r.issues || []).length === 0 ? (
-                  <div className="empty-state small">
-                    <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
-                    <p className="muted">该仓库暂无开放 issue</p>
+              )}
+              {dsBalance.balance && (
+                <div className="deepseek-balance-body">
+                  <div className="deepseek-balance-head">
+                    {dsBalance.balance.is_available ? (
+                      <span className="ok-text"><Icon name="check" /> 账户可用</span>
+                    ) : (
+                      <span className="muted">账户不可用</span>
+                    )}
+                    {dsBalance.balance.fetched_at && (
+                      <span className="muted small" title="查询时间">
+                        更新于 {fmtTime(dsBalance.balance.fetched_at)}
+                      </span>
+                    )}
                   </div>
-                ) : (
-                  /* issue #80：按 bot 终态标签分组（bot-failed / bot-done /
-                     其他），只渲染非空组，组标题带计数
-                     issue #101：正在运行的 issue 独立成 running 组置顶，
-                     任务结束键消失后自动回落原分组 */
-                  ISSUE_GROUPS.map((g) => {
-                    const items = groupIssuesByBotLabel(r.issues, runningKeys, r.repo_id)[g.key]
-                    if (items.length === 0) return null
-                    return (
-                      <div key={g.key} className="issue-group">
-                        <div className="issue-group-head">
-                          <span className="issue-group-title" title={g.hint}><Icon name={g.icon} /> {g.title}</span>
-                          <span className="issue-group-count"
-                                title="组内 issue 数量">{items.length} 个</span>
-                        </div>
-                        <ul className="issue-list">
-                          {items.map((i) => {
-                            const bot = botStatusKey(i)
-                            const statusMeta = bot ? BOT_STATUS_META[bot] : null
-                            // issue #99：任务（running/retrying）命中则该 issue 高亮
-                            const running = runningKeys.has(`${r.repo_id}:${i.iid}`)
-                            // issue #80：终态标签由状态徽章替代展示，其余标签保留胶囊
-                            const otherLabels = (i.labels || []).filter(
-                              (l) => l && !BOT_STATUS_NAMES.has(l.name))
-                            return (
-                              <li key={i.iid}
-                                  className={running ? 'issue-item issue-item-running' : 'issue-item'}>
-                                {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
-                                    标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数
-                                    issue #85：标题改为按钮——点击打开右边栏，不再直接
-                                    跳转 GitLab（跳转统一走右边栏右上角按钮）
-                                    issue #114：issue 行（issue-row）与任务信息块
-                                    纵向排布——任务板块删除后任务详情随项展示 */}
-                                <div className="issue-row">
-                                <div className="issue-main">
-                                  <button type="button" className="issue-link"
-                                          onClick={() => setSelectedIssue({
-                                            issue: i, repoName: r.repo_name,
-                                            running,
-                                          })}
-                                          title="查看 issue 详情">
-                                    <span className="issue-iid">#{i.iid}</span>
-                                    {statusMeta && (
-                                      <span className={`issue-status ${statusMeta.cls}`}
-                                            title={statusMeta.hint}><Icon name={statusMeta.icon} /> {statusMeta.label}</span>
-                                    )}
-                                    {/* issue #99：正在运行的 issue 显示「运行中」徽章
-                                        （任务结束后随任务列表轮询自动消失） */}
-                                    {running && (
-                                      <span className="issue-status issue-status-running"
-                                            title="该 issue 正在被 bot 执行中"><Icon name="settings" /> 运行中</span>
-                                    )}
-                                    {i.title || '—'}
-                                  </button>
-                                  {(otherLabels.length > 0 || i.milestone) && (
-                                    <div className="issue-meta">
-                                      {otherLabels.map((l) => (
-                                        <span key={l.name} className="label-pill"
-                                              style={l.color
-                                                ? { background: `#${l.color}`, color: `#${l.text_color}` }
-                                                : undefined}
-                                              title={`标签 ${l.name}`}>{l.name}</span>
+                  {(dsBalance.balance.balance_infos || []).length === 0 ? (
+                    <div className="empty-state small">
+                      <span className="empty-icon" aria-hidden="true"><Icon name="wallet" /></span>
+                      <p className="muted">暂无余额信息</p>
+                    </div>
+                  ) : (
+                    <ul className="deepseek-balance-list">
+                      {(dsBalance.balance.balance_infos || []).map((info, i) => (
+                        <li key={i} className="deepseek-balance-item">
+                          <span className="deepseek-balance-currency" title="币种">
+                            {info.currency || '—'}
+                          </span>
+                          <span className="deepseek-balance-total" title="总余额">
+                            {info.total_balance != null ? `${info.total_balance}` : '—'}
+                          </span>
+                          <span className="muted small" title="赠送余额">
+                            赠送 {info.granted_balance ?? '—'}
+                          </span>
+                          <span className="muted small" title="充值余额">
+                            充值 {info.topped_up_balance ?? '—'}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+              <div className="form-row">
+                <button type="button" className="btn btn-small"
+                        onClick={loadDeepSeekBalance}><Icon name="refresh" /> 刷新</button>
+                <a className="btn btn-small deepseek-topup-link"
+                   href={DEEPSEEK_TOPUP_URL} target="_blank" rel="noreferrer"
+                   title="前往 DeepSeek 开放平台充值"><Icon name="externalLink" /> 去充值</a>
+              </div>
+            </section>
+          )}
+
+          {/* issue #68：板块排序调整——开放 Issue 置于页面顶部，
+              其后为 CI/CD 流水线。
+              issue #114：独立任务板块删除，正在运行任务的信息（状态徽章
+              / 引擎 / 实时输出）整合进本板块 running 组的 issue 项内，
+              任务轮询错误一并在此展示 */}
+          <section className="issues-section">
+            <h2>开放 Issue</h2>
+            <p className="muted">已启用仓库的开放 issue，按仓库优先级排序，正在运行的 issue 置顶展示任务执行详情（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
+            {ownerTokenOk === false && (
+              <div className="alert alert-warning" role="alert">
+                <Icon name="warning" /> <strong>Owner GitLab Token 未配置</strong>：概览页的 issue 编辑
+                （关闭 issue / 编辑标签 / 添加评论 / 回复评论 / 添加 issue）必须使用
+                owner token，未配置时操作会被拦截（不会以 code01 身份发布）。
+                请先在「设置」页配置 <code>gitlab.owner_token</code> 后再操作。
+              </div>
+            )}
+            {issueError && (
+              <div className="alert alert-error" onClick={() => setIssueError('')}>{issueError}</div>
+            )}
+            {error && (
+              <div className="alert alert-error" onClick={() => setError('')}>{error}</div>
+            )}
+            {issueErrors.length > 0 && (
+              <div className="alert alert-error">
+                {issueErrors.map((e, i) => <div key={i}>{e}</div>)}
+              </div>
+            )}
+            {repoIssues.length === 0 || repoIssues.every((r) => !r.issues || r.issues.length === 0) ? (
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
+                <p className="muted">暂无开放 issue</p>
+              </div>
+            ) : (
+              <div className="issues-list">
+                {repoIssues.map((r) => (
+                  <div key={r.repo_id} className="card issue-repo-card">
+                    <div className="issue-repo-head">
+                      <span className="issue-repo-name" title="仓库"><Icon name="folder" /> {r.repo_name || '（已删除）'}</span>
+                      <span className="badge badge-muted" title="仓库优先级：数字越小越优先">
+                        优先级 {r.priority ?? 100}
+                      </span>
+                      <span className="muted">{r.issues.length} 个开放 issue</span>
+                      {/* issue #134：卡片右上角操作组——「对账」按钮 + issue #92
+                          「添加 Issue」按钮，整体推到卡片头最右侧 */}
+                      <div className="issue-repo-actions">
+                        <button type="button" className="btn btn-small reconcile-btn"
+                                onClick={() => reconcileRepo(r)}
+                                disabled={reconcileResults[r.repo_id]?.loading}
+                                title="立即扫描该仓库开放 issue，把分配给了 bot 但还没有任务的 issue 补入任务队列">
+                          {reconcileResults[r.repo_id]?.loading ? <><Icon name="refresh" /> 对账中…</> : <><Icon name="refresh" /> 对账</>}
+                        </button>
+                        {/* issue #92：卡片右上角「添加 Issue」按钮——打开弹窗，
+                            提交后调用 GitLab API 在对应仓库创建 issue */}
+                        <button type="button" className="btn btn-small add-issue-btn"
+                                onClick={() => setAddIssueRepo(r)}
+                                title="在该仓库创建新 issue"><Icon name="plus" /> 添加 Issue</button>
+                      </div>
+                    </div>
+                    {/* issue #134：对账结果——与仓库页对账结果一致，小字展示
+                        扫描/补入队结果，请求失败显示错误 */}
+                    {reconcileResults[r.repo_id] && <ReconcileResult result={reconcileResults[r.repo_id]} />}
+                    {(r.issues || []).length === 0 ? (
+                      <div className="empty-state small">
+                        <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
+                        <p className="muted">该仓库暂无开放 issue</p>
+                      </div>
+                    ) : (
+                      /* issue #80：按 bot 终态标签分组（bot-failed / bot-done /
+                         其他），只渲染非空组，组标题带计数
+                         issue #101：正在运行的 issue 独立成 running 组置顶，
+                         任务结束键消失后自动回落原分组 */
+                      ISSUE_GROUPS.map((g) => {
+                        const items = groupIssuesByBotLabel(r.issues, runningKeys, r.repo_id)[g.key]
+                        if (items.length === 0) return null
+                        return (
+                          <div key={g.key} className="issue-group">
+                            <div className="issue-group-head">
+                              <span className="issue-group-title" title={g.hint}><Icon name={g.icon} /> {g.title}</span>
+                              <span className="issue-group-count"
+                                    title="组内 issue 数量">{items.length} 个</span>
+                            </div>
+                            <ul className="issue-list">
+                              {items.map((i) => {
+                                const bot = botStatusKey(i)
+                                const statusMeta = bot ? BOT_STATUS_META[bot] : null
+                                // issue #99：任务（running/retrying）命中则该 issue 高亮
+                                const running = runningKeys.has(`${r.repo_id}:${i.iid}`)
+                                // issue #80：终态标签由状态徽章替代展示，其余标签保留胶囊
+                                const otherLabels = (i.labels || []).filter(
+                                  (l) => l && !BOT_STATUS_NAMES.has(l.name))
+                                return (
+                                  <li key={i.iid}
+                                      className={running ? 'issue-item issue-item-running' : 'issue-item'}>
+                                    {/* issue #71：参考 GitLab issue 列表页布局——左列编号+标题+
+                                        标签/里程碑胶囊，右列 assignee 头像+更新时间+评论数
+                                        issue #85：标题改为按钮——点击打开右边栏，不再直接
+                                        跳转 GitLab（跳转统一走右边栏右上角按钮）
+                                        issue #114：issue 行（issue-row）与任务信息块
+                                        纵向排布——任务板块删除后任务详情随项展示 */}
+                                    <div className="issue-row">
+                                    <div className="issue-main">
+                                      <button type="button" className="issue-link"
+                                              onClick={() => setSelectedIssue({
+                                                issue: i, repoName: r.repo_name,
+                                                running,
+                                              })}
+                                              title="查看 issue 详情">
+                                        <span className="issue-iid">#{i.iid}</span>
+                                        {statusMeta && (
+                                          <span className={`issue-status ${statusMeta.cls}`}
+                                                title={statusMeta.hint}><Icon name={statusMeta.icon} /> {statusMeta.label}</span>
+                                        )}
+                                        {/* issue #99：正在运行的 issue 显示「运行中」徽章
+                                            （任务结束后随任务列表轮询自动消失） */}
+                                        {running && (
+                                          <span className="issue-status issue-status-running"
+                                                title="该 issue 正在被 bot 执行中"><Icon name="settings" /> 运行中</span>
+                                        )}
+                                        {i.title || '—'}
+                                      </button>
+                                      {(otherLabels.length > 0 || i.milestone) && (
+                                        <div className="issue-meta">
+                                          {otherLabels.map((l) => (
+                                            <span key={l.name} className="label-pill"
+                                                  style={l.color
+                                                    ? { background: `#${l.color}`, color: `#${l.text_color}` }
+                                                    : undefined}
+                                                  title={`标签 ${l.name}`}>{l.name}</span>
+                                          ))}
+                                          {i.milestone && (
+                                            <span className="milestone-chip" title={`里程碑 ${i.milestone}`}>
+                                              <Icon name="tag" /> {i.milestone}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="issue-side">
+                                      {(i.assignees || []).map((a) => (
+                                        a.avatar_url ? (
+                                          <img key={a.username || a.name}
+                                               className="assignee-avatar" src={a.avatar_url}
+                                               alt={a.name || a.username || ''}
+                                               title={`负责人 ${a.name || a.username || ''}`} />
+                                        ) : (
+                                          <span key={a.username || a.name}
+                                                className="assignee-avatar avatar-fallback"
+                                                title={`负责人 ${a.name || a.username || ''}`}>
+                                            {(a.name || a.username || '?').slice(0, 1).toUpperCase()}
+                                          </span>
+                                        )
                                       ))}
-                                      {i.milestone && (
-                                        <span className="milestone-chip" title={`里程碑 ${i.milestone}`}>
-                                          <Icon name="tag" /> {i.milestone}
+                                      {i.updated_at && (
+                                        <span className="issue-updated" title="最后更新时间">
+                                          {fmtAgo(i.updated_at) || ''}
+                                        </span>
+                                      )}
+                                      {typeof i.user_notes_count === 'number' && (
+                                        <span className="issue-notes" title="评论数">
+                                          <Icon name="message" /> {i.user_notes_count}
                                         </span>
                                       )}
                                     </div>
-                                  )}
-                                </div>
-                                <div className="issue-side">
-                                  {(i.assignees || []).map((a) => (
-                                    a.avatar_url ? (
-                                      <img key={a.username || a.name}
-                                           className="assignee-avatar" src={a.avatar_url}
-                                           alt={a.name || a.username || ''}
-                                           title={`负责人 ${a.name || a.username || ''}`} />
-                                    ) : (
-                                      <span key={a.username || a.name}
-                                            className="assignee-avatar avatar-fallback"
-                                            title={`负责人 ${a.name || a.username || ''}`}>
-                                        {(a.name || a.username || '?').slice(0, 1).toUpperCase()}
-                                      </span>
-                                    )
-                                  ))}
-                                  {i.updated_at && (
-                                    <span className="issue-updated" title="最后更新时间">
-                                      {fmtAgo(i.updated_at) || ''}
-                                    </span>
-                                  )}
-                                  {typeof i.user_notes_count === 'number' && (
-                                    <span className="issue-notes" title="评论数">
-                                      <Icon name="message" /> {i.user_notes_count}
-                                    </span>
-                                  )}
-                                </div>
-                                </div>
-                                {/* issue #114：正在运行任务的信息块——任务板块已删除，
-                                    任务状态徽章 / 执行引擎 / 实时输出随对应 issue 项
-                                    展示（同一 issue 的多条任务记录逐一渲染） */}
-                                {running && tasksForIssue(tasks, r.repo_id, i.iid).map((t) => {
-                                  const meta = STATUS_META[t.status]
-                                    || { label: t.status || '—', cls: '' }
-                                  const lines = liveLines[t.id] || []
-                                  const eng = engineLabel(t.engine)
-                                  return (
-                                    <div key={t.id} className="issue-task">
-                                      <div className="issue-task-head">
-                                        <span className={'badge ' + meta.cls}>{meta.label}</span>
-                                        {eng && (
-                                          <span className="issue-task-engine"
-                                                title="任务执行引擎">{eng}</span>
-                                        )}
-                                        {t.issue_url ? (
-                                          <a className="issue-task-link" href={t.issue_url}
-                                             target="_blank" rel="noreferrer"
-                                             title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
-                                        ) : null}
-                                      </div>
-                                      <pre className="log-view issue-task-log">
-                                        {lines.length > 0
-                                          ? lines.map((line, i) => <span key={i}>{line}{'\n'}</span>)
-                                          : '（暂无输出）'}
-                                      </pre>
                                     </div>
-                                  )
-                                })}
-                              </li>
-                            )
-                          })}
-                        </ul>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* issue #131：灵感板块——位于开放 Issue 下方、CI/CD 流水线上方。
-          按仓库随手记录关于对应仓库的新功能灵感，仅保存在 Botler
-          本地数据库，不提交到 GitLab issue。每个仓库一张卡：灵感列表
-          （编辑/删除）+ 底部随手记录表单 */}
-      <section className="inspirations-section">
-        <h2><Icon name="lightbulb" /> 灵感</h2>
-        <p className="muted">按仓库随手记录新功能灵感，仅保存在本地数据库；可一键将灵感提交为 GitLab issue（默认标签 feature、ui；每 {INSPIRATION_POLL_MS / 1000} 秒自动刷新）</p>
-        {inspirationError && (
-          <div className="alert alert-error" onClick={() => setInspirationError('')}>{inspirationError}</div>
-        )}
-        {inspirationCreatedIssue && (
-          <div className="alert alert-ok" onClick={() => setInspirationCreatedIssue(null)}
-               title="点击关闭">
-            <Icon name="checkCircle" /> 已创建{' '}
-            <a href={inspirationCreatedIssue.web_url || '#'} target="_blank" rel="noreferrer"
-               onClick={(e) => e.stopPropagation()}>
-              {'issue #' + inspirationCreatedIssue.iid}
-            </a>
-            （默认标签 feature、ui）
-          </div>
-        )}
-        {inspirationRepos.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true"><Icon name="lightbulb" /></span>
-            <p className="muted">暂无灵感（未配置仓库）</p>
-          </div>
-        ) : (
-          <div className="inspirations-list">
-            {inspirationRepos.map((r) => (
-              <div key={r.repo_id} className="card inspiration-repo-card">
-                <div className="inspiration-repo-head">
-                  <span className="inspiration-repo-name" title="仓库"><Icon name="folder" /> {r.repo_name || '（已删除）'}</span>
-                  {r.enabled === false && (
-                    <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
-                  )}
-                  <span className="muted">{(r.inspirations || []).length} 条灵感</span>
-                </div>
-                {(r.inspirations || []).length === 0 ? (
-                  <div className="empty-state small">
-                    <span className="empty-icon" aria-hidden="true"><Icon name="lightbulb" /></span>
-                    <p className="muted">暂无灵感，记一条吧</p>
-                  </div>
-                ) : (
-                  <ul className="inspiration-list">
-                    {r.inspirations.map((ins) => (
-                      <li key={ins.id} className="inspiration-item">
-                        {editingInspiration && editingInspiration.id === ins.id ? (
-                          <div className="inspiration-edit">
-                            <textarea className="input inspiration-textarea"
-                                      value={editInspirationDraft}
-                                      onChange={(e) => setEditInspirationDraft(e.target.value)}
-                                      rows={3} />
-                            <div className="inspiration-actions">
-                              <button type="button" className="btn btn-small inspiration-save-btn"
-                                      onClick={() => saveInspiration(ins)}
-                                      disabled={!editInspirationDraft.trim()}>保存</button>
-                              <button type="button" className="btn btn-small"
-                                      onClick={() => {
-                                        setEditingInspiration(null)
-                                        setEditInspirationDraft('')
-                                      }}>取消</button>
-                            </div>
+                                    {/* issue #114：正在运行任务的信息块——任务板块已删除，
+                                        任务状态徽章 / 执行引擎 / 实时输出随对应 issue 项
+                                        展示（同一 issue 的多条任务记录逐一渲染） */}
+                                    {running && tasksForIssue(tasks, r.repo_id, i.iid).map((t) => {
+                                      const meta = STATUS_META[t.status]
+                                        || { label: t.status || '—', cls: '' }
+                                      const lines = liveLines[t.id] || []
+                                      const eng = engineLabel(t.engine)
+                                      return (
+                                        <div key={t.id} className="issue-task">
+                                          <div className="issue-task-head">
+                                            <span className={'badge ' + meta.cls}>{meta.label}</span>
+                                            {eng && (
+                                              <span className="issue-task-engine"
+                                                    title="任务执行引擎">{eng}</span>
+                                            )}
+                                            {t.issue_url ? (
+                                              <a className="issue-task-link" href={t.issue_url}
+                                                 target="_blank" rel="noreferrer"
+                                                 title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
+                                            ) : null}
+                                          </div>
+                                          <pre className="log-view issue-task-log">
+                                            {lines.length > 0
+                                              ? lines.map((line, i) => <span key={i}>{line}{'\n'}</span>)
+                                              : '（暂无输出）'}
+                                          </pre>
+                                        </div>
+                                      )
+                                    })}
+                                  </li>
+                                )
+                              })}
+                            </ul>
                           </div>
-                        ) : (
-                          <>
-                            <p className="inspiration-content">{ins.content}</p>
-                            <div className="inspiration-meta">
-                              <span className="inspiration-time" title="最后更新时间">
-                                {fmtAgo(ins.updated_at) || '—'}
-                              </span>
-                              <span className="inspiration-actions">
-                                <button type="button" className="inspiration-action-btn inspiration-add-issue-btn"
-                                        title="将灵感内容作为标题与描述，通过 GitLab API 创建 issue（默认标签 feature、ui；分配人为该仓库 remote url 用户，可在仓库设置页查看/重新读取）"
-                                        onClick={() => addIssueFromInspiration(ins)}
-                                        disabled={!!addingIssueInspIds[ins.id]}>
-                                  {addingIssueInspIds[ins.id] ? <><Icon name="hourglass" /> 提交中…</> : <><Icon name="pin" /> 添加 Issue</>}
-                                </button>
-                                <button type="button" className="inspiration-action-btn inspiration-chat-btn"
-                                        title="与 AI agent 探讨该灵感（复用设置页「AI API 供应商」配置的对话模型）"
-                                        onClick={() => openInspirationChat(ins)}><Icon name="message" /> 对话</button>
-                                <button type="button" className="inspiration-action-btn"
-                                        title="编辑该灵感"
-                                        onClick={() => {
-                                          setEditingInspiration(ins)
-                                          setEditInspirationDraft(ins.content)
-                                        }}><Icon name="pencil" /> 编辑</button>
-                                <button type="button" className="inspiration-action-btn inspiration-delete-btn"
-                                        title="删除该灵感"
-                                        onClick={() => deleteInspiration(ins)}><Icon name="trash" /> 删除</button>
-                              </span>
-                            </div>
-                          </>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {/* 随手记录表单：内容去首尾空白非空才允许提交 */}
-                <form className="inspiration-add-form"
-                      onSubmit={(e) => { e.preventDefault(); submitNewInspiration(r.repo_id) }}>
-                  <textarea className="input inspiration-textarea"
-                            placeholder="记一条关于该仓库的新功能灵感…"
-                            value={newInspirationDrafts[r.repo_id] || ''}
-                            onChange={(e) => setNewInspirationDrafts((prev) => ({ ...prev, [r.repo_id]: e.target.value }))}
-                            rows={2} />
-                  <button type="submit" className="btn btn-small inspiration-add-btn"
-                          disabled={!(newInspirationDrafts[r.repo_id] || '').trim()}><Icon name="plus" /> 记录</button>
-                </form>
+                        )
+                      })
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+            )}
+          </section>
 
-      {/* issue #166：灵感 AI 对话面板——与 AI agent 探讨当前灵感。
-          复用 .modal 体系（遮罩点击 / × / Esc 关闭，与 AddIssueModal
-          一致）：顶部灵感摘要，中部消息列表（用户右 / AI 左），底部
-          输入框 + 发送按钮（Enter 发送 / Shift+Enter 换行）；发送中
-          按钮禁用，AI 回复实时 append */}
+          {/* issue #114：独立任务板块已删除——正在运行任务的信息（状态徽章
+              / 执行引擎 / 实时输出）整合进上方开放 Issue 板块 running 组的
+              issue 项内，任务轮询与 SSE 数据流保持不变 */}
+          <section className="pipelines-section">
+            <h2>CI/CD 流水线</h2>
+            <p className="muted">所有配置仓库的最新流水线（每 {PIPELINE_POLL_MS / 1000} 秒自动刷新）</p>
+            {pipeError && (
+              <div className="alert alert-error" onClick={() => setPipeError('')}>{pipeError}</div>
+            )}
+            {pipeErrors.length > 0 && (
+              <div className="alert alert-error">
+                {pipeErrors.map((e, i) => <div key={i}>{e}</div>)}
+              </div>
+            )}
+            {pipelines.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true"><Icon name="rocket" /></span>
+                <p className="muted">暂无流水线</p>
+              </div>
+            ) : (
+              <div className="pipelines-list">
+                {pipelines.map((p) => {
+                  const pl = p.pipeline
+                  const meta = pl
+                    ? (PIPELINE_STATUS_META[pl.status] || { label: pl.status, cls: '' })
+                    : null
+                  return (
+                    <div key={p.repo_id} className="card pipeline-card">
+                      <div className="pipeline-head">
+                        <span className="pipeline-repo" title="仓库"><Icon name="folder" /> {p.repo_name || '（已删除）'}</span>
+                        {p.enabled === false && (
+                          <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
+                        )}
+                        {meta ? (
+                          <span className={'badge ' + meta.cls}>{meta.label}</span>
+                        ) : (
+                          <span className="muted">暂无流水线</span>
+                        )}
+                      </div>
+                      {pl && (
+                        <a className="pipeline-link" href={pl.web_url} target="_blank"
+                           rel="noreferrer" title="在 GitLab 中打开流水线">
+                          <span className="pipeline-ref" title={`分支 ${pl.ref} · 提交 ${pl.sha}`}>
+                            {pl.ref} · {shortSha(pl.sha)}
+                          </span>
+                          {/* 最近流水线对应提交的提交时间 + 距今多久（issue #43） */}
+                          {p.commit_time && (
+                            <span className="pipeline-commit-time">
+                              {fmtTime(p.commit_time)}（{fmtAgo(p.commit_time) || '—'}）
+                            </span>
+                          )}
+                          <div className="pipeline-stages">
+                            {(p.stages || []).map((s, i) => (
+                              <span key={i}
+                                    className={`pipeline-stage ${stageClass(s.status)}`}
+                                    title={`${s.name}: ${s.status}`}>
+                                <span className="pipeline-stage-name">{s.name}</span>
+                                <span className="pipeline-stage-dot" />
+                              </span>
+                            ))}
+                          </div>
+                        </a>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* issue #180：Issue 完成耗时——平均每个 issue 完成所需的时间
+              （成功任务的处理用时：系统接收时间 → bot-done 打标时间，与任务
+              详情「处理用时」issue #49 语义一致）与逐日平均走势图，置于
+              概览页最下方。数据来自本地 tasks 表成功终态任务
+              （GET /api/issues/completion-stats），无 GitLab 请求压力 */}
+          <section className="completion-stats-section">
+            <h2>Issue 完成耗时</h2>
+            <p className="muted">平均每个 issue 完成所需时间（处理用时：系统接收 → bot-done 打标）与逐日走势（每 {COMPLETION_STATS_POLL_MS / 1000} 秒自动刷新）</p>
+            {completionStatsError && (
+              <div className="alert alert-error" onClick={() => setCompletionStatsError('')}>{completionStatsError}</div>
+            )}
+            {completionStats && completionStats.completed_count === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true"><Icon name="hourglass" /></span>
+                <p className="muted">暂无已完成 issue</p>
+              </div>
+            ) : completionStats ? (
+              <>
+                <div className="completion-stats-summary">
+                  <span className="completion-stats-value"
+                        title="全部已完成 issue 的平均完成耗时">
+                    {fmtSeconds(completionStats.avg_seconds) || <span className="muted">—</span>}
+                  </span>
+                  <span className="muted">平均完成耗时（{completionStats.completed_count} 个已完成 issue）</span>
+                </div>
+                <CompletionTrendChart trend={completionStats.trend} />
+              </>
+            ) : null}
+          </section>
+        </div>
+
+        <aside className="overview-sidebar" aria-label="灵感与 AI 对话">
+          {/* issue #131/#184：灵感板块——概览页右侧常驻边栏（issue #184
+              由全宽板块改为右侧边栏）：按仓库随手记录关于对应仓库的新功能
+              灵感，仅保存在 Botler 本地数据库，不提交到 GitLab issue。
+              每个仓库一张卡：灵感列表（编辑/删除/对话）+ 底部随手记录表单；
+              窄视口单列堆叠在主内容下方 */}
+          <section className="inspirations-section">
+            <h2><Icon name="lightbulb" /> 灵感</h2>
+            <p className="muted">按仓库随手记录新功能灵感，仅保存在本地数据库；可一键将灵感提交为 GitLab issue（默认标签 feature、ui；每 {INSPIRATION_POLL_MS / 1000} 秒自动刷新）</p>
+            {inspirationError && (
+              <div className="alert alert-error" onClick={() => setInspirationError('')}>{inspirationError}</div>
+            )}
+            {inspirationCreatedIssue && (
+              <div className="alert alert-ok" onClick={() => setInspirationCreatedIssue(null)}
+                   title="点击关闭">
+                <Icon name="checkCircle" /> 已创建{' '}
+                <a href={inspirationCreatedIssue.web_url || '#'} target="_blank" rel="noreferrer"
+                   onClick={(e) => e.stopPropagation()}>
+                  {'issue #' + inspirationCreatedIssue.iid}
+                </a>
+                （默认标签 feature、ui）
+              </div>
+            )}
+            {inspirationRepos.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true"><Icon name="lightbulb" /></span>
+                <p className="muted">暂无灵感（未配置仓库）</p>
+              </div>
+            ) : (
+              <div className="inspirations-list">
+                {inspirationRepos.map((r) => (
+                  <div key={r.repo_id} className="card inspiration-repo-card">
+                    <div className="inspiration-repo-head">
+                      <span className="inspiration-repo-name" title="仓库"><Icon name="folder" /> {r.repo_name || '（已删除）'}</span>
+                      {r.enabled === false && (
+                        <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
+                      )}
+                      <span className="muted">{(r.inspirations || []).length} 条灵感</span>
+                    </div>
+                    {(r.inspirations || []).length === 0 ? (
+                      <div className="empty-state small">
+                        <span className="empty-icon" aria-hidden="true"><Icon name="lightbulb" /></span>
+                        <p className="muted">暂无灵感，记一条吧</p>
+                      </div>
+                    ) : (
+                      <ul className="inspiration-list">
+                        {r.inspirations.map((ins) => (
+                          <li key={ins.id} className="inspiration-item">
+                            {editingInspiration && editingInspiration.id === ins.id ? (
+                              <div className="inspiration-edit">
+                                <textarea className="input inspiration-textarea"
+                                          value={editInspirationDraft}
+                                          onChange={(e) => setEditInspirationDraft(e.target.value)}
+                                          rows={3} />
+                                <div className="inspiration-actions">
+                                  <button type="button" className="btn btn-small inspiration-save-btn"
+                                          onClick={() => saveInspiration(ins)}
+                                          disabled={!editInspirationDraft.trim()}>保存</button>
+                                  <button type="button" className="btn btn-small"
+                                          onClick={() => {
+                                            setEditingInspiration(null)
+                                            setEditInspirationDraft('')
+                                          }}>取消</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <p className="inspiration-content">{ins.content}</p>
+                                <div className="inspiration-meta">
+                                  <span className="inspiration-time" title="最后更新时间">
+                                    {fmtAgo(ins.updated_at) || '—'}
+                                  </span>
+                                  <span className="inspiration-actions">
+                                    <button type="button" className="inspiration-action-btn inspiration-add-issue-btn"
+                                            title="将灵感内容作为标题与描述，通过 GitLab API 创建 issue（默认标签 feature、ui；分配人为该仓库 remote url 用户，可在仓库设置页查看/重新读取）"
+                                            onClick={() => addIssueFromInspiration(ins)}
+                                            disabled={!!addingIssueInspIds[ins.id]}>
+                                      {addingIssueInspIds[ins.id] ? <><Icon name="hourglass" /> 提交中…</> : <><Icon name="pin" /> 添加 Issue</>}
+                                    </button>
+                                    <button type="button" className="inspiration-action-btn inspiration-chat-btn"
+                                            title="与 AI agent 探讨该灵感（复用设置页「AI API 供应商」配置的对话模型）"
+                                            onClick={() => openInspirationChat(ins)}><Icon name="message" /> 对话</button>
+                                    <button type="button" className="inspiration-action-btn"
+                                            title="编辑该灵感"
+                                            onClick={() => {
+                                              setEditingInspiration(ins)
+                                              setEditInspirationDraft(ins.content)
+                                            }}><Icon name="pencil" /> 编辑</button>
+                                    <button type="button" className="inspiration-action-btn inspiration-delete-btn"
+                                            title="删除该灵感"
+                                            onClick={() => deleteInspiration(ins)}><Icon name="trash" /> 删除</button>
+                                  </span>
+                                </div>
+                              </>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {/* 随手记录表单：内容去首尾空白非空才允许提交 */}
+                    <form className="inspiration-add-form"
+                          onSubmit={(e) => { e.preventDefault(); submitNewInspiration(r.repo_id) }}>
+                      <textarea className="input inspiration-textarea"
+                                placeholder="记一条关于该仓库的新功能灵感…"
+                                value={newInspirationDrafts[r.repo_id] || ''}
+                                onChange={(e) => setNewInspirationDrafts((prev) => ({ ...prev, [r.repo_id]: e.target.value }))}
+                                rows={2} />
+                      <button type="submit" className="btn btn-small inspiration-add-btn"
+                              disabled={!(newInspirationDrafts[r.repo_id] || '').trim()}><Icon name="plus" /> 记录</button>
+                    </form>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </aside>
+      </div>
+
+      {/* issue #166/#184：灵感 AI 对话——与 AI agent 探讨当前灵感。
+          右侧边栏抽屉形式（issue #184），复用 .drawer 右侧抽屉体系
+          （与 issue 详情右边栏 issue #85 一致）：遮罩点击 / × / Esc
+          关闭，从右侧滑入；顶部灵感摘要，中部消息列表（用户右 / AI
+          左），底部输入框 + 发送按钮（Enter 发送 / Shift+Enter
+          换行）；发送中按钮禁用，AI 回复实时 append */}
       {chatInspiration && (
-        <div className="modal-overlay" onClick={closeInspirationChat}>
-          <div className="modal chat-modal" role="dialog" aria-modal="true"
+        <div className="drawer-overlay" onClick={closeInspirationChat}>
+          <div className="drawer chat-drawer" role="dialog" aria-modal="true"
                onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <strong><Icon name="message" /> 与 AI 探讨灵感</strong>
@@ -982,107 +1094,6 @@ export default function Overview() {
           </div>
         </div>
       )}
-
-      {/* issue #114：独立任务板块已删除——正在运行任务的信息（状态徽章
-          / 执行引擎 / 实时输出）整合进上方开放 Issue 板块 running 组的
-          issue 项内，任务轮询与 SSE 数据流保持不变 */}
-      <section className="pipelines-section">
-        <h2>CI/CD 流水线</h2>
-        <p className="muted">所有配置仓库的最新流水线（每 {PIPELINE_POLL_MS / 1000} 秒自动刷新）</p>
-        {pipeError && (
-          <div className="alert alert-error" onClick={() => setPipeError('')}>{pipeError}</div>
-        )}
-        {pipeErrors.length > 0 && (
-          <div className="alert alert-error">
-            {pipeErrors.map((e, i) => <div key={i}>{e}</div>)}
-          </div>
-        )}
-        {pipelines.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true"><Icon name="rocket" /></span>
-            <p className="muted">暂无流水线</p>
-          </div>
-        ) : (
-          <div className="pipelines-list">
-            {pipelines.map((p) => {
-              const pl = p.pipeline
-              const meta = pl
-                ? (PIPELINE_STATUS_META[pl.status] || { label: pl.status, cls: '' })
-                : null
-              return (
-                <div key={p.repo_id} className="card pipeline-card">
-                  <div className="pipeline-head">
-                    <span className="pipeline-repo" title="仓库"><Icon name="folder" /> {p.repo_name || '（已删除）'}</span>
-                    {p.enabled === false && (
-                      <span className="badge badge-muted" title="该仓库在 Botler 中未启用">未启用</span>
-                    )}
-                    {meta ? (
-                      <span className={'badge ' + meta.cls}>{meta.label}</span>
-                    ) : (
-                      <span className="muted">暂无流水线</span>
-                    )}
-                  </div>
-                  {pl && (
-                    <a className="pipeline-link" href={pl.web_url} target="_blank"
-                       rel="noreferrer" title="在 GitLab 中打开流水线">
-                      <span className="pipeline-ref" title={`分支 ${pl.ref} · 提交 ${pl.sha}`}>
-                        {pl.ref} · {shortSha(pl.sha)}
-                      </span>
-                      {/* 最近流水线对应提交的提交时间 + 距今多久（issue #43） */}
-                      {p.commit_time && (
-                        <span className="pipeline-commit-time">
-                          {fmtTime(p.commit_time)}（{fmtAgo(p.commit_time) || '—'}）
-                        </span>
-                      )}
-                      <div className="pipeline-stages">
-                        {(p.stages || []).map((s, i) => (
-                          <span key={i}
-                                className={`pipeline-stage ${stageClass(s.status)}`}
-                                title={`${s.name}: ${s.status}`}>
-                            <span className="pipeline-stage-name">{s.name}</span>
-                            <span className="pipeline-stage-dot" />
-                          </span>
-                        ))}
-                      </div>
-                    </a>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* issue #180：Issue 完成耗时——平均每个 issue 完成所需的时间
-          （成功任务的处理用时：系统接收时间 → bot-done 打标时间，与任务
-          详情「处理用时」issue #49 语义一致）与逐日平均走势图，置于
-          概览页最下方。数据来自本地 tasks 表成功终态任务
-          （GET /api/issues/completion-stats），无 GitLab 请求压力 */}
-      <section className="completion-stats-section">
-        <h2>Issue 完成耗时</h2>
-        <p className="muted">平均每个 issue 完成所需时间（处理用时：系统接收 → bot-done 打标）与逐日走势（每 {COMPLETION_STATS_POLL_MS / 1000} 秒自动刷新）</p>
-        {completionStatsError && (
-          <div className="alert alert-error" onClick={() => setCompletionStatsError('')}>{completionStatsError}</div>
-        )}
-        {completionStats && completionStats.completed_count === 0 ? (
-          <div className="empty-state">
-            <span className="empty-icon" aria-hidden="true"><Icon name="hourglass" /></span>
-            <p className="muted">暂无已完成 issue</p>
-          </div>
-        ) : completionStats ? (
-          <>
-            <div className="completion-stats-summary">
-              <span className="completion-stats-value"
-                    title="全部已完成 issue 的平均完成耗时">
-                {fmtSeconds(completionStats.avg_seconds) || <span className="muted">—</span>}
-              </span>
-              <span className="muted">平均完成耗时（{completionStats.completed_count} 个已完成 issue）</span>
-            </div>
-            <CompletionTrendChart trend={completionStats.trend} />
-          </>
-        ) : null}
-      </section>
-
       {/* issue #85：issue 详情右边栏——点击列表项打开，显示具体信息与正文。
           issue #94：关闭 issue 成功后刷新列表（后端已清缓存，该 issue
           从开放列表消失）；抽屉保持打开，状态徽章由抽屉内部更新。

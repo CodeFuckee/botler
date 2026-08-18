@@ -2293,8 +2293,40 @@ code {
   color: var(--muted);
 }
 
-/* ---- 概览页灵感板块（issue #131）：位于开放 Issue 与 CI/CD 流水线
-   之间。每仓库一张卡，沿用开放 issue 板块的卡片/网格/空状态视觉语言 ---- */
+/* ---- 概览页双栏布局（issue #184）：灵感板块移入右侧常驻边栏，
+   主内容（DeepSeek 余额 / 开放 Issue / CI/CD 流水线 / Issue 完成耗时）
+   在左列。宽屏（≥1180px）双栏，右侧边栏 360px 并随页面滚动吸附顶部；
+   窄视口单列堆叠，边栏在主内容下方 ---- */
+.overview-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+.overview-main {
+  min-width: 0;
+}
+.overview-sidebar {
+  min-width: 0;
+}
+@media (min-width: 1180px) {
+  .overview-layout {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+  .overview-sidebar {
+    /* apple-design：长页面下边栏随滚动吸附顶部，灵感/对话入口始终可达 */
+    position: sticky;
+    top: var(--space-4);
+  }
+  /* 双栏时边栏头部与左列首板块对齐（间距由 grid gap 承担） */
+  .overview-sidebar .inspirations-section {
+    margin-top: 0;
+  }
+}
+
+/* ---- 概览页灵感板块（issue #131/#184）：位于概览页右侧常驻边栏
+   （overview-sidebar）内，每仓库一张卡，沿用开放 issue 板块的卡片/
+   网格/空状态视觉语言；窄视口单列堆叠在主内容下方 ---- */
 .inspirations-section {
   margin-top: var(--space-5);
 }
@@ -2432,14 +2464,19 @@ code {
   cursor: not-allowed;
 }
 
-/* ---- issue #166：灵感 AI 对话面板——与 AI agent 探讨灵感 ----
-   复用 .modal 体系：灵感摘要 + 消息气泡列表（用户右 / AI 左）+
-   底部输入区；发送中禁用，AI 回复实时 append */
-.chat-modal {
-  width: 640px;
-  max-width: 94vw;
-  display: flex;
-  flex-direction: column;
+/* ---- issue #166/#184：灵感 AI 对话——与 AI agent 探讨灵感 ----
+   右侧边栏抽屉形式（issue #184），复用 .drawer 右侧抽屉体系（与
+   issue 详情右边栏 issue #85 一致）：从右侧滑入；抽屉自身不滚动，
+   头部/摘要/输入区固定，仅消息列表（chat-body）内部滚动 */
+.chat-drawer {
+  width: 420px;
+  max-width: 92vw;
+  overflow: hidden;
+}
+.chat-drawer .chat-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 .chat-subject {
   margin: var(--space-2) 0;

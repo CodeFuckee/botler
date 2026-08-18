@@ -332,10 +332,12 @@ test('渲染：无活跃任务时概览页仅剩三板块且不渲染任何任�
     const root = renderer.root
     const h2s = root.findAll((n) => n.type === 'h2')
       .map((n) => textOf(n.props.children).trim())
-    // issue #131：新增灵感板块（位于开放 Issue 与流水线之间）
-    // issue #180：新增「Issue 完成耗时」板块（位于页面最下方，流水线之后）
-    assert.deepEqual(h2s, ['开放 Issue', '灵感', 'CI/CD 流水线', 'Issue 完成耗时'],
-                     '概览页应只剩四个板块：开放 Issue → 灵感 → CI/CD 流水线 → Issue 完成耗时')
+    // issue #131：新增灵感板块；issue #180：新增「Issue 完成耗时」板块
+    // issue #184：灵感板块移入右侧边栏（aside 位于主内容之后，DOM 顺序
+    // 在最后、视觉位于右侧），主内容（开放 Issue → CI/CD 流水线 →
+    // Issue 完成耗时）在左列
+    assert.deepEqual(h2s, ['开放 Issue', 'CI/CD 流水线', 'Issue 完成耗时', '灵感'],
+                     '概览页应只剩四个板块：主内容（开放 Issue → CI/CD 流水线 → Issue 完成耗时）+ 右侧边栏（灵感）')
     assert.equal(root.findAll((n) => n.props.className === 'issue-task').length, 0,
                  '无任务时不得渲染任务块')
   } finally {

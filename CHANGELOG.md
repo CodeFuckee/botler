@@ -5,6 +5,26 @@
 ## [Unreleased]
 ### Changed
 
+- **概览页「灵感」板块与 AI agent 对话改为右侧边栏形式（issue #184）**：此前灵感
+  板块是横贯全宽的网格、AI 对话是居中弹窗——长页面上灵感要上下滚动寻找，对话弹窗
+  还会遮挡整页内容；本次将概览页改为双栏布局，灵感组件与 AI 对话都以「右侧边栏」
+  形式呈现——
+  - `frontend/src/pages/Overview.jsx`：新增 `overview-layout` / `overview-main` /
+    `overview-sidebar` 双栏结构，主内容（DeepSeek 余额 / 开放 Issue / CI/CD 流水线 /
+    Issue 完成耗时）在左列，灵感板块（`inspirations-section`）迁入右侧边栏 `<aside>`；
+    灵感 AI 对话面板由居中弹窗（`modal-overlay` + `modal chat-modal`）改为右侧边栏
+    抽屉（`drawer-overlay` + `drawer chat-drawer`，复用 issue #85 右侧抽屉体系：
+    从右侧滑入，遮罩点击 / × / Esc 关闭，消息列表内部滚动、头部与输入区固定）；
+  - `frontend/src/styles.css`：新增双栏布局样式（宽屏 ≥1180px 双栏、右侧边栏 360px
+    并随滚动吸附顶部，窄视口单列堆叠在主内容下方）与 `chat-drawer` 抽屉样式；
+  - **测试**：更新 `overview-inspirations.test.mjs` 布局断言（源码双栏结构：主板块
+    位于 `overview-main`、灵感板块位于 `overview-sidebar` 内；渲染时灵感标题/内容
+    位于右侧边栏、主内容在左列；对话面板断言 `drawer chat-drawer` 抽屉结构且不再
+    使用居中 modal；关闭后抽屉卸载）与 `overview-issue-task.test.mjs` 板块顺序断言
+    （灵感板块 DOM 顺序移至主内容之后、视觉位于右侧边栏），全量前端测试通过
+    （858 例），无 regression。
+
+
 - **设置页「网页通知」卡片新增独立保存按钮，开关可单独保存生效（issue #292）**：
   用户反馈「设置里的网页通知增加一个保存按钮，现在无法保存设置」——此前「网页通知」
   卡片内只有开关与说明文字，保存入口是「任务调度」卡片里的全局「保存」按钮，卡片在
