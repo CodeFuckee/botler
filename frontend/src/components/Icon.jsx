@@ -13,7 +13,7 @@ import {
   Image as ImageIcon, Keyboard, Lightbulb, Lock, MessageCircle, Mic, Package,
   Pencil, Pin, Plus, RefreshCw,
   Rocket, Search, Settings, Sparkles, Square, Tag, Terminal as TerminalIcon,
-  Trash2, TriangleAlert, User, Wallet, Wrench, X, XCircle,
+  Trash2, TriangleAlert, Upload, User, Wallet, Wrench, X, XCircle,
 } from 'lucide-react'
 
 // 语义名 → Lucide 图标映射（全量 Lucide 系列）
@@ -58,6 +58,7 @@ export const ICONS = {
   tag: Tag,
   terminal: TerminalIcon,
   trash: Trash2,
+  upload: Upload,
   user: User,
   wallet: Wallet,
   warning: TriangleAlert,

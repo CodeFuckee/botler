@@ -239,6 +239,20 @@ class GitLabClient:
         assert isinstance(proj, dict)
         return proj
 
+    def update_project_avatar(self, project_id: int, filename: str, data: bytes,
+                              mime: str) -> dict | None:
+        """上传项目头像（issue #297）：PUT /projects/{id} 的 avatar 文件参数。
+
+        仓库管理页「同步到 GitLab」按钮调用——把本地生成的 logo 图片设为
+        GitLab 项目图标。multipart 上传（httpx files= 参数自动构造
+        multipart/form-data），返回项目对象（含 path_with_namespace /
+        avatar_url 等字段）。需要 Maintainer 及以上角色（bot token /
+        仓库 remote token 均满足）。
+        """
+        return self._request(
+            "PUT", f"/projects/{project_id}",
+            files={"avatar": (filename, data, mime)})
+
     def get_project_by_path(self, path: str) -> dict:
         """path 形如 group/project，需 URL 编码。"""
         encoded = path.replace("/", "%2F")

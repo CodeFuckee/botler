@@ -5,6 +5,33 @@
 ## [Unreleased]
 ### Added
 
+- **仓库设置页面 logo 同步到 GitLab 按钮（issue #297）**：
+  「仓库设置页面生成 logo 后，增加按钮可以直接同步 gitlab 上，作为仓库
+  的图标」——仓库管理页「生成图标」生成 logo 后，仓库行新增「同步到
+  GitLab」按钮，一键把本地生成的 logo 上传为 GitLab 项目图标（头像）：
+  - 后端新增 `POST /api/repos/{id}/sync-logo`：校验仓库存在/未软删除/
+    已生成 logo/logo 文件存在后，读取本地 logo 文件，经 GitLab API
+    `PUT /projects/{id}` 的 `avatar` 文件参数（multipart）上传；身份
+    复用 issue 创建链路（per-repo client——仓库 remote URL 内嵌 token
+    优先，无 token 回退全局 bot token，均需 Maintainer 及以上角色）；
+    成功返回 ok + 项目 `path_with_namespace` + 新 `avatar_url`；
+    错误映射：仓库不存在 404 / 已删除 400 / 尚未生成 logo 400 / logo
+    文件缺失 404 / 读取失败 500 / GitLab 调用失败 502（透传错误详情）；
+  - `GitLabClient` 新增 `update_project_avatar(project_id, filename,
+    data, mime)` 方法（PUT /projects/{id} multipart 上传头像）；
+  - 前端仓库行操作组在 `repo.logo_path` 非空时展示「同步到 GitLab」
+    按钮（请求中禁用防重复点击并显示「同步中…」），成功展示「已同步到
+    GitLab（项目路径）」、失败展示后端错误信息；`Icon` 新增 `upload`
+    语义图标（lucide Upload）；
+  - 同步更新 README 的模块说明与 API 表（新增 sync-logo 行）；
+  - 新增测试：后端 `TestSyncLogo` 7 例（正常路径含上传参数断言 / 不依赖
+    AI 与生图模型配置 / 仓库不存在 / 软删除 / 尚未生成 / 文件缺失 /
+    GitLab 失败 502 / 读取失败 500）、前端
+    `frontend/tests/repos-logo-sync.test.mjs` 5 例（渲染条件 / 点击调
+    用 / 请求中禁用 / 成功 / 失败），icons 清单补 `upload`，全量测试无
+    regression。
+
+
 - **概览页 issue 详情侧边栏展示任务 id（issue #290）**：
   「概览页的右侧的 issue 详情侧边栏，如果已经执行了，显示对应的任务 id」——
   概览页弹出的 issue 右边栏新增「任务」行：已执行过（有任务记录）的 issue

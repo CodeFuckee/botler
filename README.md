@@ -75,7 +75,7 @@ backend/
     minio_client.py  MinIO 对象存储客户端（issue #163：识图图片 SHA-256 哈希命名上传，返回 http URL，配合 vision_models 使用；issue #164：默认桶 public、不存在自动创建并自动设为公开只读）
     chat_models.py   灵感 AI 对话模型调用封装（issue #166：复用设置页「AI API 供应商」配置，支持 OpenAI 兼容 chat/completions / Gemini generateContent / Anthropic messages 三种协议，统一 ChatModelClient）
     api/introspection.py 概览页「自省」API（issue #187）：POST /api/repos/{id}/introspect——收集项目上下文（文件树/README/清单文件）→ 调 AI 对话模型审查 → 把改进建议写入该仓库 issue（分配人 = 仓库 owner）
-    api/repo_logo.py  仓库 logo 生成 API（issue #188）：POST /api/repos/{id}/generate-logo——agent 基于仓库 README 生成 logo 提示词 → 调用生图模型（设置页「生图模型」配置）生成 logo 落盘并写 repos 表；GET /api/repos/{id}/logo 读取图片（?download=1 触发下载）
+    api/repo_logo.py  仓库 logo 生成与同步 API（issue #188/#297）：POST /api/repos/{id}/generate-logo——agent 基于仓库 README 生成 logo 提示词 → 调用生图模型（设置页「生图模型」配置）生成 logo 落盘并写 repos 表；GET /api/repos/{id}/logo 读取图片（?download=1 触发下载）；POST /api/repos/{id}/sync-logo 把已生成 logo 上传为 GitLab 项目图标（头像）
     api/discover.py  概览页「发掘」API（issue #189）：POST /api/repos/{id}/discover——AI 基于项目功能生成 GitHub 搜索词 → 搜索类似仓库并翻找其开放 issue（过滤 PR）→ AI 整理成若干条需求 → 逐条写入该仓库 issue（分配人 = 仓库 owner，一条需求一个 issue；可选环境变量 GITHUB_TOKEN 提升 GitHub 限额）
     api/stats.py     统计看板 API（issue #264/#274）：GET /api/stats/dashboard——本地任务表聚合（任务总数/成功率/平均耗时/失败数 + 按引擎/仓库/来源分组 + 失败原因 Top（附分类）+ 失败原因分类分布），10 秒 TTL 缓存，与任务列表同表同口径
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
@@ -533,6 +533,7 @@ POST   /api/repos/{id}/introspect   概览页仓库卡片「自省」按钮（is
 POST   /api/repos/{id}/discover   概览页仓库卡片「发掘」按钮（issue #189）：AI 基于该仓库实现的功能生成 GitHub 搜索关键词 → 搜索 GitHub 类似仓库（按 star 排序、跨关键词去重）→ 翻找其开放 issue（过滤 PR）→ AI 整理成若干条需求 → 逐条写入该仓库 issue（标题带【发掘】前缀、标签 feature、分配人 = 仓库 owner，一条需求一个 issue，封顶 8 条；写 issue 走 owner token；GitHub 匿名调用，可选环境变量 GITHUB_TOKEN 提升限额）
 POST   /api/repos/{id}/generate-logo 仓库管理页「生成图标」按钮（issue #188）：agent 基于该仓库 README（本地文件夹优先，GitLab 仓库 API 兜底，均缺失时基于仓库元信息）生成 logo 提示词 → 调用生图模型（设置页「生图模型」第一个启用且 Key 非空的项）生成 logo，首张落盘 backend/data/logos/ 并写 repos 表 logo_path / logo_updated_at / logo_mime；重复点击覆盖重生成
 GET    /api/repos/{id}/logo         读取该仓库已生成的 logo 图片（img src 直连，前端按 logo_updated_at 拼缓存击穿参数）；?download=1 返回 Content-Disposition attachment 供下载
+POST   /api/repos/{id}/sync-logo   仓库管理页「同步到 GitLab」按钮（issue #297）：把已生成 logo 上传为 GitLab 项目图标（头像）——读取本地 logo 文件，经 GitLab API PUT /projects/{id} 的 avatar 文件参数上传；身份复用 issue 创建链路（仓库 remote URL 内嵌 token 优先，无 token 回退全局 bot token）；成功返回 ok + 项目 path_with_namespace + avatar_url
 POST   /api/repos/{id}/remote-user   读取仓库 remote url 获取仓库用户（remote url userinfo 用户名，如 https://user:token@host/... 的 user；读取顺序：local_path 的 git remote → workspace 克隆 → 存储 url；结果落库并作为灵感「添加 Issue」的默认分配人，issue #153）
 GET/PUT /api/repos/{id}/template      仓库模版
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）

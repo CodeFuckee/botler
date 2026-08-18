@@ -25,6 +25,12 @@
 - GET /api/repos/{repo_id}/logo：读取已生成 logo 图片字节返回
   （Content-Type 按 logo_mime）；?download=1 时附加 Content-Disposition
   attachment（前端「下载」按钮直接走浏览器下载）。
+- POST /api/repos/{repo_id}/sync-logo（issue #297）：把已生成 logo 上传为
+  GitLab 项目图标（头像）。读取本地 logo 文件，经 GitLab API
+  PUT /projects/{id} 的 avatar 文件参数上传（multipart），身份复用
+  issue 创建链路（per-repo client——仓库 remote URL 内嵌 token 优先，
+  无 token 回退全局 bot token）；成功返回 ok=true + 项目
+  path_with_namespace + 新 avatar_url，前端展示「已同步到 GitLab」。
 
 错误映射：仓库不存在 → 404；仓库已删除/未启用 → 400；未配置 AI 对话
 模型 → 400（引导设置页配置）；未配置生图模型 → 400（引导设置页配置）；
@@ -267,6 +273,56 @@ def generate_repo_logo(request: Request, repo_id: int):
         "logo_updated_at": updated_at,
         "size": len(image.data),
         "logo_prompt": logo_prompt,
+    }
+
+
+@router.post("/{repo_id}/sync-logo")
+def sync_repo_logo(request: Request, repo_id: int):
+    """同步仓库 logo 到 GitLab 作为项目图标（issue #297）。
+
+    前置：仓库已有生成的 logo（「生成图标」issue #188 的产物）。读取
+    本地 logo 文件，通过 GitLab API PUT /projects/{id} 的 avatar 文件
+    参数上传，把 GitLab 项目头像设置为该 logo。身份与 issue 创建链路
+    一致：per-repo client（仓库 remote URL 内嵌 token）优先，无 token
+    回退全局 bot token（均需 Maintainer 及以上角色才能改项目头像）。
+
+    错误映射：仓库不存在 → 404；已软删除 → 400；尚未生成 logo → 400；
+    logo 文件缺失 → 404；读取文件失败 → 500；GitLab API 调用失败 →
+    502（透传 GitLab 错误信息，如权限不足/图片格式不支持）。
+    """
+    c = request.app.state.ctx
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    row = dict(row)  # sqlite3.Row → dict，统一按 dict 访问（issue #187）
+    if row["deleted_at"] is not None:
+        raise HTTPException(400, "仓库已删除")
+    if not row["logo_path"]:
+        raise HTTPException(400, "该仓库尚未生成 logo，请先点击「生成图标」")
+    path = LOGO_DIR / row["logo_path"]
+    if not path.is_file():
+        raise HTTPException(404, "logo 文件不存在，请重新点击「生成图标」")
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise HTTPException(500, f"读取 logo 文件失败: {e}") from e
+    mime = row["logo_mime"] or "image/png"
+
+    # 身份：per-repo client（仓库自身 token）优先，回退全局 bot token
+    # （与生成 logo 的 README 收集 / issue 创建同一链路）
+    from .introspection import _issue_create_client
+    from ..gitlab_client import GitLabError
+    client = _issue_create_client(c, row)
+    try:
+        project = client.update_project_avatar(
+            row["gitlab_project_id"], path.name, data, mime)
+    except GitLabError as e:
+        raise HTTPException(502, f"同步到 GitLab 失败: {e}") from e
+    project = project or {}
+    return {
+        "ok": True,
+        "project": project.get("path_with_namespace"),
+        "avatar_url": project.get("avatar_url"),
     }
 
 

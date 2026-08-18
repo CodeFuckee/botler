@@ -96,6 +96,10 @@ class StubGitLab:
         self.tree_by_project: dict[int, list[dict]] = {}
         self.readme_by_project: dict[int, str] = {}
         self.fail_tree_projects: set[int] = set()
+        # issue #297：项目头像上传调用记录与故障注入
+        self.avatar_calls: list[tuple[int, str, bytes, str]] = []
+        self.avatar_error: GitLabError | None = None
+        self.avatar_result: dict | None = None
 
     def _request(self, method, path, params=None):
         self.calls.append(f"{method} {path}")
@@ -116,6 +120,13 @@ class StubGitLab:
     # 下列方法仅需存在（_issue_create_client 可能触达），无实际调用断言
     def get_project(self, project_id):
         return {}
+
+    def update_project_avatar(self, project_id, filename, data, mime):
+        """issue #297：记录项目头像上传调用，可注入 GitLab 故障。"""
+        self.avatar_calls.append((project_id, filename, data, mime))
+        if self.avatar_error is not None:
+            raise self.avatar_error
+        return self.avatar_result
 
     def get_user_id_by_username(self, username):
         return None
@@ -447,3 +458,110 @@ class TestGetLogo:
         r = tc.get(f"/api/repos/{repo_id}/logo")
         assert r.status_code == 404
         assert "logo 文件不存在" in r.json()["detail"]
+
+
+class TestSyncLogo:
+    """同步 logo 到 GitLab 作为项目图标（issue #297）。
+
+    覆盖：
+    - 正常路径：已有 logo 的仓库调 POST /api/repos/{id}/sync-logo → 读
+      本地 logo 文件 → GitLab update_project_avatar 收到正确的
+      project_id / 文件名 / 字节 / mime → 返回 ok + 项目路径 + avatar_url；
+    - 边界：仓库不存在 404 / 软删除 400 / 尚未生成 logo 400 / logo 文件
+      缺失 404 / GitLab 调用失败 502；
+    - 与生成图标解耦：不配置 AI / 生图模型也能同步（仅依赖已落盘的 logo）。
+    """
+
+    def _add_logo_repo(self, db, logo_dir, project_id=42, name="botler",
+                       logo="42.png", mime="image/png"):
+        """便捷：插入仓库并写入 logo 元信息 + 落盘 logo 文件。"""
+        repo_id = _add_repo(db, project_id, name)
+        db.update_repo(repo_id, logo_path=logo,
+                       logo_updated_at="2026-08-18 10:00:00", logo_mime=mime)
+        logo_dir.mkdir(parents=True, exist_ok=True)
+        (logo_dir / logo).write_bytes(b"fake-logo-png-bytes")
+        return repo_id
+
+    def test_success(self, logo_env):
+        """正常路径：logo 文件经 GitLab 上传为项目头像，返回项目信息。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_result = {
+            "path_with_namespace": "chenkaidi/botler",
+            "avatar_url": "https://gitlab.example.com/uploads/-/system/project/avatar/42/42.png",
+        }
+        repo_id = self._add_logo_repo(db, logo_dir)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["ok"] is True
+        assert data["project"] == "chenkaidi/botler"
+        assert data["avatar_url"].endswith("42.png")
+        # 上传参数：project_id / 文件名 / 文件字节 / mime 一一对应
+        assert stub.avatar_calls == [(42, "42.png", b"fake-logo-png-bytes", "image/png")]
+
+    def test_success_without_ai_or_image_model(self, logo_env):
+        """同步不依赖 AI/生图模型配置（仅使用已落盘的 logo 文件）。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_result = {"path_with_namespace": "chenkaidi/botler"}
+        repo_id = self._add_logo_repo(db, logo_dir)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] is True
+
+    def test_repo_not_found(self, logo_env):
+        tc, stub, db, logo_dir = logo_env
+        r = tc.post("/api/repos/999/sync-logo")
+        assert r.status_code == 404
+        assert "不存在" in r.json()["detail"]
+
+    def test_repo_soft_deleted(self, logo_env):
+        tc, stub, db, logo_dir = logo_env
+        repo_id = self._add_logo_repo(db, logo_dir)
+        db.soft_delete_repo(repo_id)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 400
+        assert "已删除" in r.json()["detail"]
+
+    def test_not_generated(self, logo_env):
+        """尚未生成 logo：400 引导先点「生成图标」。"""
+        tc, stub, db, logo_dir = logo_env
+        repo_id = _add_repo(db, 42, "botler")
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 400
+        assert "尚未生成 logo" in r.json()["detail"]
+
+    def test_logo_file_missing(self, logo_env):
+        """DB 有 logo_path 但文件被删：404 引导重新生成。"""
+        tc, stub, db, logo_dir = logo_env
+        repo_id = _add_repo(db, 42, "botler")
+        db.update_repo(repo_id, logo_path="42.png",
+                       logo_updated_at="2026-08-18 10:00:00",
+                       logo_mime="image/png")
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 404
+        assert "logo 文件不存在" in r.json()["detail"]
+
+    def test_gitlab_error(self, logo_env):
+        """GitLab 上传失败（如权限不足/格式不支持）：502 透传错误信息。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_error = GitLabError(
+            "GitLab API 错误 403: Avatar is not allowed", 403)
+        repo_id = self._add_logo_repo(db, logo_dir)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 502
+        assert "同步到 GitLab 失败" in r.json()["detail"]
+        assert "403" in r.json()["detail"]
+
+    def test_read_file_failure(self, logo_env, monkeypatch):
+        """logo 文件读取失败：500 兜底（monkeypatch read_bytes 抛 OSError）。"""
+        from pathlib import Path
+        tc, stub, db, logo_dir = logo_env
+        repo_id = self._add_logo_repo(db, logo_dir)
+
+        def boom(self):
+            raise OSError("模拟读取失败")
+
+        monkeypatch.setattr(Path, "read_bytes", boom)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 500
+        assert "读取 logo 文件失败" in r.json()["detail"]
