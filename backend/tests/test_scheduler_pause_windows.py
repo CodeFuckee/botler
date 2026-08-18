@@ -222,3 +222,137 @@ class TestDispatchPauseWindow:
         sched._dispatch()
         assert done.wait(timeout=2), "非生效星期不应暂停"
         assert executor.run_ids == [t]
+
+
+class TestPausePriorityExemption:
+    """暂停窗口豁免优先级阈值（issue #299）。
+
+    需求：任务调度处增加设置，当优先级高于多少的时候，可以不受定时暂停
+    窗口的影响持续开发——仓库调度优先级（repos[].priority，数字越小越
+    优先）不差于配置阈值（priority <= pause_priority_threshold）的仓库，
+    在暂停窗口内仍可开始新任务；未配置（0）时所有仓库都受暂停窗口约束
+    （issue #169 行为不变）。
+    """
+
+    def _mk_repo(self, db, project_id: int, priority: int = 100) -> int:
+        db.upsert_repo(project_id, f"repo-{project_id}",
+                       f"https://gitlab.example.com/group/repo-{project_id}.git",
+                       priority=priority)
+        return db.get_repo_by_project_id(project_id)["id"]
+
+    def test_high_priority_repo_dispatched_in_window(self, tmp_path, db, executor):
+        """窗口内：优先级不差于阈值的仓库任务照常派发（豁免生效）。"""
+        cfg = _worker_config(
+            tmp_path,
+            "  pause_windows: ['09:00-12:00']\n"
+            "  pause_priority_threshold: 50\n")
+        repo = self._mk_repo(db, project_id=11, priority=10)  # 高优先级
+
+        sched = TaskScheduler(cfg, db, executor)
+        sched._now = lambda: _at("2026-08-18T10:00:00")  # 窗口内
+        t = _mk_task(db, repo, project_id=11, issue_iid=1)
+        sched.enqueue(t)
+
+        started, done = executor.expect()
+        sched._dispatch()
+        assert done.wait(timeout=2), "窗口内高优先级仓库应照常派发"
+        assert executor.run_ids == [t]
+
+    def test_low_priority_repo_held_in_window(self, tmp_path, db, executor):
+        """窗口内：优先级差于阈值的仓库任务保留，窗口结束后才派发。"""
+        cfg = _worker_config(
+            tmp_path,
+            "  pause_windows: ['09:00-12:00']\n"
+            "  pause_priority_threshold: 50\n")
+        repo = self._mk_repo(db, project_id=11, priority=100)  # 低优先级
+
+        sched = TaskScheduler(cfg, db, executor)
+        t = _mk_task(db, repo, project_id=11, issue_iid=1)
+        sched.enqueue(t)
+
+        sched._now = lambda: _at("2026-08-18T10:00:00")
+        sched._dispatch()
+        assert executor.run_ids == [], "窗口内低优先级仓库不得派发"
+        assert sched.stats()["queued"] == 1, "任务应保留在队列"
+
+        # 窗口结束后：低优先级任务自动开始
+        sched._now = lambda: _at("2026-08-18T12:00:00")
+        started, done = executor.expect()
+        sched._dispatch()
+        assert done.wait(timeout=2), "窗口结束后应恢复派发低优先级任务"
+        assert executor.run_ids == [t]
+
+    def test_threshold_boundary_inclusive(self, tmp_path, db, executor):
+        """边界：priority == 阈值时豁免（不差于阈值 = 小于等于）。"""
+        cfg = _worker_config(
+            tmp_path,
+            "  pause_windows: ['09:00-12:00']\n"
+            "  pause_priority_threshold: 50\n")
+        repo = self._mk_repo(db, project_id=11, priority=50)  # 恰好等于阈值
+
+        sched = TaskScheduler(cfg, db, executor)
+        sched._now = lambda: _at("2026-08-18T10:00:00")
+        t = _mk_task(db, repo, project_id=11, issue_iid=1)
+        sched.enqueue(t)
+
+        started, done = executor.expect()
+        sched._dispatch()
+        assert done.wait(timeout=2), "priority == 阈值应豁免（小于等于）"
+        assert executor.run_ids == [t]
+
+    def test_threshold_zero_keeps_pause_semantics(self, tmp_path, db, executor):
+        """阈值 0 = 关闭豁免：窗口内所有仓库（含高优先级）都不派发。"""
+        cfg = _worker_config(
+            tmp_path,
+            "  pause_windows: ['09:00-12:00']\n"
+            "  pause_priority_threshold: 0\n")
+        repo = self._mk_repo(db, project_id=11, priority=1)  # 最高优先级
+
+        sched = TaskScheduler(cfg, db, executor)
+        sched._now = lambda: _at("2026-08-18T10:00:00")
+        t = _mk_task(db, repo, project_id=11, issue_iid=1)
+        sched.enqueue(t)
+
+        sched._dispatch()
+        assert executor.run_ids == [], "阈值 0 时窗口内不得派发任何任务"
+        assert sched.stats()["queued"] == 1
+
+    def test_missing_priority_falls_back_to_default(self, tmp_path, db, executor):
+        """优先级缺失（数据库缺省 100）：按 DEFAULT_PRIORITY 参与阈值判断。"""
+        cfg = _worker_config(
+            tmp_path,
+            "  pause_windows: ['09:00-12:00']\n"
+            "  pause_priority_threshold: 100\n")
+        repo = _mk_repo(db, project_id=11)  # 未显式指定 priority（缺省 100）
+
+        sched = TaskScheduler(cfg, db, executor)
+        sched._now = lambda: _at("2026-08-18T10:00:00")
+        t = _mk_task(db, repo, project_id=11, issue_iid=1)
+        sched.enqueue(t)
+
+        started, done = executor.expect()
+        sched._dispatch()
+        assert done.wait(timeout=2), "缺省优先级 100 == 阈值 100 应豁免"
+        assert executor.run_ids == [t]
+
+    def test_high_priority_dispatched_low_held(self, tmp_path, db, executor):
+        """窗口内混合队列：高优先级仓库派发，低优先级仓库保留在队列。"""
+        cfg = _worker_config(
+            tmp_path,
+            "  pause_windows: ['09:00-12:00']\n"
+            "  pause_priority_threshold: 50\n")
+        hi = self._mk_repo(db, project_id=11, priority=10)
+        lo = self._mk_repo(db, project_id=22, priority=100)
+        t_hi = _mk_task(db, hi, project_id=11, issue_iid=1)
+        t_lo = _mk_task(db, lo, project_id=22, issue_iid=2)
+
+        sched = TaskScheduler(cfg, db, executor)
+        sched._now = lambda: _at("2026-08-18T10:00:00")
+        sched.enqueue(t_hi)
+        sched.enqueue(t_lo)
+
+        started, done = executor.expect()
+        sched._dispatch()
+        assert done.wait(timeout=2), "窗口内高优先级仓库应派发"
+        assert executor.run_ids == [t_hi], "窗口内只应派发高优先级仓库任务"
+        assert sched.stats()["queued"] == 1, "低优先级任务应保留在队列"

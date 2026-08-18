@@ -5,6 +5,34 @@
 ## [Unreleased]
 ### Added
 
+- **任务调度处增加「暂停窗口豁免优先级阈值」设置（issue #299）**：
+  「任务调度处增加设置，当优先级高于多少的时候，可以不受定时暂停窗口的
+  影响持续开发」——任务调度「定时暂停窗口」配置新增豁免优先级阈值
+  `worker.pause_priority_threshold`（0~999，默认 0 = 关闭）：
+  - 语义：仓库调度优先级（`repos[].priority`，1~999，数字越小越优先）
+    不差于该阈值（`priority <= 阈值`）的仓库，在暂停窗口内仍可开始新
+    任务（不受窗口影响）；阈值 0 = 关闭豁免，所有仓库都受暂停窗口约束
+    （issue #169 行为不变）；
+  - 调度器 `_dispatch`：暂停窗口内不再一律不派发，而是先按阈值过滤候选
+    仓库——仅保留优先级不差于阈值的仓库参与派发，其余仓库任务保留在
+    队列等待窗口结束后自动开始；`max_concurrent_repos` 并行上限与运行中
+    任务豁免语义不变；进入窗口的日志在配置阈值时说明豁免范围；
+  - 设置 API：`GET /api/settings` worker 段返回
+    `pause_priority_threshold`，`PUT` 校验 0~999 整数（布尔/负数/超上限/
+    非整数 400 拒绝，与 pause_weekdays 同思路）；
+  - 设置页「任务调度」卡片「定时暂停窗口」区块新增「豁免优先级」输入框
+    （数字输入 0~999，placeholder「0（关闭）」，附说明文字），随全局
+    「保存」写回 config.yaml；
+  - 同步更新 `config.example.yaml` / README 配置表；
+  - 新增测试：后端调度器 `TestPausePriorityExemption` 6 例（窗口内高优
+    先级派发 / 低优先级保留至窗口结束 / 阈值边界含等号 / 阈值 0 保持
+    暂停语义 / 缺省优先级回退 100 / 混合队列只派发豁免仓库）、设置 API
+    `TestPausePriorityThresholdSettings` 7 例（默认 0 / 落盘回读 / 0 关闭
+    / 不影响其他字段 / 非法值 400×7）、前端
+    `settings-pause-windows.test.mjs` 3 例（卡片区块标注 / 保存提交 /
+    渲染回显并提交），全量测试无 regression。
+
+
 - **仓库设置页面 logo 同步到 GitLab 按钮（issue #297）**：
   「仓库设置页面生成 logo 后，增加按钮可以直接同步 gitlab 上，作为仓库
   的图标」——仓库管理页「生成图标」生成 logo 后，仓库行新增「同步到

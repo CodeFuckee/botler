@@ -114,6 +114,7 @@ function mockFetch({ windows = ['09:00-12:00'], weekdays = [], timezone = 'Asia/
             pause_windows: windows,
             pause_weekdays: weekdays,
             pause_timezone: timezone,
+            pause_priority_threshold: 0,
             pause_active: pauseActive,
           },
           sso: {}, claude: { command: 'claude', args: [] },
@@ -205,6 +206,60 @@ test('渲染：pause_active=true 显示暂停提示，星期勾选提交数组',
     const worker = m.puts[m.puts.length - 1].worker
     assert.deepEqual(worker.pause_weekdays, [0, 1, 2], '勾选后应提交升序星期数组')
     assert.equal(worker.pause_timezone, 'Asia/Shanghai', '应提交配置的时区')
+  } finally {
+    if (renderer) await TestRenderer.act(() => renderer.unmount())
+    m.restore()
+  }
+})
+
+
+test('任务调度卡片含「豁免优先级」配置区块（issue #299）', () => {
+  const card = cardSource(settingsSrc, '任务调度')
+  assert.ok(card, '设置页应存在「任务调度」卡片')
+  assert.match(card, /豁免优先级/, '卡片应含豁免优先级配置')
+  assert.match(card, /worker\.pause_priority_threshold/,
+    '应标注配置键 worker.pause_priority_threshold')
+  assert.match(card, /暂停窗口内\n\s*仍可开始新任务/, '说明应写明窗口内豁免语义')
+})
+
+test('全局保存提交 pause_priority_threshold（issue #299）', () => {
+  const body = fnBody(settingsSrc, 'save')
+  assert.ok(body, '应存在 save 函数')
+  assert.match(body, /worker\.pause_priority_threshold = Number\(settings\.worker\?\.pause_priority_threshold \?\? 0\)/,
+    'save 应携带 pause_priority_threshold 数字（缺省 0）')
+})
+
+test('渲染：豁免优先级输入框回显并随保存提交', async () => {
+  const m = mockFetch({ windows: ['09:00-12:00'] })
+  let renderer = null
+  try {
+    await TestRenderer.act(async () => {
+      renderer = TestRenderer.create(React.createElement(Settings))
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    const numInputs = renderer.root.findAll(
+      (node) => node.type === 'input' && node.props.type === 'number')
+    const threshold = numInputs.find((i) => String(i.props.placeholder || '').includes('关闭'))
+    assert.ok(threshold, '应存在豁免优先级数字输入框（placeholder 含 关闭）')
+    assert.equal(Number(threshold.props.value), 0, '缺省应回显 0（关闭）')
+
+    // 修改为 50 → 点击全局「保存」→ 提交 pause_priority_threshold=50
+    await TestRenderer.act(async () => {
+      threshold.props.onChange({ target: { value: '50' } })
+    })
+    const buttons = renderer.root.findAllByType('button')
+    const saveBtn = buttons.find(
+      (b) => Array.isArray(b.props.children)
+        ? String(b.props.children.join('')).trim() === '保存'
+        : String(b.props.children || '').trim() === '保存')
+    assert.ok(saveBtn, '应存在全局「保存」按钮')
+    await TestRenderer.act(async () => {
+      saveBtn.props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    assert.ok(m.puts.length >= 1, '点击保存应发出 PUT 请求')
+    const worker = m.puts[m.puts.length - 1].worker
+    assert.equal(worker.pause_priority_threshold, 50, '应提交配置的豁免阈值')
   } finally {
     if (renderer) await TestRenderer.act(() => renderer.unmount())
     m.restore()

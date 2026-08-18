@@ -146,8 +146,14 @@ class TaskScheduler:
         val = in_pause_window(self.config.get(), self._now())
         if val != self._last_pause_state:
             if val:
-                logger.info("进入定时暂停窗口：停止开始新任务，"
-                            "运行中任务继续执行，未开始任务等待窗口结束")
+                threshold = self.config.get().pause_priority_threshold
+                if threshold > 0:
+                    logger.info("进入定时暂停窗口：停止低优先级仓库的新任务，"
+                                "优先级不差于 %s（priority <= %s）的仓库仍可派发，"
+                                "运行中任务继续执行", threshold, threshold)
+                else:
+                    logger.info("进入定时暂停窗口：停止开始新任务，"
+                                "运行中任务继续执行，未开始任务等待窗口结束")
             else:
                 logger.info("退出定时暂停窗口：恢复派发新任务")
             self._last_pause_state = val
@@ -220,21 +226,30 @@ class TaskScheduler:
         q.remove(best)
         return best
 
+    def _repo_priority_value(self, repo_id: int) -> int:
+        """仓库调度优先级（issue #51）：整数 1~999，数字越小越优先；
+        数据库缺省 / 损坏值回退 DEFAULT_PRIORITY。"""
+        row = self.db.get_repo(repo_id)
+        if row is not None and row["priority"] is not None:
+            try:
+                return int(row["priority"])
+            except (TypeError, ValueError):
+                pass
+        return DEFAULT_PRIORITY
+
     def _repo_sort_key(self, repo_id: int, q: deque[int], cfg) -> tuple[int, tuple, int]:
         """候选仓库排序键（issue #51）：仓库优先级升序（数字小先），
         同优先级按队内最优任务的排序键（issue #76 + #234：标签权重 →
         issue 创建时间）比较，再按 repo_id 兜底保证确定性。"""
-        row = self.db.get_repo(repo_id)
-        priority = DEFAULT_PRIORITY
-        if row is not None and row["priority"] is not None:
-            priority = int(row["priority"])
+        priority = self._repo_priority_value(repo_id)
         best = min(q, key=lambda tid: self._task_sort_key(tid, cfg))
         return (priority, self._task_sort_key(best, cfg), repo_id)
 
     def _dispatch(self) -> None:
-        if self._in_pause_window():
-            return  # 暂停窗口内不开始新任务（issue #169）
         cfg = self.config.get()
+        in_pause = self._in_pause_window()
+        if in_pause and cfg.pause_priority_threshold <= 0:
+            return  # 暂停窗口内不开始新任务（issue #169；未配置豁免阈值）
         with self._lock:
             running_count = len(self._running)
             if running_count >= cfg.max_concurrent_repos:
@@ -244,6 +259,15 @@ class TaskScheduler:
                 (repo_id, q) for repo_id, q in self._queues.items()
                 if repo_id not in self._running and q
             ]
+            if in_pause:
+                # 暂停窗口豁免（issue #299）：仅派发优先级不差于阈值
+                # （priority <= pause_priority_threshold，数字越小越优先）
+                # 的仓库；其余仓库的任务保留在队列，窗口结束后照常派发
+                threshold = cfg.pause_priority_threshold
+                candidates = [
+                    (repo_id, q) for repo_id, q in candidates
+                    if self._repo_priority_value(repo_id) <= threshold
+                ]
             if not candidates:
                 return
             repo_id, q = min(

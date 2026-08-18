@@ -2463,3 +2463,64 @@ class TestCommentTemplateSettings:
             "templates": {"comment": "新评论模版"}}).status_code == 200
         after = tc.get("/api/settings").json()["templates"]["resume"]
         assert after == before
+
+
+class TestPausePriorityThresholdSettings:
+    """worker.pause_priority_threshold 段（issue #299）：暂停窗口豁免优先级阈值。
+
+    仓库调度优先级（1~999，数字越小越优先）不差于该值的仓库，在定时暂停
+    窗口内仍可开始新任务；0 = 关闭（所有仓库都受暂停窗口约束）。
+    """
+
+    def test_get_settings_default_zero(self, client):
+        """未配置时默认 0（关闭豁免，保持 issue #169 行为）。"""
+        tc, _ = client
+        worker = tc.get("/api/settings").json()["worker"]
+        assert worker["pause_priority_threshold"] == 0
+
+    def test_update_persists(self, client):
+        """PUT 写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_priority_threshold": 50}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["pause_priority_threshold"] == 50
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "pause_priority_threshold: 50" in config_text
+
+    def test_update_zero_disables(self, client):
+        """0 = 关闭豁免（显式写回 0）。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"worker": {"pause_priority_threshold": 50}})
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_priority_threshold": 0}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["pause_priority_threshold"] == 0
+
+    def test_update_keeps_other_worker_fields(self, client):
+        """部分更新：提交阈值不影响其他 worker 字段。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"worker": {
+            "pause_windows": ["09:00-12:00"]}})
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_priority_threshold": 20}})
+        assert resp.status_code == 200
+        worker = resp.json()["worker"]
+        assert worker["pause_priority_threshold"] == 20
+        assert worker["pause_windows"] == ["09:00-12:00"]
+
+    @pytest.mark.parametrize("bad", [
+        -1,          # 负数
+        1000,        # 超出 1~999 上限
+        1.5,         # 非整数
+        "50",        # 字符串
+        None,        # null
+        True,        # 布尔不是整数（int 子类显式排除）
+        [50],        # 数组
+    ])
+    def test_update_rejects_bad_threshold(self, client, bad):
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {
+            "pause_priority_threshold": bad}})
+        assert resp.status_code == 400
+        assert "pause_priority_threshold" in resp.json()["detail"]

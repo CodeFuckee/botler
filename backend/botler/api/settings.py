@@ -89,6 +89,9 @@ def get_settings(request: Request):
             "pause_windows": s.pause_windows,
             "pause_weekdays": s.pause_weekdays,
             "pause_timezone": s.pause_timezone,
+            # 暂停窗口豁免优先级阈值（issue #299）：仓库调度优先级不差于
+            # 该值的仓库在暂停窗口内仍可开始新任务；0 = 关闭
+            "pause_priority_threshold": s.pause_priority_threshold,
             "pause_active": in_pause_window(s),
         },
         "claude": {
@@ -652,6 +655,20 @@ def _validate_worker(patch: dict) -> None:
                         raise HTTPException(
                             400, f"worker.pause_timezone 时区名非法: {tz}")
                 patch[key] = tz
+                continue
+            if key == "pause_priority_threshold":
+                # issue #299：暂停窗口豁免优先级阈值（0 = 关闭，1~999 =
+                # 阈值；仓库优先级不差于阈值的在暂停窗口内仍可开始新任务）。
+                # 布尔是 int 子类，显式排除（与 pause_weekdays 同思路）
+                if not isinstance(val, int) or isinstance(val, bool):
+                    raise HTTPException(
+                        400, "worker.pause_priority_threshold 必须是整数"
+                             "（0=关闭，1~999 为阈值）")
+                if val < 0 or val > 999:
+                    raise HTTPException(
+                        400, f"worker.pause_priority_threshold 取值非法: {val}"
+                             "（可选 0~999，0=关闭）")
+                patch[key] = val
                 continue
             if not isinstance(val, int) or val <= 0:
                 raise HTTPException(400, f"{key} 必须是正整数")

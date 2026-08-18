@@ -103,6 +103,17 @@ def _pause_weekdays(worker: dict) -> list[int]:
     return cleaned
 
 
+def _pause_priority_threshold(worker: dict) -> int:
+    """读取 worker.pause_priority_threshold（issue #299）：0~999 整数。
+    0 = 关闭（所有仓库都受暂停窗口约束）；缺省/非法值回退 0（防御手动
+    编辑 config.yaml 写坏，保证调度行为与未配置一致）。"""
+    val = worker.get("pause_priority_threshold")
+    if (isinstance(val, int) and not isinstance(val, bool)
+            and 0 <= val <= 999):
+        return val
+    return 0
+
+
 def _issue_priority_labels(worker: dict) -> list[str]:
     """读取 worker.issue_priority（issue #76）：必须是字符串列表且非空，
     否则回退默认顺序（防御手动编辑 config.yaml 写坏的情况）。"""
@@ -176,6 +187,11 @@ class Settings:
     pause_windows: list[str] = field(default_factory=list)
     pause_weekdays: list[int] = field(default_factory=list)
     pause_timezone: str = ""
+    # 暂停窗口豁免优先级阈值（issue #299）：仓库调度优先级（repos[].priority，
+    # 1~999，数字越小越优先）不差于该阈值（priority <= 阈值）的仓库，在定时
+    # 暂停窗口内仍可开始新任务（不受暂停窗口影响）；0 = 关闭（所有仓库都受
+    # 暂停窗口约束，issue #169 行为不变）。设置页「任务调度」卡片可编辑。
+    pause_priority_threshold: int = 0
     # CI 流水线等待（issue #40）：任务成功收尾前等待任务提交触发的流水线
     # 到终态。detect = 探测窗口（GitLab 收到 push 即创建流水线记录，
     # 窗口内找不到匹配 sha 说明仓库无 CI）；timeout = 等待终态总上限；
@@ -325,7 +341,8 @@ KNOWN_FIELDS = {
                "reconcile_interval_seconds", "ci_wait_detect_seconds",
                "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
                "engine", "plugin_paths", "issue_priority",
-               "pause_windows", "pause_weekdays", "pause_timezone"},
+               "pause_windows", "pause_weekdays", "pause_timezone",
+               "pause_priority_threshold"},
     "claude": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
             "session_root", "cordis", "runtime_bin", "base_url", "api_key"},
@@ -518,6 +535,7 @@ class ConfigManager:
             pause_windows=_pause_windows(worker),
             pause_weekdays=_pause_weekdays(worker),
             pause_timezone=str(worker.get("pause_timezone") or "").strip(),
+            pause_priority_threshold=_pause_priority_threshold(worker),
             ci_wait_detect_seconds=int(worker.get("ci_wait_detect_seconds", 120)),
             ci_wait_interval_seconds=int(worker.get("ci_wait_interval_seconds", 15)),
             ci_wait_timeout_seconds=int(worker.get("ci_wait_timeout_seconds", 1800)),

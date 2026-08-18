@@ -384,6 +384,9 @@ export default function Settings() {
       worker.pause_windows = settings.worker?.pause_windows || []
       worker.pause_weekdays = settings.worker?.pause_weekdays || []
       worker.pause_timezone = settings.worker?.pause_timezone || ''
+      // 暂停窗口豁免优先级阈值（issue #299）：0=关闭；1~999=仓库调度
+      // 优先级（数字越小越优先）不差于该值的仓库在窗口内仍可开始新任务
+      worker.pause_priority_threshold = Number(settings.worker?.pause_priority_threshold ?? 0)
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
@@ -786,6 +789,22 @@ export default function Settings() {
                 <datalist id="pause-timezone-options">
                   {COMMON_TZ.map((tz) => <option key={tz} value={tz} />)}
                 </datalist>
+                <div className="weekday-row">
+                  <span className="muted">豁免优先级 <code>worker.pause_priority_threshold</code>：</span>
+                </div>
+                <input
+                  className="input num-input"
+                  type="number"
+                  min={0}
+                  max={999}
+                  placeholder="0（关闭）"
+                  value={settings.worker?.pause_priority_threshold ?? 0}
+                  onChange={(e) => setWorkerField('pause_priority_threshold', e.target.value)}
+                />
+                <span className="muted small">
+                  仓库调度优先级（数字越小越优先）不差于该值的仓库，在暂停窗口内
+                  仍可开始新任务；0 = 关闭（所有仓库都受暂停窗口约束）。
+                </span>
               </td>
             </tr>
             <tr>
@@ -815,6 +834,12 @@ export default function Settings() {
           HH:MM-HH:MM，24 小时制，支持跨天如 22:00-02:00）；星期勾选生效
           范围（不勾选 = 每天都生效）；时区留空 = 服务器本地时区。修改后
           点击「保存」立即生效，对运行中任务无影响。
+        </p>
+        <p className="muted small">
+          暂停窗口豁免优先级（issue #299）：填写仓库调度优先级阈值（1~999，
+          数字越小越优先）后，优先级不差于该值（priority ≤ 阈值）的仓库在
+          暂停窗口内仍可开始新任务，不受窗口影响；填 0 或留空 = 关闭豁免，
+          所有仓库都受暂停窗口约束。
         </p>
         <p className="muted small">
           任务执行引擎：切换后端编写代码的 agent，默认 claude（Claude Code CLI）；
