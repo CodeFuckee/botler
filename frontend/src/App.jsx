@@ -12,6 +12,8 @@ import Plugins from './pages/Plugins.jsx'
 import Terminal from './pages/Terminal.jsx'
 import Login from './pages/Login.jsx'
 import DialogHost from './components/DialogHost.jsx'
+import ShortcutHelpModal from './components/ShortcutHelpModal.jsx'
+import { useShortcuts } from './keymap.js'
 import { api, setDisplayTz, setSsoEnabled, shortSha } from './api.js'
 import { applyTheme, loadThemePreference, saveThemePreference, watchSystemTheme } from './theme.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
@@ -25,6 +27,13 @@ export default function App() {
   // 界面国际化（issue #268）：t 翻译 / lang 当前语言 / setLang 切换（默认中文，无 Provider 时回退）
   const { t, lang, setLang } = useI18n()
   const [auth, setAuth] = useState(null)
+  const [redirect, setRedirect] = useState(null)
+  // 快捷键帮助弹窗（issue #269）：右上角「快捷键帮助」按钮打开
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false)
+  // 快捷键跳转（issue #269）：全局快捷键 t / g o / g s 设置跳转目标，
+  // 经 <Navigate> 渲染完成路由切换后立即清除（不依赖 useNavigate——
+  // 测试环境 mock Router 无导航上下文也不会崩溃；生产 BrowserRouter
+  // 下正常跳转，replace 避免后退键卡在跳转环）
   useEffect(() => {
     api.get('/api/auth/status')
       .then((a) => { setSsoEnabled(a.enabled); setAuth(a) })
@@ -101,6 +110,24 @@ export default function App() {
     const timer = setInterval(poller.poll, POLL_INTERVAL_MS)
     return () => clearInterval(timer)
   }, [auth])
+
+  // 键盘快捷键（issue #269）：全站级绑定——t 跳转任务列表、
+  // g o / g s 组合前往概览/设置页；n / r / / 为页面级绑定，由
+  // 对应页面（Overview / Tasks）自行注册。输入框聚焦自动不触发、
+  // 开关关闭全部失效（keymap.js 统一处理）；Esc 交由 DialogHost
+  // 与各弹窗已有处理，不在此拦截
+  useShortcuts({
+    'go-tasks': () => setRedirect('/tasks'),
+    'go-overview': () => setRedirect('/overview'),
+    'go-settings': () => setRedirect('/settings'),
+  }, { storage: typeof localStorage !== 'undefined' ? localStorage : null })
+
+  // 跳转消费后清除 redirect（子组件 <Navigate> 的 effect 先于本父组件
+  // effect 执行：先完成路由切换，再清空目标，<Navigate> 随即卸载，避免
+  // 常驻导致用户后续手动导航时被拽回快捷键目标页）
+  useEffect(() => {
+    if (redirect) setRedirect(null)
+  }, [redirect])
 
   // HIG 匠心：整页加载态用居中 spinner，非裸文本
   if (!auth) {
@@ -185,6 +212,17 @@ export default function App() {
             <option key={code} value={code}>{label}</option>
           ))}
         </select>
+        {/* 键盘快捷键（issue #269）：右上角「快捷键帮助」按钮——
+            打开帮助面板展示全部键位 + 启用/禁用开关 */}
+        <button
+          type="button"
+          className="btn btn-sm shortcuts-help-btn"
+          onClick={() => setShortcutHelpOpen(true)}
+          title={t('shortcuts.helpBtnTitle')}
+          aria-label={t('shortcuts.helpBtnTitle')}
+        >
+          <Icon name="keyboard" /> {t('shortcuts.helpBtn')}
+        </button>
         {auth.user && (
           <span className="navlink user-chip" title={t('nav.userTitle')}>
             <Icon name="user" /> {auth.user.username || auth.user.name || auth.user.sub}
@@ -192,6 +230,8 @@ export default function App() {
           </span>
         )}
       </nav>
+      {/* 快捷键跳转（issue #269）：redirect 非空时切换路由并立即清空 */}
+      {redirect && <Navigate to={redirect} replace />}
       <main className="content">
         <Routes>
           {/* issue #54：默认页面改到概览页——/ 重定向到 /overview，
@@ -209,6 +249,14 @@ export default function App() {
           <Route path="/terminal" element={<Terminal />} />
         </Routes>
       </main>
+      {/* 快捷键帮助弹窗（issue #269）：右上角按钮打开，展示键位与
+          启用开关；Esc / 遮罩 / × 关闭（组件内自行监听 Esc） */}
+      {shortcutHelpOpen && (
+        <ShortcutHelpModal
+          onClose={() => setShortcutHelpOpen(false)}
+          storage={typeof localStorage !== 'undefined' ? localStorage : null}
+        />
+      )}
       {/* 自定义对话框宿主（issue #105）：替代浏览器原生 alert/confirm，
           挂在根部全局唯一，供 confirmDialog / alertDialog 渲染 */}
       <DialogHost />

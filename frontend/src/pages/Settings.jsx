@@ -15,6 +15,7 @@ import {
   saveThemePreference,
 } from '../theme.js'
 import { useI18n, LANG_LABELS } from '../i18n.jsx'
+import { loadShortcutsEnabled, saveShortcutsEnabled } from '../keymap.js'
 
 const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
@@ -51,6 +52,11 @@ const themeStorage = typeof localStorage !== 'undefined' ? localStorage : null
 export default function Settings() {
   // 界面国际化（issue #268）：设置页「界面显示」卡片提供语言切换
   const { t, lang, setLang } = useI18n()
+  // 键盘快捷键启用开关（issue #269）：localStorage botler.shortcuts
+  // 持久化（与界面语言同模式），默认开启；帮助面板与设置页均可切换，
+  // 分发处理器每次按键实时读取，无需刷新即全局生效
+  const [shortcutsEnabled, setShortcutsEnabled] = useState(() =>
+    loadShortcutsEnabled(typeof localStorage !== 'undefined' ? localStorage : null))
   const [settings, setSettings] = useState(null)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
@@ -885,6 +891,25 @@ export default function Settings() {
               </td>
             </tr>
             <tr>
+              {/* 键盘快捷键（issue #269）：全站快捷键启用开关，持久化
+                  localStorage（键 botler.shortcuts，默认开启）；帮助
+                  面板同步展示同一开关，任意一处切换即时全局生效 */}
+              <th>启用键盘快捷键 <code>botler.shortcuts</code></th>
+              <td>
+                <input
+                  type="checkbox"
+                  className="check-input shortcuts-toggle-input"
+                  checked={shortcutsEnabled}
+                  onChange={(e) => {
+                    setShortcutsEnabled(e.target.checked)
+                    saveShortcutsEnabled(
+                      typeof localStorage !== 'undefined' ? localStorage : null,
+                      e.target.checked)
+                  }}
+                />
+              </td>
+            </tr>
+            <tr>
               <th>显示时区 <code>ui.timezone</code></th>
               <td>
                 <input
@@ -914,6 +939,8 @@ export default function Settings() {
           切换即时预览，保存后写回 config.yaml 并同步浏览器本地偏好，刷新不闪变。
           任务创建/开始/完成时间与执行日志时间戳按显示时区展示；留空则跟随本机浏览器时区
           （默认与访问者本机一致），修改后点击下方「保存界面显示配置」立即生效，无需刷新。
+          键盘快捷键（n 新建 issue / r 刷新 / t 跳转任务 / g o 概览 / g s 设置 / / 聚焦搜索）：
+          勾选 = 启用（默认），取消 = 全站快捷键立即失效；输入框聚焦时快捷键不触发，避免误操作。
           {t('settings.ui.languageHint')}
         </p>
       </div>

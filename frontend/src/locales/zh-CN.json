@@ -236,5 +236,19 @@
   "overview.botStatusHint.done": "bot 已完成开发，待人工确认关闭",
   "overview.botStatusHint.failed": "bot 处理失败，需人工介入",
   "tasks.task": "任务",
-  "tasks.stopAllWithCount": "停止所有任务（{n}）"
+  "tasks.stopAllWithCount": "停止所有任务（{n}）",
+  "shortcuts.helpBtn": "快捷键帮助",
+  "shortcuts.helpBtnTitle": "键盘快捷键（概览页 / 任务页常用操作）",
+  "shortcuts.helpTitle": "键盘快捷键",
+  "shortcuts.enabled": "启用键盘快捷键",
+  "shortcuts.enabledHint": "关闭后全站快捷键立即失效，再次勾选即恢复；输入框聚焦时快捷键不会触发，避免误操作。",
+  "shortcuts.newIssue": "新建 issue（打开添加弹窗）",
+  "shortcuts.refresh": "刷新当前页数据",
+  "shortcuts.focusSearch": "聚焦搜索框",
+  "shortcuts.goTasks": "跳转任务列表",
+  "shortcuts.goOverview": "前往概览页",
+  "shortcuts.goSettings": "前往设置页",
+  "shortcuts.scope.global": "全站",
+  "shortcuts.scope.overview": "概览页",
+  "shortcuts.scope.tasks": "任务页"
 }

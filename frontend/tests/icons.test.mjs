@@ -32,12 +32,13 @@ function renderIcon(name, props) {
 // sparkles（生成图标按钮）三个语义名，同步补入清单
 // issue #189：新增 compass（概览页「发掘」按钮）语义名，同步补入清单
 // issue #264：新增 chart（统计看板空态与总览卡片）语义名，同步补入清单
+// issue #269：新增 keyboard（导航栏「快捷键帮助」按钮）语义名，同步补入清单
 const EXPECTED_NAMES = [
   'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle',
   'chevronDown', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
   'externalLink', 'flag', 'folder', 'folderOpen', 'hourglass', 'image',
   'lightbulb', 'lock', 'message', 'mic', 'package', 'pencil', 'pin',
-  'plus', 'refresh', 'rocket', 'search', 'settings', 'sparkles', 'square',
+  'keyboard', 'plus', 'refresh', 'rocket', 'search', 'settings', 'sparkles', 'square',
   'tag', 'terminal', 'trash', 'user', 'wallet', 'warning', 'wrench',
   'x', 'xCircle',
 ]

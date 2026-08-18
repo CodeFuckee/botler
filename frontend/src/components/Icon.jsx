@@ -9,7 +9,7 @@
 import {
   ArrowLeft, ArrowUp, BarChart3, Bot, Brain, Check, CheckCircle2, ChevronDown,
   ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Flag,
-  Folder, FolderOpen, Hourglass, Image as ImageIcon, Lightbulb, Lock,
+  Folder, FolderOpen, Hourglass, Image as ImageIcon, Keyboard, Lightbulb, Lock,
   MessageCircle, Mic, Package, Pencil, Pin, Plus, RefreshCw, Rocket, Search,
   Settings, Sparkles, Square, Tag, Terminal as TerminalIcon, Trash2,
   TriangleAlert, User, Wallet, Wrench, X, XCircle,
@@ -35,6 +35,7 @@ export const ICONS = {
   folder: Folder,
   folderOpen: FolderOpen,
   hourglass: Hourglass,
+  keyboard: Keyboard,
   image: ImageIcon,
   lightbulb: Lightbulb,
   lock: Lock,

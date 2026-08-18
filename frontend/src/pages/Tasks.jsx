@@ -4,6 +4,7 @@ import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { Icon } from '../components/Icon.jsx'
 import { useI18n } from '../i18n.jsx'
+import { focusElement, useShortcuts } from '../keymap.js'
 import { UsageSummary } from '../components/UsageCard.jsx'
 
 // 每页条数（与后端 limit 一致，issue #50 翻页）
@@ -172,6 +173,8 @@ export default function Tasks() {
   // include_usage=1 重新拉取，后端批量返回避免逐任务 N+1 查询）
   const [showUsage, setShowUsage] = useState(false)
   const timer = useRef(null)
+  // 搜索框 ref（issue #269）：/ 快捷键聚焦搜索框用
+  const searchRef = useRef(null)
 
   const load = useCallback(async () => {
     try {
@@ -209,6 +212,15 @@ export default function Tasks() {
   useEffect(() => {
     api.get('/api/repos').then((d) => setRepos(d.repos)).catch(() => {})
   }, [])
+
+  // 键盘快捷键（issue #269）：页面级绑定——r = 手动刷新任务列表
+  // （与「刷新」按钮等效，低危操作无需确认），/ = 聚焦搜索框
+  // （防误触：搜索框已聚焦时按 / 不重复聚焦/输入斜杠）。输入框
+  // 聚焦自动不触发、开关关闭全部失效（keymap.js 统一处理）
+  useShortcuts({
+    'refresh': () => refreshList(),
+    'focus-search': () => focusElement(searchRef.current),
+  }, { storage: typeof localStorage !== 'undefined' ? localStorage : null })
 
   // 窄视口列隐藏（issue #70）：挂载时按视口宽度计算需隐藏的列，窗口缩放时重算。
   // SSR 测试环境无 window 时保持默认全显示。
@@ -359,6 +371,7 @@ export default function Tasks() {
             {repos.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
           <input
+            ref={searchRef}
             className="input grow"
             placeholder={tr('tasks.searchPlaceholder')}
             value={search}

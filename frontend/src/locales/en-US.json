@@ -236,5 +236,19 @@
   "overview.botStatusHint.done": "Bot finished development, waiting for manual confirmation to close",
   "overview.botStatusHint.failed": "Bot processing failed, manual intervention needed",
   "tasks.task": "Task",
-  "tasks.stopAllWithCount": "Stop All Tasks ({n})"
+  "tasks.stopAllWithCount": "Stop All Tasks ({n})",
+  "shortcuts.helpBtn": "Shortcuts",
+  "shortcuts.helpBtnTitle": "Keyboard shortcuts (overview / tasks)",
+  "shortcuts.helpTitle": "Keyboard Shortcuts",
+  "shortcuts.enabled": "Enable keyboard shortcuts",
+  "shortcuts.enabledHint": "All shortcuts take effect immediately once disabled; check again to restore. Shortcuts do not trigger while typing in inputs, preventing accidental actions.",
+  "shortcuts.newIssue": "New issue (open add modal)",
+  "shortcuts.refresh": "Refresh current page data",
+  "shortcuts.focusSearch": "Focus search box",
+  "shortcuts.goTasks": "Go to task list",
+  "shortcuts.goOverview": "Go to overview",
+  "shortcuts.goSettings": "Go to settings",
+  "shortcuts.scope.global": "Global",
+  "shortcuts.scope.overview": "Overview",
+  "shortcuts.scope.tasks": "Tasks"
 }

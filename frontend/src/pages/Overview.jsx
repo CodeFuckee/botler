@@ -5,6 +5,7 @@ import { useI18n } from '../i18n.jsx'
 import { Icon } from '../components/Icon.jsx'
 import { fmtTokens, fmtCost } from '../components/UsageCard.jsx'
 import AddIssueModal from '../components/AddIssueModal.jsx'
+import { useShortcuts } from '../keymap.js'
 
 // 概览页展示的活跃任务状态（issue #32）：执行中 + 重试中
 export const LIVE_STATUSES = ['running', 'retrying']
@@ -737,6 +738,24 @@ export default function Overview() {
       setDiscoverResults((prev) => ({ ...prev, [repo.repo_id]: { error: e.message } }))
     }
   }, [loadIssues])
+
+  // 键盘快捷键（issue #269）：页面级绑定——n = 打开首个仓库的
+  // 「添加 Issue」弹窗（与点击仓库卡片右上角按钮等效），r = 手动
+  // 刷新当前页数据（开放 issue / 活跃任务 / 流水线 / 灵感，均走
+  // 已有加载函数，低危操作无需确认）。输入框聚焦自动不触发、开关
+  // 关闭全部失效（keymap.js 统一处理）；弹窗已打开时 n 不再重复
+  // 打开（避免覆盖用户正在填写的表单）
+  useShortcuts({
+    'new-issue': () => {
+      if (repoIssues.length > 0 && !addIssueRepo) setAddIssueRepo(repoIssues[0])
+    },
+    'refresh': () => {
+      loadIssues()
+      load()
+      loadPipelines()
+      loadInspirations()
+    },
+  }, { storage: typeof localStorage !== 'undefined' ? localStorage : null })
 
   // 各任务信息块实时输出自动滚动到底部（issue #114：任务板块删除后
   // 任务块迁入开放 issue 列表项内；SSR 测试环境无 document 时跳过）

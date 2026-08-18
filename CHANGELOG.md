@@ -5,6 +5,43 @@
 ## [Unreleased]
 ### Added
 
+- **键盘快捷键（概览页 / 任务页常用操作，issue #269）**：
+  平台所有操作依赖鼠标点击（新建 issue 点按钮、刷新点按钮、打开任务详情点行），高频
+  操作无快捷键效率低。本次引入全局 keydown 监听 + 集中管理的 keymap.js，低成本覆盖
+  高频操作：
+  - `frontend/src/keymap.js`（新增）：快捷键绑定集中管理（验收标准 4）——`SHORTCUT_DEFS`
+    定义表（帮助面板与分发共用同一数据源，新增快捷键只需登记一条 + 页面注册同名 action）、
+    单键 + 组合键（`g o` / `g s` 序列，2 秒超时复位、失败降级单键）匹配器、全局 keydown
+    分发（`useShortcuts` hook，卸载自动清理；动作表经 getter 实时读取，避免闭包捕获
+    过期状态）、启用开关（localStorage 键 botler.shortcuts，默认开启，每次按键实时读取
+    即改即生效）、防误触 `isTypingTarget`（input/textarea/select/contenteditable 聚焦
+    不触发，验收标准 1）；Esc 不拦截（交由 DialogHost 与各弹窗已有处理）、ctrl/meta/alt
+    系统组合键不抢占、长按 repeat 去重；
+  - 快捷键集：`n` 新建 issue（概览页，打开首个仓库添加弹窗）、`r` 刷新当前页数据
+    （概览页刷新开放 issue/活跃任务/流水线/灵感，任务页刷新任务列表）、`t` 跳转任务列表、
+    `g o` 概览 / `g s` 设置（全站生效）、`/` 聚焦搜索框（任务页搜索已存在即联动；
+    #216 全局搜索落地后由 keymap 登记扩展）；输入框聚焦不误触；
+  - `frontend/src/components/ShortcutHelpModal.jsx`（新增）：页面右上角「快捷键帮助」
+    按钮打开的弹窗（验收标准 2）——键位表来自 SHORTCUT_DEFS 单一数据源 + 「启用键盘
+    快捷键」开关（一键禁用，验收标准 3，与设置页开关同键位、任意一处切换即时全局生效）；
+    关闭方式与现有 Modal 一致（× / 遮罩 / Esc）；
+  - `frontend/src/pages/Overview.jsx` / `Tasks.jsx`：页面级注册 n / r / / 动作（复用
+    已有 setAddIssueRepo / loadIssues / refreshList / focusElement 等，零重复逻辑）；
+    `frontend/src/App.jsx`：导航栏右上角「快捷键帮助」按钮 + 全站级 t / g o / g s 跳转
+    （useNavigate）；`frontend/src/pages/Settings.jsx`：「界面显示」卡片新增「启用键盘
+    快捷键」开关行（botler.shortcuts）；`frontend/src/components/Icon.jsx` 注册 keyboard
+    图标；`frontend/src/styles.css` 帮助按钮 / 弹窗 / kbd 键位样式（跟随深浅色主题变量）；
+    i18n：shortcuts.* 中英字典 14 键；
+  - **测试**：新增 `frontend/tests/keymap.test.mjs` 28 例（定义表完整、单键/组合键匹配
+    与超时复位/失败降级、防误触判定、启用开关读写与异常兜底、分发处理器（开关关闭 /
+    输入框聚焦 / 修饰键 / Esc / repeat / 空事件）、useShortcuts hook 生命周期与最新动作
+    表回归）、`shortcut-help-modal.test.mjs` 9 例、`overview-shortcuts.test.mjs` 5 例
+    （n 打开弹窗 / r 刷新 / 输入框聚焦不误触）、`tasks-shortcuts.test.mjs` 4 例
+    （r 刷新 / / 命中与防误触）、`app-shortcuts.test.mjs` 4 例（帮助按钮与面板 / t / g o /
+    g s 跳转 / 开关关闭不跳转）、`settings-shortcuts-toggle.test.mjs` 2 例；全量前端单元
+    测试（node --test + c8 覆盖率门禁）通过，无 regression。
+
+
 - **前端界面国际化（中英文切换，issue #268）**：
   平台可对接 GitLab 开放社区，但前端全部文案硬编码中文（jsx 字符串），英文用户/团队协作有门槛，
   魔法字符串散落各处也不利于维护。本次引入轻量自研 i18n（React Context + JSON 字典，不引入

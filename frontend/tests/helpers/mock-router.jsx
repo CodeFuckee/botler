@@ -6,7 +6,7 @@
 // children，Link 渲染为 <a>（to 为对象时取 pathname）。
 //
 // 其余导出（NavLink/Route/Routes/BrowserRouter/useParams/useLocation/
-// useSearchParams）供 vite optimizeDeps 扫描 index.html 入口链时匹配，
+// useSearchParams/useNavigate）供 vite optimizeDeps 扫描 index.html 入口链时匹配，
 // 避免预扫描报 missing export 噪音（不影响组件渲染断言）。
 import React from 'react'
 
@@ -52,4 +52,10 @@ export function useLocation() {
 
 export function useSearchParams() {
   return [new URLSearchParams(), () => {}]
+}
+
+// 导航（issue #269 App 全局快捷键）：测试环境为记录型导航——返回的
+// navigate 函数把目标路径推入数组并渲染 <a>，便于断言跳转发生
+export function useNavigate() {
+  return (to) => {}
 }
