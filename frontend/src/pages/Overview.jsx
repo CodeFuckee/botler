@@ -225,6 +225,56 @@ export function saveIssueFilter(storage, filter) {
   }
 }
 
+// ---- issue #285：概览页 issue 分组折叠/展开 ----
+// 分组头部增加折叠开关（chevronRight/chevronDown），折叠后隐藏组内
+// issue 列表、保留组标题与计数，方便用户折叠长列表；折叠偏好存
+// localStorage（键 botler.overview.collapsedGroups），刷新后保持。
+export const GROUP_COLLAPSE_STORAGE_KEY = 'botler.overview.collapsedGroups'
+
+// 读取折叠偏好：localStorage 兼容对象（测试可注入）；无存储环境或
+// getItem 抛异常（隐私模式）时返回空 Set（全展开）。值须为 JSON 数组
+// 且元素为已知分组 key（running/failed/done/other），非法元素剔除
+export function loadCollapsedGroups(storage) {
+  const known = new Set(ISSUE_GROUPS.map((g) => g.key))
+  const out = new Set()
+  try {
+    if (!storage) return out
+    const raw = storage.getItem(GROUP_COLLAPSE_STORAGE_KEY)
+    if (!raw) return out
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return out
+    for (const k of parsed) {
+      if (typeof k === 'string' && known.has(k)) out.add(k)
+    }
+  } catch {
+    /* 无存储环境/损坏数据：静默回退全展开 */
+  }
+  return out
+}
+
+// 保存折叠偏好：只写合法分组 key 数组；存储不可用或 setItem 抛异常时
+// 静默忽略，不影响页面使用
+export function saveCollapsedGroups(storage, collapsed) {
+  try {
+    if (!storage || !collapsed) return
+    const known = new Set(ISSUE_GROUPS.map((g) => g.key))
+    const keys = Array.from(collapsed)
+      .filter((k) => typeof k === 'string' && known.has(k))
+    storage.setItem(GROUP_COLLAPSE_STORAGE_KEY, JSON.stringify(keys))
+  } catch {
+    /* 无存储环境：静默忽略 */
+  }
+}
+
+// 折叠状态切换（纯函数）：已折叠的分组展开、未折叠的分组折叠，返回
+// 新 Set（不改动入参），供组件 setState 使用
+export function toggleGroupCollapsed(collapsed, key) {
+  const next = new Set(collapsed || [])
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  return next
+}
+
 // 提取 issue 的标签名数组：labels 元素可能是 {name} 对象（后端标准）、
 // 纯字符串或 null/缺 name（旧缓存/异常数据），逐一防御兼容
 export function issueLabelNames(issue) {
@@ -389,6 +439,16 @@ export default function Overview() {
   useEffect(() => {
     saveIssueFilter(typeof localStorage !== 'undefined' ? localStorage : null, issueFilter)
   }, [issueFilter])
+
+  // issue #285：分组折叠偏好——初值从 localStorage 恢复（无存储环境/
+  // 解析失败回全展开），变更时持久化，刷新后保持
+  const [collapsedGroups, setCollapsedGroups] = useState(() =>
+    loadCollapsedGroups(typeof localStorage !== 'undefined' ? localStorage : null))
+
+  useEffect(() => {
+    saveCollapsedGroups(typeof localStorage !== 'undefined' ? localStorage : null,
+                        collapsedGroups)
+  }, [collapsedGroups])
 
   // 过滤后的仓库 issue（issue #230）：保留仓库分组结构、仅过滤条目。
   // 未过滤时全部仓库卡片照常渲染（含零 issue 仓库的仓库级空状态）；
@@ -1009,13 +1069,25 @@ export default function Overview() {
                       ISSUE_GROUPS.map((g) => {
                         const items = groupIssuesByBotLabel(r.issues, runningKeys, r.repo_id)[g.key]
                         if (items.length === 0) return null
+                        // issue #285：分组折叠开关——折叠态隐藏组内 issue
+                        // 列表、保留组标题与计数（chevron 方向指示状态）
+                        const collapsed = collapsedGroups.has(g.key)
                         return (
-                          <div key={g.key} className="issue-group">
+                          <div key={g.key} className={'issue-group' + (collapsed ? ' issue-group-collapsed' : '')}>
                             <div className="issue-group-head">
+                              <button type="button"
+                                      className="issue-group-toggle"
+                                      onClick={() => setCollapsedGroups((prev) => toggleGroupCollapsed(prev, g.key))}
+                                      aria-expanded={!collapsed}
+                                      aria-label={tr(collapsed ? 'overview.expandGroup' : 'overview.collapseGroup')}
+                                      title={tr(collapsed ? 'overview.expandGroupHint' : 'overview.collapseGroupHint')}>
+                                <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} />
+                              </button>
                               <span className="issue-group-title" title={tr(`overview.groupHint.${g.key}`)}><Icon name={g.icon} /> {tr(`overview.group.${g.key}`)}</span>
                               <span className="issue-group-count"
                                     title={tr('overview.groupCountTitle')}>{tr('overview.groupCount', { n: items.length })}</span>
                             </div>
+                            {!collapsed && (
                             <ul className="issue-list">
                               {items.map((i) => {
                                 const bot = botStatusKey(i)
@@ -1133,6 +1205,7 @@ export default function Overview() {
                                 )
                               })}
                             </ul>
+                            )}
                           </div>
                         )
                       })

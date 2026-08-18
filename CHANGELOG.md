@@ -5,6 +5,28 @@
 ## [Unreleased]
 ### Added
 
+- **概览页开放 Issue 分组折叠/展开（issue #285）**：
+  概览页「开放 Issue」按 bot 终态标签分组展示（运行中 / bot-failed /
+  bot-done / 其他），长列表占据大量纵向空间。本次为每个分组增加折叠开关，
+  方便用户折叠长列表：
+  - `frontend/src/pages/Overview.jsx`：分组头部新增折叠按钮
+    （chevronDown/chevronRight 指示展开/折叠态，`aria-expanded` 无障碍
+    语义），折叠后隐藏组内 issue 列表、保留组标题与计数；新增纯函数
+    `loadCollapsedGroups` / `saveCollapsedGroups` / `toggleGroupCollapsed`
+    与存储键 `botler.overview.collapsedGroups`——折叠偏好持久化到
+    localStorage（沿用 issue #230 过滤偏好的存取模式：损坏数据/未知分组
+    key 逐项兜底、无存储环境静默忽略），刷新后保持；
+  - `frontend/src/styles.css`：`.issue-group-toggle` 图标按钮样式（悬浮
+    高亮）；`frontend/src/locales/zh-CN.json` / `en-US.json` 新增折叠/
+    展开按钮文案与悬浮提示（`overview.collapseGroup` /
+    `overview.expandGroup` / `overview.collapseGroupHint` /
+    `overview.expandGroupHint`）；
+  - **测试**：新增 `frontend/tests/overview-issue-group-collapse.test.mjs`
+    16 例（存取纯函数边界：无存储/损坏数据/未知 key 剔除/getItem 抛异常
+    静默；切换纯函数新 Set 语义；渲染：默认全展开、点击折叠隐藏组内列表
+    且标题计数保留、组间互不影响、localStorage 预置折叠态初始生效、点击
+    写入持久化、aria 文案切换），前端测试 1096 例全通过、覆盖率门禁通过。
+
 - **技能管理页面（issue #282）**：
   新增「技能」页面，展示所有配置的执行引擎（executor 插件）所拥有的技能，
   并支持查看 / 编辑 SKILL.md 以及其他技能相关的 md 文件（如 README.md /

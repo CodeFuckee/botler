@@ -2353,6 +2353,27 @@ code {
   color: var(--muted);
 }
 
+/* issue #285：分组折叠开关——图标按钮，悬浮高亮提示可交互；折叠态
+   分组隐藏组内 issue 列表但保留组标题与计数 */
+.issue-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.issue-group-toggle:hover {
+  color: var(--text);
+  background: var(--bg-soft);
+}
+
 /* issue #230：开放 issue 过滤条——状态分段按钮 + 标签多选胶囊，仅过滤
    条目保留仓库分组结构；选中态高亮与 label-pill 视觉呼应，清除过滤
    按钮推到最右 */
