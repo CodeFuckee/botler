@@ -32,6 +32,17 @@ function renderTree(content, projectUrl = '') {
   return json
 }
 
+/** 渲染为纯文本（issue #231：验证恶意 HTML 按纯文本原样保留） */
+function renderText(content) {
+  let renderer = null
+  TestRenderer.act(() => {
+    renderer = TestRenderer.create(React.createElement(Markdown, { content }))
+  })
+  const text = toText(renderer.toJSON())
+  TestRenderer.act(() => renderer.unmount())
+  return text
+}
+
 /** 渲染树 → 纯文本（与 overview-issue-notes.test.mjs 的 toText 一致） */
 function toText(node) {
   if (node == null) return ''
@@ -278,4 +289,84 @@ test('Markdown：列表/引用块中的 SHA 同样渲染提交链接', () => {
   const treeQuote = renderTree('> 提到 d6adbde9d2c4074ee7634f56010a3ccb088cdd24',
                                'https://gitlab.example.com/chenkaidi/botler')
   assert.match(treeQuote, /commit-link/)
+})
+
+// ---- issue #231：XSS 防护加固 ----
+// 组件渲染路径已走 React 文本节点（不使用 dangerouslySetInnerHTML），
+// HTML 标签天然按纯文本转义；剩余注入面是 [label](href) 的 href 直通
+// <a href>，javascript:/data:/vbscript: 等危险协议链接可点击执行脚本。
+// 以下用例固化：危险协议链接不渲染为可点击 <a>，正常协议/相对路径不受影响。
+
+test('安全：javascript: 协议链接不渲染为可点击 <a>（label 按纯文本）', () => {
+  const tree = renderTree('[点击](javascript:alert(1))')
+  assert.doesNotMatch(tree, /"a"/, '不应渲染 <a> 元素')
+  assert.doesNotMatch(tree, /javascript:/i, 'href 不应含 javascript:')
+  assert.match(tree, /点击/, '链接文字按纯文本保留')
+})
+
+test('安全：大小写混淆与空白混淆的危险协议链接均被拦截', () => {
+  // 大小写混淆 JaVaScRiPt:
+  const mixed = renderTree('[x](JaVaScRiPt:alert(1))')
+  assert.doesNotMatch(mixed, /"a"/, '大小写混淆的 javascript: 应被拦截')
+  // HTML 解析会忽略 href 中的控制字符/换行，java\nscript: 仍解析为 javascript:
+  const whitespace = renderTree('[x](java\nscript:alert(1))')
+  assert.doesNotMatch(whitespace, /"a"/, '含换行混淆的 javascript: 应被拦截')
+})
+
+test('安全：data: / vbscript: / file: 协议链接均被拦截', () => {
+  const cases = [
+    '[下载](data:text/html,<script>alert(1)</script>)',
+    '[执行](vbscript:msgbox(1))',
+    '[本地](file:///etc/passwd)',
+    '[未知](unknown-scheme:foo)',
+  ]
+  for (const c of cases) {
+    const tree = renderTree(c)
+    assert.doesNotMatch(tree, /"a"/, `${c} 不应渲染 <a> 元素`)
+  }
+})
+
+test('安全：正常协议与相对路径链接仍正常渲染', () => {
+  const ok = [
+    '[文档](https://example.com/docs)',
+    '[内网](http://10.0.0.1:8080/x)',
+    '[邮件](mailto:admin@example.com)',
+    '[相对](/docs/guide)',
+    '[锚点](#section-1)',
+  ]
+  for (const c of ok) {
+    const tree = renderTree(c)
+    assert.match(tree, /"a"/, `${c} 应正常渲染为 <a>`)
+  }
+})
+
+test('安全：<img onerror> / <iframe> / 事件属性按纯文本转义（不产生元素）', () => {
+  const cases = [
+    '<img src=x onerror=alert(1)>',
+    '<iframe src="https://evil.example"></iframe>',
+    '<div onclick="alert(1)">x</div>',
+  ]
+  for (const c of cases) {
+    const tree = renderTree(c)
+    // 注：组件根元素为 <div>，故仅断言危险元素类型不出现；
+    // 恶意标签/事件属性按纯文本转义保留（文本节点中的 onerror 字样
+    // 不会被浏览器执行，这是期望行为）。
+    assert.doesNotMatch(tree, /"img"/, `${c} 不应渲染 img 元素`)
+    assert.doesNotMatch(tree, /"iframe"/, `${c} 不应渲染 iframe 元素`)
+    const text = renderText(c)
+    assert.ok(text.includes(c), `${c} 应按纯文本原样转义保留（实际: ${text}）`)
+  }
+})
+
+test('安全：isSafeUrl 纯函数白名单（导出供单测）', async () => {
+  const mod = await vite.ssrLoadModule('/src/components/Markdown.jsx')
+  const { isSafeUrl } = mod
+  assert.equal(typeof isSafeUrl, 'function', '应导出 isSafeUrl 纯函数')
+  const safe = ['https://a.com', 'http://a.com', 'mailto:a@b.com',
+                'tel:12345', '/docs/guide', '#sec', './x.md', '../up', 'plain']
+  const unsafe = ['javascript:alert(1)', 'JaVaScRiPt:alert(1)',
+                  'java\nscript:alert(1)', 'data:text/html,x', 'vbscript:x',
+                  'file:///etc/passwd', 'unknown-scheme:x']
+  for (const u of safe) assert.equal(isSafeUrl(u), true, `${u} 应判为安全`)
+  for (const u of unsafe) assert.equal(isSafeUrl(u), false, `${u} 应判为危险`)
 })

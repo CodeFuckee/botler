@@ -10,6 +10,11 @@
 //
 // 安全约束：全部内容走 React 文本节点（不使用 dangerouslySetInnerHTML），
 // 文档中的 HTML 片段按纯文本转义显示。
+//
+// issue #231：XSS 防护加固——组件渲染路径无 HTML 注入面（React 文本节点
+// 天然转义），剩余注入面是 [label](href) 的 href 直通 <a href>：
+// javascript:/data:/vbscript: 等危险协议链接可点击执行脚本。新增
+// isSafeUrl 协议白名单，危险协议链接降级为纯文本展示（不渲染可点击 <a>）。
 import React from 'react'
 
 // Git 提交 SHA 匹配（issue #181）：7-40 位十六进制且两侧为词边界。
@@ -17,6 +22,22 @@ import React from 'react'
 // 完整 SHA 40 位；\b 依赖 \w，hex 均为单词字符，故混入非 hex 字母
 // 的字符串（如 abc1234xyz）不会误判。
 const COMMIT_SHA_RE = /\b[0-9a-f]{7,40}\b/gi
+
+// URL 协议白名单（issue #231，纯函数导出便于测试）：markdown 链接
+// [label](href) 的 href 直通 <a href> 渲染前必须校验。仅放行
+// http/https/mailto/tel 等安全协议与无 scheme 的相对路径/锚点；
+// javascript: / data: / vbscript: / file: 等可执行或敏感协议一律拒绝。
+// HTML 属性解析会忽略其中的空白与控制字符（java\nscript: 仍会被浏览器
+// 解析为 javascript:），故先剔除控制字符与 ASCII 空白再判断 scheme。
+const URL_CTRL_RE = /[\u0000-\u0020\u007f-\u009f]/g
+export function isSafeUrl(href) {
+  if (typeof href !== 'string') return false
+  const clean = href.replace(URL_CTRL_RE, '')
+  // 无 scheme（相对路径 / # ? 或普通文件名）→ 同站安全，放行
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(clean)) return true
+  // 有 scheme → 仅白名单协议放行（不区分大小写）
+  return /^(https?|mailto|tel):/i.test(clean)
+}
 
 /** 纯文本中的 Git 提交 SHA → 可点击链接（issue #181，纯函数导出便于测试）。
  *
@@ -77,11 +98,16 @@ function renderInline(text, keyPrefix = '', projectUrl = '') {
       const sep = token.lastIndexOf('](')
       const label = token.slice(1, sep)
       const href = token.slice(sep + 2, -1)
-      parts.push(
-        <a key={`${keyPrefix}a${i++}`} href={href} target="_blank" rel="noreferrer">
-          {label}
-        </a>
-      )
+      // issue #231：危险协议链接不渲染为可点击 <a>，label 按纯文本展示
+      if (!isSafeUrl(href)) {
+        parts.push(label)
+      } else {
+        parts.push(
+          <a key={`${keyPrefix}a${i++}`} href={href} target="_blank" rel="noreferrer">
+            {label}
+          </a>
+        )
+      }
     }
     last = m.index + token.length
   }

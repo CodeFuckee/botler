@@ -363,6 +363,27 @@
     清理 / 冲突检测 / 结果判定）；后端全量 2200+ 用例通过，无回归。
 
 
+### Fixed
+
+- **Markdown 渲染组件 XSS 防护加固：危险协议链接降级为纯文本（issue #231）**：
+  `frontend/src/components/Markdown.jsx` 渲染 issue 描述/评论等外部可控内容，
+  组件本身已全量走 React 文本节点（不使用 `dangerouslySetInnerHTML`，HTML
+  标签/事件属性天然按纯文本转义），但 `[label](href)` 的 href 直通 `<a href>`
+  无协议校验——`javascript:` / `data:` / `vbscript:` / `file:` 等危险协议
+  链接可点击执行脚本（管理员上下文风险高）。本次加固：
+  - 新增 `isSafeUrl(href)` 协议白名单纯函数（导出便于单测）：仅放行
+    http/https/mailto/tel 与无 scheme 的相对路径/锚点；先剔除 HTML 属性解析
+    会忽略的空白与控制字符（`java\nscript:` 仍会被浏览器解析为
+    `javascript:`），再按 scheme 判定，大小写混淆（`JaVaScRiPt:`）一并拦截；
+  - `renderInline` 链接分支接入白名单：危险协议链接不渲染为可点击 `<a>`，
+    label 按纯文本展示（不产生可点击诱导面）；
+  - 测试固化：`frontend/tests/markdown.test.mjs` 新增 6 例安全用例——
+    `javascript:` 链接不渲染 `<a>`、大小写/空白混淆拦截、data:/vbscript:/
+    file:/未知 scheme 拦截、正常协议与相对路径链接不受影响、`<img onerror>` /
+    `<iframe>` / 事件属性按纯文本转义、`isSafeUrl` 白名单纯函数边界；修复前
+    5 例失败（漏洞复现），修复后 28/28 通过，前端全量测试无 regression。
+
+
 ## [1.3.63] - 2026-08-19
 ### Added
 
