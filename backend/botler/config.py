@@ -495,9 +495,10 @@ DEFAULT_RESUME_PROMPT = """【继续处理（中断恢复）】你正在处理 {
 不要关闭该 issue——关闭动作留给用户确认后手动执行（模版库规范）。"""
 
 # Webhook POST 结构体默认模板（issue #136）：与全局提示词模版同占位符机制
-# （{repo_name}/{issue_title}/{issue_body}/{issue_url}/{gitlab_url}/
-# {project_id}/{issue_iid}/{project_path}/{project_path_encoded}/
-# {gitlab_host}），任务完成时自动渲染填充；设置页留空 = 使用此默认值。
+# （{repo_name}/{issue_title}/{issue_body}/{issue_title_urlenc}/
+# {issue_body_urlenc}/{issue_url}/{gitlab_url}/{project_id}/{issue_iid}/
+# {project_path}/{project_path_encoded}/{gitlab_host}），任务完成时自动
+# 渲染填充；设置页留空 = 使用此默认值。
 DEFAULT_WEBHOOK_TEMPLATE = """{
   "event": "task_succeeded",
   "repo": "{repo_name}",
