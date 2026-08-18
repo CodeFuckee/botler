@@ -31,6 +31,10 @@
 // comments/{note_id}/reply）；成功后本地即时追加新评论并叠加评论
 // 计数（localNotesCount），无需重新拉取详情；失败保留输入内容可重试。
 //
+// issue #290：任务 id——detail 响应新增 task_id 字段（该 issue 最近
+// 一条任务记录 id，从未执行为 null）：已执行过的 issue 在 KV 表
+// 「任务」行展示对应任务 id（#id），从未执行/加载失败显示「—」。
+//
 // 交互约定：
 // - 列表项本身不再直接跳转 GitLab，跳转统一走抽屉右上角
 //   「在 GitLab 中打开」按钮（web_url 新窗口）；
@@ -179,6 +183,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // issue #167：任务执行详情第二层右边栏——detailOpen 打开时本层
   // 抽屉不响应 Esc（由第二层自己处理关闭，避免两层同时被 Esc 关闭）
   const [detailOpen, setDetailOpen] = useState(false)
+  // issue #290：任务 id——detail 响应返回该 issue 最近任务 id（已执行
+  // 过才有值），KV 表「任务」行据此展示 #id；null=加载中/从未执行
+  // （加载完成后无任务显示「—」）
+  const [taskId, setTaskId] = useState(null)
 
   // Esc 关闭抽屉（SSR 测试环境无 document 时跳过）。issue #167：任务
   // 执行详情第二层右边栏打开时不响应 Esc（由第二层自己关闭），避免
@@ -234,12 +242,17 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     setDetailErr('')
     setEngine(null)
     setEngineErr('')
+    setTaskId(null)
     try {
       const d = await api.get(`/api/issues/${i.project_id}/${i.iid}/detail`)
       setNotes(Array.isArray(d && d.notes) ? d.notes : [])
       // issue #120：执行引擎来自该 issue 最近任务的实际记录（后端已
       // 做无任务回退），不再读取全局 worker.engine
       setEngine((typeof d.engine === 'string' && d.engine.trim()) ? d.engine : '')
+      // issue #290：任务 id——后端无任务返回 null；异常值（0/字符串/
+      // 负数）按无任务兜底显示「—」，不因坏数据崩溃
+      setTaskId((typeof d.task_id === 'number' && Number.isInteger(d.task_id)
+                 && d.task_id > 0) ? d.task_id : null)
     } catch (e) {
       setDetailErr(e.message || '加载失败')
       setEngineErr(e.message || '加载失败')
@@ -560,6 +573,19 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                     {engineDisplay(engine)}
                   </span>
                 )}
+              </td></tr>
+            {/* issue #290：任务 id——已执行过（有任务记录）显示对应
+                任务 id；从未执行/加载失败显示「—」；详情加载中显示
+                「加载中…」 */}
+            <tr><th>任务</th>
+              <td>
+                {detailErr ? (
+                  <span title={`加载失败：${detailErr}`}>—</span>
+                ) : notes === null ? (
+                  <span className="muted">加载中…</span>
+                ) : typeof taskId === 'number' ? (
+                  <span title={`该 issue 最近一次任务 #${taskId}`}>#{taskId}</span>
+                ) : '—'}
               </td></tr>
             <tr><th>作者</th><td>{author}</td></tr>
             <tr><th>创建时间</th><td>{fmtTime(i.created_at)}</td></tr>

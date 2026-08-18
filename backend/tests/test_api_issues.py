@@ -1612,7 +1612,8 @@ class TestIssueDetail:
         resp = tc.get("/api/issues/42/64/detail")
 
         assert resp.status_code == 200
-        assert resp.json() == {"notes": [], "engine": "claude"}
+        assert resp.json() == {"notes": [], "engine": "claude",
+                            "task_id": None}
 
     # ---- issue #120：执行引擎按 issue 展示（回退链：任务落库 engine
     # > 断点续跑会话字段推断 > 全局 worker.engine）----
@@ -1669,6 +1670,51 @@ class TestIssueDetail:
         resp = tc.get("/api/issues/42/64/detail")
 
         assert resp.json()["engine"] == "hermes"
+
+    # ---- issue #290：任务id展示——detail 返回该 issue 最近任务 id ----
+
+    def test_returns_task_id_from_latest_task(self, client):
+        """已执行（有任务记录）→ 返回该 issue 最近任务 id，供前端侧边栏
+        展示对应任务 id。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        task_id = db.create_task(repo_id, 42, 64, "历史任务")
+        db.set_task_status(task_id, "succeeded", engine="claude")
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["task_id"] == task_id
+        assert resp.json()["engine"] == "claude"
+
+    def test_task_id_is_latest_of_multiple(self, client):
+        """同 issue 多条任务记录（重新指派/对账补入队/手动重试）→
+        task_id 取最新一条（id 倒序最新在前，与任务列表排序约定一致）。"""
+        tc, stub, db, _ = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+        first = db.create_task(repo_id, 42, 64, "第一次任务")
+        db.set_task_status(first, "succeeded", engine="claude")
+        second = db.create_task(repo_id, 42, 64, "第二次任务")
+        db.set_task_status(second, "succeeded", engine="dsh")
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["task_id"] == second
+        assert resp.json()["engine"] == "dsh", "引擎同样取最近任务的落库值"
+
+    def test_task_id_none_when_no_task(self, client):
+        """从未执行（无任务记录）→ task_id 为 null，前端显示「—」。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): []}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        assert resp.json()["task_id"] is None
 
     def test_repo_not_found(self, client):
         """GitLab project_id 无对应启用仓库 → 404，且不触碰 GitLab。"""

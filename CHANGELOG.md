@@ -5,6 +5,27 @@
 ## [Unreleased]
 ### Added
 
+- **概览页 issue 详情侧边栏展示任务 id（issue #290）**：
+  「概览页的右侧的 issue 详情侧边栏，如果已经执行了，显示对应的任务 id」——
+  概览页弹出的 issue 右边栏新增「任务」行：已执行过（有任务记录）的 issue
+  展示其最近一次任务的 id（`#id`），从未执行显示「—」：
+  - 后端 `GET /api/issues/{project_id}/{iid}/detail` 新增 `task_id` 字段
+    （该 issue 最近一条任务记录 id，复用 `find_latest_task` 按 id 倒序取
+    最新，重新指派/对账补入队/手动重试的多条任务记录取最新一条；无任务
+    记录返回 `null`）；`_issue_engine` 重构为 `_task_engine_name(latest)`
+    + 全局回退两层，detail 一次查询同时产出 engine 与 task_id；
+  - 前端 `IssueDrawer` 抽屉 KV 表「执行引擎」行下方新增「任务」行：
+    `d.task_id` 为正整数时展示 `#id`（title 提示最近任务），详情加载中
+    显示「加载中…」，从未执行/加载失败/异常值（0、字符串、负数）均
+    显示「—」兜底，不因坏数据崩溃；
+  - 同步更新 README 的 detail 接口文档（两处 API 表）；
+  - 新增测试：后端 `TestIssueDetail` 3 例（有任务返回 id / 多任务取
+    最新 / 无任务 null，既有空 notes 精确断言同步补 `task_id` 字段）、
+    前端 `frontend/tests/overview-issue-drawer-task-id.test.mjs` 5 例
+    （源码数据流 + 渲染正常/从未执行/加载失败/异常值兜底），全量测试
+    无 regression。
+
+
 - **概览页「其他」分组 issue 置顶按钮（issue #308）**：
   「其他」分组（尚未处理/处理中的开放 issue）每条 issue 增加置顶按钮
   （pin 图标）：点击把该 issue 移到手动调度顺序最前并保存（复用 issue
