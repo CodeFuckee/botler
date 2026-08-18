@@ -644,3 +644,20 @@ class GitLabClient:
                 sha = commit.get("id")
                 return sha if isinstance(sha, str) and sha else None
         return None
+
+    def update_issue_assignee(self, project_id: int, iid: int,
+                              assignee_ids: list[int] | None) -> dict:
+        """更新 issue 负责人（issue #303：概览页右边栏负责人下拉修改）。
+
+        GitLab issue update API：PUT /projects/{id}/issues/{iid}，
+        assignee_ids 传空列表清除负责人——不传该字段 GitLab 会保留原
+        负责人，故 None/空列表统一归一为显式空数组（清除语义明确）。
+        assignee_ids 元素为 GitLab 用户 id（members/all 的 user_id，
+        与 create_issue 的 assignee_ids 同约定）。
+        """
+        body: dict = {"assignee_ids": assignee_ids or []}
+        issue = self._request(
+            "PUT", f"/projects/{project_id}/issues/{iid}",
+            json=body)
+        assert isinstance(issue, dict)
+        return issue

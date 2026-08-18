@@ -566,6 +566,8 @@ GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评�
 GET    /api/issues/{project_id}/{iid}/tasks 该 issue 的全部任务执行记录（id 倒序最新在前，同 issue 多条任务记录全部返回；概览页右边栏「查看执行的详情」数据源，issue #167）
 POST   /api/issues/{project_id}/{iid}/comments   添加 issue 评论（概览页右边栏「添加评论」，正文必填，成功后清缓存并返回精简评论，issue #125）
 POST   /api/issues/{project_id}/{iid}/comments/{note_id}/reply   回复 issue 某条评论（概览页右边栏「回复评论」，后端经 discussions API 解析评论所在线程后追加回复，issue #125）
+GET    /api/issues/{project_id}/members  项目成员清单（概览页右边栏负责人下拉数据源：GitLab members/all + user_id 补齐，成员精简为 {id, username, name}，id 为 GitLab 用户 id，issue #303）
+PUT    /api/issues/{project_id}/{iid}/assignee  更新 issue 负责人（assignee_id 为 GitLab 用户 id，null 清除负责人；编辑走 owner token 并同步 GitLab，成功后清缓存并返回更新后负责人列表，issue #303）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
 GET    /api/auth/status               登录状态探测（SSO 是否启用 + 当前用户，issue #27）
@@ -581,6 +583,8 @@ GET    /api/issues/{project_id}/labels      项目标记池（概览页右边栏
 PUT    /api/issues/{project_id}/{iid}/labels  更新 issue 标记（add/remove 一次提交加删标记；成功后清缓存并返回更新后标记列表，issue #108）
 GET    /api/issues/{project_id}/manual-orders 读取仓库手动调度顺序（iid 按 position 升序，issue #287；overview 聚合结果同样携带 manual_order 字段）
 PUT    /api/issues/{project_id}/manual-orders 全量保存仓库手动调度顺序（拖动 issue 后整组 iid 列表；非正整数/重复剔除、空列表清空、超长截断；成功后清 overview 缓存，issue #287）
+GET    /api/issues/{project_id}/members      项目成员清单（概览页右边栏负责人下拉数据源：GitLab members/all + user_id 补齐，issue #303）
+PUT    /api/issues/{project_id}/{iid}/assignee  更新 issue 负责人（assignee_id 为 GitLab 用户 id，null 清除负责人；同步 GitLab，成功后清缓存并返回更新后负责人列表，issue #303）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120；含 task_id 字段——该 issue 最近一条任务记录 id，已执行过才有值，从未执行/尚未派发为 null，概览页右边栏「任务」行展示，issue #290；含 task_duration_seconds 字段——该 issue 最近任务完成耗时秒数（finished_at - created_at），仅成功终态任务有值，其余为 null，概览页右边栏「完成耗时」行展示，issue #300）
 GET    /api/inspirations/overview      概览页灵感聚合：所有未软删除仓库 + 各自灵感（仓库按优先级排序，灵感按 updated_at 降序，issue #131）
 POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；默认仅存本地数据库，issue #131）

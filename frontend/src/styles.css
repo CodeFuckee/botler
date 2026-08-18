@@ -2329,6 +2329,21 @@ code {
   gap: var(--space-2);
   justify-content: flex-end;
 }
+/* issue #303：右边栏负责人编辑区——负责人下拉 + 操作按钮（保存/
+   取消右对齐，与标记编辑 labels-edit-actions 一致）；下拉复用
+   .input 基础样式，宽度收窄到内容区可读 */
+.assignee-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.assignee-select {
+  max-width: 100%;
+}
+.assignee-select option {
+  color: var(--text);
+  background: var(--bg-card);
+}
 /* issue #80：仓库卡片内按 bot 终态标签分组——组标题行 + 计数，
    空组不渲染；组标题提供分组视觉分隔 */
 .issue-group {

@@ -2041,7 +2041,8 @@ export default function Overview() {
                      onClose={() => setSelectedIssue(null)}
                      onIssueClosed={() => loadIssues()}
                      onLabelsUpdated={() => loadIssues()}
-                     onRetried={() => loadIssues()} />
+                     onRetried={() => loadIssues()}
+                     onAssigneeUpdated={() => loadIssues()} />
       )}
 
       {/* issue #92：添加 issue 弹窗——创建成功后关闭并立即刷新列表 */}

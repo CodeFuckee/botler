@@ -427,6 +427,56 @@ class TestCreateIssue:
                                   "labels": "bug,ui"}
 
 
+class TestUpdateIssueAssignee:
+    """GitLabClient.update_issue_assignee（issue #303）：PUT
+    /projects/{id}/issues/{iid} 提交 assignee_ids；None/空列表统一
+    归一为空数组（清除负责人语义明确，不传该字段 GitLab 会保留原
+    负责人）。用桩替换 _request 记录请求体断言发送内容。"""
+
+    def _stub(self, client: GitLabClient) -> list[tuple[str, str, dict]]:
+        """用桩替换 _request，记录 (method, path, json) 调用参数。"""
+        captured: list[tuple[str, str, dict]] = []
+
+        def fake_request(method, path, **kwargs):
+            captured.append((method, path, kwargs.get("json")))
+            return {"iid": 64, "title": "x", "state": "opened",
+                    "assignees": [{"id": 3, "username": "agent",
+                                   "name": "agent"}]}
+
+        client._request = fake_request
+        return captured
+
+    def test_sends_assignee_ids(self):
+        """指定负责人：PUT 请求体 assignee_ids=[用户 id]。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        issue = client.update_issue_assignee(42, 64, [3])
+
+        assert issue["iid"] == 64
+        method, path, body = captured[0]
+        assert (method, path) == ("PUT", "/projects/42/issues/64")
+        assert body == {"assignee_ids": [3]}
+
+    def test_clear_assignee(self):
+        """清除负责人：None 归一为空数组（不传字段会保留原负责人）。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        client.update_issue_assignee(42, 64, None)
+
+        assert captured[0][2] == {"assignee_ids": []}
+
+    def test_empty_list_clears(self):
+        """空列表同样清除负责人。"""
+        client = make_client()
+        captured = self._stub(client)
+
+        client.update_issue_assignee(42, 64, [])
+
+        assert captured[0][2] == {"assignee_ids": []}
+
+
 class TestReopenIssue:
     """reopen_issue：autoclose 误关后平台侧恢复（issue #109）。"""
 

@@ -5,6 +5,43 @@
 ## [Unreleased]
 ### Added
 
+- **概览页 issue 详情右边栏支持修改负责人并同步 GitLab（issue #303）**：
+  「概览页issue详情右边栏，增加可以修改issue的负责人，并同步到gitlab上，
+  负责人通过下拉菜单的方式选取，直接通过gitlab api读取项目成员」——
+  概览页弹出的 issue 右边栏「负责人」行新增「编辑」按钮，编辑态通过下拉
+  菜单选取项目成员（数据源直接读取 GitLab 项目成员 API），保存后同步
+  更新 GitLab 上该 issue 的负责人：
+  - 后端新增 `GET /api/issues/{project_id}/members`：项目成员清单
+    （负责人下拉数据源，GitLab members/all + issue #93 的 user_id 补齐，
+    成员精简为 {id, username, name}，id 为 GitLab 用户 id——更新负责人
+    assignee_ids 需要该值；查询失败 502，不可降级为空）；
+  - 后端新增 `PUT /api/issues/{project_id}/{iid}/assignee`：更新 issue
+    负责人（assignee_id 为项目成员用户 id，None 清除负责人；
+    GitLabClient 新增 `update_issue_assignee` 统一归一为空数组显式清除；
+    编辑走 owner token（issue #130），成功后清空概览缓存并返回更新后
+    负责人列表）；`_trim_assignees` 与 `_project_members` 抽取复用
+    （前者与 overview 聚合的负责人精简共用，后者与添加 issue 弹窗的
+    成员处理共用）；
+  - 前端 `IssueDrawer` 抽屉 KV 表「负责人」行新增「编辑」按钮（缺
+    project_id 旧缓存数据隐藏，与关闭/编辑标记按钮同约定）：编辑态
+    加载项目成员下拉选择（「不指定」+ 项目成员，当前负责人按 username
+    预选、负责人已不是项目成员时回退「不指定」），保存调用
+    `PUT /api/issues/{project_id}/{iid}/assignee`，成功后本地负责人
+    即时更新并通知父组件刷新列表（onAssigneeUpdated → loadIssues）；
+    失败保留编辑态可重试、取消不调接口；成员加载失败展示错误 + 重试；
+    同步新增 `assignee-edit` / `assignee-select` 样式；
+  - 同步更新 README 的 issues API 文档（两处 API 表，新增
+    members/assignee 两行）；
+  - 新增测试：后端 `TestIssueMembers` 9 例（成员精简 / user_id 补齐 /
+    查不到剔除 / 异常元素过滤 / 空成员 / 404×2 / 502×2）、
+    `TestUpdateIssueAssignee` 8 例（更新成功 / 清除 / 404×3 / 502×2 /
+    清缓存）、GitLabClient `TestUpdateIssueAssignee` 3 例（assignee_ids
+    转发 / None 清除 / 空列表清除）、前端
+    `frontend/tests/overview-issue-drawer-assignee-edit.test.mjs` 12 例
+    （源码数据流 + 编辑按钮显隐 / 预选 / 保存参数 / 清除 / 成功失败 /
+    加载失败重试 / 空成员池 / 取消 / 请求中禁用），全量测试无 regression。
+
+
 - **概览页 issue 详情侧边栏展示完成耗时（issue #300）**：
   「概览页面，issue详情的有侧边栏，如果是任务完成了，显示完成耗时」——
   概览页弹出的 issue 右边栏「任务」行下方新增「完成耗时」行：该 issue

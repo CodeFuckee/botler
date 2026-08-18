@@ -86,6 +86,14 @@ class StubGitLab:
         self.labels_update_calls: list[tuple[int, int, list, list | None]] = []
         self.labels_update_errors: dict[tuple[int, int], Exception] = {}
         self.labels_update_result: dict | None = None
+        # issue #303：更新负责人桩——assignee_update_calls 记录
+        # (project_id, iid, assignee_ids) 调用参数；
+        # assignee_update_errors[(project_id, iid)] 注入异常（None 表示
+        # 成功）；assignee_update_result 配置返回对象（None 时用默认
+        # issue 对象，assignees 为空）
+        self.assignee_update_calls: list[tuple[int, int, list[int]]] = []
+        self.assignee_update_errors: dict[tuple[int, int], Exception] = {}
+        self.assignee_update_result: dict | None = None
         # issue #92：项目成员查询（members_by_project 按 project_id 配置，
         # 可故障注入 fail_member_projects）；create_issue 记录调用参数、
         # 可故障注入 fail_create_projects、可配置返回对象
@@ -195,6 +203,20 @@ class StubGitLab:
                 "created_at": None, "description": None, "author": None,
                 "milestone": None, "assignees": [],
                 "user_notes_count": 0}
+
+    def update_issue_assignee(self, project_id, iid, assignee_ids):
+        """更新负责人桩（issue #303）：记录参数，可注入异常、可配置返回。"""
+        self.assignee_update_calls.append((project_id, iid, list(assignee_ids)))
+        err = self.assignee_update_errors.get((project_id, iid))
+        if err is not None:
+            raise err
+        if self.assignee_update_result is not None:
+            return self.assignee_update_result
+        return {"iid": iid, "title": "x", "state": "opened",
+                "web_url": f"https://gitlab.example.com/x/-/issues/{iid}",
+                "labels": [], "updated_at": None, "created_at": None,
+                "description": None, "author": None, "milestone": None,
+                "assignees": [], "user_notes_count": 0}
 
     def list_issue_notes(self, project_id, iid, limit=None):
         """评论/活动查询桩（issue #97）：记录参数，可注入异常。"""
@@ -2250,6 +2272,256 @@ class TestIssueLabels:
         resp = tc.put("/api/issues/42/64/labels", json={"add": ["feature"]})
 
         assert resp.status_code == 502
+
+
+class TestIssueMembers:
+    """GET /api/issues/{project_id}/members：概览页右边栏负责人下拉数据源
+    （issue #303）。
+
+    仓库定位与标签池接口一致（project_id 匹配「已启用」仓库，不存在/
+    未启用 → 404）；客户端选择与聚合一致（per-repo token 优先，回退
+    全局 bot token，只读查询）。成员精简为 {id, username, name}（id
+    为 GitLab 用户 id，复用 form-meta 的 _trim_member + issue #93
+    user_id 补齐）；查询失败 → 502（下拉数据源不可降级为空）。
+    """
+
+    def test_members_success(self, client):
+        """正常返回：成员精简为 {id, username, name}，id 取 user_id
+        （GitLab 用户 id，更新负责人 assignee_ids 需要该值）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.members_by_project = {42: [
+            {"id": 10, "user_id": 3, "username": "agent", "name": "agent",
+             "access_level": 50},
+            {"id": 11, "user_id": 7, "username": "dev", "name": "开发",
+             "access_level": 30},
+        ]}
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == [
+            {"id": 3, "username": "agent", "name": "agent"},
+            {"id": 7, "username": "dev", "name": "开发"},
+        ]
+
+    def test_members_user_id_completed_by_username(self, client):
+        """issue #93：members/all 返回项缺 user_id 时按 username 查
+        /users 补齐真实用户 id（与添加 issue 弹窗成员处理一致）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.members_by_project = {42: [
+            {"id": 10, "username": "agent", "name": "agent"},  # 无 user_id
+            {"id": 11, "user_id": 7, "username": "dev", "name": "dev"},
+        ]}
+        stub.users_by_username = {"agent": 3}
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 200
+        assert stub.user_id_lookups == ["agent"]
+        assert resp.json()["members"] == [
+            {"id": 3, "username": "agent", "name": "agent"},
+            {"id": 7, "username": "dev", "name": "dev"},
+        ]
+
+    def test_members_user_id_lookup_missing_filtered(self, client):
+        """用户 id 查询失败（用户已删除等）→ 成员剔除，下拉不出现
+        无法分配的条目。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.members_by_project = {42: [
+            {"id": 10, "username": "ghost", "name": "ghost"},
+            {"id": 11, "user_id": 7, "username": "dev", "name": "dev"},
+        ]}
+        stub.users_by_username = {"ghost": None}
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 200
+        assert stub.user_id_lookups == ["ghost"]
+        assert resp.json()["members"] == [
+            {"id": 7, "username": "dev", "name": "dev"},
+        ]
+
+    def test_members_abnormal_element_filtered(self, client):
+        """既无 user_id 也无 username 的异常成员元素过滤。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.members_by_project = {42: [
+            {"id": 10},  # 无 user_id/username
+            {"id": 11, "user_id": 7, "username": "dev", "name": "dev"},
+        ]}
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.json()["members"] == [
+            {"id": 7, "username": "dev", "name": "dev"},
+        ]
+
+    def test_members_empty(self, client):
+        """仓库无成员 → 空数组（前端下拉提示「该仓库暂无成员」）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 200
+        assert resp.json()["members"] == []
+
+    def test_members_repo_not_found(self, client):
+        """仓库不存在/未添加 → 404（与标签池接口一致）。"""
+        tc, stub, db, _ = client
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 404
+
+    def test_members_repo_disabled(self, client):
+        """仓库未启用 → 404（与概览聚合只聚合启用仓库一致）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo", enabled=False)
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 404
+
+    def test_members_gitlab_error(self, client):
+        """GitLab 成员 API 失败 → 502（下拉数据源不可降级为空）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.fail_member_projects = {42}
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 502
+
+    def test_members_network_error(self, client):
+        """网络错误（per-repo host 不可达）→ 502。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        from unittest.mock import patch
+        with patch.object(stub, "list_project_members",
+                          side_effect=httpx.HTTPError("connect timeout")):
+
+            resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 502
+
+
+class TestUpdateIssueAssignee:
+    """PUT /api/issues/{project_id}/{iid}/assignee：概览页右边栏负责人
+    下拉修改（issue #303）。
+
+    assignee_id 为 GitLab 用户 id（项目成员接口返回的 id），None 清除
+    负责人（assignee_ids 置空数组）；编辑操作走 owner token
+    （_issue_edit_call，issue #130）；成功后清空概览缓存并返回更新后
+    issue 的精简负责人列表。错误映射：仓库不存在/未启用 → 404，
+    GitLab 404（issue 不存在）→ 404，GitLab 其他错误与网络错误 → 502。
+    """
+
+    def test_update_success(self, client_edit):
+        """正常更新：stub 收到 assignee_ids=[id]，返回更新后负责人列表。"""
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name="demo")
+        stub.assignee_update_result = {
+            "iid": 64, "title": "x", "state": "opened",
+            "web_url": "https://gitlab.example.com/x/-/issues/64",
+            "labels": [], "updated_at": None, "created_at": None,
+            "description": None, "author": None, "milestone": None,
+            "assignees": [
+                {"name": "开发", "username": "dev",
+                 "avatar_url": "https://gitlab.example.com/dev.png"},
+            ],
+            "user_notes_count": 0,
+        }
+
+        resp = tc.put("/api/issues/42/64/assignee", json={"assignee_id": 7})
+
+        assert resp.status_code == 200
+        assert stub.assignee_update_calls == [(42, 64, [7])]
+        assert resp.json()["assignees"] == [
+            {"name": "开发", "username": "dev",
+             "avatar_url": "https://gitlab.example.com/dev.png"},
+        ]
+
+    def test_update_clear(self, client_edit):
+        """清除负责人：assignee_id=None → assignee_ids 置空数组。"""
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.put("/api/issues/42/64/assignee", json={"assignee_id": None})
+
+        assert resp.status_code == 200
+        assert stub.assignee_update_calls == [(42, 64, [])]
+        assert resp.json()["assignees"] == []
+
+    def test_update_repo_not_found(self, client_edit):
+        """仓库不存在/未添加 → 404。"""
+        tc, stub, db, _ = client_edit
+
+        resp = tc.put("/api/issues/42/64/assignee", json={"assignee_id": 7})
+
+        assert resp.status_code == 404
+        assert stub.assignee_update_calls == []
+
+    def test_update_repo_disabled(self, client_edit):
+        """仓库未启用 → 404。"""
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name="demo", enabled=False)
+
+        resp = tc.put("/api/issues/42/64/assignee", json={"assignee_id": 7})
+
+        assert resp.status_code == 404
+        assert stub.assignee_update_calls == []
+
+    def test_update_issue_missing(self, client_edit):
+        """GitLab 返回 404（issue 不存在）→ 404。"""
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name="demo")
+        stub.assignee_update_errors[(42, 64)] = GitLabError(
+            "404 Not Found", status_code=404)
+
+        resp = tc.put("/api/issues/42/64/assignee", json={"assignee_id": 7})
+
+        assert resp.status_code == 404
+        assert "不存在" in resp.json()["detail"]
+
+    def test_update_gitlab_server_error(self, client_edit):
+        """GitLab 上游 5xx → 502，不假装成功。"""
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name="demo")
+        stub.assignee_update_errors[(42, 64)] = GitLabError(
+            "500 Internal Server Error", status_code=500)
+
+        resp = tc.put("/api/issues/42/64/assignee", json={"assignee_id": 7})
+
+        assert resp.status_code == 502
+
+    def test_update_network_error(self, client_edit):
+        """网络错误（httpx.HTTPError，per-repo host 不可达）→ 502。"""
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name="demo")
+        stub.assignee_update_errors[(42, 64)] = httpx.HTTPError("connect timeout")
+
+        resp = tc.put("/api/issues/42/64/assignee", json={"assignee_id": 7})
+
+        assert resp.status_code == 502
+
+    def test_update_clears_overview_cache(self, client_edit):
+        """更新成功后清空概览缓存：下次 overview 重新聚合、新负责人生效。"""
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name="demo")
+        stub.issues_by_project = {42: [make_issue(1, "x")]}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+        # 10 秒 TTL 内命中缓存：改数据后仍返回旧结果（证明缓存生效）
+        stub.issues_by_project = {42: []}
+        assert tc.get("/api/issues/overview").json()["total"] == 1
+
+        tc.put("/api/issues/42/64/assignee", json={"assignee_id": 7})
+
+        # 缓存被清 → 重新聚合，读到新的（空）数据
+        assert tc.get("/api/issues/overview").json()["total"] == 0
 
 
 class TestIssueComments:

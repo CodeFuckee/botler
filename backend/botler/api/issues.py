@@ -106,6 +106,17 @@ def clear_issue_cache() -> None:
     _OWNER_CLIENT_TOKEN = "" 
 
 
+def _trim_assignees(issue: dict) -> list[dict]:
+    """issue 对象 → 精简负责人列表（name/username/avatar_url，issue
+    #303：负责人更新响应与 _trim_issue 的 assignees 字段共用）。"""
+    return [
+        {"name": a.get("name"), "username": a.get("username"),
+         "avatar_url": a.get("avatar_url")}
+        for a in (issue.get("assignees") or [])
+        if isinstance(a, dict)
+    ]
+
+
 def _trim_issue(issue: dict, label_colors: dict) -> dict:
     """精简 issue 对象：只保留概览页展示需要的字段。
 
@@ -140,12 +151,7 @@ def _trim_issue(issue: dict, label_colors: dict) -> dict:
     milestone = issue.get("milestone")
     trimmed["milestone"] = (
         milestone.get("title") if isinstance(milestone, dict) else None)
-    trimmed["assignees"] = [
-        {"name": a.get("name"), "username": a.get("username"),
-         "avatar_url": a.get("avatar_url")}
-        for a in (issue.get("assignees") or [])
-        if isinstance(a, dict)
-    ]
+    trimmed["assignees"] = _trim_assignees(issue)
     trimmed["user_notes_count"] = issue.get("user_notes_count")
     return trimmed
 
@@ -525,6 +531,38 @@ def project_labels(request: Request, project_id: int):
     return {"labels": _form_meta_labels(labels or [])}
 
 
+# ---- issue #303：概览页右边栏负责人编辑 ----
+
+
+@router.get("/{project_id}/members")
+def project_members(request: Request, project_id: int):
+    """项目成员清单（issue #303：概览页右边栏负责人下拉数据源）。
+
+    仓库定位与标签池接口一致（project_id 匹配「已启用」仓库，不存在/
+    未启用 → 404）；客户端选择与聚合一致（per-repo token 优先，回退
+    全局 bot token，只读查询）。成员是负责人下拉的数据来源，查询失败
+    不可降级为空（降级会让用户误以为仓库无成员）→ 502（与 form-meta
+    的成员查询错误处理一致）。
+
+    返回复用 _project_members 精简：{id, username, name}，id 为
+    GitLab 用户 id（更新 issue 负责人的 assignee_ids 需要该值，与
+    members/all 顶层成员关系 id 区分）。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        members = _project_members(client, project_id)
+    except GitLabError as e:
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    return {"members": members}
+
+
 # ---- issue #287：概览页「其他」分组手动调度顺序 ----
 # 用户在「调度器执行顺序」排序下拖动 issue 上下移动，把调整后的整组顺序
 # 全量保存（PUT），调度器派发时优先按此顺序（见 scheduler._task_sort_key）。
@@ -641,6 +679,47 @@ def update_issue_labels(request: Request, project_id: int, iid: int,
     clear_issue_cache()
     label_colors = _fetch_label_colors(_repo_client(c, row) or c.gitlab, project_id)
     return {"labels": _trim_issue(issue, label_colors)["labels"]}
+
+
+class IssueAssigneeUpdate(BaseModel):
+    """负责人更新体（issue #303）：assignee_id 为 GitLab 用户 id
+    （项目成员接口返回的 id）；None 表示清除负责人。"""
+    assignee_id: int | None = None
+
+
+@router.put("/{project_id}/{iid}/assignee")
+def update_issue_assignee(request: Request, project_id: int, iid: int,
+                          body: IssueAssigneeUpdate):
+    """更新 issue 负责人（issue #303：概览页右边栏负责人下拉修改）。
+
+    assignee_id 为 GitLab 用户 id（GET /api/issues/{project_id}/members
+    返回的 id）；传 None 清除负责人（GitLabClient.update_issue_assignee
+    将 assignee_ids 置空数组，GitLab 侧同步生效）。编辑操作走 owner
+    token（_issue_edit_call，issue #130）；成功后清空概览缓存（下一轮
+    轮询即反映新负责人）并返回更新后 issue 的精简负责人列表（前端本地
+    即时展示，无需等待轮询）。
+
+    错误映射：GitLab 404（issue 不存在）→ 404；GitLab 其他错误与
+    网络错误 → 502。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    assignee_ids = [body.assignee_id] if body.assignee_id is not None else []
+    try:
+        issue = _issue_edit_call(
+            c, row,
+            lambda cl: cl.update_issue_assignee(project_id, iid, assignee_ids))
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "issue 不存在") from e
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    clear_issue_cache()
+    return {"assignees": _trim_assignees(issue)}
 
 
 # ---- issue #97：概览页右边栏评论与活动 ----
@@ -898,6 +977,28 @@ def _trim_member(member: dict) -> dict | None:
             "name": member.get("name")}
 
 
+def _project_members(client, project_id: int) -> list[dict]:
+    """项目成员 → 精简条目（issue #303：负责人下拉 / issue #92：添加
+    issue 分配人下拉共用）。
+
+    复用 _trim_member 精简 + issue #93 的 user_id 补齐：members/all
+    返回项可能不含 user_id（GitLab 19 实测），按 username 查 /users
+    补齐真实用户 id；查不到（用户已删除等）的成员剔除——分配人/负责人
+    下拉不能出现无法分配的条目。
+    """
+    members = client.list_project_members(project_id)
+    out: list[dict] = []
+    for m in (_trim_member(x) for x in members or []):
+        if m is None:
+            continue
+        if m["id"] is None:
+            m["id"] = client.get_user_id_by_username(m["username"])
+            if m["id"] is None:
+                continue
+        out.append(m)
+    return out
+
+
 def _form_meta_labels(labels: list[dict]) -> list[dict]:
     """项目标签 → 前端多选展示条目：复用 _label_entry 的 name/color/
     text_color 精简与颜色归一化逻辑（issue #100：GitLab 返回的 # 前缀
@@ -934,20 +1035,8 @@ def issue_form_meta(request: Request, repo_id: int):
         raise HTTPException(400, "仓库未启用")
     client = _issue_create_client(c, row)
     try:
-        members = client.list_project_members(row["gitlab_project_id"])
+        member_entries = _project_members(client, row["gitlab_project_id"])
         labels = client.list_project_labels(row["gitlab_project_id"])
-        # issue #93：members/all 返回项可能不含 user_id（GitLab 19 实测），
-        # 按 username 查 /users 补齐真实用户 id；查不到（用户已删除等）
-        # 的成员剔除——分配人下拉不能出现无法分配的条目
-        member_entries = []
-        for m in (_trim_member(x) for x in members or []):
-            if m is None:
-                continue
-            if m["id"] is None:
-                m["id"] = client.get_user_id_by_username(m["username"])
-                if m["id"] is None:
-                    continue
-            member_entries.append(m)
     except GitLabError as e:
         raise HTTPException(502, f"获取仓库成员/标签失败: {e}") from e
     except httpx.HTTPError as e:

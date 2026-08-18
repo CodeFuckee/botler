@@ -142,7 +142,8 @@ export function NoteAvatar({ note }) {
 }
 
 export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
-                                      onLabelsUpdated, running = false, onRetried }) {
+                                      onLabelsUpdated, running = false, onRetried,
+                                      onAssigneeUpdated }) {
   const [closing, setClosing] = useState(false) // 关闭请求进行中（按钮禁用）
   const [closed, setClosed] = useState(false)   // 本次会话关闭成功标记
   const [closeErr, setCloseErr] = useState('')  // 关闭失败的错误信息
@@ -168,6 +169,19 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   const [savingLabels, setSavingLabels] = useState(false)
   const [labelErr, setLabelErr] = useState('')
   const [displayLabels, setDisplayLabels] = useState(null)
+  // issue #303：负责人编辑状态——editingAssignee 是否处于编辑态；
+  // memberPool null=成员加载中；memberPoolErr 非空=加载失败；
+  // selectedAssigneeId 编辑态选中的用户 id（null=不指定）；
+  // savingAssignee 保存请求进行中；assigneeErr 保存失败信息；
+  // displayAssignees 保存成功后的本地负责人覆盖（props issue 未
+  // 刷新，负责人行展示以此为准，null 表示用 issue.assignees）
+  const [editingAssignee, setEditingAssignee] = useState(false)
+  const [memberPool, setMemberPool] = useState(null)
+  const [memberPoolErr, setMemberPoolErr] = useState('')
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState(null)
+  const [savingAssignee, setSavingAssignee] = useState(false)
+  const [assigneeErr, setAssigneeErr] = useState('')
+  const [displayAssignees, setDisplayAssignees] = useState(null)
   // issue #118/#120：任务执行引擎类型——engine null=加载中；engineErr
   // 非空=加载失败（执行引擎行显示「—」）；成功值经 engineDisplay 归一
   // 展示。引擎来自该 issue 最近任务的 detail 响应（后端按任务落库），
@@ -236,8 +250,11 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   const author = i.author && typeof i.author === 'object'
     ? (i.author.name || i.author.username || '—')
     : '—'
-  // 负责人列表：name 优先回退 username（与列表头像的兜底逻辑一致）
-  const assigneeNames = (i.assignees || []).map(
+  // 负责人列表：name 优先回退 username（与列表头像的兜底逻辑一致）。
+  // issue #303：保存成功后的本地覆盖优先（displayAssignees），
+  // props issue 是点击时的轮询快照，编辑成功前不刷新
+  const currentAssignees = displayAssignees ?? (i.assignees || [])
+  const assigneeNames = currentAssignees.map(
     (a) => (a && typeof a === 'object' ? (a.name || a.username || '—') : '—'))
 
   // 评论/活动详情数据来源（issue #97）：project_id 与 iid 均为数字时
@@ -391,6 +408,107 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     } finally {
       setSavingLabels(false)
     }
+  }
+
+  // ---- issue #303：负责人编辑 ----
+
+  // 可编辑条件：带 project_id（负责人接口按 project_id 定位仓库，
+  // 旧缓存数据缺失时隐藏按钮，与关闭/标记按钮同约定）
+  const canEditAssignee = typeof i.project_id === 'number'
+
+  // 进入编辑态：加载项目成员（负责人下拉数据源，GitLab API 读取），
+  // 预选当前负责人——按 username 在成员池匹配（负责人精简对象无 id，
+  // 成员条目 username 唯一）；匹配不到（负责人已不是项目成员）或暂无
+  // 负责人时回退「不指定」
+  async function startEditAssignee() {
+    setEditingAssignee(true)
+    setAssigneeErr('')
+    setSelectedAssigneeId(null)
+    setMemberPool(null)
+    setMemberPoolErr('')
+    try {
+      const d = await api.get(`/api/issues/${i.project_id}/members`)
+      const members = Array.isArray(d && d.members) ? d.members : []
+      setMemberPool(members)
+      const first = currentAssignees[0]
+      if (first && typeof first.username === 'string') {
+        const hit = members.find(
+          (m) => m && typeof m.username === 'string' && m.username === first.username)
+        if (hit && typeof hit.id === 'number') setSelectedAssigneeId(hit.id)
+      }
+    } catch (e) {
+      setMemberPoolErr(e.message || '加载失败')
+    }
+  }
+
+  // 取消编辑：不调接口，丢弃本地选择，负责人显示保持原状
+  function cancelEditAssignee() {
+    setEditingAssignee(false)
+    setAssigneeErr('')
+  }
+
+  // 保存：PUT 同步到 GitLab（assignee_id 为项目成员的用户 id，null
+  // 清除负责人）。成功后本地负责人即时更新（displayAssignees 覆盖）
+  // 并通知父组件刷新列表；失败保留编辑态可重试。
+  async function saveAssignee() {
+    setSavingAssignee(true)
+    setAssigneeErr('')
+    try {
+      const d = await api.put(`/api/issues/${i.project_id}/${i.iid}/assignee`,
+                              { assignee_id: selectedAssigneeId })
+      setDisplayAssignees(Array.isArray(d && d.assignees) ? d.assignees : [])
+      setEditingAssignee(false)
+      onAssigneeUpdated?.()
+    } catch (e) {
+      setAssigneeErr(e.message || '保存失败')
+    } finally {
+      setSavingAssignee(false)
+    }
+  }
+
+  // 编辑态渲染：成员加载失败（错误横幅 + 重试）/ 加载中 / 空池提示 /
+  // 下拉选择（「不指定」+ 项目成员）。保存/取消按钮与标记编辑同布局
+  function renderAssigneeEdit() {
+    if (memberPoolErr) {
+      return (
+        <div className="issue-drawer-error" role="alert">
+          {memberPoolErr}
+          <button type="button" className="btn btn-small labels-retry"
+                  onClick={startEditAssignee} title="重新加载项目成员">重试</button>
+        </div>
+      )
+    }
+    if (memberPool === null) return <p className="muted">加载成员中…</p>
+    return (
+      <div className="assignee-edit">
+        {memberPool.length === 0 ? (
+          <p className="muted">该仓库暂无成员</p>
+        ) : (
+          <select className="input assignee-select"
+                  value={selectedAssigneeId == null ? '' : selectedAssigneeId}
+                  onChange={(e) => setSelectedAssigneeId(
+                    e.target.value === '' ? null : Number(e.target.value))}
+                  title="选择该 issue 的负责人">
+            <option value="">不指定</option>
+            {memberPool.map((m) => (
+              <option key={typeof m.id === 'number' ? m.id : m.username}
+                      value={typeof m.id === 'number' ? m.id : ''}>
+                {m.name || m.username || m.id}
+              </option>
+            ))}
+          </select>
+        )}
+        {assigneeErr && <div className="issue-drawer-error" role="alert">{assigneeErr}</div>}
+        <div className="labels-edit-actions">
+          <button type="button" className="btn btn-small"
+                  onClick={cancelEditAssignee}>取消</button>
+          <button type="button" className="btn btn-small btn-primary"
+                  disabled={savingAssignee} onClick={saveAssignee}>
+            {savingAssignee ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+    )
   }
 
   // 编辑态渲染：标记池加载失败（错误横幅 + 重试）/ 加载中 / 空池
@@ -651,7 +769,21 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                 )}
               </td></tr>
             <tr><th>里程碑</th><td>{i.milestone || '—'}</td></tr>
-            <tr><th>负责人</th><td>{assigneeNames.length > 0 ? assigneeNames.join('、') : '—'}</td></tr>
+            <tr><th>负责人</th>
+              <td>
+                {editingAssignee ? (
+                  renderAssigneeEdit()
+                ) : (
+                  <>
+                    {assigneeNames.length > 0 ? assigneeNames.join('、') : '—'}
+                    {canEditAssignee && (
+                      <button type="button" className="btn btn-small labels-edit-btn"
+                              onClick={startEditAssignee}
+                              title="修改该 issue 的负责人">编辑</button>
+                    )}
+                  </>
+                )}
+              </td></tr>
             <tr><th>评论</th>
               {/* issue #125：计数 = 轮询快照 + 本次会话新增（新评论
                   已落库，快照要等下一轮轮询才更新） */}
