@@ -209,7 +209,8 @@ bash frontend/e2e/scripts/start-servers.sh tests/overview.spec.js   # 跑单个�
 - **覆盖链路**：概览页加载与 issue 展示 / 添加 Issue 弹窗提交（含必填校验）/ 设置页
   保存配置（重载验证持久化）/ 任务详情 SSE 事件流（后端回放种子执行日志逐事件渲染）；
 - **防 flaky**：`playwright.config.js` 配置 `retries: 2` + trace 保留；CI
-  `.gitlab-ci.yml` 新增 `e2e` stage（build 之后、deploy 之前，E2E 未通过不部署）。
+  `.gitlab-ci.yml` 的 `e2e` stage 位于 deploy 之后、sync 之前（issue #306，
+  E2E 未通过不同步/不发版）。
 
 ## CHANGELOG 维护与发布轮转（issue #289）
 

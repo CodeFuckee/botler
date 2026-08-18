@@ -3,6 +3,19 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+### Changed
+
+- **调整 CI/CD 执行流程：e2e 阶段移至 deploy 之后、sync 之前（issue #306）**：
+  原流水线阶段顺序 security → build → e2e → deploy → sync → release
+  （e2e 在部署前执行，E2E 未通过不部署）。现调整为
+  security → build → deploy → e2e → sync → release：
+  - `e2e:playwright` 移至 `deploy_to_code01` 之后执行——部署不再等待 e2e
+    （新版本更快上线），e2e 门禁改为阻断后续 sync/release
+    （「E2E 未通过不同步/不发版」，docs_only_skip 的 on_success 传播）；
+  - 同步更新 `.gitlab-ci.yml` 头部 Stage 拓扑与阶段说明、e2e/release job
+    注释，以及 README「E2E 架构」中关于 e2e 阶段位置的描述；
+  - 纯 CI 配置调整（无后端/前端代码改动），YAML 校验 + GitLab CI Lint
+    验证通过，流水线阶段顺序实测为 deploy → e2e → sync。
 
 ## [1.3.63] - 2026-08-19
 ### Added

@@ -7,7 +7,7 @@
 #
 # Stage 拓扑（依赖关系）：
 #
-#   security（5 job 并行）──► build（3 job 并行）──► deploy ──► sync
+#   security（5 job 并行）──► build（3 job 并行）──► deploy ──► e2e ──► sync ──► release
 #   ┌──────────────────────┐   ┌──────────────────────┐
 #   │ bandit     后端代码SAST│   │ frontend:build ────────────► deploy_to_code01
 #   │ deps-python 后端依赖CVE│   │   (React/Vite 构建)   │      (pm2 本机部署 + 健康检查)
@@ -16,6 +16,9 @@
 #   │ secrets    密钥泄露检测│   │ harmony:build ───────────┘  (鸿蒙端编译门禁, issue #173)
 #   └──────────────────────┘   │   (hvigorw 编译 HAP)  │
 #                              └──────────────────────┘
+#
+#   deploy 之后依次执行 e2e（浏览器级端到端测试，issue #212/#306）、
+#   sync（GitHub 镜像同步）与 release（自动发版）——详见下方阶段说明。
 #
 # 说明：
 #   - 第零阶段 security：五种免费开源工具并行做静态代码分析
@@ -37,6 +40,14 @@
 #     （鸿蒙端 hvigorw 真实编译，产出未签名 HAP，issue #173）并行执行
 #   - 第二阶段 deploy：必须等 frontend:build 成功且拿到 dist 产物后才
 #     部署到本机（code01 = 10.0.0.122，shell executor，pm2 管理 uvicorn）
+#   - 第三阶段 e2e：部署完成后执行浏览器级端到端测试（Playwright，
+#     issue #212；issue #306 将 e2e 阶段移至 deploy 之后、sync 之前），
+#     自起真实后端 + 前端构建产物做真浏览器测试，失败即阻断后续
+#     sync/release（「E2E 未通过不同步/不发版」）
+#   - 第四阶段 sync：GitHub 镜像同步（剔除 .gitlab-ci.yml + 内部信息
+#     脱敏，issue #29）
+#   - 第五阶段 release：自动发版（中间版本号 +1 时发布新版本并重置
+#     CHANGELOG，issue #294）
 #
 # 部署模型（pm2 部署；issue #7 曾切换 Docker compose，现改回 pm2，
 # 但保留 issue #7 的数据目录修复）：
@@ -58,8 +69,8 @@
 stages:
   - security
   - build
-  - e2e
   - deploy
+  - e2e
   - sync
   - release
 
@@ -942,8 +953,9 @@ backend:test:
 # 弹窗提交 / 设置页保存配置 / 任务详情 SSE 事件流。GitLab 依赖接口由
 # 浏览器级 mock 兜底（frontend/e2e/support/mock-api.js），后端用假
 # GitLab 地址 + 种子数据库，稳定且不依赖真实 GitLab。
-# 门禁：e2e 失败 → 后续 deploy 不执行（docs_only_skip 的 on_success
-# 传播），保证「E2E 未通过不部署」。
+# 门禁（issue #306：e2e 阶段移至 deploy 之后、sync 之前）：部署不再
+# 等待 e2e（新版本更快上线），e2e 失败 → 后续 sync/release 不执行
+# （docs_only_skip 的 on_success 传播），保证「E2E 未通过不同步/不发版」。
 # ================================================================
 e2e:playwright:
   extends: [.docs_only_skip]
@@ -1649,7 +1661,7 @@ sync_to_github:
 # rules：仅 main 分支 push 且含代码/配置变更的流水线执行；docs-only 提交 /
 # tag / MR / 其他分支 / schedule 流水线一律不执行（tag 流水线不重复发版，
 # docs-only 提交不发版，发版时机顺延到下一个代码提交流水线）。
-# stage 顺序（sync 之后）保证 security/build/e2e/deploy/sync 全部成功后才
+# stage 顺序（sync 之后）保证 security/build/deploy/e2e/sync 全部成功后才
 # 发版；发版提交仅改 CHANGELOG.md 与 docs/CHANGELOG-archive.md → 其触发的
 # docs-only 流水线自动跳过构建（只跑 sync），不会循环。
 # ================================================================
