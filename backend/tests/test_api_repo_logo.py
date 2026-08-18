@@ -196,12 +196,12 @@ def logo_env(client, tmp_path, monkeypatch):
     """logo 测试夹具：配置 AI 供应商 + 生图模型 + 打桩 ChatModelClient /
     ImageModelClient / LOGO_DIR，返回 (tc, stub_gitlab, db, logo_dir)。"""
     tc, db = client
-    tc.app.state.ctx.config.update_ai_providers([{
+    tc.app.state.ctx.config.update_section("ai_providers", [{
         "name": "deepseek", "provider": "deepseek",
         "base_url": "https://api.deepseek.com/v1",
         "api_key": "sk-test", "model": "deepseek-chat", "enabled": True,
     }])
-    tc.app.state.ctx.config.update_image_models([{
+    tc.app.state.ctx.config.update_section("image_models", [{
         "name": "gemini-nano", "provider": "gemini_nano_banana",
         "base_url": "", "api_key": "ai-test", "model": "",
         "enabled": True,
@@ -260,7 +260,7 @@ class TestValidation:
     def test_without_ai_provider(self, client):
         """未配置 AI 对话模型：400 引导设置页（生图模型已配置也先拦）。"""
         tc, db = client
-        tc.app.state.ctx.config.update_image_models([{
+        tc.app.state.ctx.config.update_section("image_models", [{
             "name": "gemini-nano", "provider": "gemini_nano_banana",
             "base_url": "", "api_key": "ai-test", "model": "",
             "enabled": True,
@@ -273,7 +273,7 @@ class TestValidation:
     def test_without_image_model(self, client):
         """未配置生图模型：400 引导设置页「生图模型」配置。"""
         tc, db = client
-        tc.app.state.ctx.config.update_ai_providers([{
+        tc.app.state.ctx.config.update_section("ai_providers", [{
             "name": "deepseek", "provider": "deepseek",
             "base_url": "https://api.deepseek.com/v1",
             "api_key": "sk-test", "model": "deepseek-chat", "enabled": True,

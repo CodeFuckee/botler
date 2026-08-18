@@ -117,11 +117,11 @@ def install_plugin(request: Request, body: dict):
                 400, f"插件 {kind.value}/{name} 与已安装插件冲突，安装已拒绝")
 
     # 校验通过：写入配置（唯一事实来源）后热加载到全局注册表
-    c.config.update_worker({"plugin_paths": paths + [path]})
+    c.config.update_section("worker", {"plugin_paths": paths + [path]})
     loaded = global_registry.load_external([path], errors=errors)
     if not loaded:
         # 防御性回滚：热加载失败不残留配置（理论不达，试加载已通过）
-        c.config.update_worker({"plugin_paths": paths})
+        c.config.update_section("worker", {"plugin_paths": paths})
         raise HTTPException(
             500, f"插件热加载失败: {errors[0] if errors else '未知错误'}")
     logger.info("插件安装成功: %s（%s 个插件）", path, len(registered))
@@ -145,7 +145,7 @@ def uninstall_plugin(request: Request, body: dict):
     if path not in paths:
         raise HTTPException(400, f"插件未安装: {path}（仅外部插件可卸载）")
     new_paths = [p for p in paths if p != path]
-    c.config.update_worker({"plugin_paths": new_paths})
+    c.config.update_section("worker", {"plugin_paths": new_paths})
     removed = get_registry().remove_external(path)
     logger.info("插件卸载成功: %s（移除 %s 个插件）", path, len(removed))
     return _view(c)
@@ -188,6 +188,6 @@ def update_plugin_settings(request: Request, body: dict):
     if engine not in choices:
         raise HTTPException(
             400, f"engine 取值非法: {engine}（可选 {choices_text}）")
-    c.config.update_worker({"engine": engine})
+    c.config.update_section("worker", {"engine": engine})
     logger.info("默认执行引擎已更新: %s", engine)
     return _view(c)

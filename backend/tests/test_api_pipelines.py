@@ -290,7 +290,7 @@ class TestPipelinesOverview:
         _add_repo(db, project_id=43, name="off", enabled=False)
         stub.pipelines_by_project = {42: make_pipeline(731, status="success")}
         stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
-        app.state.ctx.config.update_ui({"show_disabled_repos": False})
+        app.state.ctx.config.update_section("ui", {"show_disabled_repos": False})
 
         resp = TestClient(app).get("/api/pipelines/overview")
 

@@ -357,12 +357,67 @@ KNOWN_FIELDS = {
     "sso": {"enabled", "well_known_url", "client_id", "client_secret", "scope",
             "session_days", "redirect_uri", "verify_ssl"},
     # MinIO 对象存储（issue #163）：识图图片上传配置。凭据掩码/空串 =
-    # 保持现有值（update_minio 处理），与 webhook.authorization 同模式。
+    # 保持现有值（SECTION_SCHEMAS["minio"].masked 处理），与 webhook.authorization 同模式。
     "minio": {"enabled", "endpoint", "secure", "access_key", "secret_key",
               "bucket", "public_base_url", "verify_ssl"},
     # 任务 token 用量（issue #235）：currency 为费用货币；pricing 为模型
     # 单价表（每项 model / input_per_million / output_per_million）。
     "usage": {"currency", "pricing"},
+}
+# 配置段写回 schema（issue #193 泛化 update_*）：settings API 写回 config.yaml
+# 的唯一入口 update_section(section, patch) 按此描述执行，替代原先 15+ 个
+# 结构重复的 update_* 方法（读 yaml → 局部改 → 写回 → 重载同一骨架）。
+# 新增配置段 = 在这里登记一行，无需再复制粘贴方法。
+@dataclass(frozen=True)
+class SectionSchema:
+    """配置段写回描述。
+
+    fields:              可写字段白名单（与 KNOWN_FIELDS 一致）；
+    masked:              掩码字段（api_key / owner_token / client_secret /
+                         authorization / access_key / secret_key）——patch
+                         值为 None / 含 * / 空串视为「未修改」，不覆盖真实
+                         凭据（语义集中实现，杜绝复制时漏掉）；
+    trim:                写回前 str().strip() 空白归一（如 minio.endpoint /
+                         public_base_url）；
+    blank_means_default: 空串字段 → 移除键恢复内置默认（templates.resume /
+                         comment，不允许空模版）；
+    replace_list:        True 表示整段为列表（repos / ai_providers /
+                         image_models / vision_models），patch 直接传列表
+                         整体替换。
+    """
+    fields: tuple[str, ...]
+    masked: tuple[str, ...] = ()
+    trim: tuple[str, ...] = ()
+    blank_means_default: tuple[str, ...] = ()
+    replace_list: bool = False
+
+
+SECTION_SCHEMAS: dict[str, SectionSchema] = {
+    "worker": SectionSchema(fields=tuple(KNOWN_FIELDS["worker"])),
+    "gitlab": SectionSchema(fields=tuple(KNOWN_FIELDS["gitlab"]),
+                            masked=("owner_token",)),
+    "claude": SectionSchema(fields=tuple(KNOWN_FIELDS["claude"])),
+    "dsh": SectionSchema(fields=tuple(KNOWN_FIELDS["dsh"]),
+                         masked=("api_key",)),
+    "templates": SectionSchema(fields=tuple(KNOWN_FIELDS["templates"]),
+                               blank_means_default=("resume", "comment")),
+    "browse": SectionSchema(fields=tuple(KNOWN_FIELDS["browse"])),
+    "backup": SectionSchema(fields=tuple(KNOWN_FIELDS["backup"])),
+    "ui": SectionSchema(fields=tuple(KNOWN_FIELDS["ui"])),
+    "notifications": SectionSchema(fields=tuple(KNOWN_FIELDS["notifications"])),
+    "webhook": SectionSchema(fields=tuple(KNOWN_FIELDS["webhook"]),
+                             masked=("authorization",)),
+    "sso": SectionSchema(fields=tuple(KNOWN_FIELDS["sso"]),
+                         masked=("client_secret",)),
+    "minio": SectionSchema(fields=tuple(KNOWN_FIELDS["minio"]),
+                           masked=("access_key", "secret_key"),
+                           trim=("endpoint", "public_base_url")),
+    "usage": SectionSchema(fields=tuple(KNOWN_FIELDS["usage"])),
+    "labels": SectionSchema(fields=("custom",)),
+    "repos": SectionSchema(fields=(), replace_list=True),
+    "ai_providers": SectionSchema(fields=(), replace_list=True),
+    "image_models": SectionSchema(fields=(), replace_list=True),
+    "vision_models": SectionSchema(fields=(), replace_list=True),
 }
 
 # 网页通知开关 → Settings 字段映射（issue #21）
@@ -691,184 +746,71 @@ class ConfigManager:
 
     # ---- settings API 支持 ----
 
-    def update_worker(self, patch: dict[str, Any]) -> Settings:
-        """更新 worker 配置并写回（写盘前重读磁盘，保留手动编辑，issue #25）。"""
-        self._reload_from_disk()
-        worker = self._data.setdefault("worker", {})
-        for key in KNOWN_FIELDS["worker"]:
-            if key in patch:
-                worker[key] = patch[key]
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
+    def update_section(self, section: str, patch: Any) -> Settings:
+        """泛型配置段写回（issue #193）：读 yaml → 局部改 → 原子写 → 重载。
 
-    def update_gitlab(self, patch: dict[str, Any]) -> Settings:
-        """更新 gitlab 配置并写回（owner token；issue #87）。
+        原先 15+ 个结构重复的 update_* 方法（update_worker / update_gitlab /
+        update_claude / update_dsh / update_browse / update_backup / update_ui /
+        update_notifications / update_sso / update_minio / update_webhook /
+        update_repos / update_custom_labels / update_ai_providers /
+        update_image_models / update_vision_models / update_default_template /
+        update_resume_template / update_comment_template）全部收敛于此：
+        按 SECTION_SCHEMAS[section] 的描述集中处理字段白名单、掩码保持
+        （空串/含 * 不覆盖真实凭据）、空白归一、空串恢复内置默认与整体
+        列表替换；写回前重读磁盘保留用户手动编辑（issue #25），统一走
+        原子写 save()（temp + rename，写一半崩溃不损坏 config.yaml）。
 
-        前端回传的掩码值（含 *）或空串视为"未修改"，不覆盖真实凭据
-        （与 sso.client_secret 同模式）。
+        patch 形状由 schema 决定：
+        - replace_list 段（repos / ai_providers / image_models /
+          vision_models）：patch 为列表，整体替换；
+        - 其余段：patch 为字段字典，仅写白名单字段。
+
+        未知配置段抛 ValueError（拒绝静默写坏 config.yaml）。
         """
+        schema = SECTION_SCHEMAS.get(section)
+        if schema is None:
+            raise ValueError(f"未知配置段: {section}")
         self._reload_from_disk()
-        gitlab = self._data.setdefault("gitlab", {})
-        for key in KNOWN_FIELDS["gitlab"]:
-            if key not in patch:
-                continue
-            val = patch[key]
-            if key == "owner_token" and (val is None or "*" in str(val)
-                                         or not str(val).strip()):
-                continue  # 掩码占位符/空串：保持现有凭据
-            gitlab[key] = val
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_claude(self, patch: dict[str, Any]) -> Settings:
-        self._reload_from_disk()
-        claude = self._data.setdefault("claude", {})
-        for key in KNOWN_FIELDS["claude"]:
-            if key in patch:
-                claude[key] = patch[key]
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_dsh(self, patch: dict[str, Any]) -> Settings:
-        """更新 dsh 配置并写回（issue #84）。
-
-        前端回传的 api_key 掩码值（含 *）或空串视为"未修改"，不覆盖
-        真实凭据（与 gitlab.owner_token 同模式）。
-        """
-        self._reload_from_disk()
-        dsh = self._data.setdefault("dsh", {})
-        for key in KNOWN_FIELDS["dsh"]:
-            if key not in patch:
-                continue
-            val = patch[key]
-            if key == "api_key" and (val is None or "*" in str(val)
-                                     or not str(val).strip()):
-                continue  # 掩码占位符/空串：保持现有凭据
-            dsh[key] = val
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_default_template(self, text: str) -> Settings:
-        self._reload_from_disk()
-        self._data.setdefault("templates", {})["default"] = text
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_resume_template(self, text: str) -> Settings:
-        """更新中断恢复模版并写回（issue #116）。
-
-        与 update_default_template 不同：空白文本 = 移除自定义键恢复
-        内置默认（中断恢复必须有引导语，不允许空模版导致恢复会话
-        无提示词裸跑）；非空则写入 templates.resume。
-        """
-        self._reload_from_disk()
-        templates = self._data.setdefault("templates", {})
-        text = text.strip()
-        if text:
-            templates["resume"] = text
+        if schema.replace_list:
+            if not isinstance(patch, list):
+                raise TypeError(
+                    f"配置段 {section} 需要列表整体替换，"
+                    f"收到 {type(patch).__name__}")
+            self._data[section] = patch
         else:
-            templates.pop("resume", None)
+            if not isinstance(patch, dict):
+                raise TypeError(
+                    f"配置段 {section} 需要字段字典，"
+                    f"收到 {type(patch).__name__}")
+            target = self._data.setdefault(section, {})
+            for key in schema.fields:
+                if key not in patch:
+                    continue
+                val = patch[key]
+                if key in schema.masked and (
+                        val is None or "*" in str(val)
+                        or not str(val).strip()):
+                    continue  # 掩码占位符/空串：保持现有凭据
+                if key in schema.trim:
+                    target[key] = str(val or "").strip()
+                    continue
+                if key in schema.blank_means_default:
+                    val = str(val or "").strip()
+                    if val:
+                        target[key] = val
+                    else:
+                        target.pop(key, None)  # 空串：移除键恢复内置默认
+                    continue
+                target[key] = val
         self.save()
         self.settings = self._to_settings(self._data)
         return self.settings
-
-    def update_comment_template(self, text: str) -> Settings:
-        """更新结果评论模版并写回（issue #252）。
-
-        与 update_resume_template 同模式：空白文本 = 移除自定义键恢复
-        内置默认（收尾评论渲染层 fallback 到 report 模块的内置模版，
-        不允许空模版导致评论无结构）；非空则写入 templates.comment。
-        """
-        self._reload_from_disk()
-        templates = self._data.setdefault("templates", {})
-        text = text.strip()
-        if text:
-            templates["comment"] = text
-        else:
-            templates.pop("comment", None)
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_browse(self, patch: dict[str, Any]) -> Settings:
-        """更新 browse 配置并写回（目录选择对话框初始定位目录）。"""
-        self._reload_from_disk()
-        browse = self._data.setdefault("browse", {})
-        for key in KNOWN_FIELDS["browse"]:
-            if key in patch:
-                browse[key] = patch[key]
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_backup(self, patch: dict[str, Any]) -> Settings:
-        """更新 backup 配置并写回（定时备份开关 / 保留天数）。"""
-        self._reload_from_disk()
-        backup = self._data.setdefault("backup", {})
-        for key in KNOWN_FIELDS["backup"]:
-            if key in patch:
-                backup[key] = patch[key]
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_ui(self, patch: dict[str, Any]) -> Settings:
-        """更新 ui 配置并写回（页面显示时区，空 = 跟随浏览器本机时区；issue #14）。"""
-        self._reload_from_disk()
-        ui = self._data.setdefault("ui", {})
-        for key in KNOWN_FIELDS["ui"]:
-            if key in patch:
-                ui[key] = patch[key]
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_notifications(self, patch: dict[str, Any]) -> Settings:
-        """更新 notifications 配置并写回（网页通知开关；issue #21）。"""
-        self._reload_from_disk()
-        notify = self._data.setdefault("notifications", {})
-        for key in KNOWN_FIELDS["notifications"]:
-            if key in patch:
-                notify[key] = patch[key]
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_sso(self, patch: dict[str, Any]) -> Settings:
-        """更新 sso 配置并写回（Synology SSO 登录；issue #27）。
-
-        前端回传的 client_secret 掩码值（含 *）视为"未修改"，不覆盖真实凭据。
-        """
-        self._reload_from_disk()
-        sso = self._data.setdefault("sso", {})
-        for key in KNOWN_FIELDS["sso"]:
-            if key not in patch:
-                continue
-            val = patch[key]
-            if key == "client_secret" and (val is None or "*" in str(val)):
-                continue  # 掩码占位符：保持现有凭据
-            sso[key] = val
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_repos(self, repos: list[dict[str, Any]]) -> None:
-        """整体替换 repos 列表（增删改仓库后的落盘）。"""
-        self._reload_from_disk()
-        self._data["repos"] = repos
-        self.save()
-        self.settings = self._to_settings(self._data)
 
     def remove_repo(self, project_id: int) -> None:
         """从 repos 列表移除指定 project_id 的仓库并落盘（issue #61）。
 
         删除仓库时由 API 层调用；先重读磁盘再过滤保存，
-        避免覆盖并发写入的其他配置（与 update_* 系列一致）。
+        避免覆盖并发写入的其他配置（与 update_section 一致）。
         """
         self._reload_from_disk()
         self._data["repos"] = [
@@ -877,83 +819,6 @@ class ConfigManager:
         ]
         self.save()
         self.settings = self._to_settings(self._data)
-
-    def update_custom_labels(self, labels: list[dict[str, Any]]) -> Settings:
-        """整体替换自定义标签列表（标记库页增删后落盘，issue #29）。"""
-        self._reload_from_disk()
-        self._data.setdefault("labels", {})["custom"] = labels
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_ai_providers(self, providers: list[dict[str, Any]]) -> Settings:
-        """整体替换 AI 供应商列表（设置页增删改后落盘，issue #46）。"""
-        self._reload_from_disk()
-        self._data["ai_providers"] = providers
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_image_models(self, models: list[dict[str, Any]]) -> Settings:
-        """整体替换生图模型列表（设置页增删改后落盘，issue #135）。"""
-        self._reload_from_disk()
-        self._data["image_models"] = models
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_vision_models(self, models: list[dict[str, Any]]) -> Settings:
-        """整体替换识图模型列表（设置页增删改后落盘，issue #152）。"""
-        self._reload_from_disk()
-        self._data["vision_models"] = models
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_minio(self, patch: dict[str, Any]) -> Settings:
-        """更新 MinIO 对象存储配置并写回（issue #163）。
-
-        access_key / secret_key 的掩码值（含 *）或空串视为「未修改」，
-        不覆盖真实凭据（与 webhook.authorization / sso.client_secret
-        同模式）；endpoint / public_base_url 空白归一为空串（由
-        minio_client 回退默认/环境变量）。
-        """
-        self._reload_from_disk()
-        minio = self._data.setdefault("minio", {})
-        for key in KNOWN_FIELDS["minio"]:
-            if key not in patch:
-                continue
-            val = patch[key]
-            if key in ("access_key", "secret_key") and (
-                    val is None or "*" in str(val) or not str(val).strip()):
-                continue  # 掩码占位符/空串：保持现有凭据
-            if key in ("endpoint", "public_base_url"):
-                minio[key] = str(val or "").strip()
-                continue
-            minio[key] = val
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
-
-    def update_webhook(self, patch: dict[str, Any]) -> Settings:
-        """更新 webhook 推送配置并写回（issue #136）。
-
-        前端回传的 authorization 掩码值（含 *）或空串视为「未修改」，
-        不覆盖真实凭据（与 sso.client_secret 同模式）。
-        """
-        self._reload_from_disk()
-        webhook = self._data.setdefault("webhook", {})
-        for key in KNOWN_FIELDS["webhook"]:
-            if key not in patch:
-                continue
-            val = patch[key]
-            if key == "authorization" and (val is None or "*" in str(val)
-                                             or not str(val).strip()):
-                continue  # 掩码占位符/空串：保持现有凭据
-            webhook[key] = val
-        self.save()
-        self.settings = self._to_settings(self._data)
-        return self.settings
 
     @staticmethod
     def repo_to_config_dict(repo: RepoConfig) -> dict[str, Any]:
@@ -973,3 +838,4 @@ class ConfigManager:
         if repo.remote_username:
             d["remote_username"] = repo.remote_username
         return d
+

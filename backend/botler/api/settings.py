@@ -259,49 +259,49 @@ def update_settings(request: Request, body: dict):
     worker_patch = body.get("worker")
     if worker_patch is not None:
         _validate_worker(worker_patch)
-        c.config.update_worker(worker_patch)
+        c.config.update_section("worker", worker_patch)
 
     claude_patch = body.get("claude")
     if claude_patch is not None:
         _validate_claude(claude_patch)
-        c.config.update_claude(claude_patch)
+        c.config.update_section("claude", claude_patch)
 
     dsh_patch = body.get("dsh")
     if dsh_patch is not None:
         _validate_dsh(dsh_patch)
-        c.config.update_dsh(dsh_patch)
+        c.config.update_section("dsh", dsh_patch)
 
     tpl = body.get("templates")
     if tpl is not None:
         if "default" in tpl:
-            c.config.update_default_template(tpl["default"])
+            c.config.update_section("templates", {"default": tpl["default"]})
         if "resume" in tpl:
             # issue #116：中断恢复模版必须是字符串；空白由
-            # update_resume_template 归一为内置默认（不允许空模版）
+            # update_section("templates", ...) 归一为内置默认（不允许空模版）
             if not isinstance(tpl["resume"], str):
                 raise HTTPException(400, "templates.resume 必须是字符串")
-            c.config.update_resume_template(tpl["resume"])
+            c.config.update_section("templates", {"resume": tpl["resume"]})
         if "comment" in tpl:
             # issue #252：结果评论模版必须是字符串；空白由
-            # update_comment_template 归一为内置默认
+            # update_section("templates", ...) 归一为内置默认
             if not isinstance(tpl["comment"], str):
                 raise HTTPException(400, "templates.comment 必须是字符串")
-            c.config.update_comment_template(tpl["comment"])
+            c.config.update_section("templates", {"comment": tpl["comment"]})
 
     browse = body.get("browse")
     if browse is not None:
         _validate_browse(browse)
-        c.config.update_browse(browse)
+        c.config.update_section("browse", browse)
 
     backup = body.get("backup")
     if backup is not None:
         _validate_backup(backup)
-        c.config.update_backup(backup)
+        c.config.update_section("backup", backup)
 
     ui = body.get("ui")
     if ui is not None:
         _validate_ui(ui)
-        c.config.update_ui(ui)
+        c.config.update_section("ui", ui)
         # issue #142：清空流水线概览缓存（TTL 10 秒），开关立即生效
         from .pipelines import clear_pipeline_cache
         clear_pipeline_cache()
@@ -309,40 +309,40 @@ def update_settings(request: Request, body: dict):
     notify = body.get("notifications")
     if notify is not None:
         _validate_notifications(notify)
-        c.config.update_notifications(notify)
+        c.config.update_section("notifications", notify)
 
     sso = body.get("sso")
     if sso is not None:
         _validate_sso(sso, current=c.config.get())
-        c.config.update_sso(sso)
+        c.config.update_section("sso", sso)
 
     providers = body.get("ai_providers")
     if providers is not None:
         cleaned = _validate_ai_providers(
             providers, current=c.config.get().ai_providers)
-        c.config.update_ai_providers(cleaned)
+        c.config.update_section("ai_providers", cleaned)
 
     image_models = body.get("image_models")
     if image_models is not None:
         cleaned = _validate_image_models(
             image_models, current=c.config.get().image_models)
-        c.config.update_image_models(cleaned)
+        c.config.update_section("image_models", cleaned)
 
     vision_models = body.get("vision_models")
     if vision_models is not None:
         cleaned = _validate_vision_models(
             vision_models, current=c.config.get().vision_models)
-        c.config.update_vision_models(cleaned)
+        c.config.update_section("vision_models", cleaned)
 
     minio_patch = body.get("minio")
     if minio_patch is not None:
         _validate_minio(minio_patch)
-        c.config.update_minio(minio_patch)
+        c.config.update_section("minio", minio_patch)
 
     webhook = body.get("webhook")
     if webhook is not None:
         _validate_webhook(webhook)
-        c.config.update_webhook(webhook)
+        c.config.update_section("webhook", webhook)
 
     gitlab_patch = body.get("gitlab")
     if gitlab_patch is not None:
@@ -353,7 +353,7 @@ def update_settings(request: Request, body: dict):
         if isinstance(token_val, str) and token_val.strip() \
                 and "*" not in token_val:
             _validate_owner_token_scope(c.config.get(), token_val.strip())
-        c.config.update_gitlab(gitlab_patch)
+        c.config.update_section("gitlab", gitlab_patch)
 
     return get_settings(request)
 

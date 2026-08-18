@@ -172,9 +172,9 @@ class TestStructuredSuccessComment:
     def test_custom_comment_template_used(self, executor, tmp_path):
         """templates.comment 自定义模版生效（issue #252 可配置）。"""
         db = executor.db
-        executor.config.update_comment_template(
+        executor.config.update_section("templates", {"comment": 
             "自定义报告：\n\n改动：{diff_stat}\n\n测试：{test_summary}\n"
-            "提交：{commit_link}\n用时：{duration}")
+            "提交：{commit_link}\n用时：{duration}"})
         workdir, base = _git_repo_with_base(tmp_path)
         repo_id = _mk_repo(db, local_path=workdir)
         task_id = _mk_task(db, repo_id)

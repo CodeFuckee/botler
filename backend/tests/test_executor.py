@@ -1543,14 +1543,14 @@ class TestResumePromptTemplate:
 
     def test_resume_prompt_uses_configured_template(self, executor):
         """配置自定义恢复模版后渲染使用自定义文本。"""
-        executor.config.update_resume_template("恢复 {repo_name} #{issue_iid}，继续。")
+        executor.config.update_section("templates", {"resume": "恢复 {repo_name} #{issue_iid}，继续。"})
         prompt = executor._resume_prompt(_REPO, _issue_dict())
         assert prompt == "恢复 demo #7，继续。"
 
     def test_resume_prompt_blank_config_falls_back_to_builtin(self, executor):
         """自定义被清空后回退内置默认。"""
-        executor.config.update_resume_template("临时自定义")
-        executor.config.update_resume_template("   ")
+        executor.config.update_section("templates", {"resume": "临时自定义"})
+        executor.config.update_section("templates", {"resume": "   "})
         prompt = executor._resume_prompt(_REPO, _issue_dict())
         assert "继续处理（中断恢复）" in prompt
 

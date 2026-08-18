@@ -43,7 +43,7 @@ def add_label(request: Request, body: dict) -> dict:
         raise HTTPException(status_code=400, detail=f"自定义标签「{name}」已存在")
     description = (body.get("description") or "").strip()
     labels = [*existing, {"name": name, "color": color, "description": description}]
-    c.config.update_custom_labels(labels)
+    c.config.update_section("labels", {"custom": labels})
     return {"default": DEFAULT_LABELS, "custom": labels}
 
 
@@ -57,7 +57,7 @@ def delete_label(request: Request, name: str) -> dict:
     remaining = [l for l in custom if l["name"] != name]
     if len(remaining) == len(custom):
         raise HTTPException(status_code=404, detail=f"自定义标签「{name}」不存在")
-    c.config.update_custom_labels(remaining)
+    c.config.update_section("labels", {"custom": remaining})
     return {"default": DEFAULT_LABELS, "custom": remaining}
 
 

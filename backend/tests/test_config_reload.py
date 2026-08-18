@@ -77,7 +77,7 @@ class TestUiSaveKeepsManualEdit:
 
         _manual_edit_template(path, TEMPLATE_B)  # 用户手动改为 B
 
-        cm.update_worker({"max_concurrent_repos": 5})
+        cm.update_section("worker", {"max_concurrent_repos": 5})
 
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
@@ -91,7 +91,7 @@ class TestUiSaveKeepsManualEdit:
         path = tmp_path / "config.yaml"
         _write_config(path, TEMPLATE_A)
         cm = ConfigManager(str(path))
-        cm.update_default_template(TEMPLATE_B)
+        cm.update_section("templates", {"default": TEMPLATE_B})
         assert cm.get().default_template == TEMPLATE_B
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
@@ -220,7 +220,7 @@ class TestAtomicSaveAndLoad:
 
         # 修复前：update_webhook 在 reload 失败后继续用被污染的 _data，
         # _to_settings 抛 KeyError: 'url'（CI 中 PUT /api/settings 500）
-        cm.update_webhook({"enabled": True, "url": ""})
+        cm.update_section("webhook", {"enabled": True, "url": ""})
         assert cm.get().default_template == TEMPLATE_A
         # 写盘恢复完整配置（gitlab.url 仍在）
         with open(path, encoding="utf-8") as f:
@@ -253,7 +253,7 @@ class TestAtomicSaveAndLoad:
 
         def writer():
             for i in range(100):
-                cm.update_worker({"max_concurrent_repos": 3 + i % 5})
+                cm.update_section("worker", {"max_concurrent_repos": 3 + i % 5})
             stop.set()
 
         threads = [threading.Thread(target=reader) for _ in range(2)]
@@ -274,7 +274,7 @@ class TestAtomicSaveAndLoad:
         _write_config(path, TEMPLATE_A)
         cm = ConfigManager(str(path))
         cm.get()
-        cm.update_worker({"max_concurrent_repos": 5})
+        cm.update_section("worker", {"max_concurrent_repos": 5})
         leftovers = [p.name for p in tmp_path.iterdir()
                      if p.name.startswith(".config-") or p.name.endswith(".tmp")]
         assert leftovers == []

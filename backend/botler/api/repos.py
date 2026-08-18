@@ -155,7 +155,7 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
         remote_username=repo_dict.get("remote_username"),
         priority=repo_dict["priority"],
     ))
-    config.update_repos([config.repo_to_config_dict(r) for r in kept])
+    config.update_section("repos", [config.repo_to_config_dict(r) for r in kept])
 
 
 @router.get("")

@@ -333,7 +333,7 @@ def client_edit(client, monkeypatch):
     配置时直接 400 拦截；编辑用例统一走 owner 路径（写操作与旧回退
     路径共用同一 stub，错误映射/缓存失效断言不变）。"""
     tc, stub, db, tmp_path = client
-    tc.app.state.ctx.config.update_gitlab({"owner_token": "owner-token-1"})
+    tc.app.state.ctx.config.update_section("gitlab", {"owner_token": "owner-token-1"})
     from botler.api import issues as issues_mod
     monkeypatch.setattr(
         issues_mod, "GitLabClient",
@@ -2728,7 +2728,7 @@ class TestIssueEditOwnerToken:
 
     @staticmethod
     def _enable_owner(ctx, token="owner-token-1"):
-        ctx.config.update_gitlab({"owner_token": token})
+        ctx.config.update_section("gitlab", {"owner_token": token})
 
     def test_close_prefers_owner_token(self, api_app, monkeypatch):
         """关闭 issue：配置 owner token 时优先使用 owner client。"""

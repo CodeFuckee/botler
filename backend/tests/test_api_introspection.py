@@ -197,8 +197,8 @@ def introspect_env(client, monkeypatch):
     """自省测试夹具：配置 owner token + AI 供应商 + 打桩 GitLabClient
     与 ChatModelClient，返回 (tc, stub, db)。"""
     tc, db = client
-    tc.app.state.ctx.config.update_gitlab({"owner_token": "owner-token-1"})
-    tc.app.state.ctx.config.update_ai_providers([{
+    tc.app.state.ctx.config.update_section("gitlab", {"owner_token": "owner-token-1"})
+    tc.app.state.ctx.config.update_section("ai_providers", [{
         "name": "deepseek", "provider": "deepseek",
         "base_url": "https://api.deepseek.com/v1",
         "api_key": "sk-test", "model": "deepseek-chat", "enabled": True,
@@ -243,7 +243,7 @@ class TestValidation:
     def test_without_ai_provider(self, client):
         """未配置 AI 对话模型：400 引导设置页（owner token 已配置也先拦）。"""
         tc, db = client
-        tc.app.state.ctx.config.update_gitlab({"owner_token": "owner-token-1"})
+        tc.app.state.ctx.config.update_section("gitlab", {"owner_token": "owner-token-1"})
         repo_id = _add_repo(db, 42, "botler")
         r = tc.post(f"/api/repos/{repo_id}/introspect")
         assert r.status_code == 400
@@ -253,7 +253,7 @@ class TestValidation:
         """未配置 owner token：创建 issue 被 _issue_edit_call 拦截（400），
         与概览页其他 issue 编辑一致，绝不回退 bot token。"""
         tc, db = client
-        tc.app.state.ctx.config.update_ai_providers([{
+        tc.app.state.ctx.config.update_section("ai_providers", [{
             "name": "deepseek", "provider": "deepseek",
             "base_url": "https://api.deepseek.com/v1",
             "api_key": "sk-test", "model": "deepseek-chat", "enabled": True,

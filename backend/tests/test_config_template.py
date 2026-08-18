@@ -215,7 +215,7 @@ repos: []
         path = tmp_path / "config.yaml"
         path.write_text(self.CONFIG_MIN.format(templates="{}"), encoding="utf-8")
         mgr = ConfigManager(str(path))
-        assert mgr.update_resume_template("自定义恢复提示").resume_template == "自定义恢复提示"
+        assert mgr.update_section("templates", {"resume": "自定义恢复提示"}).resume_template == "自定义恢复提示"
         assert "自定义恢复提示" in path.read_text(encoding="utf-8")
-        assert "继续处理（中断恢复）" in mgr.update_resume_template("  ").resume_template
+        assert "继续处理（中断恢复）" in mgr.update_section("templates", {"resume": "  "}).resume_template
         assert "resume:" not in path.read_text(encoding="utf-8")

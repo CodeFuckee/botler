@@ -136,7 +136,7 @@ class TestOverview:
         app, db = api_app
         _add_repo(db, 1, "enabled-repo", enabled=True)
         _add_repo(db, 2, "disabled-repo", enabled=False)
-        app.state.ctx.config.update_ui({"show_disabled_repos": False})
+        app.state.ctx.config.update_section("ui", {"show_disabled_repos": False})
         r = TestClient(app).get("/api/inspirations/overview")
         assert [x["repo_name"] for x in r.json()["repos"]] == ["enabled-repo"]
 
@@ -146,7 +146,7 @@ class TestOverview:
         repo = _add_repo(db, 1, "enabled-repo", enabled=True)
         _add_repo(db, 2, "disabled-repo", enabled=False)
         db.create_inspiration(repo, "只属于启用仓库的灵感")
-        app.state.ctx.config.update_ui({"show_disabled_repos": False})
+        app.state.ctx.config.update_section("ui", {"show_disabled_repos": False})
         r = TestClient(app).get("/api/inspirations/overview")
         repos = r.json()["repos"]
         assert [x["repo_name"] for x in repos] == ["enabled-repo"]
@@ -384,7 +384,7 @@ def edit_env(client, monkeypatch):
     issue 必须使用 owner token（与 test_api_issues.py::client_edit
     同思路，概览页写操作绝不回退 bot token）。"""
     tc, db = client
-    tc.app.state.ctx.config.update_gitlab({"owner_token": "owner-token-1"})
+    tc.app.state.ctx.config.update_section("gitlab", {"owner_token": "owner-token-1"})
     from botler.api import issues as issues_mod
     monkeypatch.setattr(
         issues_mod, "GitLabClient",
@@ -796,7 +796,7 @@ def chat_env(client, monkeypatch):
     默认注入一个启用的 deepseek 供应商；用例可覆盖列表后重新 update。
     """
     tc, db = client
-    tc.app.state.ctx.config.update_ai_providers([{
+    tc.app.state.ctx.config.update_section("ai_providers", [{
         "name": "deepseek", "provider": "deepseek",
         "base_url": "https://api.deepseek.com/v1",
         "api_key": "sk-test", "model": "deepseek-chat", "enabled": True,
@@ -938,7 +938,7 @@ class TestInspirationChat:
             [{"name": "d", "provider": "deepseek", "base_url": "",
               "api_key": None, "enabled": True}],
         ):
-            tc.app.state.ctx.config.update_ai_providers(providers)
+            tc.app.state.ctx.config.update_section("ai_providers", providers)
             r = tc.post(f"/api/inspirations/{insp_id}/messages",
                         json={"content": "hi"})
             assert r.status_code == 400
@@ -984,7 +984,7 @@ class TestInspirationChat:
         """供应商 provider 不受支持 → ChatModelError → 502 且回滚。"""
         tc, db = chat_env
         insp_id = _add_inspiration(db)
-        tc.app.state.ctx.config.update_ai_providers([{
+        tc.app.state.ctx.config.update_section("ai_providers", [{
             "name": "x", "provider": "unknown_provider",
             "base_url": "", "api_key": "sk-1", "model": "", "enabled": True,
         }])

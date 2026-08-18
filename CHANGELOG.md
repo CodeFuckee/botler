@@ -5,6 +5,32 @@
 ## [Unreleased]
 ### Added
 
+- **config.py 泛化配置写回（issue #193）**：`ConfigManager` 原先 15+ 个
+  结构重复的 `update_*` 方法（`update_worker` / `update_gitlab` /
+  `update_claude` / `update_dsh` / `update_browse` / `update_backup` /
+  `update_ui` / `update_notifications` / `update_sso` / `update_minio` /
+  `update_webhook` / `update_repos` / `update_custom_labels` /
+  `update_ai_providers` / `update_image_models` / `update_vision_models` /
+  `update_default_template` / `update_resume_template` /
+  `update_comment_template`，每个都是「读 yaml → 局部改 → 写回 → 重载」
+  的同一套模板）收敛为 1 个泛型实现 `update_section(section, patch)`：
+  - schema 描述：新增 `SECTION_SCHEMAS` + `SectionSchema`（字段白名单 /
+    掩码字段 / 空白归一 / 空串恢复默认 / 整体列表替换），新增配置段只需
+    登记一行，不再复制粘贴方法；`KNOWN_FIELDS` 与 schema 一致性由测试兜底；
+  - 掩码语义集中：`api_key` / `owner_token` / `client_secret` /
+    `authorization` / `access_key` / `secret_key` 的空串 / 含 `*` 掩码值
+    统一「不覆盖真实凭据」（原 `sso.client_secret` 空串会清空的行为一并
+    收敛为保持现有值）；
+  - 原子写保留：写回统一走 `save()` 的 temp + rename 原子写，模拟写中断
+    （rename 阶段 / dump 中途崩溃）不损坏 config.yaml；
+  - 调用方迁移：`api/settings.py` / `api/plugins.py` / `api/labels.py` /
+    `api/repos.py` 及测试全部改调 `update_section`，`remove_repo` 保留
+    专用实现（按 project_id 过滤，语义独立）；
+  - 新增测试 `backend/tests/test_config_section.py` 37 例：白名单 / 未知段
+    拒绝 / 掩码保持（6 字段 × 掩码 / 空串 / 真实覆盖）/ minio 空白归一 /
+    templates 空串恢复默认 / 列表段整体替换 / schema 一致性 / 原子写中断
+    模拟。
+
 - **SQLite 连接复用与统一连接管理（issue #191）**：`database.py` 的 `_conn()`
   每次调用都执行 `sqlite3.connect(timeout=30)` + `PRAGMA journal_mode=WAL` +
   row_factory 设置，高频路径（任务列表、概览轮询、通知拉取、日志写入）每秒
