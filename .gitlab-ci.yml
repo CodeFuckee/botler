@@ -551,6 +551,7 @@ security:semgrep:
         --config ci/semgrep-rules.yaml \
         --severity ERROR --severity WARNING \
         --error \
+        --timeout 30 \
         --json -o semgrep-result.json \
         backend/botler \
         frontend/src frontend/scripts frontend/vite.config.js 2>semgrep-scan.log
@@ -586,6 +587,7 @@ security:semgrep:
       backend/.venv-semgrep/bin/semgrep scan \
         --config ci/semgrep-rules.yaml \
         --severity ERROR --severity WARNING \
+        --timeout 30 \
         --sarif -o backend/semgrep-report.sarif \
         backend/botler \
         frontend/src frontend/scripts frontend/vite.config.js 2>/dev/null || true

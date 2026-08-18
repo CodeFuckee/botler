@@ -246,6 +246,16 @@
     非 git 环境省略 commit）；后端新增 `backend/tests/test_version.py` 12 例（version.json 全量/最小/空字段容错、
     非法 JSON 与缺版本号回退 txt、双缺失 None、health 负载有/无版本信息与统计可缺省）；前后端全量测试通过，无 regression。
 
+### Fixed
+
+- **security:semgrep 扫描显式放宽单规则单文件超时（--timeout 30），消除大文件规则
+  偶发超时导致 CI 误判失败（issue #274 收尾联动）**：
+  `js-hardcoded-secret` 规则对长字符串字面量执行前瞻正则匹配，`Overview.jsx` 等
+  大文件在并发负载下偶发超过 semgrep 默认 5 秒单文件超时，触发「防假绿」健康检查
+  报 `Timeout when running ci.js-hardcoded-secret` 使流水线失败（流水线 #1143 实测）。
+  本次为 JSON 阻断扫描与 SARIF 报告扫描两处均补充 `--timeout 30`（作业 timeout 20m
+  不受影响），同类偶发超时不再误伤流水线。
+
 ### Changed
 
 - **任务列表/详情页新增单任务「停止」与详情页「重试」操作，解决单任务操作入口分散（issue #214）**：
