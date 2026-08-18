@@ -2502,6 +2502,38 @@ code {
 .issue-manual-error {
   margin-top: var(--space-2);
 }
+
+/* issue #308：「其他」分组置顶按钮——快速把 issue 移到手动调度顺序最前
+   （调度器第一个处理）。常态弱化、行 hover 显现；悬停主色提示可置顶；
+   已置顶时高亮主色（pin 图标实心感），保存中隐藏（与拖动手柄一致） */
+.issue-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 2px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.issue-item:hover .issue-pin {
+  opacity: 1;
+  color: var(--text);
+}
+.issue-pin:hover {
+  background: var(--bg-active);
+  color: var(--primary);
+}
+.issue-pin.issue-pin-active {
+  opacity: 1;
+  color: var(--primary);
+}
 .issue-row {
   display: flex;
   justify-content: space-between;

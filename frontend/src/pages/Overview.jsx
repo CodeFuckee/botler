@@ -432,6 +432,17 @@ export function moveItem(list, from, to) {
   return arr
 }
 
+// issue #308：置顶按钮——把 issue 移到手动调度顺序最前（纯函数，返回
+// 新数组不改动入参）：iid 已在首位时返回原序副本；不在列表中时直接
+// 插到最前；在列表中时移到最前并保序去重（其余元素相对顺序不变）。
+// 与 applyManualOrder 的防御风格一致：非数组入参按空列表处理、非整数
+// iid 原样返回副本（调用方在保存时还会再做整数过滤）
+export function pinIssueToTop(iids, iid) {
+  const arr = Array.isArray(iids) ? iids : []
+  if (!Number.isInteger(iid)) return [...arr]
+  return [iid, ...arr.filter((x) => x !== iid)]
+}
+
 // 提取 issue 的标签名数组：labels 元素可能是 {name} 对象（后端标准）、
 // 纯字符串或 null/缺 name（旧缓存/异常数据），逐一防御兼容
 export function issueLabelNames(issue) {
@@ -691,6 +702,19 @@ export default function Overview() {
     const prevIids = manualOrders[repo.repo_id] || []
     setManualOrders((prev) => ({ ...prev, [repo.repo_id]: iids }))
     await saveManualOrder(repo, iids, prevIids)
+  }
+
+  // issue #308：「其他」分组置顶按钮——把 issue 移到手动调度顺序最前并
+  // 保存（复用 #287 的手动顺序机制与 PUT 接口，调度器优先按手动顺序
+  // 派发，置顶即第一个处理）。已置顶（手动顺序首位）时直接返回，避免
+  // 无意义的重复保存；保存失败由 saveManualOrder 统一回滚并提示
+  const pinIssue = async (repo, issue) => {
+    if (issue == null || !Number.isInteger(issue.iid)) return
+    const prevIids = manualOrders[repo.repo_id] || []
+    if (prevIids[0] === issue.iid) return
+    const nextIids = pinIssueToTop(prevIids, issue.iid)
+    setManualOrders((prev) => ({ ...prev, [repo.repo_id]: nextIids }))
+    await saveManualOrder(repo, nextIids, prevIids)
   }
 
   // 调度器 issue 标签优先级（issue #286）：从 /api/settings 读取
@@ -1430,6 +1454,10 @@ export default function Overview() {
                                 // issue #80：终态标签由状态徽章替代展示，其余标签保留胶囊
                                 const otherLabels = (i.labels || []).filter(
                                   (l) => l && !BOT_STATUS_NAMES.has(l.name))
+                                // issue #308：置顶状态——手动调度顺序首位即已置顶
+                                // （仅「其他」分组展示置顶按钮）
+                                const pinned = g.key === 'other'
+                                  && manualIids[0] === i.iid
                                 // issue #287：拖拽状态类——拖起项半透明、
                                 // 悬停目标高亮落点
                                 const isDragging = dragging && dragFrom.from === idx
@@ -1542,6 +1570,23 @@ export default function Overview() {
                                         <span className="issue-notes" title={tr('overview.notesCount')}>
                                           <Icon name="message" /> {i.user_notes_count}
                                         </span>
+                                      )}
+                                      {/* issue #308：置顶按钮——仅「其他」分组展示：点击
+                                          把 issue 移到手动调度顺序最前并保存（调度器优先
+                                          派发，置顶即第一个处理，复用 #287 手动顺序机制）。
+                                          已置顶（手动顺序首位）时高亮主色 + aria-pressed；
+                                          保存中隐藏避免并发覆盖；过滤/其他排序下仍可用
+                                          （仅写手动顺序，不依赖可见子集） */}
+                                      {g.key === 'other' && repoProjectId != null
+                                        && !manualSaving.has(r.repo_id) && (
+                                        <button type="button"
+                                                className={'issue-pin' + (pinned ? ' issue-pin-active' : '')}
+                                                onClick={() => pinIssue(r, i)}
+                                                title={pinned ? tr('overview.pinIssuePinned') : tr('overview.pinIssueTitle')}
+                                                aria-label={pinned ? tr('overview.pinIssuePinned') : tr('overview.pinIssue')}
+                                                aria-pressed={pinned}>
+                                          <Icon name="pin" />
+                                        </button>
                                       )}
                                     </div>
                                     </div>

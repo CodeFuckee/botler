@@ -275,6 +275,9 @@
   "overview.manualOrderError": "Failed to save schedule order: {msg}",
   "overview.manualOrderDisabledSort": "Switch back to Scheduler order to drag-reorder issues in the Other group",
   "overview.manualOrderDisabledFilter": "Clear filters to drag-reorder issues in the Other group",
+  "overview.pinIssue": "Pin to top",
+  "overview.pinIssueTitle": "Pin this issue to the top of the scheduling order (dispatched first)",
+  "overview.pinIssuePinned": "Pinned — the scheduler will process this issue first",
   "overview.completionPerRepoTitle": "Per-repo average & trend",
   "overview.repoNoData": "No data",
   "overview.repoTrendAria": "Average completion time trend for this repo"

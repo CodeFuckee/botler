@@ -3,6 +3,29 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+### Added
+
+- **概览页「其他」分组 issue 置顶按钮（issue #308）**：
+  「其他」分组（尚未处理/处理中的开放 issue）每条 issue 增加置顶按钮
+  （pin 图标）：点击把该 issue 移到手动调度顺序最前并保存（复用 issue
+  #287 的手动调度顺序机制与 `PUT /api/issues/{project_id}/manual-orders`
+  接口，`issue_manual_orders` 表），任务调度器派发时优先按手动顺序，
+  置顶即第一个处理：
+  - 置顶不依赖当前排序/过滤视图——任意排序方法、过滤激活状态下均可
+    一键置顶（仅写手动顺序，不修改可见子集，与拖动排序的过滤禁用
+    约束不同）；调度器执行顺序视图下置顶后立即跳到组首展示；
+  - 已置顶（手动顺序首位）的 issue 按钮高亮主色 + `aria-pressed`
+    标识，重复点击不重复保存；保存中隐藏按钮避免并发覆盖；保存失败
+    回滚顺序并提示（复用 `overview.manualOrderError` 错误提示）；
+  - 仅「其他」分组展示（bot-failed / bot-done / 运行中分组不展示），
+    仓库与 issue 均无 project_id 时不展示；
+  - 新增纯函数 `pinIssueToTop`（置顶 iid 到首位、保序去重、非数组/非
+    整数兜底）与 i18n 文案（`overview.pinIssue` /
+    `overview.pinIssueTitle` / `overview.pinIssuePinned`，中英文）；
+  - 新增前端测试 `frontend/tests/overview-issue-pin.test.mjs` 14 例
+    （纯函数边界 + 渲染条件 + 交互保存/去重/失败回滚 + i18n 键齐全），
+    前端全量测试无 regression。
+
 ### Changed
 
 - **调整 CI/CD 执行流程：e2e 阶段移至 deploy 之后、sync 之前（issue #306）**：
