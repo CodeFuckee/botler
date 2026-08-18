@@ -8,14 +8,14 @@
 //   2. 生成 frontend/public/version.json（version + buildTime），
 //      vite build 时自动复制进 dist/，前端 fetch 显示
 //
-// 版本自增规则（issue #179：逢100进一）：
-//   - patch 位自增到 100 时向 minor 进位（patch 归零、minor +1）：
-//     1.0.99 → 1.1.0
-//   - minor 位随之到 100 时再向 major 进位（minor 归零、major +1）：
-//     1.99.99 → 2.0.0
+// 版本自增规则（issue #179 逢100进一 + issue #283 逢百进位持续生效）：
+//   - patch 位逢百进位：patch ≥ 100 时按 100 整除进位到 minor、余数保留
+//     （1.0.99 → 1.1.0；已超 99 的历史值同样进位，1.0.299 → 1.3.0）
+//   - minor 位逢百进位：minor ≥ 100 时按 100 整除进位到 major、余数保留
+//     （1.99.99 → 2.0.0；1.150.5 → 2.50.6）
 //   - major 位不设进位上限（99.99.99 → 100.0.0）
-//   - 已超过 99 的历史版本号仅按数字自增、不做回写修正
-//     （1.0.299 → 1.0.300）
+//   - 平台版本已到 300+ 时高位版本号同步加一（1.0.310 → 1.3.11），
+//     版本号无限自增（issue #283）
 //
 // 版本文件位置：
 //   - 环境变量 BOTLER_DATA_DIR 优先（CI 显式指向持久数据目录，
@@ -37,17 +37,15 @@ export function nextVersion(current) {
   }
 
   let [major, minor, patch] = version.split('.').map(Number)
+  // 逢100进一（base-100 归一化，issue #179 + issue #283）：patch/minor
+  // 任一位 ≥ 100 即按 100 整除向高位进位、余数保留。patch 已超 99 的
+  // 历史版本同样进位（1.0.299 → 1.3.0、1.0.310 → 1.3.11），保证版本号
+  // 无限自增且高位版本号始终同步加一。
   patch += 1
-  if (patch === 100) {
-    // 逢100进一：patch 归零、向 minor 进位
-    patch = 0
-    minor += 1
-    if (minor === 100) {
-      // minor 随之到 100：归零、再向 major 进位
-      minor = 0
-      major += 1
-    }
-  }
+  minor += Math.floor(patch / 100)
+  patch %= 100
+  major += Math.floor(minor / 100)
+  minor %= 100
   return `${major}.${minor}.${patch}`
 }
 
@@ -70,7 +68,8 @@ if (isMain) {
     if (/^\d+\.\d+\.\d+$/.test(raw)) version = raw
   }
 
-  // 逢100进一（issue #179）：1.0.99 → 1.1.0，1.99.99 → 2.0.0
+  // 逢100进一（issue #179 + issue #283）：1.0.99 → 1.1.0，1.99.99 → 2.0.0；
+  // 已超 99 的历史版本同样逢百进位（1.0.310 → 1.3.11，高位版本号加一）
   const next = nextVersion(version)
 
   // 写回版本文件（数据目录持久化，跨构建自增）
