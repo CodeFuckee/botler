@@ -516,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 17, f"user_version 应推进到 17（v16 task_usage + v17 tasks.base_sha，issue #252），实际 {ver}"
+        assert ver == 18, f"user_version 应推进到 18（v16 task_usage + v17 base_sha + v18 failure_category，issue #274），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -606,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 17, f"user_version 应推进到 17（v16 task_usage + v17 tasks.base_sha，issue #252），实际 {ver}"
+        assert ver == 18, f"user_version 应推进到 18（v16 task_usage + v17 base_sha + v18 failure_category，issue #274），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
@@ -671,7 +671,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols, "旧库应补出 tasks.environment 列"
-        assert ver == 17, f"user_version 应推进到 17（v16 task_usage + v17 tasks.base_sha，issue #252），实际 {ver}"
+        assert ver == 18, f"user_version 应推进到 18（v16 task_usage + v17 base_sha + v18 failure_category，issue #274），实际 {ver}"
 
     def test_new_db_has_environment_column(self, tmp_path):
         """新库建表语句应直接含 environment 列（无需迁移）。"""
@@ -680,7 +680,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols
-        assert ver == 17
+        assert ver == 18
 
     def test_set_task_status_accepts_environment(self, tmp_path):
         """set_task_status 应能写入 environment（_TASK_FIELDS 白名单）。"""
@@ -738,7 +738,7 @@ class TestTaskProgressLedger:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "task_progress" in tables, "旧库应补出 task_progress 表"
-        assert ver == 17
+        assert ver == 18
 
     def test_record_and_latest_per_step(self, tmp_path):
         """record/list/latest：只增不改快照式，latest 取每步最新状态。"""
@@ -834,3 +834,40 @@ class TestMigrateTaskBaseSha:
         task_id = db.create_task(repo_id, 42, 1, "标题")
         db.set_task_status(task_id, None, base_sha="a" * 40)
         assert db.get_task(task_id)["base_sha"] == "a" * 40
+
+
+class TestMigrateFailureCategory:
+    """issue #274：旧库迁移补 tasks.failure_category 列（失败原因分类落库）。"""
+
+    def test_old_db_gets_failure_category_column(self, tmp_path):
+        """旧库（user_version=17，无 failure_category 列）初始化后应补出该列。"""
+        path = tmp_path / "old274.db"
+        _build_old_db(path)
+        conn = sqlite3.connect(str(path))
+        conn.execute("PRAGMA user_version = 17")
+        conn.commit()
+        conn.close()
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "failure_category" in cols
+        assert ver >= 18
+
+    def test_new_db_has_failure_category_column(self, tmp_path):
+        """新库建表语句应直接含 failure_category 列（无需迁移）。"""
+        db = Database(str(tmp_path / "new274.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "failure_category" in cols
+
+    def test_finish_task_writes_failure_category(self, tmp_path):
+        """finish_task 应支持写入 failure_category（白名单内）。"""
+        db = Database(str(tmp_path / "finish274.db"))
+        db.upsert_repo(274, "demo274", "https://x/demo274.git")
+        rid = db.get_repo_by_project_id(274)["id"]
+        tid = db.create_task(rid, 274, 274, "任务")
+        assert db.claim_task(tid)
+        assert db.finish_task(tid, "failed",
+                              error_message="任务超时", failure_category="env")
+        assert db.get_task(tid)["failure_category"] == "env"

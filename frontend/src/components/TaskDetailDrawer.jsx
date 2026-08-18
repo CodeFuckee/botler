@@ -20,6 +20,7 @@ import { Icon } from './Icon.jsx'
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 import UsageCard from '../components/UsageCard.jsx'
+import { failureCategoryClass, failureCategoryLabel } from '../failure-categories.js'
 
 // 任务仍可能产出新日志/聊天的活跃状态（与任务详情页一致，活跃期间轮询）
 const LIVE_STATUSES = ['queued', 'running', 'retrying']
@@ -326,6 +327,22 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
                     {/* issue #281：dsh 会话 id 任务开始即落库，中断恢复凭此 id
                        经 DeepSeek Harness SDK resume；仅 dsh 引擎任务有值 */}
                     <tr><th>dsh 会话</th><td>{task.dsh_session_id ? <code title={`完整会话 id: ${task.dsh_session_id}`}>{task.dsh_session_id.slice(0, 12)}…</code> : <span className="muted">—</span>}</td></tr>
+                    {/* issue #274：失败任务展示失败原因分类徽章 + 处理建议
+                         （env/engine/unsolvable/unknown；仅 failed/interrupted
+                         且有分类时显示，旧任务无分类不显示，不报错） */}
+                    {task.failure_category && (task.status === 'failed' || task.status === 'interrupted') && (
+                      <tr>
+                        <th>失败分类</th>
+                        <td>
+                          <span className={`badge failure-cat ${failureCategoryClass(task.failure_category)}`}>
+                            {failureCategoryLabel(task.failure_category)}
+                          </span>
+                          {task.failure_advice && (
+                            <span className="muted failure-advice">{task.failure_advice}</span>
+                          )}
+                        </td>
+                      </tr>
+                    )}
                     {task.error_message && (
                       <tr><th>错误信息</th><td className="pre-wrap">{task.error_message}</td></tr>
                     )}

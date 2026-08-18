@@ -223,6 +223,32 @@ class TestStructuredFailureComment:
         assert "| a.txt | +1 | -0 |" in body
         assert "## 测试摘要" in body
         assert "❌" in body
+        # issue #274：失败评论带分类前缀（本用例无关键词 → 兜底 unknown）
+        assert "失败分类：未知（unknown）" in body
+
+    def test_failure_comment_has_category_prefix_and_persisted(self, executor, tmp_path):
+        """issue #274：失败收尾按规则分类落库 tasks.failure_category，
+        失败评论带分类前缀（401 → 环境类）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = []
+        executor.gitlab = SimpleNamespace(
+            add_comment=lambda pid, iid, body: comments.append((pid, iid, body)),
+            add_labels=lambda *a, **k: None)
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+        db.claim_task(task_id)
+
+        executor._finish_failed(task_id, "获取 issue 失败: 401 Unauthorized",
+                                "connect error", repo=db.get_repo(repo_id))
+
+        # 分类落库
+        assert db.get_task(task_id)["failure_category"] == "env"
+        # 评论带分类前缀（徽章 + 处理建议）
+        assert len(comments) == 1
+        _, _, body = comments[0]
+        assert "> **失败分类：环境类（env）**" in body
+        assert "请检查仓库 token 与网络配置后点重试" in body
 
     def test_failure_comment_hides_files_without_diff(self, executor, tmp_path):
         """失败但无 diff（无基线/无工作区）：相关文件段落隐藏，不报错。"""

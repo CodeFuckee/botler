@@ -1067,6 +1067,15 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .status-failed { background: var(--err-weak); color: var(--err); }
 .status-interrupted { background: var(--bg-soft); color: var(--muted); }
 .badge-muted { background: var(--bg-soft); color: var(--muted); }
+/* 失败原因分类徽章（issue #274）：env=警示（环境配置问题）、engine=主色
+   （引擎层问题）、unsolvable=错误色（任务本身不可解）、unknown=中性灰
+   （兜底未命中），与状态徽章配色体系一致 */
+.failure-cat { margin-right: 8px; vertical-align: middle; }
+.failure-cat-env { background: var(--warn-weak); color: var(--warn); }
+.failure-cat-engine { background: var(--primary-weak); color: var(--primary); }
+.failure-cat-unsolvable { background: var(--err-weak); color: var(--err); }
+.failure-cat-unknown { background: var(--bg-soft); color: var(--muted); }
+.failure-advice { font-size: 12px; }
 /* 断点续跑标记（issue #8）：任务从上次中断的 claude 会话恢复执行 */
 /* vertical-align: middle（issue #31）：badge 与尝试次数数值同行混排时，基线对齐
    会让胶囊 padding/border 下沉到基线以下、小字号视觉中心偏低，改为 middle 与

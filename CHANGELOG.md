@@ -5,6 +5,40 @@
 ## [Unreleased]
 ### Added
 
+- **任务失败原因自动分类与处理建议（issue #274）**：
+  任务失败时详情页只显示错误信息原文与日志，用户要自己判断失败类型（环境 token
+  失效/网络/超时、引擎命令缺失/API Key 失效、还是 agent 无法解决）。本次在任务
+  收尾时对失败原因做规则分类，分类结果落库并在详情页/失败评论/统计看板联动展示：
+  - `backend/botler/failure_classify.py`（新增）：规则分类模块——按正则/关键字匹配
+    错误信息分为 `env`（网络/认证/超时/磁盘）、`engine`（命令缺失/SDK 错误/API key
+    无效）、`unsolvable`（agent 明确报告无法解决/自测未过）与 `unknown`（兜底，分类
+    错误不报错）；匹配顺序 unsolvable > engine > env，多段文本（失败原因/错误详情/
+    执行输出）综合判定；`CATEGORY_LABELS` / `CATEGORY_ADVICE` 提供分类展示名与处理
+    建议文案；规则可配置扩展——代码常量 `DEFAULT_RULES` 为内置默认，config.yaml 的
+    `failure_classify.rules` 可整体覆盖（非法分类/非法正则被忽略，不影响任务收尾）；
+  - `backend/botler/database.py`：tasks 表新增 `failure_category` 列（迁移 v18，旧库
+    自动补列），`_TASK_FIELDS` 白名单支持写入；`dashboard_stats` 的 `failure_reasons`
+    每条附分类（category/category_name）并新增 `failure_categories` 分类分布（落库值
+    优先，旧任务按 error_message 实时分类兜底，统计口径与任务列表一致）；
+  - `backend/botler/executor.py`：`_finish_failed` / `_finish_asked` 收尾时分类落库，
+    失败评论带分类前缀（「> **失败分类：环境类（env）** — 处理建议」）；评论模版新增
+    `{failure_category}` / `{failure_category_badge}` / `{failure_advice}` 占位符
+    （templates.PLACEHOLDERS 同步登记）；
+  - `backend/botler/config.py` / `config.example.yaml`：`failure_classify.rules`
+    配置读取与示例（空配置 = 内置默认规则）；
+  - `backend/botler/api/tasks.py`：任务详情/列表返回 `failure_category` 与
+    `failure_advice`（详情页展示分类徽章 + 建议，无分类返回空串不报错）；
+  - 前端：`frontend/src/failure-categories.js`（新增，分类名/徽章 class 共享），
+    `TaskDetail.jsx` / `TaskDetailDrawer.jsx` 失败/中断任务展示分类徽章 + 处理建议，
+    `Stats.jsx` 失败原因 Top 列表附分类徽章并新增「失败原因分类分布」区块，
+    `styles.css` 分类徽章配色（env=警示 / engine=主色 / unsolvable=错误色 / unknown=灰）；
+  - **测试**：新增 `backend/tests/test_failure_classify.py` 36 例（典型失败分类正确、
+    多段文本综合判定、unknown 兜底不报错、规则可配置扩展与非法规则容错、标签/建议
+    文案），`test_database_migrate.py` 补 failure_category 迁移 3 例，
+    `test_api_stats.py` 补分类聚合 2 例，`test_api_tasks.py` 补详情分类/兜底 2 例，
+    `test_executor_report.py` 补失败评论分类前缀与落库 2 例；既有 user_version 断言
+    更新至 v18；前端测试 1064 例全通过，后端全量测试无 regression。
+
 - **右上角展示当前登录用户信息与退出入口（issue #271）**：
   SSO 启用后登录流程完整但界面没有当前登录用户展示（多账号/多人共用时身份混淆、
   退出只能清 cookie）。本次在顶部导航右侧落地完整用户区：

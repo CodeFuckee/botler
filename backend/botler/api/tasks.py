@@ -16,6 +16,7 @@ from botler.executor import (
     find_session_file, format_display_line, parse_transcript, read_log_delta,
     read_session_prompt,
 )
+from botler.failure_classify import category_advice
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -103,6 +104,12 @@ def _task_to_dict(row, repo: dict | None = None, usage_row=None) -> dict:
         "exit_code": row["exit_code"],
         "error_message": row["error_message"],
         "error_detail": detail,
+        # issue #274：任务失败原因自动分类——收尾时规则分类落库
+        # tasks.failure_category；failure_advice 为对应处理建议文案
+        # （详情页展示分类徽章 + 建议；空分类返回空串，前端不报错）
+        "failure_category": row["failure_category"] or "",
+        "failure_advice": (category_advice(row["failure_category"])
+                           if row["failure_category"] else ""),
         "resumed": bool(row["claude_session_id"] or row["dsh_session_id"]),
         # 会话断点续跑标记（issue #8 claude / issue #84 dsh；任一引擎恢复
         # 过会话即为 true。issue #281 起 dsh 会话 id 任务开始即落库）

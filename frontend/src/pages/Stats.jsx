@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, fmtSeconds } from '../api.js'
 import { Icon } from '../components/Icon.jsx'
+import { failureCategoryClass, failureCategoryLabel } from '../failure-categories.js'
 
 // 统计看板页（issue #264）：任务执行数据聚合看板——总览卡片 / 引擎对比 /
 // 仓库排行 / 来源分布 / 失败原因 Top。
@@ -230,10 +231,43 @@ export default function Stats() {
                 {(data.failure_reasons || []).map((r, i) => (
                   <li key={i}>
                     <span className="stats-reason-rank">{i + 1}</span>
+                    {/* issue #274：失败原因条目附分类徽章（后端按失败原因
+                        文本规则分类，与详情页/失败评论同口径） */}
+                    {r.category && (
+                      <span className={`badge failure-cat ${failureCategoryClass(r.category)}`}>
+                        {failureCategoryLabel(r.category)}
+                      </span>
+                    )}
                     <span className="stats-reason-text" title={r.reason}>{r.reason}</span>
                     <span className="stats-bar-cell">
                       <Bar value={r.count} max={maxReason} title={`${r.count} 次`} />
                       <span className="muted">{r.count} 次</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {/* issue #274：失败原因分类分布——与「失败原因 Top」同源
+              （failed/interrupted 任务），按分类聚合展示数量与占比，
+              数据驱动判断失败大头在环境/引擎还是任务本身不可解 */}
+          <section className="stats-section">
+            <h2>失败原因分类分布</h2>
+            {(data.failure_categories || []).length === 0 ? (
+              <p className="muted">无失败任务（当前时间段内分类分布为空）</p>
+            ) : (
+              <ul className="stats-reasons">
+                {data.failure_categories.map((c, i) => (
+                  <li key={c.category}>
+                    <span className="stats-reason-rank">{i + 1}</span>
+                    <span className={`badge failure-cat ${failureCategoryClass(c.category)}`}>
+                      {c.name}
+                    </span>
+                    <span className="stats-reason-text">{c.name}（{c.category}）</span>
+                    <span className="stats-bar-cell">
+                      <Bar value={c.count} max={maxReason} title={`${c.count} 次`} />
+                      <span className="muted">{c.count} 次</span>
                     </span>
                   </li>
                 ))}

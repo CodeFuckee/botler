@@ -32,7 +32,10 @@ PLACEHOLDERS = {
     "commit_sha": "提交短 sha（8 位，仅评论模版）",
     "duration": "任务用时（系统接收到 issue → 收尾，仅评论模版）",
     "error_message": "失败原因（仅失败评论模版）",
-    "log_tail": "日志尾部（仅失败评论模版）"
+    "log_tail": "日志尾部（仅失败评论模版）",
+    "failure_category": "失败分类值（env/engine/unsolvable/unknown，仅失败评论模版，issue #274）",
+    "failure_category_badge": "失败分类徽章文案（如「环境类（env）」，仅失败评论模版）",
+    "failure_advice": "失败分类处理建议（如「环境类：请检查仓库 token 与网络配置后点重试」，仅失败评论模版）"
 }
 
 

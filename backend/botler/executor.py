@@ -54,6 +54,11 @@ from .gitlab_client import (
 from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
                          list_local_remotes, parse_remote_url)
 from .templates import TemplateRenderer
+from .failure_classify import (
+    category_advice,
+    category_label,
+    classify_failure,
+)
 from .report import (
     DEFAULT_COMMENT_TEMPLATE,
     DEFAULT_FAILURE_COMMENT_TEMPLATE,
@@ -2840,6 +2845,9 @@ class ClaudeExecutor:
             short = sha[:8]
             url = f"{cfg.gitlab_url.rstrip('/')}/-/commit/{sha}"
             commit_link = f"[{short}]({url})"
+        # issue #274：失败分类徽章与处理建议占位符（供自定义评论模版使用；
+        # 未配置新占位符的模版保持原样，分类信息由 _finish_failed 前缀行补齐）
+        category = _row_get(task, "failure_category") or ""
         variables = {
             "result_summary": "" if failed else self._success_summary(output),
             "diff_stat": build_diff_table(diff),
@@ -2849,6 +2857,10 @@ class ClaudeExecutor:
             "duration": self._task_duration_text(task),
             "error_message": reason,
             "log_tail": log_tail,
+            "failure_category": category,
+            "failure_category_badge": (
+                f"{category_label(category)}（{category}）" if category else ""),
+            "failure_advice": category_advice(category) if category else "",
         }
         try:
             return render_comment(template, variables)
@@ -3005,6 +3017,13 @@ class ClaudeExecutor:
                        error_detail: str | None = None,
                        repo: dict | None = None) -> None:
         task = self.db.get_task(task_id)
+        # issue #274：任务收尾时对失败原因做规则分类（env/engine/unsolvable/
+        # unknown），结果落库 tasks.failure_category——详情页展示分类徽章+建议、
+        # 失败评论带分类前缀、统计看板按分类聚合。综合失败原因、错误详情与
+        # 执行输出三路文本匹配，未命中兜底 unknown（不抛错）。
+        category = classify_failure(
+            reason, error_detail or "", output,
+            rules=self.config.get().failure_classify_rules)
         # 条件终态（issue #24）：任务已被其他实例先收尾时不再覆盖状态、
         # 不重复评论/通知
         if not self.db.finish_task(
@@ -3012,10 +3031,13 @@ class ClaudeExecutor:
                 exit_code=None,
                 error_message=reason,
                 error_detail=error_detail,
+                failure_category=category,
                 finished_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())):
             logger.info("任务 %s 失败收尾被跳过（状态已非运行中，可能已被其他实例收尾）", task_id)
             return
-        self.db.add_log(task_id, "error", f"任务失败: {reason}")
+        self.db.add_log(
+            task_id, "error",
+            f"任务失败: {reason}（失败分类：{category_label(category)}）")
         self._write_log_tail(task_id, output)
 
         # 在 issue 上留失败评论 + 打标签
@@ -3029,6 +3051,12 @@ class ClaudeExecutor:
             body = self._build_report_comment(
                 task, output, repo=repo, failed=True,
                 reason=reason, log_tail=log_tail)
+            # issue #274：失败评论同步带分类前缀（分类徽章 + 处理建议），
+            # 无论默认/自定义模版都保证用户第一眼看到失败分类；兜底
+            # unknown 同样带「未知」徽章，不抛错
+            prefix = (f"> **失败分类：{category_label(category)}（{category}）**"
+                      f" — {category_advice(category)}\n\n")
+            body = prefix + body
             if not body.strip():
                 # 兜底：渲染为空（极端场景）时保留最小可读文案
                 body = f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{reason}"
@@ -3069,6 +3097,11 @@ class ClaudeExecutor:
         对账扫描再次入队，新任务可读到回复后继续处理。
         """
         task = self.db.get_task(task_id)
+        # issue #274：等待用户决策按「无法解决类（unsolvable）」分类落库
+        # （agent 停在提问节点、无法独立继续，处理建议引导用户回复/改描述）
+        category = classify_failure(
+            "Claude 在执行中遇到需要用户决策的问题，等待用户回复",
+            rules=self.config.get().failure_classify_rules)
         # 条件终态（issue #24）：任务已被其他实例先收尾时不再覆盖状态、
         # 不重复评论/通知
         if not self.db.finish_task(
@@ -3076,6 +3109,7 @@ class ClaudeExecutor:
                 exit_code=None,
                 error_message="Claude 在执行中遇到需要用户决策的问题，"
                               "提问已反馈至 issue，等待用户回复后重新处理",
+                failure_category=category,
                 finished_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())):
             logger.info("任务 %s 提问收尾被跳过（状态已非运行中，可能已被其他实例收尾）", task_id)
             return
@@ -3086,6 +3120,8 @@ class ClaudeExecutor:
         if task:
             question = self._extract_question(output)
             comment = (
+                f"> **失败分类：{category_label(category)}（{category}）**"
+                f" — {category_advice(category)}\n\n"
                 "🤖 Botler 自动回复：Claude 在执行中遇到需要您决策的问题，"
                 "暂时无法继续，请回复后重新处理。\n\n"
                 "**Claude 的问题**：\n\n"

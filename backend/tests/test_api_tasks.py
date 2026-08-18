@@ -57,11 +57,13 @@ def _mk_repo(db, project_id: int = 42, name: str = "demo") -> int:
 
 def _mk_task(db, repo_id: int, issue_iid: int = 1, title: str = "修复登录问题",
              status: str = "succeeded", error_message: str | None = None,
-             error_detail: str | None = None, commit_sha: str | None = None) -> int:
+             error_detail: str | None = None, commit_sha: str | None = None,
+             failure_category: str | None = None) -> int:
     """创建任务并按需更新状态，返回 task_id。"""
     task_id = db.create_task(repo_id, 42, issue_iid, title, triggered_by="webhook")
     db.set_task_status(task_id, status, error_message=error_message,
-                       error_detail=error_detail, commit_sha=commit_sha)
+                       error_detail=error_detail, commit_sha=commit_sha,
+                       failure_category=failure_category)
     return task_id
 
 
@@ -305,13 +307,31 @@ class TestTaskDetail:
         app_client, db = client
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id, issue_iid=9, title="失败任务",
-                           status="failed", error_message="Claude Code 报告无法解决该 issue")
+                           status="failed",
+                           error_message="Claude Code 报告无法解决该 issue",
+                           failure_category="unsolvable")
         resp = app_client.get(f"/api/tasks/{task_id}")
         assert resp.status_code == 200
         task = resp.json()
         assert task["error_message"] == "Claude Code 报告无法解决该 issue"
         assert task["logs"] == []
         assert task["status"] == "failed"
+        # issue #274：详情返回失败分类与处理建议（详情页展示分类徽章 + 建议）
+        assert task["failure_category"] == "unsolvable"
+        assert "无法解决类" in task["failure_advice"]
+        assert "issue" in task["failure_advice"]
+
+    def test_detail_failure_category_defaults_empty(self, client):
+        """issue #274：无分类的旧任务返回空分类与空建议，前端不报错。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id, issue_iid=10, title="成功任务",
+                           status="succeeded")
+        resp = app_client.get(f"/api/tasks/{task_id}")
+        assert resp.status_code == 200
+        task = resp.json()
+        assert task["failure_category"] == ""
+        assert task["failure_advice"] == ""
 
     def test_get_missing_task_404(self, client):
         app_client, db = client

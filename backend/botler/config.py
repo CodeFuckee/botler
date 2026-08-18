@@ -113,6 +113,27 @@ def _issue_priority_labels(worker: dict) -> list[str]:
     return list(DEFAULT_ISSUE_PRIORITY)
 
 
+def _failure_classify_rules(cfg: dict) -> dict | None:
+    """读取 config failure_classify.rules（issue #274）。
+
+    格式为 {分类名: [正则串, ...]}；仅接受 env/engine/unsolvable 三类
+    合法分类（unknown 为兜底，不允许配置），值必须是字符串列表。
+    空配置/全部非法 → 返回 None（调用方使用内置默认规则 DEFAULT_RULES）。
+    """
+    rules = cfg.get("rules")
+    if not isinstance(rules, dict) or not rules:
+        return None
+    from botler.failure_classify import VALID_CATEGORIES
+    cleaned: dict[str, list[str]] = {}
+    for category, patterns in rules.items():
+        if category not in VALID_CATEGORIES or category == "unknown":
+            continue
+        if not isinstance(patterns, list):
+            continue
+        cleaned[category] = [str(p) for p in patterns if isinstance(p, str)]
+    return cleaned if cleaned else None
+
+
 @dataclass
 class RepoConfig:
     project_id: int
@@ -205,6 +226,12 @@ class Settings:
     # DEFAULT_FAILURE_COMMENT_TEMPLATE）；支持 {diff_stat}/{test_summary}
     # 等占位符（见 templates.PLACEHOLDERS），空段落自动隐藏。
     comment_template: str = ""
+    # 任务失败原因分类规则（issue #274）：config.yaml 的 failure_classify.rules
+    # 可整体覆盖内置默认规则（botler.failure_classify.DEFAULT_RULES）——键为
+    # 分类名（env/engine/unsolvable），值为正则字符串列表（re.IGNORECASE
+    # 匹配）。None = 使用内置默认规则（代码常量，同样满足「规则可配置扩展」）。
+    # 非法分类/非法正则被忽略，兜底 unknown 不报错。
+    failure_classify_rules: dict | None = None
     browse_default_path: str | None = None
     backup_enabled: bool = True
     backup_retention_days: int = 30
@@ -458,6 +485,7 @@ class ConfigManager:
         vision_models_raw = data.get("vision_models", []) or []
         minio = data.get("minio", {}) or {}
         usage = data.get("usage", {}) or {}
+        failure_classify = data.get("failure_classify", {}) or {}
 
         repos = []
         for r in repos_raw:
@@ -513,6 +541,9 @@ class ConfigManager:
             # 结果评论模版（issue #252）：缺失/空串 = 内置默认（收尾评论
             # 渲染层 fallback，见 executor._build_report_comment）
             comment_template=tpl.get("comment", ""),
+            # issue #274：失败分类规则可配置扩展——config failure_classify.rules
+            # 整体覆盖内置默认规则；空/缺失/非法值归一为 None（用内置默认）
+            failure_classify_rules=_failure_classify_rules(failure_classify),
             browse_default_path=browse.get("default_path") or None,
             backup_enabled=bool(backup.get("enabled", True)),
             backup_retention_days=int(backup.get("retention_days", 30)),

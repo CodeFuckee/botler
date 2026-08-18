@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import json
+
+from botler.failure_classify import category_label, classify_failure
 import logging
 import os
 import sqlite3
@@ -40,7 +42,8 @@ DEFAULT_PRIORITY = 100
 _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
                 "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript",
-                "engine", "environment", "base_sha"}
+                "engine", "environment", "base_sha",
+                "failure_category"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
@@ -85,6 +88,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   dsh_transcript TEXT,
   environment TEXT,
   base_sha TEXT,
+  failure_category TEXT DEFAULT '',
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -469,6 +473,17 @@ class Database:
             if "base_sha" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN base_sha TEXT")
             conn.execute("PRAGMA user_version = 17")
+
+        if ver < 18:
+            # issue #274：任务失败原因自动分类——任务收尾时对失败原因做规则
+            # 分类（env/engine/unsolvable/unknown），结果落库本列，任务详情
+            # 页展示分类徽章 + 处理建议，失败评论带分类前缀，统计看板按分类
+            # 聚合失败原因 Top 分布。旧库（user_version=17）补列；新库
+            # _SCHEMA 已含（默认空串 = 未分类，统计时实时分类兜底）。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "failure_category" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN failure_category TEXT DEFAULT ''")
+            conn.execute("PRAGMA user_version = 18")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1234,6 +1249,7 @@ class Database:
                         t.engine AS engine, t.triggered_by AS triggered_by,
                         t.created_at AS created_at, t.finished_at AS finished_at,
                         t.error_message AS error_message,
+                        t.failure_category AS failure_category,
                         COALESCE(r.name, '') AS repo_name
                  FROM tasks t LEFT JOIN repos r ON r.id = t.repo_id WHERE 1=1"""
         params: list = []
@@ -1352,6 +1368,10 @@ def aggregate_dashboard(rows) -> dict:
     by_repo: dict = {}
     by_source: dict = {}
     reasons: dict[str, int] = {}
+    # issue #274：失败原因分类分布——failed/interrupted 任务按失败原因分类
+    # 聚合（tasks.failure_category 优先，旧任务无分类时按 error_message 实时
+    # 规则分类兜底），统计看板「失败原因 Top」与「分类分布」联动
+    failure_categories: dict[str, int] = {}
 
     for row in rows:
         status = row["status"] or ""
@@ -1393,6 +1413,11 @@ def aggregate_dashboard(rows) -> dict:
                 and (row["error_message"] or "").strip():
             reason = _normalize_failure_reason(row["error_message"])
             reasons[reason] = reasons.get(reason, 0) + 1
+            # issue #274：按分类聚合（落库值优先，缺失时实时分类兜底，
+            # 保证存量任务与统计口径一致）
+            category = (row["failure_category"] or "").strip() or \
+                classify_failure(row["error_message"])
+            failure_categories[category] = failure_categories.get(category, 0) + 1
 
     def _group(bucket: dict) -> list[dict]:
         out = []
@@ -1428,8 +1453,19 @@ def aggregate_dashboard(rows) -> dict:
         "by_repo": _group(by_repo),
         "by_source": _group(by_source),
         "failure_reasons": [
-            {"reason": r, "count": c}
+            # issue #274：每条失败原因附分类（category + 展示名），统计看板
+            # 失败原因 Top 列表展示分类徽章，与详情页/失败评论口径联动
+            {"reason": r, "count": c, "category": classify_failure(r),
+             "category_name": category_label(classify_failure(r))}
             for r, c in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))
             [:FAILURE_REASON_TOP_N]
+        ],
+        # issue #274：失败原因分类分布（env/engine/unsolvable/unknown Top），
+        # 与「失败原因 Top」同源（failed + interrupted 任务），排序按计数
+        # 降序、同计数按分类展示名升序
+        "failure_categories": [
+            {"category": c, "name": category_label(c), "count": n}
+            for c, n in sorted(failure_categories.items(),
+                               key=lambda kv: (-kv[1], category_label(kv[0])))
         ],
     }

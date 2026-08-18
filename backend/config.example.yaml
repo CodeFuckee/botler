@@ -127,6 +127,25 @@ templates:
   # 可选：不配置/留空 = 使用内置默认（Web UI 模版页可编辑，留空保存即恢复内置默认）。
   comment: ""
 
+# 任务失败原因自动分类（issue #274）：任务收尾时对失败原因做规则分类
+# （正则/关键字匹配错误信息），结果落库 tasks.failure_category，任务详情页
+# 展示分类徽章 + 处理建议，失败评论带分类前缀，统计看板按分类聚合失败原因
+# Top 分布。分类：
+#   env         环境类：网络/认证/超时/磁盘（如 token 失效、连接失败）
+#   engine      引擎类：命令缺失/SDK 错误/API key 无效
+#   unsolvable  无法解决类：agent 明确报告无法解决/自测未过
+#   unknown     兜底：未命中任何规则（分类错误不报错）
+# rules（可选）：整体覆盖内置默认规则（不配置 = 使用代码常量
+# botler/failure_classify.DEFAULT_RULES，同样可扩展）。键为分类名
+# （env/engine/unsolvable，unknown 为兜底不允许配置），值为正则字符串
+# 列表（re.IGNORECASE 匹配）；非法分类/非法正则被忽略，不影响任务收尾。
+failure_classify:
+  rules: {}
+  # rules:
+  #   env: ['custom-network-marker', 'custom-token-error']
+  #   engine: ['custom-cli-missing']
+  #   unsolvable: ['custom-unresolvable-marker']
+
 browse:
   # 目录选择对话框的初始定位目录（"添加仓库 → 本地文件夹 → 浏览…"）。
   # 留空（推荐）= 服务器用户主目录（~）；支持 ~ 展开与相对路径。
