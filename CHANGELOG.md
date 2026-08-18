@@ -5,6 +5,21 @@
 ## [Unreleased]
 ### Changed
 
+- **设置页「网页通知」卡片新增独立保存按钮，开关可单独保存生效（issue #292）**：
+  用户反馈「设置里的网页通知增加一个保存按钮，现在无法保存设置」——此前「网页通知」
+  卡片内只有开关与说明文字，保存入口是「任务调度」卡片里的全局「保存」按钮，卡片在
+  其下方且说明仅提示「点击上方保存」，用户修改开关后找不到保存入口，误以为无法保存
+  （与 issue #27 SSO / #141 Webhook / #142 界面显示卡片同款问题）——
+  - `frontend/src/pages/Settings.jsx`：新增「保存网页通知配置」按钮（`saveNotify`，
+    只提交 `notifications` 段，后端 `PUT /api/settings` 支持部分更新，不影响
+    worker/claude/ui/webhook 等其他设置），成功后卡片内显示「已写回 config.yaml」
+    提示；卡片说明文字由「点击上方「保存」」改为「点击下方「保存网页通知配置」」；
+    全局「保存」按钮仍同时提交 notifications 段，两处保存行为一致；
+  - **测试**：新增复现用例 4 例（`settings-notifications-save-button.test.mjs`：
+    卡片内应含「保存网页通知配置」按钮并绑定 `saveNotify`、`saveNotify` 只提交
+    notifications 段、说明文字不再指向「上方保存」、全局保存按钮保留），修复前
+    全部失败、修复后通过；前端全量测试通过，无 regression。
+
 - **修复 dsh 引擎重试/恢复时 SDK 会话 id collision 导致任务反复失败：碰撞即如实降级
   为全新会话（issue #291）**：任务 #388/#390/#391 首次运行失败后，重试与平台重启
   恢复均复用 `tasks.dsh_session_id` 已落库 id 调 `harness.run(prompt, session_id=)`

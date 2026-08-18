@@ -93,6 +93,12 @@ export default function Settings() {
   // Webhook 卡片 issue #141 同模式）
   const [uiSaveBusy, setUiSaveBusy] = useState(false)
   const [uiSaved, setUiSaved] = useState(false)
+  // 「网页通知」卡片内独立保存（issue #292）：用户反馈「设置里的网页通知
+  // 增加一个保存按钮，现在无法保存设置」——全局「保存」按钮在「任务调度」
+  // 卡片，「网页通知」卡片在其下方，需在卡片内可独立保存（与 SSO 卡片
+  // issue #27 / Webhook 卡片 issue #141 / 界面显示卡片 issue #142 同模式）
+  const [notifySaveBusy, setNotifySaveBusy] = useState(false)
+  const [notifySaved, setNotifySaved] = useState(false)
   // 定时暂停窗口（issue #169）：textarea 每行一个窗口串 ↔ 数组存储；
   // 初始值在 settings 加载后回填（与 issue_priority 同模式）
   const [pauseWindowsInput, setPauseWindowsInput] = useState('')
@@ -269,6 +275,17 @@ export default function Settings() {
       setUiSaved(true)
       setTimeout(() => setUiSaved(false), 2000)
     } catch (e) { setError(e.message) } finally { setUiSaveBusy(false) }
+  }
+
+  // 「网页通知」卡片内独立保存（issue #292）：只提交 notifications 段
+  // （部分更新），后端 PUT /api/settings 支持部分更新，不影响其他设置
+  const saveNotify = async () => {
+    setNotifySaveBusy(true); setError(''); setNotifySaved(false)
+    try {
+      await api.put('/api/settings', { notifications: { ...settings.notifications } })
+      setNotifySaved(true)
+      setTimeout(() => setNotifySaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setNotifySaveBusy(false) }
   }
 
   // SSO 卡片内独立保存（issue #27 第四轮）：只提交 sso 段，
@@ -900,9 +917,15 @@ export default function Settings() {
             </tr>
           </tbody>
         </table>
+        <div className="form-row">
+          <button className="btn btn-primary" disabled={notifySaveBusy} onClick={saveNotify}>
+            {notifySaveBusy ? '保存中…' : '保存网页通知配置'}
+          </button>
+          {notifySaved && <span className="saved-hint"><Icon name="check" /> 网页通知配置已保存（已写回 config.yaml）</span>}
+        </div>
         <p className="muted small">
           通过浏览器在电脑上弹出系统通知：任务需要交互（失败）、issue 完成、队列清空、无新任务可处理。
-          修改后点击上方「保存」立即生效；需保持本页面打开（浏览器限制），首次启用时请授权系统通知。
+          修改后点击下方「保存网页通知配置」立即生效；需保持本页面打开（浏览器限制），首次启用时请授权系统通知。
         </p>
       </div>
 
