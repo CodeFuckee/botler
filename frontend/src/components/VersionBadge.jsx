@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { shortSha } from '../api.js'
 
-// 版本徽标（issue #9）：读取构建产物 version.json（由
+// 版本徽标（issue #9 + issue #233）：读取构建产物 version.json（由
 // scripts/gen-version.mjs 在每次构建时生成，vite 复制进 dist/），
-// 在导航栏右侧显示版本号与构建时间。开发模式（无该文件）静默隐藏。
+// 在设置页「关于 → 版本信息」卡片显示版本号、commit 与构建时间。
+// 开发模式（无该文件）静默隐藏。
 export default function VersionBadge() {
   const [info, setInfo] = useState(null)
 
@@ -23,8 +25,12 @@ export default function VersionBadge() {
 
   if (!info) return null
   return (
-    <span className="version-badge" title={`构建时间：${info.buildTime || '未知'}`}>
+    <span
+      className="version-badge"
+      title={`版本：v${info.version} · 构建时间：${info.buildTime || '未知'} · 提交：${info.commit ? shortSha(info.commit) : '未知'}`}
+    >
       v{info.version}
+      {info.commit && <span className="version-badge-commit"> · {shortSha(info.commit)}</span>}
       {info.buildTime && <span className="version-badge-time"> · {info.buildTime}</span>}
     </span>
   )

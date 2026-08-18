@@ -11,9 +11,10 @@ import Plugins from './pages/Plugins.jsx'
 import Terminal from './pages/Terminal.jsx'
 import Login from './pages/Login.jsx'
 import DialogHost from './components/DialogHost.jsx'
-import { api, setDisplayTz, setSsoEnabled } from './api.js'
+import { api, setDisplayTz, setSsoEnabled, shortSha } from './api.js'
 import { applyTheme, loadThemePreference, saveThemePreference, watchSystemTheme } from './theme.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
+import { createVersionChecker } from './version-update.js'
 import { Icon } from './components/Icon.jsx'
 
 export default function App() {
@@ -67,6 +68,19 @@ export default function App() {
     )
   }, [auth])
 
+  // 版本更新提示（issue #233）：页面加载后轮询 /version.json，检测到
+  // 与基线版本不一致（新版部署完成）→ 显示刷新横幅。首次成功只记录基线
+  // 不弹提示，版本变化只提示一次；SSO 未登录时跳过（登录页不轮询）。
+  const [versionUpdate, setVersionUpdate] = useState(null)
+  useEffect(() => {
+    if (!auth || (auth.enabled && !auth.user)) return
+    const checker = createVersionChecker({
+      onUpdate: (info) => setVersionUpdate(info),
+    })
+    checker.start()
+    return () => checker.stop()
+  }, [auth])
+
   // 网页通知轮询（issue #21）：每 10s 拉取新事件弹系统通知。
   // 设置开关在每次轮询时实时读取 → 设置页修改立即生效，无需刷新。
   // 首次拉取只记录游标不弹，避免历史事件轰炸。
@@ -102,6 +116,21 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* 版本更新提示（issue #233）：新版部署完成后页面提示刷新，
+          忽略后不再重复打扰，刷新后 VersionBadge 显示最新版本 */}
+      {versionUpdate && (
+        <div className="version-update-banner" role="status" aria-live="polite">
+          <Icon name="refresh" aria-hidden="true" />
+          <span className="version-update-banner-text">
+            检测到新版本 <strong>v{versionUpdate.version}</strong>
+            {versionUpdate.buildTime && <span> · 构建于 {versionUpdate.buildTime}</span>}
+            {versionUpdate.commit && <span> · 提交 {shortSha(versionUpdate.commit)}</span>}
+            ，点击刷新加载最新部署内容。
+          </span>
+          <button className="btn btn-sm" onClick={() => window.location.reload()}>立即刷新</button>
+          <button className="btn btn-sm version-update-banner-dismiss" onClick={() => setVersionUpdate(null)}>忽略</button>
+        </div>
+      )}
       {/* HIG 灵活：导航提供 aria-label 语义（屏幕阅读器可跳过） */}
       <nav className="topnav" aria-label="主导航">
         <div className="brand">

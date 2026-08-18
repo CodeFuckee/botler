@@ -3,6 +3,36 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+### Added
+
+- **前端可见版本号（含 commit/时间）+ 后端 /api/health 版本对齐 + 新版部署后页面提示刷新，排查「这个功能部署了吗」不再靠猜（issue #233）**：
+  需求——`VersionBadge.jsx` 组件与 `gen-version.mjs` 构建版本生成早已存在（issue #9），但版本信息展示缺 commit、后端
+  `/api/health` 版本号硬编码 `1.0.0` 与前端生成版本不一致、新版部署后页面无任何提示，用户无法直观确认当前部署版本。
+  本次打通「构建产物 → 前后端展示 → 更新感知」全链路：
+  - `frontend/scripts/gen-version.mjs`：构建产物 `version.json` 新增 `commit` 字段（issue #233）——`CI_COMMIT_SHA`
+    优先（GitLab CI 注入）、本地回退 `git rev-parse HEAD`、非 git 环境（Docker 构建无 .git）静默省略该字段（前端
+    降级显示版本 + 构建时间）；新增纯函数 `shortCommit`（sha 截断前 8 位）与 `currentCommit`；新增 `BOTLER_PUBLIC_DIR`
+    环境变量覆盖输出目录（单测用临时目录，不污染真实 `public/version.json`）；
+  - `frontend/src/components/VersionBadge.jsx`：设置页「关于 → 版本信息」卡片展示 `v版本 · commit 短号 · 构建时间`，
+    无 commit 时静默省略（不显示占位符）；
+  - `frontend/src/version-update.js`（新增）：版本更新检查模块——`createVersionChecker` 启动后立即检查一次并每 60s
+    轮询 `/version.json`（与 VersionBadge 同源），首次成功只记录基线不提示、版本变化只提示一次（忽略后不再重复打扰）、
+    轮询失败静默跳过；`detectVersionChange` 纯函数判定版本变化；
+  - `frontend/src/App.jsx`：挂载版本检查器，检测到新版本（新版部署完成）渲染右下角刷新横幅（`.version-update-banner`，
+    toast 风格，含「立即刷新」整页重载与「忽略」按钮）；`frontend/src/styles.css` 新增横幅与 commit 短号样式；
+  - `backend/botler/version.py`（新增）：`read_version_info` 优先读取构建产物 `frontend/dist/version.json`（与前端
+    VersionBadge 同源，含版本 + 构建时间 + commit），缺失时回退 `data/version.txt`（`BOTLER_DATA_DIR` 约定，本地开发/
+    CI 测试兜底），双缺失返回 None；`build_health_payload` 组装 `/api/health` 响应（version 字段永远存在，无信息时
+    `0.0.0`，健康检查本身不受版本文件缺失影响）；
+  - `backend/botler/main.py`：`/api/health` 移除硬编码 `"version": "1.0.0"`，改用 `load_version_info()`（dist 产物 →
+    data/version.txt 回退），新增 `build` 字段携带构建时间与 commit；
+  - **测试**：前端新增 `frontend/tests/version-update.test.mjs` 9 例（detectVersionChange 纯函数边界 / 首次仅记基线 /
+    版本变化触发且只触发一次 / 轮询失败静默 / start-stop 生命周期）、`frontend/tests/version-badge-commit.test.mjs` 7 例
+    （Badge 渲染 commit 与构建时间 / 无 commit 省略 / gen-version 生成 commit 字段 / App 挂载提示 / 设置页文案），
+    `gen-version.test.mjs` 扩充 4 例（shortCommit 边界 / currentCommit / 主流程临时目录生成含 commit 的 version.json /
+    非 git 环境省略 commit）；后端新增 `backend/tests/test_version.py` 12 例（version.json 全量/最小/空字段容错、
+    非法 JSON 与缺版本号回退 txt、双缺失 None、health 负载有/无版本信息与统计可缺省）；前后端全量测试通过，无 regression。
+
 ### Changed
 
 - **任务列表/详情页新增单任务「停止」与详情页「重试」操作，解决单任务操作入口分散（issue #214）**：

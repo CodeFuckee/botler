@@ -283,7 +283,7 @@ docker compose up -d --build
 
 # 3. 验证
 docker compose ps                          # 状态 healthy（botler + minio）
-curl http://localhost:8000/api/health      # {"ok":true,...}
+curl http://localhost:8000/api/health      # {"ok":true,"version":"1.3.34","build":{"buildTime":"...","commit":"..."},...}（版本号与前端 version.json 同源，issue #233）
 curl http://localhost:9000/minio/health/live   # MinIO 健康检查（issue #160）
 ./deploy/verify-docker.sh --full           # 冒烟检查（临时数据目录，不碰真实数据，含 MinIO）
 ```
@@ -420,7 +420,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 ## API 一览
 
 ```
-GET    /api/health                    健康检查
+GET    /api/health                    健康检查（含平台版本号 version 与构建信息 build，与前端 version.json 同源，issue #233）
 GET    /api/repos                     仓库列表
 POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook + 在目标 GitLab 项目补齐标记库缺失的默认标签（issue #157）；priority 1~999 缺省 100，Web UI 添加仓库表单可填写调度优先级，issue #161）
 GET    /api/repos/browse              浏览服务器目录（无 path 时初始定位到 browse.default_path，默认服务器用户主目录 ~）

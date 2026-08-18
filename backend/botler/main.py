@@ -31,6 +31,7 @@ from .gitlab_client import GitLabClient
 from .reconciler import Reconciler
 from .scheduler import TaskScheduler
 from .templates import TemplateRenderer
+from .version import build_health_payload, read_version_info
 from .webhook import WebhookHandler, WebhookError
 
 logging.basicConfig(
@@ -43,6 +44,24 @@ logger = logging.getLogger("botler")
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+
+
+def _default_version_txt() -> Path:
+    """版本号回退文件 data/version.txt 路径（issue #233）：与
+    frontend/scripts/gen-version.mjs 的 BOTLER_DATA_DIR 约定同源，
+    无 dist 构建产物时（本地开发/CI 测试）读取纯版本号兜底。"""
+    data_dir = os.environ.get("BOTLER_DATA_DIR")
+    if data_dir:
+        return Path(data_dir) / "version.txt"
+    return BACKEND_DIR.parent / "data" / "version.txt"
+
+
+def load_version_info() -> dict | None:
+    """读取当前平台版本信息（issue #233）：优先 frontend/dist/version.json
+    （与前端 VersionBadge 同源的构建产物，含版本 + 构建时间 + commit，
+    由 CI frontend:build 产物下载到 FastAPI 静态托管目录），回退
+    data/version.txt（仅版本号）。"""
+    return read_version_info(FRONTEND_DIST / "version.json", _default_version_txt())
 
 
 @dataclass
@@ -171,12 +190,13 @@ def create_app(config_path: str | None = None) -> FastAPI:
     @app.get("/api/health")
     def health():
         ctx = app.state.ctx
-        return {
-            "ok": True,
-            "version": "1.0.0",
-            "scheduler": ctx.scheduler.stats(),
-            "tasks": ctx.db.task_stats(),
-        }
+        # 版本号与前端构建产物同源（issue #233）：读取 dist/version.json
+        # （含构建时间与 commit），缺失时回退 data/version.txt
+        return build_health_payload(
+            load_version_info(),
+            scheduler_stats=ctx.scheduler.stats(),
+            task_stats=ctx.db.task_stats(),
+        )
 
     # ---- 前端静态托管 ----
     if FRONTEND_DIST.exists():

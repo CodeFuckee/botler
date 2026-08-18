@@ -1284,7 +1284,7 @@ export default function Settings() {
       <section id="settings-version" className="settings-section">
       <div className="card">
         <h2>版本信息</h2>
-        <p className="muted small">当前版本与构建时间（每次 CI/CD 构建自动更新）：</p>
+        <p className="muted small">当前版本、构建时间与提交（每次 CI/CD 构建自动更新，构建信息见 /version.json 与 /api/health）：</p>
         <div className="settings-version">
           <VersionBadge />
         </div>

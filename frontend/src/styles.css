@@ -338,6 +338,39 @@ body {
   color: var(--text);
 }
 
+/* 版本徽标内 commit 短号（issue #233）：等宽数字风格，与构建时间同源 */
+.version-badge .version-badge-commit {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 版本更新提示横幅（issue #233）----
+   新版部署完成后固定右下角浮层提示刷新（toast 风格，不打断页面操作）；
+   忽略后消失不再重复打扰，刷新后 VersionBadge 显示最新版本。
+   层级与对话框宿主同档（z-index: 100，见 .dialog-backdrop），确保
+   始终浮在内容之上 */
+.version-update-banner {
+  position: fixed;
+  right: var(--gutter, 16px);
+  bottom: var(--gutter, 16px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  max-width: min(520px, calc(100vw - 32px));
+  padding: var(--space-3, 12px) var(--space-4, 16px);
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border, #ddd);
+  border-radius: var(--radius, 8px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.version-update-banner .lucide { color: var(--primary, #2563eb); flex-shrink: 0; }
+.version-update-banner-text { flex: 1; min-width: 0; }
+.version-update-banner-text strong { color: var(--text, #111); }
+.version-update-banner-dismiss { background: transparent; border-color: transparent; color: var(--muted, #666); }
+.version-update-banner-dismiss:hover { background: var(--bg-hover, #f0f0f0); border-color: transparent; }
+
 /* HIG 布局：内容区即安全区——左右外边距引用 --gutter（桌面 20px /
    窄屏 16px），顶部 24px 起步、底部 60px 留白保证滚动内容延伸到底部 */
 .content {
