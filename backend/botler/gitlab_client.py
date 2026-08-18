@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import random
 import re
 import time
 from urllib.parse import urlparse, unquote
@@ -68,6 +69,35 @@ class GitLabError(Exception):
         self.status_code = status_code
 
 
+# 瞬时故障状态码（issue #280）：网关/WAF 短暂不可用（502/503/504）、服务端
+# 过载（500）、限流（429）时，GET 读取可安全重试；其余 4xx 为永久性错误。
+TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+# GET 读取重试次数与指数退避上限（含首次最多 RETRY_MAX_ATTEMPTS 次）。
+# 08-17 生产事故（issue #280）：GitLab 短暂不可用返回 502，44 个排队任务
+# 启动阶段 get_issue 一次 502 即全部判失败，且失败评论同样发不出。这里对
+# 幂等读取做退避重试，非 GET（评论/标签等写操作）绝不重试避免重复提交。
+RETRY_MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 4.0
+
+
+def _retry_delay(attempt: int) -> float:
+    """指数退避 + 小抖动（attempt 从 0 开始：1s、2s、4s…封顶）。"""
+    return min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY) + random.uniform(0, 0.3)
+
+
+def is_transient_error(e: GitLabError) -> bool:
+    """GitLabError 是否属于可重试的瞬时故障（issue #280）。
+
+    瞬时故障 = 网关/服务端短暂不可用（429/500/502/503/504），或传输层故障
+    （连接超时/拒绝/DNS 解析失败，httpx 异常被 _request 包裹为 __cause__）。
+    显式状态码优先判定；仅当没有状态码（传输层故障）时才看 __cause__。
+    """
+    if e.status_code is not None:
+        return e.status_code in TRANSIENT_STATUS_CODES
+    return isinstance(e.__cause__, httpx.TransportError)
+
+
 class GitLabClient:
     def __init__(self, url: str, token: str, verify_ssl: bool = True,
                  webhook_base_url: str | None = None):
@@ -85,9 +115,37 @@ class GitLabClient:
 
     # ---- 基础请求 ----
 
+    def _http_request_with_retry(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """执行一次 HTTP 请求；GET 读取遇瞬时故障退避重试（issue #280）。
+
+        瞬时故障 = 传输层异常（超时/连接拒绝/DNS）或网关/服务端短暂不可用
+        （429/500/502/503/504）。GET 幂等可安全重试；非 GET（评论/标签等
+        写操作）不重试，避免网络抖动导致重复提交。
+        """
+        attempts = RETRY_MAX_ATTEMPTS if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                resp = self._http.request(method, path, **kwargs)
+            except httpx.HTTPError:
+                if attempt >= attempts - 1:
+                    raise
+                delay = _retry_delay(attempt)
+                logger.warning("GitLab %s %s 传输层瞬时故障，%.1fs 后重试（第 %d/%d 次）",
+                               method, path, delay, attempt + 1, attempts)
+                time.sleep(delay)
+                continue
+            if resp.status_code in TRANSIENT_STATUS_CODES and attempt < attempts - 1:
+                delay = _retry_delay(attempt)
+                logger.warning("GitLab %s %s 瞬时故障（HTTP %s），%.1fs 后重试（第 %d/%d 次）",
+                               method, path, resp.status_code, delay, attempt + 1, attempts)
+                time.sleep(delay)
+                continue
+            return resp
+        raise AssertionError("unreachable")  # 循环内必 return / raise
+
     def _request(self, method: str, path: str, **kwargs) -> dict | list | None:
         try:
-            resp = self._http.request(method, path, **kwargs)
+            resp = self._http_request_with_retry(method, path, **kwargs)
         except httpx.HTTPError as e:
             # 传输层故障（DNS 解析失败 / 连接拒绝 / 超时等）统一转 GitLabError，
             # 调用方按「GitLab 故障」优雅降级（对账/概览单仓库失败不中断整体，
@@ -106,12 +164,16 @@ class GitLabClient:
         return resp.json()
 
     def _paged(self, path: str, limit: int | None = None, **kwargs) -> list[dict]:
-        """分页拉取（per_page=100）；limit 非空时最多取 limit 条即停止翻页。"""
+        """分页拉取（per_page=100）；limit 非空时最多取 limit 条即停止翻页。
+
+        分页请求同走 _http_request_with_retry（issue #280）：瞬时故障退避重试，
+        避免对账/概览扫描被一次 502 整体中断。
+        """
         items: list[dict] = []
         page = 1
         while True:
             try:
-                resp = self._http.request(
+                resp = self._http_request_with_retry(
                     "GET", path, params={"page": page, "per_page": 100, **kwargs})
             except httpx.HTTPError as e:
                 # 与 _request 一致：传输层故障统一转 GitLabError（issue #212）

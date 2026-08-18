@@ -1634,3 +1634,143 @@ class TestCaptureEnvSnapshot:
         monkeypatch.setattr(db, "set_task_status",
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
         executor._capture_env_snapshot(task_id, workdir)  # 不应抛出
+
+
+class TestRunTaskTransientIssueFetch:
+    """issue #280：任务启动拉取 issue 遇 GitLab 瞬时故障（502 等）不应立即判失败。
+
+    08-17 生产事故：GitLab 短暂不可用返回 502，44 个排队任务 get_issue
+    一次 502 即全部打成 failed，且失败评论同样发不出。修复后按指数退避
+    重试（ISSUE_FETCH_MAX_ATTEMPTS 次），重试耗尽或非瞬时错误才判失败。
+    """
+
+    def _install(self, executor, monkeypatch, tmp_path, get_issue):
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        executor.gitlab = SimpleNamespace(
+            get_issue=get_issue,
+            add_comment=lambda *a, **k: {"id": 1},
+            add_labels=lambda *a, **k: {},
+        )
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+        return task_id
+
+    def test_transient_502_retried_then_proceeds(self, executor, monkeypatch, tmp_path):
+        """前两次 get_issue 502、第三次成功 → 任务继续执行（不以获取失败收尾）。"""
+        from botler.executor import ExecutorError, ISSUE_FETCH_MAX_ATTEMPTS
+        calls = {"n": 0}
+
+        def flaky_get_issue(pid, iid):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise GitLabError("GitLab API 错误 502: boom", 502)
+            return {"state": "opened"}
+
+        def run_once(*a, **k):
+            # 让执行阶段失败（进入重试分支），仅验证「已越过 issue 拉取阶段」
+            raise ExecutorError("boom")
+
+        task_id = self._install(executor, monkeypatch, tmp_path, flaky_get_issue)
+        monkeypatch.setattr(executor, "_run_once", run_once)
+        executor.run_task(task_id)
+
+        task = executor.db.get_task(task_id)
+        assert calls["n"] == 3, "502 应重试到成功为止"
+        assert task["status"] == "failed"
+        assert "获取 issue" not in task["error_message"], \
+            "瞬时故障重试成功不应以「获取 issue 失败」收尾"
+        assert ISSUE_FETCH_MAX_ATTEMPTS >= 3
+
+    def test_transient_always_502_fails_after_attempts(self, executor, monkeypatch, tmp_path):
+        """持续 502 → 重试耗尽后判失败，原因含获取 issue 失败。"""
+        from botler.executor import ISSUE_FETCH_MAX_ATTEMPTS
+        calls = {"n": 0}
+
+        def always_502(pid, iid):
+            calls["n"] += 1
+            raise GitLabError("GitLab API 错误 502: boom", 502)
+
+        task_id = self._install(executor, monkeypatch, tmp_path, always_502)
+        executor.run_task(task_id)
+
+        task = executor.db.get_task(task_id)
+        assert calls["n"] == ISSUE_FETCH_MAX_ATTEMPTS, "应重试到次数上限"
+        assert task["status"] == "failed"
+        assert "获取 issue" in task["error_message"]
+
+    def test_permanent_404_fails_immediately(self, executor, monkeypatch, tmp_path):
+        """404 非瞬时 → 只请求一次即判失败，不重试。"""
+        calls = {"n": 0}
+
+        def always_404(pid, iid):
+            calls["n"] += 1
+            raise GitLabError("资源不存在（404）: /projects/42/issues/1", 404)
+
+        task_id = self._install(executor, monkeypatch, tmp_path, always_404)
+        executor.run_task(task_id)
+
+        task = executor.db.get_task(task_id)
+        assert calls["n"] == 1
+        assert task["status"] == "failed"
+        assert "获取 issue" in task["error_message"]
+
+
+class TestFinishFailedTransientRetry:
+    """issue #280：失败收尾评论/标签遇瞬时故障应退避重试，确保用户收到反馈。
+
+    08-17 事故中「没有任何的回复和评论」的直接原因：失败评论与 bot-failed
+    标签调用各试一次即遇 502 失败放弃。修复后瞬时故障按指数退避重试。
+    """
+
+    def _mk_running_task(self, executor, tmp_path):
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        db.set_task_status(task_id, "running")
+        return task_id
+
+    def test_failure_comment_retried_on_transient_502(self, executor, monkeypatch, tmp_path):
+        """add_comment 前两次 502、第三次成功 → 失败评论最终发出。"""
+        task_id = self._mk_running_task(executor, tmp_path)
+        comment_calls = {"n": 0}
+
+        def add_comment(pid, iid, body):
+            comment_calls["n"] += 1
+            if comment_calls["n"] <= 2:
+                raise GitLabError("GitLab API 错误 502: boom", 502)
+            return {"id": 1}
+
+        executor.gitlab = SimpleNamespace(add_comment=add_comment,
+                                          add_labels=lambda *a, **k: {})
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+
+        executor._finish_failed(task_id, "测试失败原因")
+
+        task = executor.db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert comment_calls["n"] == 3, "失败评论应重试到成功"
+        logs = executor.db.list_logs(task_id)
+        assert any("已在 issue 上留失败评论" in l["message"] for l in logs)
+
+    def test_failure_comment_permanent_error_no_retry(self, executor, monkeypatch, tmp_path):
+        """403 非瞬时 → 失败评论只试一次即放弃。"""
+        task_id = self._mk_running_task(executor, tmp_path)
+        comment_calls = {"n": 0}
+
+        def add_comment(pid, iid, body):
+            comment_calls["n"] += 1
+            raise GitLabError("权限不足（403）: denied", 403)
+
+        executor.gitlab = SimpleNamespace(add_comment=add_comment,
+                                          add_labels=lambda *a, **k: {})
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+
+        executor._finish_failed(task_id, "测试失败原因")
+
+        task = executor.db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert comment_calls["n"] == 1, "403 永久性错误不应重试"

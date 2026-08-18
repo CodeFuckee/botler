@@ -45,7 +45,9 @@ from .env_snapshot import (
     error_snapshot,
     serialize_snapshot,
 )
-from .gitlab_client import PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError
+from .gitlab_client import (
+    PIPELINE_TERMINAL_STATES, GitLabClient, GitLabError, is_transient_error,
+)
 from .git_remote import (NoGitRemoteError, build_repo_client_with_username,
                          list_local_remotes, parse_remote_url)
 from .templates import TemplateRenderer
@@ -89,6 +91,19 @@ COMMENT_TAIL_CHARS = 3000
 # 手动停止约定退出码（issue #35）：读循环检测到停止标记时返回，
 # 区别于 124（超时）与其他环境失败，run_task 据此走停止收尾
 STOP_EXIT_CODE = 125
+
+# issue #280：任务启动阶段拉取 issue 遇 GitLab 瞬时故障（网关 502/限流/
+# 网络抖动）时不立即判失败，按指数退避重试——08-17 生产事故：GitLab 短暂
+# 不可用返回 502，44 个排队任务 get_issue 一次 502 即全部打成 failed，且
+# 失败评论同样发不出，issue 上「没有任何回复评论」。重试耗尽后才判失败。
+ISSUE_FETCH_MAX_ATTEMPTS = 5
+ISSUE_FETCH_BASE_DELAY = 5.0
+ISSUE_FETCH_MAX_DELAY = 60.0
+# 收尾评论/标签尽力重试（同 issue #280）：GitLab 恢复后仍要保证用户能
+# 收到失败反馈，不能只试一次就放弃。
+FINISH_RETRY_ATTEMPTS = 5
+FINISH_RETRY_BASE_DELAY = 5.0
+FINISH_RETRY_MAX_DELAY = 60.0
 
 class ExecutorError(Exception):
     pass
@@ -525,6 +540,34 @@ class ClaudeExecutor:
             logger.info("任务仓库 %s：全局 token 失效（%s），"
                         "改用 remote url 内嵌 token 重试", repo["name"], e)
             return call(fallback), fallback
+
+    def _transient_retry(self, what: str, call, *,
+                         attempts: int = FINISH_RETRY_ATTEMPTS,
+                         base_delay: float = FINISH_RETRY_BASE_DELAY,
+                         max_delay: float = FINISH_RETRY_MAX_DELAY):
+        """对 call() 执行瞬时故障重试（指数退避）；非瞬时错误立即抛出。
+
+        issue #280：GitLab 短暂不可用（502/503/限流/网络抖动）时，收尾
+        评论/标签不能只试一次就放弃——一次 502 会让 issue 上「没有任何
+        回复评论」，用户无法感知任务失败/处理中。重试耗尽后抛最后一个
+        GitLabError，由调用方记日志降级。
+        """
+        last: GitLabError | None = None
+        for attempt in range(attempts):
+            try:
+                return call()
+            except GitLabError as e:
+                if not is_transient_error(e):
+                    raise
+                last = e
+                if attempt >= attempts - 1:
+                    break
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                logger.warning("%s瞬时故障（%s），%.0fs 后重试（第 %d/%d 次）",
+                               what, e, delay, attempt + 1, attempts)
+                time.sleep(delay)
+        assert last is not None
+        raise last
 
     # ---- 工作区管理 ----
 
@@ -2115,14 +2158,26 @@ class ClaudeExecutor:
 
         project_id, issue_iid = task["project_id"], task["issue_iid"]
         self.db.set_task_status(task_id, None, log_path=str(self._log_file(task_id)))
-        try:
-            issue, _ = self._call_with_fallback(
-                repo, lambda c: c.get_issue(project_id, issue_iid))
-        except GitLabError as e:
-            self._finish_failed(task_id,
-                                f"获取 issue {project_id}#{issue_iid} 失败: {e}",
-                                repo=repo)
-            return
+        # issue #280：拉取 issue 遇 GitLab 瞬时故障（502/503/限流/网络抖动）
+        # 时按指数退避重试，不立即判失败——08-17 生产 GitLab 短暂不可用，
+        # 44 个排队任务启动阶段 get_issue 一次 502 即全部打成 failed，且失败
+        # 评论同样发不出，issue 上「没有任何回复评论」。重试耗尽才判失败。
+        for attempt in range(ISSUE_FETCH_MAX_ATTEMPTS):
+            try:
+                issue, _ = self._call_with_fallback(
+                    repo, lambda c: c.get_issue(project_id, issue_iid))
+                break
+            except GitLabError as e:
+                if attempt >= ISSUE_FETCH_MAX_ATTEMPTS - 1 or not is_transient_error(e):
+                    self._finish_failed(task_id,
+                                        f"获取 issue {project_id}#{issue_iid} 失败: {e}",
+                                        repo=repo)
+                    return
+                delay = min(ISSUE_FETCH_BASE_DELAY * (2 ** attempt), ISSUE_FETCH_MAX_DELAY)
+                self.db.add_log(task_id, "warn",
+                                f"获取 issue 瞬时故障（{e}），{delay:.0f}s 后重试"
+                                f"（第 {attempt + 1}/{ISSUE_FETCH_MAX_ATTEMPTS} 次）")
+                time.sleep(delay)
 
         max_retries = cfg.max_retries
         attempt = 0
@@ -2165,13 +2220,16 @@ class ClaudeExecutor:
             self.db.add_log(task_id, "info", f"第 {attempt} 次尝试开始")
             logger.info("任务 %s（%s#%s）第 %s 次执行", task_id, project_id, issue_iid, attempt)
 
-            # 首次尝试时在 issue 上回复「处理中」，提升体验（不刷屏，重试不再重复）
+            # 首次尝试时在 issue 上回复「处理中」，提升体验（不刷屏，重试不再重复）。
+            # issue #280：瞬时故障退避重试，避免 GitLab 短暂不可用时用户收不到任何回复
             if attempt == 1:
                 try:
-                    self._call_with_fallback(
-                        repo, lambda c: c.add_comment(
-                            project_id, issue_iid,
-                            "🤖 Botler 已收到该 issue，开始处理中…"))
+                    self._transient_retry(
+                        "发送处理中评论",
+                        lambda: self._call_with_fallback(
+                            repo, lambda c: c.add_comment(
+                                project_id, issue_iid,
+                                "🤖 Botler 已收到该 issue，开始处理中…")))
                 except GitLabError as e:
                     self.db.add_log(task_id, "warn", f"发送处理中评论失败: {e}")
 
@@ -2567,19 +2625,26 @@ class ClaudeExecutor:
             tail = self._tail_output(output)
             if tail and tail != output.strip():
                 summary += f"\n\n日志尾部：\n```\n{tail[-COMMENT_TAIL_CHARS:]}\n```"
+            # issue #280：GitLab 短暂不可用时评论/标签只试一次会因 502 发不出
+            # （08-17 事故：失败评论与 bot-failed 标签全部 502 失败，issue 上
+            # 「没有任何回复评论」）。瞬时故障退避重试，恢复后仍能送达。
             try:
-                self._call_with_fallback(
-                    repo, lambda c: c.add_comment(
-                        task["project_id"], task["issue_iid"],
-                        f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{summary}"))
+                self._transient_retry(
+                    "留失败评论",
+                    lambda: self._call_with_fallback(
+                        repo, lambda c: c.add_comment(
+                            task["project_id"], task["issue_iid"],
+                            f"🤖 Botler 自动回复：无法完成此 issue。\n\n**原因**：{summary}")))
                 self.db.add_log(task_id, "info", "已在 issue 上留失败评论")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"留失败评论失败: {e}")
             try:
-                self._call_with_fallback(
-                    repo, lambda c: c.add_labels(
-                        task["project_id"], task["issue_iid"], ["bot-failed"],
-                        remove=["in-progress"]))
+                self._transient_retry(
+                    "打 bot-failed 标签",
+                    lambda: self._call_with_fallback(
+                        repo, lambda c: c.add_labels(
+                            task["project_id"], task["issue_iid"], ["bot-failed"],
+                            remove=["in-progress"])))
                 self.db.add_log(task_id, "info", "已打 bot-failed 标签")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"打 bot-failed 标签失败: {e}")
@@ -2620,18 +2685,23 @@ class ClaudeExecutor:
                 "**Claude 的问题**：\n\n"
                 f"{question}\n\n"
                 "请在本 issue 直接回复您的选择，回复后 bot 会重新领取处理。")
+            # issue #280：瞬时故障退避重试，保证用户能收到提问反馈
             try:
-                self._call_with_fallback(
-                    repo, lambda c: c.add_comment(
-                        task["project_id"], task["issue_iid"], comment))
+                self._transient_retry(
+                    "留提问评论",
+                    lambda: self._call_with_fallback(
+                        repo, lambda c: c.add_comment(
+                            task["project_id"], task["issue_iid"], comment)))
                 self.db.add_log(task_id, "info", "已在 issue 上留提问评论，等待用户回复")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"留提问评论失败: {e}")
             try:
-                self._call_with_fallback(
-                    repo, lambda c: c.add_labels(
-                        task["project_id"], task["issue_iid"], ["blocked"],
-                        remove=["in-progress"]))
+                self._transient_retry(
+                    "打 blocked 标签",
+                    lambda: self._call_with_fallback(
+                        repo, lambda c: c.add_labels(
+                            task["project_id"], task["issue_iid"], ["blocked"],
+                            remove=["in-progress"])))
                 self.db.add_log(task_id, "info", "已打 blocked 标签，等待用户回复")
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"打 blocked 标签失败: {e}")

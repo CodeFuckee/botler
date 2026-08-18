@@ -1,8 +1,13 @@
 """GitLabClient 单元测试：项目识别（resolve_project）等。"""
 
+from types import SimpleNamespace
+
+import httpx
 import pytest
 
-from botler.gitlab_client import GitLabClient, GitLabError
+from botler.gitlab_client import (
+    GitLabClient, GitLabError, is_transient_error,
+)
 
 
 def make_client(url: str = "https://gitlab.example.com") -> GitLabClient:
@@ -628,3 +633,119 @@ class TestCreateProjectLabel:
         client.create_project_label(42, "feature", "#009966")
 
         assert captured[0][2] == {"name": "feature", "color": "#009966"}
+
+
+class TestIsTransientError:
+    """is_transient_error：瞬时故障（可重试）与永久性错误分类（issue #280）。
+
+    08-17 生产事故根因：GitLab 短暂不可用返回 502（SafeLine WAF 兜底页），
+    任务启动阶段 get_issue 一次 502 即全部判失败。修复后 5xx/429/传输层
+    故障视为瞬时、退避重试，4xx 永久性错误不重试。
+    """
+
+    def test_transient_status_codes(self):
+        for code in (429, 500, 502, 503, 504):
+            assert is_transient_error(GitLabError("x", code)), f"{code} 应视为瞬时"
+
+    def test_non_transient_status_codes(self):
+        for code in (400, 401, 403, 404, 422):
+            assert not is_transient_error(GitLabError("x", code)), f"{code} 不应重试"
+
+    def test_transport_error_is_transient(self):
+        """传输层故障（连接超时/拒绝/DNS）由 httpx 异常包裹为 cause → 瞬时。"""
+        e = GitLabError("GitLab 请求失败（/user）: timed out")
+        e.__cause__ = httpx.ConnectTimeout("timed out")
+        assert is_transient_error(e)
+
+    def test_transport_error_with_http_status_is_not_transient(self):
+        """带明确 4xx 状态码的错误即使有传输层 cause 也不视为瞬时。"""
+        e = GitLabError("token 无效或已过期（401）", 401)
+        e.__cause__ = httpx.ConnectTimeout("timed out")
+        assert not is_transient_error(e)
+
+
+class TestTransientRequestRetry:
+    """_request/_paged 对 GET 读取做瞬时故障退避重试（issue #280）。"""
+
+    @staticmethod
+    def _resp(status_code: int, text: str = "", json_data=None):
+        """构造最小响应桩（含 status_code/text/content/json()）。"""
+        resp = SimpleNamespace(status_code=status_code, text=text,
+                               content=b"x", _json=json_data)
+        resp.json = lambda: resp._json
+        return resp
+
+    @staticmethod
+    def _install(client, responses, monkeypatch):
+        """替换 _http：request() 依次弹出 responses（异常直接抛），返回调用记录。"""
+        calls: list[tuple] = []
+
+        class FakeHttp:
+            def request(self, method, path, **kwargs):
+                calls.append((method, path))
+                item = responses.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
+        client._http = FakeHttp()
+        monkeypatch.setattr("botler.gitlab_client.time.sleep", lambda s: None)
+        return calls
+
+    def test_get_502_twice_then_success(self, monkeypatch):
+        """GET 前两次 502、第三次 200 → get_issue 重试后成功。"""
+        client = make_client()
+        responses = [self._resp(502, "Bad Gateway"),
+                     self._resp(502, "Bad Gateway"),
+                     self._resp(200, json_data={"state": "opened"})]
+        calls = self._install(client, responses, monkeypatch)
+        issue = client.get_issue(123, 280)
+        assert issue == {"state": "opened"}
+        assert len(calls) == 3, "502 应退避重试到成功"
+
+    def test_get_transient_exhausted_raises_502(self, monkeypatch):
+        """持续 502 → 重试耗尽后仍抛 GitLabError(502)。"""
+        client = make_client()
+        calls = self._install(client, [self._resp(502, "Bad Gateway")] * 3, monkeypatch)
+        with pytest.raises(GitLabError) as ei:
+            client.get_issue(123, 280)
+        assert ei.value.status_code == 502
+        assert len(calls) == 3
+
+    def test_get_connect_timeout_retried(self, monkeypatch):
+        """传输层超时 → 重试；第三次成功。"""
+        client = make_client()
+        responses = [httpx.ConnectTimeout("timed out"),
+                     httpx.ConnectTimeout("timed out"),
+                     self._resp(200, json_data={"state": "opened"})]
+        calls = self._install(client, responses, monkeypatch)
+        assert client.get_issue(123, 280) == {"state": "opened"}
+        assert len(calls) == 3
+
+    def test_get_404_not_retried(self, monkeypatch):
+        """404 永久性错误 → 只请求一次。"""
+        client = make_client()
+        calls = self._install(client, [self._resp(404, "Not Found")], monkeypatch)
+        with pytest.raises(GitLabError) as ei:
+            client.get_issue(123, 280)
+        assert ei.value.status_code == 404
+        assert len(calls) == 1
+
+    def test_post_502_not_retried(self, monkeypatch):
+        """写操作（评论 POST）遇 502 不重试，避免重复提交。"""
+        client = make_client()
+        calls = self._install(client, [self._resp(502, "Bad Gateway")], monkeypatch)
+        with pytest.raises(GitLabError) as ei:
+            client.add_comment(123, 280, "hello")
+        assert ei.value.status_code == 502
+        assert len(calls) == 1
+
+    def test_paged_502_retried_then_success(self, monkeypatch):
+        """分页读取遇瞬时 502 → 重试成功后正常返回，不会整体中断。"""
+        client = make_client()
+        responses = [self._resp(502, "Bad Gateway"),
+                     self._resp(200, json_data=[{"iid": 1}])]
+        calls = self._install(client, responses, monkeypatch)
+        items = client.list_open_issues(123)
+        assert [i["iid"] for i in items] == [1]
+        assert len(calls) == 2, "502 重试后成功，一次分页请求完成"

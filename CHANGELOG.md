@@ -611,6 +611,32 @@
 
 ### Fixed
 
+- **GitLab 瞬时故障（502/限流/网络抖动）退避重试——修复排队任务批量失败且 issue 无任何回复评论（issue #280 诊断修复）**：
+  08-17 生产事故诊断：GitLab（SafeLine WAF 前置）短暂不可用返回 502
+  （`GitLab is not responding` / WAF 兜底页），botler 任务启动阶段拉取 issue
+  一次 502 即全部判 failed（当日 44 个排队任务在 42 秒内批量失败），且失败
+  评论、bot-failed 标签调用同样遇 502 **各试一次即放弃**——受影响 issue 上
+  「没有任何的回复和评论」，用户无法感知任务失败。本次修复：
+  - **瞬时故障分类**：`botler/gitlab_client.py` 新增 `is_transient_error()`——
+    429/500/502/503/504 与传输层故障（连接超时/拒绝/DNS 解析失败）视为瞬时
+    可重试，其余 4xx 永久性错误不重试；
+  - **GET 读取退避重试**：`_request`/`_paged` 重构为 `_http_request_with_retry`，
+    GET（幂等读取：issue 查询/对账扫描/概览等）遇瞬时故障指数退避重试最多 3 次
+    （1s/2s/4s + 抖动）；写操作（评论 POST / 标签 PUT）不重试，避免网络抖动
+    导致重复提交；
+  - **任务启动重试**：`executor.run_task` 拉取 issue 遇瞬时故障按指数退避重试
+    （最多 `ISSUE_FETCH_MAX_ATTEMPTS=5` 次、间隔 5s→60s），重试耗尽才判
+    failed——一次短暂故障不再把整批排队任务全部打挂；
+  - **收尾反馈重试**：`_finish_failed`/`_finish_asked` 的失败评论、
+    bot-failed/blocked 标签，以及任务启动的「处理中」评论均走新增
+    `_transient_retry`（最多 5 次退避重试），GitLab 恢复后反馈仍能送达，
+    用户不再面对「无任何回复评论」；
+  - **测试**：`backend/tests/test_gitlab_client.py` 新增瞬时分类与 GET 重试 11 例
+    （502 重试成功 / 重试耗尽抛错 / 传输层超时重试 / 404 不重试 / POST 不重试 /
+    分页重试）；`backend/tests/test_executor.py` 新增启动拉取瞬时重试与失败评论
+    重试 5 例（旧代码下可复现失败——失败评论仅 1 次调用即放弃）；后端全量测试
+    （147 例）与覆盖率门禁（≥70%）通过，无 regression。
+
 - **Web 终端反向代理遗漏显式关闭——终端服务拒绝（伪造/过期 token）时浏览器端永远收不到断开事件导致挂起（issue #183）**：
   Web 终端（issue #183）WebSocket 反向代理 `_pump` 在终端服务以非 1000 关闭码
   （如 token 校验失败 close 4001）结束时，`to_client` 捕获 `ConnectionClosed`
