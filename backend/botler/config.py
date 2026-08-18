@@ -66,6 +66,19 @@ def _ui_default(ui: dict, key: str, default: bool) -> bool:
     return val if isinstance(val, bool) else default
 
 
+# 界面显示主题三态（issue #217）：system（跟随系统）/ light（浅色）/ dark（深色）
+THEME_MODES = ("system", "light", "dark")
+
+
+def _ui_theme(ui: dict) -> str:
+    """读取界面显示主题（issue #217）：缺省或非法值回退 system（跟随系统）。
+
+    防御手动编辑 config.yaml 写坏（与 _ui_default 同思路）——只有
+    system / light / dark 三个合法取值，其余一律按跟随系统处理。"""
+    val = ui.get("theme")
+    return val if isinstance(val, str) and val in THEME_MODES else "system"
+
+
 def _pause_windows(worker: dict) -> list[str]:
     """读取 worker.pause_windows（issue #169）：必须是字符串列表；剔除
     格式非法项（防御手动编辑 config.yaml 写坏），全部非法 = 不启用。"""
@@ -194,6 +207,11 @@ class Settings:
     # （未启用仓库带「未启用」徽章，保持现状）；false = 两个板块只展示
     # 已启用仓库（后端接口直接过滤，未启用仓库不再发起 GitLab 查询）。
     ui_show_disabled_repos: bool = True
+    # 界面显示主题（issue #217）：system / light / dark 三态——system 跟随
+    # 系统 prefers-color-scheme；light / dark 手动强制。与前端 localStorage
+    # 本地偏好（botler.theme）双向同步：设置页保存后写回 config.yaml（跨
+    # 设备权威配置），前端首屏按本地偏好渲染防闪烁。
+    ui_theme: str = "system"
     # 网页通知（issue #21）：总开关 + 各通知时机开关，前端按此过滤弹系统通知
     notifications_enabled: bool = True
     notify_task_needs_interaction: bool = True
@@ -274,7 +292,7 @@ KNOWN_FIELDS = {
     "templates": {"default", "resume"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
-    "ui": {"timezone", "show_disabled_repos"},
+    "ui": {"timezone", "show_disabled_repos", "theme"},
     "notifications": {"enabled", "task_needs_interaction", "issue_completed",
                       "queue_empty", "queue_no_work"},
     "webhook": {"enabled", "url", "content_type", "authorization",
@@ -480,6 +498,7 @@ class ConfigManager:
             backup_retention_days=int(backup.get("retention_days", 30)),
             ui_timezone=(ui.get("timezone") or "").strip(),
             ui_show_disabled_repos=_ui_default(ui, "show_disabled_repos", True),
+            ui_theme=_ui_theme(ui),
             notifications_enabled=_notify_default(notify, "enabled", True),
             notify_task_needs_interaction=_notify_default(notify, "task_needs_interaction", True),
             notify_issue_completed=_notify_default(notify, "issue_completed", True),

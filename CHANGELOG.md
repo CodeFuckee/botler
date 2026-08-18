@@ -367,6 +367,47 @@
     无 regression。
 
 ### Added
+- **界面显示新增深色模式三态——跟随系统 / 浅色 / 深色，夜间查看任务状态不再刺眼（issue #217）**：
+  需求——夜间无人值守查看任务/日志时浅色 UI 刺眼，提供 CSS 变量 + `prefers-color-scheme`
+  自动适配 + 设置页「界面显示」手动三态切换，偏好持久化 localStorage + 后端配置同步：
+  - `frontend/src/theme.js`（新增）：主题三态模块——`THEME_MODES`（system/light/dark）、
+    纯函数 `loadThemePreference` / `saveThemePreference`（localStorage 键 `botler.theme`，
+    非法值/无存储/隐私模式兜底不崩溃，与 SettingsNav issue #168 同款注入式 storage 设计）、
+    `resolveTheme`（system 跟随系统偏好）、`applyTheme`（设置 `<html data-theme>` 与
+    `color-scheme`，原生滚动条/表单控件同步）、`watchSystemTheme`（仅 system 模式响应
+    系统深色变化自动适配，手动模式不响应）；
+  - `frontend/index.html`：首屏 inline 脚本在应用 JS 加载前按本地偏好设置 `<html
+    data-theme>`，深色用户不再先看到浅色白屏闪变；`main.jsx` 挂载前兜底再应用一次；
+  - `frontend/src/styles.css`：深色令牌重构为三态生效——跟随系统分支
+    `@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) }`（系统深色
+    且未强制浅色时翻转）+ 手动深色分支 `:root[data-theme='dark']`（两处令牌必须同步，文件
+    内注释提示）；深色配色按 issue 要求改为**蓝白新拟物风格：深色底 `#1a1d23` + 蓝色强调
+    `#3b82f6`**（链接/文字用 `#60a5fa`，对深底对比度 ≥ 4.5:1 达 WCAG AA），浅色 `:root`
+    声明 `color-scheme: light`；顺手 token 化两处硬编码白（仓库 logo 占位底
+    `background: #fff` → `var(--bg-card)`、聊天用户气泡 `color: #fff` →
+    `var(--on-primary)` + 实底 `var(--primary-strong)`，避免深色模式白块/白字刺眼）；
+  - `frontend/src/pages/Settings.jsx`：「界面显示」卡片新增「界面主题」三态下拉
+    （跟随系统 / 浅色 / 深色，`ui.theme`），切换即时预览并写本地 localStorage；
+    `buildUiPatch` 携带 `theme`（未配置按 `system` 兼容旧配置）；卡片内「保存界面显示
+    配置」保存后立即应用 + 写 localStorage（与后端 config.yaml 双向同步）；
+  - `frontend/src/App.jsx`：启动拉取 `/api/settings` 后应用后端 `ui.theme` 并同步本地
+    偏好（跨设备权威配置）；注册系统深色变化监听，system 模式下 OS 切换深浅即时跟随；
+  - `backend/botler/config.py`：新增 `ui.theme` 配置字段（默认 `system`），`_ui_theme`
+    防御非法值回退跟随系统，KNOWN_FIELDS["ui"] 纳入 theme；
+  - `backend/botler/api/settings.py`：GET 返回 `ui.theme`；`_validate_ui` 校验三态取值
+    （非法值 400）；
+  - `backend/config.example.yaml` / `README.md` / `docs/design-system.md`：补充 `ui.theme`
+    说明与深色模式三态设计规范（生效机制、持久化双通道、使用约束）；
+  - **测试**：新增 `frontend/tests/theme.test.mjs` 7 例（load/save 边界、resolve 三态
+    跟随系统、applyTheme 设置 data-theme 与 color-scheme、watchSystemTheme 响应与取消）、
+    `frontend/tests/settings-ui-theme.test.mjs` 6 例（三态下拉源码断言 / 即时预览与本地
+    持久化 / buildUiPatch 携带 theme / saveUi 双向同步 / 说明文字 / 渲染回显与保存提交
+    PUT ui.theme=dark）；后端 `backend/tests/test_api_settings.py` 新增 TestUiThemeSettings
+    8 例（默认 system / dark、light 写回 config.yaml / 切回 system / 非法值与类型拒绝 /
+    部分更新不串扰 / yaml 手写非法值回退）；同步更新 `apple-hig.test.mjs`（深色令牌断言
+    改为 issue #217 配色 #1a1d23/#21252d/#e8eaed/#3b82f6 + 手动深色/手动浅色分支断言）与
+    `apple-design.test.mjs`（导航材质深色值更新）；前后端全量测试通过，无 regression。
+
 - **修订《中断恢复机制改进方案》v1.1：dsh / DeepSeek Harness SDK 引擎先行（issue #281）**：
   按 issue #281 用户补充意见（「deepseek harness sdk 引擎先行……每次开始任务的
   时候想把会话 id 写入到任务详情中，终端恢复后如果发现有会话 id，直接使用

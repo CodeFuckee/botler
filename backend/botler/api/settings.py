@@ -130,6 +130,9 @@ def get_settings(request: Request):
             # 灵感 / CI/CD 页面是否显示未启用项目（issue #142）：
             # true = 显示（未启用仓库带徽章），false = 只展示已启用仓库
             "show_disabled_repos": s.ui_show_disabled_repos,
+            # 界面显示主题（issue #217）：system（跟随系统）/ light / dark，
+            # 前端据此渲染 <html data-theme> 并同步本地 localStorage 偏好
+            "theme": s.ui_theme,
         },
         "notifications": {
             # 网页通知（issue #21）：总开关 + 各通知时机开关
@@ -726,9 +729,18 @@ def _validate_backup(patch: dict) -> None:
 
 def _validate_ui(patch: dict) -> None:
     """校验 ui 段：timezone 为空串（跟随浏览器）或合法 IANA 时区名（issue #14）；
-    show_disabled_repos 必须是布尔值（issue #142）。"""
+    show_disabled_repos 必须是布尔值（issue #142）；theme 必须是三态之一（issue #217）。"""
     if "show_disabled_repos" in patch and not isinstance(patch["show_disabled_repos"], bool):
         raise HTTPException(400, "ui.show_disabled_repos 必须是布尔值")
+    if "theme" in patch:
+        val = patch["theme"]
+        if not isinstance(val, str):
+            raise HTTPException(400, "ui.theme 必须是字符串（system / light / dark）")
+        val = val.strip()
+        if val not in ("system", "light", "dark"):
+            raise HTTPException(
+                400, f"ui.theme 取值非法: {val}（可选 system / light / dark）")
+        patch["theme"] = val
     if "timezone" in patch:
         val = patch["timezone"]
         if not isinstance(val, str):

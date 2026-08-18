@@ -9,6 +9,11 @@ import SettingsNav from '../components/SettingsNav.jsx'
 import Markdown from '../components/Markdown.jsx'
 import VersionBadge from '../components/VersionBadge.jsx'
 import { Icon } from '../components/Icon.jsx'
+import {
+  THEME_MODE_LABELS,
+  applyTheme,
+  saveThemePreference,
+} from '../theme.js'
 
 const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
@@ -37,6 +42,10 @@ const NOTIFY_LABELS = {
   queue_empty: 'issue 列表为空（无待处理 issue）',
   queue_no_work: '无 issue 可处理（有 issue 但均在处理中）',
 }
+
+// 本地偏好存储（issue #217）：无 localStorage 环境（SSR/隐私模式/测试）
+// 时传入 null，theme.js 内部静默忽略（与 SettingsNav issue #168 同款防护）
+const themeStorage = typeof localStorage !== 'undefined' ? localStorage : null
 
 export default function Settings() {
   const [settings, setSettings] = useState(null)
@@ -236,6 +245,9 @@ export default function Settings() {
     return {
       timezone: settings.ui?.timezone || '',
       show_disabled_repos: settings.ui?.show_disabled_repos !== false,
+      // 界面显示主题（issue #217）：system / light / dark 三态，未配置时
+      // 按 system（跟随系统 prefers-color-scheme）提交，兼容旧配置
+      theme: settings.ui?.theme || 'system',
     }
   }
 
@@ -272,6 +284,11 @@ export default function Settings() {
     try {
       await api.put('/api/settings', { ui: buildUiPatch() })
       setDisplayTz(settings.ui?.timezone) // 立即生效，无需刷新页面
+      // 界面显示主题（issue #217）：保存后立即应用 + 写入本地 localStorage，
+      // 与后端 config.yaml（ui.theme）双向同步，刷新/重进页面不闪变
+      const theme = settings.ui?.theme || 'system'
+      applyTheme(theme)
+      saveThemePreference(themeStorage, theme)
       setUiSaved(true)
       setTimeout(() => setUiSaved(false), 2000)
     } catch (e) { setError(e.message) } finally { setUiSaveBusy(false) }
@@ -828,6 +845,27 @@ export default function Settings() {
               </td>
             </tr>
             <tr>
+              <th>界面主题 <code>ui.theme</code></th>
+              <td>
+                <select
+                  className="input"
+                  value={settings.ui?.theme || 'system'}
+                  onChange={(e) => {
+                    const theme = e.target.value
+                    setSettings((s) => ({ ...s, ui: { ...(s.ui || {}), theme } }))
+                    // 立即预览（issue #217）：切换三态即时生效，无需等保存；
+                    // 保存按钮负责持久化到后端 config.yaml 与本地 localStorage
+                    applyTheme(theme)
+                    saveThemePreference(themeStorage, theme)
+                  }}
+                >
+                  {Object.entries(THEME_MODE_LABELS).map(([mode, label]) => (
+                    <option key={mode} value={mode}>{label}</option>
+                  ))}
+                </select>
+              </td>
+            </tr>
+            <tr>
               <th>显示时区 <code>ui.timezone</code></th>
               <td>
                 <input
@@ -853,6 +891,8 @@ export default function Settings() {
         <p className="muted small">
           灵感板块与 CI/CD 流水线板块是否显示未启用项目：勾选 = 显示（未启用仓库带
           「未启用」徽章，默认）；取消 = 两个板块只展示已启用仓库。
+          界面主题三态：跟随系统（prefers-color-scheme 自动适配）/ 浅色 / 深色，
+          切换即时预览，保存后写回 config.yaml 并同步浏览器本地偏好，刷新不闪变。
           任务创建/开始/完成时间与执行日志时间戳按显示时区展示；留空则跟随本机浏览器时区
           （默认与访问者本机一致），修改后点击下方「保存界面显示配置」立即生效，无需刷新。
         </p>

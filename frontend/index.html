@@ -4,6 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Botler — GitLab AI Issue Bot</title>
+    <script>
+      // 界面主题首屏防闪烁（issue #217）：应用 JS 加载前按本地偏好
+      // （键 botler.theme，缺省 = 跟随系统 prefers-color-scheme）设置
+      // <html data-theme>，避免深色用户先看到浅色白屏再闪变。
+      (function () {
+        function apply(dark) {
+          document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
+        }
+        try {
+          var mode = localStorage.getItem('botler.theme')
+          var dark = mode === 'dark' ||
+            ((!mode || mode === 'system') &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          apply(dark)
+        } catch (e) {
+          try {
+            apply(window.matchMedia('(prefers-color-scheme: dark)').matches)
+          } catch (e2) {
+            /* 无 matchMedia：保持 CSS 默认（:root 浅色，媒体查询兜底跟随系统） */
+          }
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

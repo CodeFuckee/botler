@@ -8,9 +8,14 @@
      -border 发丝线边框(rgba(0,0,0,.08) 为 Geist 标志性 hairline)
      -primary #0070f3 (Geist blue accent)
      -ok / -warn / -err 语义色,各自配套 -weak 浅底
+   深色模式（issue #217）三态：跟随系统（prefers-color-scheme）/ 浅色 /
+   深色（设置页「界面显示」三态选择，<html data-theme="dark|light">），
+   深色配色为蓝白新拟物风格——深色底 #1a1d23 + 蓝色强调 #3b82f6
    ============================================================ */
 
 :root {
+  /* 原生控件/滚动条配色（issue #217）：浅色主题声明 light */
+  color-scheme: light;
   /* 表面 */
   --bg: #fafafa;
   --bg-card: #ffffff;
@@ -94,42 +99,87 @@
   .table.kv th { width: 120px; }
 }
 
-/* HIG 灵活：跟随系统深色模式（Geist Dark 基调）。仅翻转令牌，组件零改动 */
+/* 深色主题（issue #217）：蓝白新拟物风格——深色底 #1a1d23 + 蓝色强调。
+   三态生效机制（必须保持两处选择器同步，同一份深色令牌）：
+     1) 跟随系统：@media prefers-color-scheme: dark 且用户未在设置页强制
+        浅色（:root:not([data-theme='light'])）——系统深色自动适配；
+     2) 手动深色：设置页「界面显示」三态选择深色（:root[data-theme='dark']）。
+   index.html 首屏 inline 脚本在应用 JS 加载前设置 data-theme，避免闪变。
+   仅翻转令牌，组件零改动（与 issue #110 同一设计）。 */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #000000;
-    --bg-card: #0a0a0a;
-    --bg-hover: #141414;
-    --bg-active: #1a1a1a;
-    --bg-soft: rgba(255, 255, 255, 0.06);
-    --bg-hover-soft: rgba(255, 255, 255, 0.06);
-    --hairline: rgba(255, 255, 255, 0.1);
-    --overlay: rgba(0, 0, 0, 0.6);
-    --nav-bg: #0a0a0a;
-    --nav-bg-glass: rgba(10, 10, 10, 0.72);
-    --text: #ededed;
-    --muted: #888888;
-    --border: #2a2a2a;
-    --border-hover: #444444;
-    --primary: #3291ff;
-    --primary-hover: #005bd1;
-    --primary-strong: #0070f3;
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #1a1d23;
+    --bg-card: #21252d;
+    --bg-hover: #262b33;
+    --bg-active: #2b303a;
+    --bg-soft: rgba(255, 255, 255, 0.05);
+    --bg-hover-soft: rgba(255, 255, 255, 0.07);
+    --hairline: rgba(255, 255, 255, 0.09);
+    --overlay: rgba(0, 0, 0, 0.55);
+    --nav-bg: #1d2129;
+    --nav-bg-glass: rgba(29, 33, 41, 0.78);
+    --text: #e8eaed;
+    --muted: #9aa3ad;
+    --border: #2b303a;
+    --border-hover: #3b424d;
+    --primary: #60a5fa;
+    --primary-hover: #93c5fd;
+    --primary-strong: #3b82f6;
     --on-primary: #ffffff;
-    --primary-weak: rgba(50, 145, 255, 0.16);
-    --focus-ring: 0 0 0 3px rgba(50, 145, 255, 0.3);
+    --primary-weak: rgba(59, 130, 246, 0.16);
+    --focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.35);
     --ok: #4ade80;
-    --ok-weak: rgba(74, 222, 128, 0.12);
+    --ok-weak: rgba(74, 222, 128, 0.14);
     --warn: #e3a008;
     --warn-weak: rgba(227, 160, 8, 0.14);
     --err: #ff6166;
     --err-weak: rgba(255, 97, 102, 0.14);
-    --stage-pending: #3a3a3a;
-    --stage-canceled: #666666;
-    --stage-skipped: #333333;
-    --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.12);
-    --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 1px 2px rgba(0, 0, 0, 0.4);
+    --stage-pending: #3d434d;
+    --stage-canceled: #6b7280;
+    --stage-skipped: #363c45;
+    --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.1);
+    --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.6);
   }
+}
+
+/* 手动深色（issue #217）：设置页「界面显示」三态选择深色。令牌与上方
+   @media 块完全一致（蓝白新拟物深色底 #1a1d23），保持两处同步 */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #1a1d23;
+  --bg-card: #21252d;
+  --bg-hover: #262b33;
+  --bg-active: #2b303a;
+  --bg-soft: rgba(255, 255, 255, 0.05);
+  --bg-hover-soft: rgba(255, 255, 255, 0.07);
+  --hairline: rgba(255, 255, 255, 0.09);
+  --overlay: rgba(0, 0, 0, 0.55);
+  --nav-bg: #1d2129;
+  --nav-bg-glass: rgba(29, 33, 41, 0.78);
+  --text: #e8eaed;
+  --muted: #9aa3ad;
+  --border: #2b303a;
+  --border-hover: #3b424d;
+  --primary: #60a5fa;
+  --primary-hover: #93c5fd;
+  --primary-strong: #3b82f6;
+  --on-primary: #ffffff;
+  --primary-weak: rgba(59, 130, 246, 0.16);
+  --focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.35);
+  --ok: #4ade80;
+  --ok-weak: rgba(74, 222, 128, 0.14);
+  --warn: #e3a008;
+  --warn-weak: rgba(227, 160, 8, 0.14);
+  --err: #ff6166;
+  --err-weak: rgba(255, 97, 102, 0.14);
+  --stage-pending: #3d434d;
+  --stage-canceled: #6b7280;
+  --stage-skipped: #363c45;
+  --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.6);
 }
 
 /* HIG 灵活：系统开启「减弱动态效果」时禁用/减弱动画与过渡 */
@@ -862,7 +912,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   max-height: 60vh;
   object-fit: contain;
   border-radius: var(--radius);
-  background: #fff;
+  background: var(--bg-card);
   /* apple-design 响应：大图入场微缩放 */
   animation: logo-zoom-in var(--dur-fast) var(--ease-out);
 }
@@ -2594,8 +2644,8 @@ code {
   animation: chat-in var(--dur-fast) var(--ease-out);
 }
 .chat-msg-user .chat-msg-bubble {
-  background: var(--primary);
-  color: #fff;
+  background: var(--primary-strong);
+  color: var(--on-primary);
   border-bottom-right-radius: 2px;
 }
 .chat-msg-ai .chat-msg-bubble {

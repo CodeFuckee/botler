@@ -158,6 +158,79 @@ class TestShowDisabledReposSettings:
         assert ui["timezone"] == "Asia/Shanghai"
 
 
+class TestUiThemeSettings:
+    """ui.theme 段：界面显示主题三态——跟随系统 / 浅色 / 深色（issue #217）。"""
+
+    def test_get_settings_theme_default_system(self, client):
+        """未配置时默认 system（跟随系统 prefers-color-scheme）。"""
+        tc, tmp_path = client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["theme"] == "system"
+
+    def test_update_theme_dark_persists(self, client):
+        """PUT ui.theme=dark 写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ui": {"theme": "dark"}})
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["theme"] == "dark"
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "theme: dark" in config_text
+
+    def test_update_theme_light_persists(self, client):
+        """PUT ui.theme=light 强制浅色，写回并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ui": {"theme": "light"}})
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["theme"] == "light"
+
+    def test_update_theme_back_to_system(self, client):
+        """深色切回跟随系统：system 正常写回。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={"ui": {"theme": "dark"}})
+        resp = tc.put("/api/settings", json={"ui": {"theme": "system"}})
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["theme"] == "system"
+
+    def test_update_theme_rejects_invalid_value(self, client):
+        """非法取值（如 blue）拒绝保存（400）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ui": {"theme": "blue"}})
+        assert resp.status_code == 400
+        assert "theme" in resp.json()["detail"]
+
+    def test_update_theme_rejects_non_string(self, client):
+        """非字符串取值拒绝保存（400）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ui": {"theme": 1}})
+        assert resp.status_code == 400
+        assert "theme" in resp.json()["detail"]
+
+    def test_partial_update_theme_preserves_timezone_and_show_disabled(self, client):
+        """部分更新：只改 theme 不影响 timezone / show_disabled_repos。"""
+        tc, tmp_path = client
+        tc.put("/api/settings", json={
+            "ui": {"timezone": "Asia/Shanghai", "show_disabled_repos": False}})
+        resp = tc.put("/api/settings", json={"ui": {"theme": "dark"}})
+        assert resp.status_code == 200
+        ui = resp.json()["ui"]
+        assert ui["theme"] == "dark"
+        assert ui["timezone"] == "Asia/Shanghai"
+        assert ui["show_disabled_repos"] is False
+
+    def test_invalid_theme_in_yaml_falls_back_to_system(self, client):
+        """config.yaml 手写非法 theme（防御坏配置）：读回回退 system。"""
+        tc, tmp_path = client
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            (cfg.read_text(encoding="utf-8")
+             .replace("worker: {}", 'worker: {}\nui:\n  theme: blue')),
+            encoding="utf-8")
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        assert resp.json()["ui"]["theme"] == "system"
+
+
 class TestSsoSettings:
     """sso 段：Synology SSO 登录配置（issue #27）。"""
 

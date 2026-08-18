@@ -62,9 +62,9 @@ function firstRootBlock(css) {
   const m = css.match(/:root\s*\{([^}]*)\}/s)
   return m ? m[1] : ''
 }
-// 提取深色模式 :root 块
+// 提取深色模式 :root 块（跟随系统分支：系统深色且未强制浅色，issue #217）
 function darkRootBlock(css) {
-  const m = css.match(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}/s)
+  const m = css.match(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\[data-theme='light'\]\)\s*\{([^}]*)\}/s)
   return m ? m[1] : ''
 }
 // 提取块内 CSS 变量值
@@ -145,7 +145,7 @@ test('深色主题语义色文字对深底对比度达 WCAG AA（≥4.5:1）', (
   for (const name of ['ok', 'warn', 'err', 'muted']) {
     const hex = varValue(block, name)
     assert.ok(hex, `深色主题应定义 --${name}`)
-    const ratio = contrastRatio('#0a0a0a', hex)
+    const ratio = contrastRatio('#1a1d23', hex)
     assert.ok(ratio >= 4.5, `深色 --${name}(${hex}) 对深底对比度 ${ratio.toFixed(2)}:1 应 ≥ 4.5:1`)
   }
 })
@@ -183,9 +183,25 @@ test('styles.css：触控设备按钮最小触控目标 44px（HIG 灵活）', (
 test('styles.css：跟随系统深色模式（prefers-color-scheme，HIG 有意识应对平台）', () => {
   const dark = darkRootBlock(styles)
   assert.ok(dark, '应存在深色主题变量块')
-  assert.match(dark, /--bg:\s*#000000/, '深色主题应翻转 --bg')
-  assert.match(dark, /--bg-card:\s*#0a0a0a/, '深色主题应翻转 --bg-card')
-  assert.match(dark, /--text:\s*#ededed/, '深色主题应翻转 --text')
+  // issue #217：深色配色统一为蓝白新拟物风格——深色底 #1a1d23 + 蓝色强调
+  assert.match(dark, /--bg:\s*#1a1d23/, '深色主题应翻转 --bg（issue #217 指定深色底）')
+  assert.match(dark, /--bg-card:\s*#21252d/, '深色主题应翻转 --bg-card（比底色略亮一档的表面）')
+  assert.match(dark, /--text:\s*#e8eaed/, '深色主题应翻转 --text（近白不刺眼）')
+  assert.match(dark, /--primary-strong:\s*#3b82f6/, '深色主题蓝色强调 #3b82f6（issue #217）')
+})
+
+test('styles.css：手动深色分支（[data-theme=\'dark\']，设置页三态选择，issue #217）', () => {
+  const manual = styles.match(/:root\[data-theme='dark'\]\s*\{([^}]*)\}/s)
+  assert.ok(manual, '应存在 [data-theme=\'dark\'] 手动深色变量块（设置页「界面显示」三态选择深色）')
+  assert.match(manual[1], /--bg:\s*#1a1d23/, '手动深色与跟随系统深色同一份配色（#1a1d23）')
+  assert.match(manual[1], /color-scheme:\s*dark/, '手动深色应声明 color-scheme: dark（原生控件同步）')
+})
+
+test('styles.css：手动浅色可覆盖系统深色（[data-theme=\'light\']，issue #217）', () => {
+  // 跟随系统分支使用 :root:not([data-theme='light'])——用户强制浅色时
+  // 即使系统深色也不翻转令牌，设置页「界面显示」三态选择浅色生效
+  assert.match(styles, /:root:not\(\[data-theme='light'\]\)/,
+               '跟随系统分支应排除 data-theme=\'light\'（手动浅色覆盖系统深色）')
 })
 
 // ---- 匠心/愉悦感：空状态组件渲染（图标 + 文案，非裸文本）----

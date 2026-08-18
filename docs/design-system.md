@@ -318,3 +318,40 @@ font-family: var(--mono);
 ### 决策背景
 
 用户要求「换掉不满意的界面风格、采用经过验证的设计方案、输出完整规范」。经评估选择 **Vercel Geist**：开源、浅色、面向开发者工具（与 Botler 的 GitLab 运维后台定位一致）、色板与交互规范被 Vercel 大量生产环境验证。主色保留蓝色系以延续既有品牌认知。技术路线为纯 CSS 变量重构（不引入组件库，保持零运行时依赖）。
+
+## 11. 深色模式三态（2026-08-18）
+
+### 背景
+
+夜间无人值守查看任务/日志时浅色 UI 刺眼（issue #217）。设计系统在
+2026-08-11 迁移到 Geist Light 后仅支持浅色；本次在既有「跟随系统
+prefers-color-scheme」基础上补齐**手动三态**与持久化。
+
+### 三态与生效机制
+
+| 选择 | 取值 | 生效机制 |
+|---|---|---|
+| 跟随系统 | `system`（默认） | `@media (prefers-color-scheme: dark)` + `:root:not([data-theme='light'])` ——系统深色自动翻转令牌，系统切换深浅即时跟随（前端监听 `matchMedia` change） |
+| 浅色 | `light` | `<html data-theme="light">`——即使系统深色也不翻转令牌 |
+| 深色 | `dark` | `<html data-theme="dark">`——强制翻转令牌 |
+
+深色令牌与浅色令牌全部经 CSS 变量（`--bg` / `--bg-card` / `--text` /
+`--primary` 系列等）管理，**仅翻转令牌、组件零改动**（与 issue #110 同一
+设计）。深色配色保持蓝白新拟物风格：**深色底 `#1a1d23` + 蓝色强调
+`#3b82f6`**（链接/文字用更亮的 `#60a5fa`，对深底对比度达 WCAG AA ≥4.5:1）。
+
+### 持久化双通道
+
+- **localStorage（键 `botler.theme`）**：浏览器本地偏好。`index.html`
+  首屏 inline 脚本在应用 JS 加载前读取并设置 `<html data-theme>`，
+  深色用户**首屏不闪变**；`main.jsx` 挂载前再兜底应用一次。
+- **后端 config.yaml（`ui.theme`）**：跨设备权威配置。设置页「界面显示」
+  卡片保存后经 `PUT /api/settings` 写回，App 启动拉取并覆盖本地偏好。
+
+### 使用约束
+
+- 新增组件颜色一律走 CSS 变量，禁止硬编码色值（深色模式随变量翻转）；
+- 深色语义色（`--ok` / `--warn` / `--err` / `--muted`）对深底 `#1a1d23`
+  对比度必须 ≥ 4.5:1（`frontend/tests/apple-hig.test.mjs` 有断言）；
+- 修改深色令牌时必须**同步** `@media` 跟随系统分支与
+  `:root[data-theme='dark']` 手动分支两处选择器（文件内有注释提示）。

@@ -12,6 +12,7 @@ import Terminal from './pages/Terminal.jsx'
 import Login from './pages/Login.jsx'
 import DialogHost from './components/DialogHost.jsx'
 import { api, setDisplayTz, setSsoEnabled } from './api.js'
+import { applyTheme, loadThemePreference, saveThemePreference, watchSystemTheme } from './theme.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 import { Icon } from './components/Icon.jsx'
 
@@ -29,12 +30,41 @@ export default function App() {
   // SSO 启用未登录时跳过（登录页不应发起受保护请求——401 兜底跳 /login 会
   // 整页重载，与登录页形成无限刷新循环，issue #27 第五轮）；登录成功后
   // auth 变化重新触发加载。
+  // 本地偏好存储（issue #217）：无 localStorage 环境（SSR/测试）时用
+  // globalThis 访问返回 undefined，theme.js 内部静默忽略，不抛错
+  const themeStorage = typeof localStorage !== 'undefined' ? localStorage : null
   const [, setTzLoaded] = useState(false)
   useEffect(() => {
     if (!auth || (auth.enabled && !auth.user)) return
     api.get('/api/settings')
-      .then((s) => { setDisplayTz(s.ui?.timezone); setTzLoaded(true) })
+      .then((s) => {
+        setDisplayTz(s.ui?.timezone)
+        // 界面显示主题（issue #217）：后端 ui.theme 为跨设备权威配置，
+        // 启动时应用并同步到本地 localStorage（首屏 inline 脚本读取，
+        // 刷新不闪变）；未配置（旧版本）时保持 system 跟随系统
+        const theme = s.ui?.theme || 'system'
+        applyTheme(theme)
+        saveThemePreference(themeStorage, theme)
+        setTzLoaded(true)
+      })
       .catch(() => {})
+  }, [auth])
+
+  // 系统深色偏好变化自动适配（issue #217）：仅当当前选择为「跟随系统」
+  // 时重新应用——OS 切换深浅色，页面无需刷新即时跟随；手动浅色/深色
+  // 不响应系统变化（用户已显式指定）。
+  useEffect(() => {
+    if (!auth || (auth.enabled && !auth.user)) return
+    return watchSystemTheme(
+      () => {
+        try {
+          return loadThemePreference(themeStorage) || 'system'
+        } catch {
+          return 'system'
+        }
+      },
+      () => applyTheme(),
+    )
   }, [auth])
 
   // 网页通知轮询（issue #21）：每 10s 拉取新事件弹系统通知。

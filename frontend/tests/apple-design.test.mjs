@@ -31,9 +31,9 @@ function firstRootBlock(css) {
   const m = css.match(/:root\s*\{([^}]*)\}/s)
   return m ? m[1] : ''
 }
-// 提取深色模式 :root 块
+// 提取深色模式 :root 块（跟随系统分支，issue #217）
 function darkRootBlock(css) {
-  const m = css.match(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}/s)
+  const m = css.match(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\[data-theme='light'\]\)\s*\{([^}]*)\}/s)
   return m ? m[1] : ''
 }
 // 提取指定选择器规则体
@@ -84,8 +84,8 @@ test('styles.css：导航材质 token 浅色/深色双份定义（--nav-bg / --n
   assert.match(light, /--nav-bg:\s*#ffffff/, '浅色 --nav-bg 应为白底')
   assert.match(light, /--nav-bg-glass:\s*rgba\(255,\s*255,\s*255,\s*0\.78\)/, '浅色毛玻璃底色应为半透明白')
   const dark = darkRootBlock(styles)
-  assert.match(dark, /--nav-bg:\s*#0a0a0a/, '深色 --nav-bg 应为深底')
-  assert.match(dark, /--nav-bg-glass:\s*rgba\(10,\s*10,\s*10,\s*0\.72\)/, '深色毛玻璃底色应为半透明深底')
+  assert.match(dark, /--nav-bg:\s*#1d2129/, '深色 --nav-bg 应为深底（issue #217 蓝白新拟物深色系）')
+  assert.match(dark, /--nav-bg-glass:\s*rgba\(29,\s*33,\s*41,\s*0\.78\)/, '深色毛玻璃底色应为半透明深底')
 })
 
 test('styles.css：prefers-reduced-transparency 下毛玻璃回退纯色（无模糊）', () => {
