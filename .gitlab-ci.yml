@@ -984,6 +984,19 @@ e2e:playwright:
       STEP3_START=$(date +%s)
       echo "=== 3. 启动 uvicorn + vite preview 并运行 Playwright E2E ==="
       echo "E2E 目录: frontend/e2e（配置见 playwright.config.js）"
+      # 端口动态分配（issue #235）：共享 runner 上固定端口 8011/4173 可能被
+      # 其他项目进程占用（曾出现外部 Django 占用 8011 导致 e2e 后端无法启动），
+      # 运行时探测空闲端口并通过 E2E_BACKEND_PORT/E2E_FRONTEND_PORT 注入，
+      # 避免端口冲突（start-servers.sh 已支持这两个环境变量）
+      E2E_PY="$PWD/backend/.venv/bin/python"
+      if [ -z "${E2E_BACKEND_PORT:-}" ]; then
+        E2E_BACKEND_PORT=$("$E2E_PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+      fi
+      if [ -z "${E2E_FRONTEND_PORT:-}" ]; then
+        E2E_FRONTEND_PORT=$("$E2E_PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+      fi
+      export E2E_BACKEND_PORT E2E_FRONTEND_PORT
+      echo "[e2e] 动态端口: backend=$E2E_BACKEND_PORT frontend=$E2E_FRONTEND_PORT"
       bash frontend/e2e/scripts/start-servers.sh
       STEP3_END=$(date +%s)
       echo "⏱️  步骤3 (E2E 运行) 用时: $((STEP3_END - STEP3_START)) 秒"
