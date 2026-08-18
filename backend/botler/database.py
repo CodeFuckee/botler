@@ -97,6 +97,25 @@ CREATE TABLE IF NOT EXISTS task_logs (
   message TEXT
 );
 
+-- 任务进度账本（issue #281 §4.1）：记录任务级「步骤 + 验证证据」，与
+-- 对话转录解耦。只增不改（快照式）：同一 step_no 可追加多行，恢复时取
+-- 每步最新状态行，保留「上次怎么做的」可追溯。中断恢复时据此渲染
+-- 确定性交接单（§4.4），替代「模型自查 git 反推进度」导致的反复检查。
+CREATE TABLE IF NOT EXISTS task_progress (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES tasks(id),
+  step_no INTEGER NOT NULL,
+  step_desc TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  evidence TEXT,
+  files TEXT,
+  verified_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_progress_task
+  ON task_progress(task_id, step_no);
+
 -- 网页通知事件（issue #21）：前端轮询增量拉取后弹系统通知。
 -- 任务类事件以 task_id 唯一（同一任务收尾只记一次，幂等）；
 -- 队列类事件（queue_empty/queue_no_work）task_id 为 NULL，靠 notifier 节流去重。
@@ -349,6 +368,29 @@ class Database:
             if "environment" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN environment TEXT")
             conn.execute("PRAGMA user_version = 13")
+
+        if ver < 14:
+            # issue #281 §4.1：任务进度账本 task_progress 表。CREATE TABLE
+            # IF NOT EXISTS 已在 _SCHEMA 覆盖新库；旧库（user_version=13）
+            # 首次启动时同样建表，并显式推进版本号保持迁移链完整（与
+            # issue #131 灵感表 v8 迁移同模式）。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS task_progress (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     task_id INTEGER NOT NULL REFERENCES tasks(id),
+                     step_no INTEGER NOT NULL,
+                     step_desc TEXT NOT NULL DEFAULT '',
+                     status TEXT NOT NULL,
+                     evidence TEXT,
+                     files TEXT,
+                     verified_at TEXT,
+                     created_at TEXT DEFAULT (datetime('now')),
+                     updated_at TEXT DEFAULT (datetime('now'))
+                   )""")
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_task_progress_task
+                   ON task_progress(task_id, step_no)""")
+            conn.execute("PRAGMA user_version = 14")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -898,6 +940,42 @@ class Database:
             conn.executemany(
                 "INSERT INTO task_logs (task_id, level, message) VALUES (?, ?, ?)",
                 [(task_id, lv, msg) for lv, msg in entries])
+
+    # ---- task_progress（issue #281 §4.1：结构化任务进度账本）----
+
+    def record_task_progress(self, task_id: int, step_no: int, step_desc: str,
+                             status: str, evidence: str | None = None,
+                             files: str | None = None,
+                             verified_at: str | None = None) -> int:
+        """追加一条进度账本记录（只增不改快照式，恢复时取每步最新状态）。
+
+        中断恢复时 executor 按每步最新状态行渲染确定性交接单（§4.4），
+        避免 agent 反复检查实现/重复实现。返回新行 id。
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT INTO task_progress
+                     (task_id, step_no, step_desc, status, evidence, files, verified_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (task_id, step_no, step_desc, status, evidence, files, verified_at))
+            return cur.lastrowid
+
+    def list_task_progress(self, task_id: int) -> list[sqlite3.Row]:
+        """按步骤序返回该任务全部账本行（含历史快照，可追溯）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT * FROM task_progress WHERE task_id=?
+                   ORDER BY step_no ASC, id ASC""", (task_id,)).fetchall()
+
+    def latest_task_progress(self, task_id: int) -> list[sqlite3.Row]:
+        """每步最新状态行（快照式账本取每步最新，恢复交接单数据源）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT tp.* FROM task_progress tp
+                   JOIN (SELECT step_no, MAX(id) AS max_id FROM task_progress
+                         WHERE task_id=? GROUP BY step_no) m
+                     ON tp.id = m.max_id
+                   ORDER BY tp.step_no ASC""", (task_id,)).fetchall()
 
     def task_stats(self) -> dict:
         with self._conn() as conn:

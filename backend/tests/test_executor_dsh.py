@@ -86,13 +86,16 @@ def executor(tmp_path):
 
 @pytest.fixture
 def dsh_executor(tmp_path):
-    """engine=dsh + dsh 段配置的 executor。"""
+    """engine=dsh + dsh 段配置的 executor（session_root 指向 tmp_path 下
+    真实目录——issue #281 §4.7 resume 校验要求 session_root 目录存在）。"""
+    sessions = tmp_path / "dsh-sessions"
+    sessions.mkdir(exist_ok=True)
     config = _mk_config(
         tmp_path, worker_extra="\n  engine: dsh",
         dsh_extra="\n  provider: deepseek-official"
-                  "\n  model: deepseek-v4-flash"
-                  "\n  max_tokens: 49152"
-                  "\n  session_root: /var/dsh-sessions")
+                  f"\n  model: deepseek-v4-flash"
+                  f"\n  max_tokens: 49152"
+                  f"\n  session_root: {sessions}")
     return _mk_executor(tmp_path, config)
 
 
@@ -273,7 +276,11 @@ class TestRunDshOnce:
         assert calls["resume"] is False  # 全新执行：工作区重置
         kwargs = fake_runner.instances[0].kwargs
         assert "AI 维护者" in kwargs["prompt"]  # DEFAULT_TEMPLATE 渲染产物
-        assert kwargs["session_id"] is None
+        # issue #281 §4.7：fresh 任务在 runner 构造前预生成会话 id 并落库，
+        # runner 以该 id 创建会话（SDK 支持指定 id 创建全新会话）
+        assert kwargs["session_id"] is not None
+        assert kwargs["session_id"].startswith("botler-1-")
+        assert "进度上报约定" in kwargs["prompt"]  # 进度上报节已追加
         assert kwargs["cwd"] == str(tmp_path / "work")
         # git 凭据注入继承 _build_env（GIT_ASKPASS 为真实生成的脚本路径）
         assert kwargs["env"]["GIT_ASKPASS"]
@@ -288,7 +295,7 @@ class TestRunDshOnce:
         assert kwargs["provider"] == "deepseek-official"
         assert kwargs["model"] == "deepseek-v4-flash"
         assert kwargs["max_tokens"] == 49152
-        assert kwargs["session_root"] == "/var/dsh-sessions"
+        assert kwargs["session_root"] == str(tmp_path / "dsh-sessions")
 
     def test_ai_provider_credentials_passed_to_runner(
             self, monkeypatch, tmp_path, fake_runner):
@@ -565,6 +572,196 @@ class TestRunTaskResume:
         self._run_task(dsh_executor, monkeypatch, captured)
         dsh_executor.run_task(task_id)
         assert captured["resume_session"] is None
+
+
+class TestDshSessionPrePersist:
+    """issue #281 §4.7：会话 id 任务开始即落库 + resume 前可恢复性校验。
+
+    覆盖：fresh 任务在 runner 构造前预生成 id 并原子落库（先落 id 再开跑）；
+    前置落库失败 = 任务失败（不静默降级）；resume 时 session_root 目录缺失
+    → 如实降级为全新会话（不假装「对话已保留」）。
+    """
+
+    def test_fresh_run_pre_persists_session_id_before_runner(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """fresh 执行：runner 构造时 dsh_session_id 已落库，且 runner 用同一 id。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        captured: dict = {}
+
+        class _Probe(_FakeRunner):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                captured["runner_session_id"] = kwargs["session_id"]
+                captured["db_before_start"] =                     dsh_executor.db.get_task(task_id)["dsh_session_id"]
+
+        monkeypatch.setattr("botler.executor.DshRunner", _Probe)
+        fake_runner.preset_lines = []  # 无结果行 → _persist_dsh_session_id 不改
+        dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        assert captured["runner_session_id"].startswith("botler-1-")
+        # 先落 id 再开跑：runner 构造时库中已是该 id
+        assert captured["db_before_start"] == captured["runner_session_id"]
+        assert dsh_executor.db.get_task(task_id)["dsh_session_id"] ==             captured["runner_session_id"]
+
+    def test_session_id_pre_persist_failure_raises(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """前置落库失败 = 任务失败（ExecutorError），不静默降级继续跑。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        original = dsh_executor.db.set_task_status
+
+        def boom(tid, status=None, **fields):
+            if "dsh_session_id" in fields:
+                raise RuntimeError("db down")
+            return original(tid, status, **fields)
+
+        monkeypatch.setattr(dsh_executor.db, "set_task_status", boom)
+        from botler.executor import ExecutorError
+        with pytest.raises(ExecutorError):
+            dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        assert fake_runner.instances == []  # runner 未启动
+
+    def test_resume_degrades_when_session_root_missing(
+            self, tmp_path, monkeypatch, fake_runner):
+        """session_root 目录不存在 → resume 降级全新会话（诚实降级）。"""
+        config = _mk_config(
+            tmp_path, worker_extra="\n  engine: dsh",
+            dsh_extra="\n  session_root: /nonexistent-dsh-sessions-xyz")
+        ex = _mk_executor(tmp_path, config)
+        _patch_workspace(monkeypatch, ex, tmp_path)
+        task_id = _mk_task(ex)
+        ex.db.set_task_status(task_id, None, dsh_session_id="sess-9")
+        fake_runner.preset_lines = []
+        code, _ = ex._run_dsh_once(task_id, _REPO, _ISSUE, resume_session="sess-9")
+        assert code == 0
+        kwargs = fake_runner.instances[0].kwargs
+        assert kwargs["session_id"].startswith("botler-")  # 新预生成 id
+        assert "AI 维护者" in kwargs["prompt"]  # 全新提示词（非恢复引导语）
+        row = ex.db.get_task(task_id)
+        assert row["dsh_session_id"] == kwargs["session_id"]  # 旧 id 已清除
+        logs = ex.db.list_logs(task_id)
+        assert any("会话目录已不存在" in l["message"] for l in logs)
+
+    def test_resume_keeps_session_when_root_exists(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """session_root 目录存在 → resume 复用已落库 id（不降级）。"""
+        task_id = _mk_task(dsh_executor)
+        dsh_executor.db.set_task_status(task_id, None, dsh_session_id="sess-9")
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_lines = [_RESULT_LINE]
+        dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE, resume_session="sess-9")
+        kwargs = fake_runner.instances[0].kwargs
+        assert kwargs["session_id"] == "sess-9"
+        assert "继续处理" in kwargs["prompt"]
+
+
+class TestProgressLedger:
+    """issue #281 §4.1/§4.4：进度账本 [PROGRESS] 解析落库 + 交接单渲染。"""
+
+    def test_progress_markers_persisted_to_ledger(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """assistant 输出含 [PROGRESS] 行 → 落库 task_progress（增量解析）。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        prog_line = json.dumps(
+            {"event": "stream_delta",
+             "text": "[PROGRESS] step=1 status=done desc=\"定位根因\" "
+                     "evidence=\"阅读 src/a.py 确认根因\""},
+            ensure_ascii=False)
+        fake_runner.preset_lines = [prog_line, _RESULT_LINE]
+        dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        steps = dsh_executor.db.latest_task_progress(task_id)
+        assert len(steps) == 1
+        assert steps[0]["step_no"] == 1
+        assert steps[0]["status"] == "done"
+        assert "定位根因" in steps[0]["step_desc"]
+        assert "src/a.py" in steps[0]["evidence"]
+
+    def test_progress_snapshot_appends_latest_status(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """同一 step 多次上报为快照追加，latest_task_progress 取最新状态。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_lines = [
+            json.dumps({"event": "stream_delta",
+                        "text": "[PROGRESS] step=1 status=pending desc=\"开始\""},
+                       ensure_ascii=False),
+            json.dumps({"event": "stream_delta",
+                        "text": "[PROGRESS] step=1 status=done desc=\"完成\" "
+                                "evidence=\"pytest -q 通过\""},
+                       ensure_ascii=False),
+            _RESULT_LINE,
+        ]
+        dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        all_rows = dsh_executor.db.list_task_progress(task_id)
+        assert len(all_rows) == 2  # 只增不改（快照式）
+        latest = dsh_executor.db.latest_task_progress(task_id)
+        assert len(latest) == 1
+        assert latest[0]["status"] == "done"
+
+    def test_resume_prompt_renders_handoff_from_ledger(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """账本有记录 → 恢复引导语渲染确定性交接单（已完成/证据/下一步）。"""
+        task_id = _mk_task(dsh_executor)
+        dsh_executor.db.record_task_progress(
+            task_id, 1, "定位根因", "done", evidence="pytest 通过")
+        dsh_executor.db.record_task_progress(task_id, 2, "补充边界测试", "pending")
+        prompt = dsh_executor._resume_prompt(_REPO, _ISSUE, task_id=task_id)
+        assert "平台已记录以下确定性进度" in prompt
+        assert "定位根因" in prompt
+        assert "pytest 通过" in prompt
+        assert "下一步：步骤 2「补充边界测试」" in prompt
+        assert "禁止重新检查/重做已标记 done 的步骤" in prompt
+
+    def test_resume_prompt_empty_ledger_honest_fallback(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """账本为空 → 如实说明无进度记录，不再声称「对话与改动已保留」。"""
+        task_id = _mk_task(dsh_executor)
+        prompt = dsh_executor._resume_prompt(_REPO, _ISSUE, task_id=task_id)
+        assert "暂无任务进度账本记录" in prompt
+        assert "你的对话与工作区改动已保留" not in prompt
+
+    def test_progress_markers_malformed_tolerated(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """非法 [PROGRESS] 行整体跳过，不落库不抛异常。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_lines = [
+            json.dumps({"event": "stream_delta",
+                        "text": "[PROGRESS] step=abc status=??"}, ensure_ascii=False),
+            _RESULT_LINE,
+        ]
+        dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        assert dsh_executor.db.list_task_progress(task_id) == []
+
+    def test_resume_prompt_handoff_all_steps_done(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """账本全部步骤 done → 交接单提示收尾（无下一步）。"""
+        task_id = _mk_task(dsh_executor)
+        dsh_executor.db.record_task_progress(task_id, 1, "全部完成", "done")
+        prompt = dsh_executor._resume_prompt(_REPO, _ISSUE, task_id=task_id)
+        assert "已完成全部记录步骤" in prompt
+        assert "下一步：步骤" not in prompt
+
+    def test_progress_ledger_write_failure_tolerated(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """账本写入失败 → 记 warn 不阻塞任务（账本尽力而为）。"""
+        task_id = _mk_task(dsh_executor)
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+
+        def boom(*a, **kw):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(dsh_executor.db, "record_task_progress", boom)
+        prog_line = json.dumps(
+            {"event": "stream_delta",
+             "text": "[PROGRESS] step=1 status=done desc=\"x\""},
+            ensure_ascii=False)
+        fake_runner.preset_lines = [prog_line, _RESULT_LINE]
+        code, _ = dsh_executor._run_dsh_once(task_id, _REPO, _ISSUE)
+        assert code == 0
+        logs = dsh_executor.db.list_logs(task_id)
+        assert any("[PROGRESS] 账本落库失败" in l["message"] for l in logs)
 
 
 class TestDshTranscript:

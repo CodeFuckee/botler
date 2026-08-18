@@ -516,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 13, f"user_version 应推进到 13（v13 迁移链：环境快照列），实际 {ver}"
+        assert ver == 14, f"user_version 应推进到 14（v14 迁移链：task_progress 账本表），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -606,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 13, f"user_version 应推进到 13（v13 迁移链：环境快照列），实际 {ver}"
+        assert ver == 14, f"user_version 应推进到 14（v14 迁移链：task_progress 账本表），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
@@ -671,7 +671,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols, "旧库应补出 tasks.environment 列"
-        assert ver == 13, f"user_version 应推进到 13（v13 迁移链：环境快照列），实际 {ver}"
+        assert ver == 14, f"user_version 应推进到 14（v14 迁移链：task_progress 账本表），实际 {ver}"
 
     def test_new_db_has_environment_column(self, tmp_path):
         """新库建表语句应直接含 environment 列（无需迁移）。"""
@@ -680,7 +680,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols
-        assert ver == 13
+        assert ver == 14
 
     def test_set_task_status_accepts_environment(self, tmp_path):
         """set_task_status 应能写入 environment（_TASK_FIELDS 白名单）。"""
@@ -706,3 +706,65 @@ class TestMigrateEnvironment:
         row = db.get_task(task_id)
         assert row["status"] == "succeeded"
         assert row["environment"] == '{"git": {"branch": "main"}}'
+
+
+class TestTaskProgressLedger:
+    """issue #281 §4.1：任务进度账本表 task_progress（表 + 迁移 + 快照语义）。"""
+
+    @staticmethod
+    def _task(db) -> int:
+        db.upsert_repo(42, "demo", "https://gitlab.example.com/group/demo.git")
+        repo_id = db.get_repo_by_project_id(42)["id"]
+        return db.create_task(repo_id, 42, 7, "标题")
+
+    def test_new_db_has_task_progress_table(self, tmp_path):
+        """新库建表语句应直接含 task_progress 表与索引（无需迁移）。"""
+        db = Database(str(tmp_path / "new.db"))
+        with db._conn() as conn:
+            tables = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            indexes = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'")}
+        assert "task_progress" in tables
+        assert "idx_task_progress_task" in indexes
+
+    def test_old_db_gets_task_progress_table(self, tmp_path):
+        """旧库初始化后应补出 task_progress 表并推进版本号。"""
+        path = tmp_path / "old.db"
+        _build_old_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            tables = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "task_progress" in tables, "旧库应补出 task_progress 表"
+        assert ver == 14
+
+    def test_record_and_latest_per_step(self, tmp_path):
+        """record/list/latest：只增不改快照式，latest 取每步最新状态。"""
+        db = Database(str(tmp_path / "w.db"))
+        task_id = self._task(db)
+        db.record_task_progress(task_id, 1, "定位根因", "pending")
+        db.record_task_progress(task_id, 1, "定位根因", "done", evidence="pytest 通过")
+        db.record_task_progress(task_id, 2, "补充边界测试", "pending")
+        rows = db.list_task_progress(task_id)
+        assert len(rows) == 3  # 快照式：历史行保留
+        latest = db.latest_task_progress(task_id)
+        assert len(latest) == 2  # 每步最新一行
+        assert latest[0]["step_no"] == 1
+        assert latest[0]["status"] == "done"  # step1 最新状态覆盖旧快照
+        assert latest[0]["evidence"] == "pytest 通过"
+        assert latest[1]["step_no"] == 2
+        assert latest[1]["status"] == "pending"
+
+    def test_task_progress_scoped_per_task(self, tmp_path):
+        """账本按任务隔离（不同 task 互不串扰）。"""
+        db = Database(str(tmp_path / "w.db"))
+        t1 = self._task(db)
+        db.upsert_repo(43, "demo2", "https://gitlab.example.com/group/demo2.git")
+        t2 = db.create_task(db.get_repo_by_project_id(43)["id"], 43, 8, "标题2")
+        db.record_task_progress(t1, 1, "步骤A", "done")
+        db.record_task_progress(t2, 1, "步骤B", "pending")
+        assert len(db.latest_task_progress(t1)) == 1
+        assert db.latest_task_progress(t1)[0]["step_desc"] == "步骤A"
+        assert db.latest_task_progress(t2)[0]["step_desc"] == "步骤B"

@@ -5,6 +5,36 @@
 ## [Unreleased]
 ### Changed
 
+- **中断恢复机制 Phase 1 落地：dsh 引擎「会话 id 任务开始即落库 + SDK resume + 进度账本交接单」（issue #281）**：
+  按 issue #281 用户补充意见（「支持以指定 id 创建全新会话，按照技术方案开始实现」）
+  落地 `docs/中断恢复机制改进方案.md`（v1.1）Phase 1，仅改造 dsh / DeepSeek Harness
+  SDK 引擎，claude / hermes 保持现状：
+  - **会话 id 任务开始即落库（先落 id 再开跑）**：`_run_dsh_once` 在构造
+    `DshRunner` 前预生成会话 id（`botler-<task_id>-<ts>-<rand>`）并原子写
+    `tasks.dsh_session_id`——任何时刻被强杀/平台重启，id 都已落库可恢复
+    （此前为「执行结束后才从结果行解析落库」，强杀时收尾不执行 → id 丢失 →
+    恢复退化为全新会话 → 重复实现）；前置落库失败 = 任务失败（不静默降级）；
+  - **以指定 id 创建/接续 SDK 会话**：`DshRunner(session_id=<id>)` 调
+    `harness.run(prompt, session_id=<id>)`——新建任务以预生成 id 创建会话，
+    恢复任务以已落库 id 接续会话，SDK 同一参数承载两种语义（等价 CLI
+    `dsh --profile tui --resume <id>`，以 SDK 方式实现而非 CLI 子进程）；
+  - **resume 可恢复性校验**：`session_root` 已配置但目录不存在 → 如实降级为
+    全新会话（清除旧 id + 全新提示词），不再「假装对话已保留」；
+  - **进度账本 `task_progress`**：新增表（v14 迁移）+ `record/list/latest` 方法，
+    只增不改快照式（同一 step 可追加多行，取每步最新状态，历史可追溯）；
+    dsh 提示词追加「进度上报约定」节，agent 以 `[PROGRESS] step=N status=…
+    desc="…" evidence="…"` 行上报里程碑，executor 增量解析落库（强杀时已收口
+    部分不丢）；
+  - **确定性恢复交接单**：`_resume_prompt` 升级为交接单渲染，新增
+    `{progress_summary}` 占位符——账本有记录时渲染「已完成步骤 + 证据 +
+    下一步」确定性状态（非模型自查反推），账本为空时如实说明「无进度记录」，
+    不再声称「对话与工作区改动已保留」；`templates.resume` 用户可编辑机制
+    （issue #116）保持兼容；
+  - **文档同步**：README「断点续跑」章节补充 issue #281 新机制说明；
+  - **测试**：新增 id 前置落库/降级/账本解析/交接单渲染/表迁移等 13 例
+    （`test_executor_dsh.py` +9、`test_database_migrate.py` +4），后端全量
+    pytest 通过，无 regression。
+
 - **补登 300+ 平台版本逢百进位显式复现用例（issue #283）**：
   `frontend/tests/gen-version.test.mjs` 在既有 300+ 场景用例（1.0.310 → 1.3.11、
   1.0.305 → 1.3.6 等）基础上，新增与 issue 症状完全对应的显式用例「平台版本恰为

@@ -43,6 +43,13 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 > 恢复时作为 `conversation_history` 传入接续对话。
 > dsh 引擎（issue #84）等价支持：SDK 在 session_root 持久化会话，会话 id
 > 落库 `tasks.dsh_session_id`，恢复时以同一 id 接续对话。
+> 中断恢复机制升级（issue #281）：dsh 引擎**会话 id 任务开始即落库**
+> （先落 id 再开跑，强杀/重启不再丢 id），恢复时以已落库 id 经
+> DeepSeek Harness SDK resume 续跑；任务提示词约定 agent 以
+> `[PROGRESS]` 行上报里程碑，落库 `task_progress` 进度账本（只增不改
+> 快照式），中断恢复时渲染**确定性交接单**（已完成步骤 + 验证证据 +
+> 唯一下一步），替代「模型自查 git 反推」，避免反复检查实现/重复实现；
+> session_root 目录缺失时如实降级为全新会话（不假装对话已保留）。
 
 ## 目录结构
 

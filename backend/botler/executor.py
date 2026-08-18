@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -33,6 +34,7 @@ import time
 from pathlib import Path
 
 from .config import DEFAULT_RESUME_PROMPT, ConfigManager
+
 from .database import (
     Database, STATUS_RUNNING, STATUS_RETRYING, STATUS_SUCCEEDED, STATUS_FAILED,
     STATUS_INTERRUPTED,
@@ -57,6 +59,28 @@ from .plugins import (
     has_plugin,
     list_plugins,
 )
+
+# issue #281 §4.1 进度上报约定：agent 在输出中以 [PROGRESS] 行上报里程碑，
+# dsh executor 增量解析落库 task_progress 账本；中断恢复时据此渲染确定性
+# 交接单（§4.4），替代「模型自查 git 反推」导致的反复检查/重复实现。
+# 解析容忍大小写与字段顺序；desc/evidence 带引号（可含空格），解析失败
+# 的行整体跳过（账本缺失不影响任务执行）。
+PROGRESS_MARKER = "[PROGRESS]"
+_PROGRESS_RE = re.compile(
+    r"\[PROGRESS\]\s+step=(\d+)\s+status=(done|failed|pending|skipped)"
+    r"(?:\s+desc=\"([^\"]*)\")?"
+    r"(?:\s+evidence=\"([^\"]*)\")?",
+    re.IGNORECASE)
+
+# dsh 引擎提示词追加的「进度上报约定」节（Phase 1 仅 dsh 引擎解析落库，
+# claude/hermes 不解析该标记，保持现状不受影响）。
+PROGRESS_REPORT_INSTRUCTION = """
+【进度上报约定】（中断恢复机制 issue #281）：每完成一个里程碑（定位根因 /
+编写代码 / 运行测试 / 推送等），请单独输出一行固定格式进度，平台会记录并在
+中断恢复时生成确定性交接单，避免你中断恢复后反复检查、重复实现：
+[PROGRESS] step=<序号> status=<done|failed|pending> desc=\"<本步做了什么>\" evidence=\"<验证命令与结果摘要>\"
+示例：[PROGRESS] step=2 status=done desc=\"编写修复代码\" evidence=\"pytest tests/test_x.py -q 通过\"
+"""
 
 logger = logging.getLogger(__name__)
 
@@ -1166,20 +1190,73 @@ class ClaudeExecutor:
         """查找 session 文件 ~/.claude/projects/*/<sid>.jsonl；不存在返回 None。"""
         return find_session_file(session_id, self._claude_home())
 
-    def _resume_prompt(self, repo: dict, issue: dict) -> str:
-        """恢复执行引导语：基于上次会话继续，不重复已完成的工作。
+    def _resume_prompt(self, repo: dict, issue: dict,
+                      task_id: int | None = None) -> str:
+        """恢复执行引导语：确定性交接单渲染（issue #281 §4.4）。
 
         模版优先取 config 的 templates.resume（issue #116 起用户可编辑，
         与全局默认模版同机制）；未配置/清空时回退内置默认。占位符与
-        全局模版共用 build_variables（claude/hermes/dsh 三引擎统一入口）。
+        全局模版共用 build_variables（claude/hermes/dsh 三引擎统一入口），
+        另注入 {progress_summary}：有 task_id 且账本非空时渲染「已完成
+        步骤 + 证据 / 下一步」确定性交接单；账本为空（确属首次/状态
+        丢失）如实说明「无进度记录」，不再声称「对话与改动已保留」。
         """
         template = self.config.get().resume_template or DEFAULT_RESUME_PROMPT
         variables = self.renderer.build_variables(
             repo["name"], issue, repo_url=_row_get(repo, "url") or "")
+        variables["progress_summary"] = self._render_progress_handoff(task_id)
         prompt = self.renderer.render(template, variables)
         if self._repo_workdir(repo) in self._pull_conflict_workdirs:
             prompt += self._conflict_handoff_instructions()
         return prompt
+
+    def _render_progress_handoff(self, task_id: int | None) -> str:
+        """从 task_progress 账本渲染确定性进度交接单（§4.4 数据源）。
+
+        无 task_id 或账本为空 → 如实降级文案「无进度记录」；有记录 →
+        渲染每步最新状态 + 证据 + 下一步，供 agent 直接接续，禁止重做
+        已标记 done 的步骤（替代「模型自查 git 反推」）。
+        """
+        if task_id is None:
+            return ("（平台暂无任务进度账本记录：无已完成步骤可交接，"
+                    "请先检查工作区状态后从断点继续，勿重复已完成工作）")
+        steps = self.db.latest_task_progress(task_id)
+        if not steps:
+            return ("（平台暂无任务进度账本记录：无已完成步骤可交接，"
+                    "请先检查工作区状态后从断点继续，勿重复已完成工作）")
+        lines = ["平台已记录以下确定性进度（非模型自查结果）："]
+        for row in steps:
+            desc = row["step_desc"] or ""
+            evidence = row["evidence"] or ""
+            lines.append(f"- 步骤 {row['step_no']}「{desc}」→ {row['status']}"
+                         + (f"，证据：{evidence}" if evidence else ""))
+        pending = [r for r in steps if r["status"] != "done"]
+        if pending:
+            nxt = pending[0]
+            lines.append(f"下一步：步骤 {nxt['step_no']}「{nxt['step_desc']}」")
+        else:
+            lines.append("已完成全部记录步骤，请继续完成剩余收尾工作。")
+        lines.append("要求：按上述进度直接接续，禁止重新检查/重做已标记 done 的步骤。")
+        return "\n".join(lines)
+
+    def _persist_progress_markers(self, task_id: int, text: str) -> None:
+        """从文本扫描 [PROGRESS] 里程碑并落库 task_progress（§4.1）。
+
+        解析失败/落库失败不阻塞执行（账本尽力而为，恢复时缺失则如实降级）。
+        """
+        if not text or PROGRESS_MARKER not in text:
+            return
+        for m in _PROGRESS_RE.finditer(text):
+            step_no = int(m.group(1))
+            status = m.group(2).lower()
+            desc = m.group(3) or ""
+            evidence = m.group(4) or ""
+            try:
+                self.db.record_task_progress(
+                    task_id, step_no, desc, status, evidence=evidence)
+            except Exception as e:  # noqa: BLE001 账本写入失败不影响任务执行
+                self.db.add_log(task_id, "warn",
+                                f"[PROGRESS] 账本落库失败: {e}")
 
     # ---- 单次执行 ----
 
@@ -1325,7 +1402,7 @@ class ClaudeExecutor:
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         self._capture_env_snapshot(task_id, workdir)
         if resume_session:
-            prompt = self._resume_prompt(repo, issue)
+            prompt = self._resume_prompt(repo, issue, task_id)
             self.db.add_log(
                 task_id, "info",
                 f"恢复上次会话 {resume_session[:8]}… 继续执行"
@@ -1524,7 +1601,7 @@ class ClaudeExecutor:
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_history))
         self._capture_env_snapshot(task_id, workdir)
         if resume_history:
-            prompt = self._resume_prompt(repo, issue)
+            prompt = self._resume_prompt(repo, issue, task_id)
             self.db.add_log(
                 task_id, "info",
                 f"恢复上次 hermes 会话（{len(resume_history)} 条历史）… 继续执行"
@@ -1641,8 +1718,33 @@ class ClaudeExecutor:
         cfg = self.config.get()
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         self._capture_env_snapshot(task_id, workdir)
+        # issue #281 §4.7：resume 前校验会话可恢复性——session_root 目录
+        # 已配置但不存在 = 会话必然丢失，如实降级为全新会话（不假装「对话
+        # 已保留」）；未配置 session_root 时无法校验，按可恢复处理（现状）。
+        if resume_session and not self._dsh_session_available(cfg, resume_session):
+            self.db.set_task_status(task_id, None, dsh_session_id=None)
+            self.db.add_log(
+                task_id, "warn",
+                f"上次 dsh 会话 {resume_session[:8]}… 的会话目录已不存在，"
+                f"降级为全新会话（issue #281 诚实降级）")
+            resume_session = None
+        # issue #281 §4.7：会话 id 任务开始即落库（先落 id 再开跑）——
+        # 新建任务预生成 id 并原子写库，任何时刻被强杀/重启 id 都已落库
+        # 可恢复；恢复场景直接复用已落库 id。写入失败 = 任务失败（不静默
+        # 降级，避免「以为能恢复、实际不能」）。
         if resume_session:
-            prompt = self._resume_prompt(repo, issue)
+            dsh_sid = resume_session
+        else:
+            dsh_sid = self._new_dsh_session_id(task_id)
+            try:
+                self.db.set_task_status(task_id, None, dsh_session_id=dsh_sid)
+            except Exception as e:  # noqa: BLE001 前置落库失败 = 任务失败
+                raise ExecutorError(f"dsh 会话 id 前置落库失败: {e}") from e
+            self.db.add_log(task_id, "info",
+                            f"已预生成 dsh 会话 id {dsh_sid[:8]}… 并落库"
+                            f"（任务开始即落库，issue #281）")
+        if resume_session:
+            prompt = self._resume_prompt(repo, issue, task_id)
             self.db.add_log(
                 task_id, "info",
                 f"恢复上次 dsh 会话 {resume_session[:8]}… 继续执行"
@@ -1651,6 +1753,9 @@ class ClaudeExecutor:
             prompt = self._build_prompt(repo, issue)
             self.db.add_log(task_id, "info",
                             f"执行 dsh 引擎（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
+        # issue #281 §4.1：dsh 提示词追加「进度上报约定」节（Phase 1 仅
+        # dsh 引擎解析落库 [PROGRESS] 里程碑，claude/hermes 不受影响）。
+        prompt += PROGRESS_REPORT_INSTRUCTION
         env = self._build_env(repo, issue)
 
         # issue #146：dsh 引擎提示词持久化 + 聊天记录落库（dsh_transcript）。
@@ -1681,6 +1786,9 @@ class ClaudeExecutor:
             cut_text, cut = _truncate_text(text, _TRANSCRIPT_MAX_TEXT)
             dsh_messages.append({"role": "assistant", "text": cut_text,
                                  "ts": _dsh_utc_ts(), "truncated": cut})
+            # issue #281 §4.1：assistant 文本收口时扫描 [PROGRESS] 里程碑
+            # 落库 task_progress（增量落库，中断/强杀时已收口部分不丢）
+            self._persist_progress_markers(task_id, text)
 
         def _dsh_accumulate(line: str) -> None:
             """从事件行累积聊天消息（issue #146）。
@@ -1747,7 +1855,7 @@ class ClaudeExecutor:
                 # deepseek 项（用户已在该处配过 key，此前未被消费）
                 dsh_api_key, dsh_base_url = self._dsh_credentials(cfg)
                 runner = DshRunner(
-                    prompt=prompt, session_id=resume_session,
+                    prompt=prompt, session_id=dsh_sid,
                     provider=cfg.dsh_provider, model=cfg.dsh_model,
                     max_tokens=cfg.dsh_max_tokens,
                     # 推理等级（issue #123）：dsh.reasoning_effort 经
@@ -1828,6 +1936,29 @@ class ClaudeExecutor:
         if self._is_unresolvable(final_response):
             return "unresolvable"
         return "success"
+
+    def _new_dsh_session_id(self, task_id: int) -> str:
+        """预生成 dsh 会话 id（issue #281 §4.7）：botler-<task_id>-<ts>-<rand>。
+
+        SDK `run(session_id=<id>)` 支持以指定 id 创建全新会话（用户确认），
+        任务开始前即生成并落库，强杀/重启后凭已落库 id 经 SDK resume 续跑。
+        """
+        return (f"botler-{task_id}-"
+                f"{time.strftime('%Y%m%d%H%M%S', time.gmtime())}-"
+                f"{secrets.token_hex(4)}")
+
+    def _dsh_session_available(self, cfg, session_id: str) -> bool:
+        """dsh 会话可恢复性校验（§4.7）：session_root 目录存在才可恢复。
+
+        SDK 以 DSH_SESSION_ROOT 为会话持久化根目录；已配置但目录不存在 =
+        会话必然已丢失（重部署重建目录/未挂载），如实降级为全新会话；
+        未配置 session_root（无法校验，按可恢复处理，保持现状）或目录存在
+        （信任 SDK 按 id 定位会话）时返回 True。
+        """
+        root = (getattr(cfg, "dsh_session_root", "") or "").strip()
+        if not root:
+            return True
+        return Path(root).is_dir()
 
     def _persist_dsh_session_id(self, task_id: int, output: str) -> None:
         """执行结束后把 dsh 会话 id 落库（停止/超时/失败均落，供断点续跑）。

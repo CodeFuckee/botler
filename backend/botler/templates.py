@@ -21,6 +21,7 @@ PLACEHOLDERS = {
     "project_path": "仓库路径（group/repo，如 chenkaidi/botler）",
     "project_path_encoded": "仓库路径 URL 编码（chenkaidi%2Fbotler）",
     "gitlab_host": "GitLab 主机 host:port（无 scheme）",
+    "progress_summary": "中断恢复进度交接单（issue #281：任务进度账本渲染的确定性已完成/下一步摘要，仅恢复引导语模版使用）",
 }
 
 
