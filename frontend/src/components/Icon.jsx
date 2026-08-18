@@ -10,8 +10,8 @@ import {
   ArrowLeft, ArrowUp, Bot, Brain, Check, CheckCircle2, ChevronDown,
   ChevronRight, ClipboardList, Coins, ExternalLink, Flag, Folder, FolderOpen,
   Hourglass, Lightbulb, Lock, MessageCircle, Mic, Package, Pencil, Pin, Plus,
-  RefreshCw, Rocket, Search, Settings, Square, Tag, Trash2, TriangleAlert,
-  User, Wallet, Wrench, X, XCircle,
+  RefreshCw, Rocket, Search, Settings, Square, Tag, Terminal as TerminalIcon,
+  Trash2, TriangleAlert, User, Wallet, Wrench, X, XCircle,
 } from 'lucide-react'
 
 // 语义名 → Lucide 图标映射（全量 Lucide 系列）
@@ -45,6 +45,7 @@ export const ICONS = {
   settings: Settings,
   square: Square,
   tag: Tag,
+  terminal: TerminalIcon,
   trash: Trash2,
   user: User,
   wallet: Wallet,

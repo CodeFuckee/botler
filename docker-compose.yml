@@ -53,6 +53,9 @@ services:
       # 挂载路径（docker-entrypoint.sh 启动时 editable 安装到 /opt/venv，
       # 幂等）。未挂载源码时 hermes 引擎按 SDK 未安装处理（提示安装指引）。
       HERMES_SOURCE_DIR: ${HERMES_SOURCE_DIR:-/opt/hermes/hermes-agent}
+      # Web 终端（issue #183）：/api/terminal/* 反向代理到独立终端服务
+      # 进程（compose 网络内 terminal:8765，不对外暴露端口，安全隔离）
+      BOTLER_TERM_UPSTREAM: http://terminal:8765
       # hermes 数据目录（LLM 配置 / 会话状态，runner 进程内读写）：默认
       # 走 hermes 平台默认 ~/.hermes（容器内为 /root/.hermes），部署时
       # 挂载宿主 ~/.hermes 或设置 HERMES_HOME 指向挂载的数据目录（详见
@@ -113,6 +116,36 @@ services:
   # （与 botler 数据同根目录，备份/迁移一并处理，容器重建不丢失）。
   # 健康检查：GET /minio/health/live（live 探针）。
   # ================================================================
+  # ----------------------------------------------------------------
+  # Web 终端服务（issue #183）：Tornado + terminado 独立进程，与主后端
+  # 共享用户验证（同一会话密钥文件 session_secret.key，经 data 卷共享）。
+  # 默认只监听容器内 0.0.0.0:8765（compose 网络内部可达，未映射宿主端口
+  # = 安全隔离，不对外暴露），对外统一经 botler 主后端 /api/terminal/*
+  # 反向代理（或 nginx 统一入口，见 deploy/nginx-terminal.conf）。
+  # 可调参数：TERM_IMAGE 覆盖镜像（默认复用 botler 构建产物）。
+  # ================================================================
+  terminal:
+    image: ${TERM_IMAGE:-botler:latest}
+    container_name: botler-terminal
+    restart: unless-stopped
+    command: ["/opt/venv/bin/python", "backend/terminal_service.py"]
+    environment:
+      # 与主后端共享会话密钥（token 校验同一密钥）；监听 0.0.0.0 供
+      # compose 网络内 botler 反向代理访问（不映射宿主端口）
+      PYTHONPATH: /app/backend
+      BOTLER_TERM_PORT: "8765"
+      BOTLER_TERM_BIND: 0.0.0.0
+      TZ: Asia/Shanghai
+    volumes:
+      # 会话签名密钥（auth.py 懒生成持久化，与 botler 共享同一文件）
+      - ${BOTLER_DATA_DIR:-./data}/backend/data:/app/backend/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/terminal/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
   minio:
     image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
     container_name: minio

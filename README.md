@@ -301,6 +301,29 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 
 完整设计见 [`docs/插件体系设计方案.md`](docs/插件体系设计方案.md)（接口定义 / 迁移清单 / 测试计划 / 演进方向）。
 
+## Web 终端（issue #183）
+
+浏览器内直接使用系统终端（顶部导航「终端」→ `/terminal`），**无需再打开系统终端**：
+
+- **多标签**：每个标签一个独立 PTY 会话，可新建 / 关闭 / 切换（上限 8 个）；
+- **快捷键**：`Alt+T` 新建标签、`Alt+W` 关闭当前标签（刻意避开浏览器保留快捷键）；
+  `Ctrl+Shift+C` 复制选区、`Ctrl+Shift+V` 粘贴（xterm.js 原生支持）；
+- **架构**：
+  - *后端*：**独立终端服务进程**（`backend/terminal_service.py`，Tornado + terminado）
+    提供标准 WebSocket 终端服务（terminado JSON 协议），默认只监听
+    `127.0.0.1:8765`（安全隔离，不对外暴露端口）；
+  - *认证*：与主后端**共享用户验证**——主后端 `/api/terminal/token` 用会话
+    密钥签发短时效 token（SSO 启用时需登录），终端服务握手时用同一密钥校验；
+  - *前端*：`xterm.js` + 等价 AttachAddon 的协议适配层（terminado 标准 JSON
+    协议与原始文本不兼容，适配层补齐 stdin/resize 编码与状态回调）；
+  - *部署*：浏览器始终与主后端同源（`/api/terminal/ws/*` 反向代理到终端服务
+    进程）；已有 Nginx 统一入口的场景参考 `deploy/nginx-terminal.conf` 直连。
+- **部署形态**：pm2（`deploy/botler.config.cjs` 新增 `botler-terminal` 进程，
+  CI 自动部署并做终端健康检查）/ docker compose（新增 `terminal` 服务，不映射
+  宿主端口）；终端服务与主后端共享 `backend/data/session_secret.key`。
+
+完整设计见 [`docs/web-terminal.md`](docs/web-terminal.md)（架构 / 协议 / 认证流程 / 部署 / 安全）。
+
 ## 配置说明
 
 `backend/config.yaml` 是唯一事实来源，Web UI 是编辑它的外壳。直接编辑 config.yaml 的修改会被运行中的进程自动感知（检测文件变化后重载，无需重启；issue #25），且后续 Web UI 保存设置不会覆盖手动编辑的内容。凭据一律用 `${ENV_VAR}` 引用环境变量（`backend/.env`），不入库、不进日志、不进提示词。

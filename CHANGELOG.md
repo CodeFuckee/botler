@@ -55,6 +55,52 @@
     无 regression。
 
 ### Added
+- **Web 终端集成——浏览器内直接使用系统终端，无需再打开系统终端（issue #183）**：
+  需求「集成一个终端，软件不在需要打开终端」，方案为后端 terminado + Tornado 独立
+  终端服务进程、前端 xterm.js 多标签 + 快捷键 + 复制粘贴、部署统一入口代理独立
+  进程安全隔离：
+  - **独立终端服务进程**：新增 `backend/terminal_service.py`（Tornado + terminado），
+    提供标准 WebSocket 终端服务（terminado JSON 协议），默认只监听
+    `127.0.0.1:8765`（安全隔离，不对外暴露端口）；环境变量可调
+    `BOTLER_TERM_PORT` / `BOTLER_TERM_BIND` / `BOTLER_TERM_SHELL` /
+    `BOTLER_TERM_MAX_TERMINALS`；新增依赖 `tornado>=6.4`、`terminado>=0.18`；
+  - **共享用户验证**：主后端新增 `POST /api/terminal/token`（SSO 启用时需登录，
+    未启用签发 local 用户），签发**短时效 token**（默认 60 秒，
+    `BOTLER_TERM_TOKEN_TTL` 可调）；token 与会话 cookie 同构（同一 HMAC 会话
+    密钥）但以 `typ:"term"` 声明隔离——cookie 不能当终端 token 用、终端 token
+    不能当 cookie 用（`botler/auth.py` 新增 `create_terminal_token` /
+    `verify_terminal_token`）；终端服务握手校验 token，失败以 close code 4001
+    拒绝、不创建 PTY；
+  - **反向代理开箱即用**：主后端新增 `backend/botler/api/terminal.py`——
+    `/api/terminal/ws/<name>`（WebSocket 双向转发，token/查询串透传）与
+    `/api/terminal/health`（探活）反向代理到独立终端服务进程
+    （`BOTLER_TERM_UPSTREAM` 可调），浏览器与主后端同源，无需额外部署即可使用；
+  - **前端多标签终端**：顶部导航新增「终端」入口（`/terminal`），
+    `frontend/src/pages/Terminal.jsx` 多标签管理（新建/关闭/切换，上限 8 个，
+    `Alt+T` 新建 / `Alt+W` 关闭当前标签，避开浏览器保留快捷键；`Ctrl+Shift+C`
+    复制 / `Ctrl+Shift+V` 粘贴为 xterm.js 原生能力）；
+    `frontend/src/terminal/`：`protocol.js`（terminado 协议编解码 + WS 地址构造）、
+    `attach.js`（等价 @xterm/addon-attach 的适配层——AttachAddon 只收发原始文本
+    且无 resize，与 terminado JSON 协议不兼容，适配层补齐 stdin/resize 编码与
+    连接状态回调）、`TerminalView.jsx`（xterm.js + FitAddon + 适配层，动态导入
+    兼容 CJS 产物）；新增依赖 `@xterm/xterm@^5.5.0`、`@xterm/addon-fit@^0.10.0`；
+    vite 开发/预览代理启用 `ws: true` 支持终端 WebSocket；Icon 组件新增
+    `terminal` 图标、styles.css 新增终端页样式；
+  - **部署**：pm2（`deploy/botler.config.cjs` 新增 `botler-terminal` 进程，
+    CI `deploy_to_code01` 同步停止/启动并新增 `/api/terminal/health` 健康检查，
+    失败即部署失败）/ docker compose（新增 `terminal` 服务，与 botler 共享
+    `data/backend/data` 卷的会话密钥，不映射宿主端口）；Nginx 统一入口参考
+    配置 `deploy/nginx-terminal.conf`（`/terminal/` WebSocket 升级代理）；
+  - **文档**：README 新增「Web 终端」章节、`docs/web-terminal.md` 完整设计文档
+    （架构 / 认证 / 协议 / 部署 / 安全 / 测试）；
+  - **测试**：后端新增 `test_terminal_token.py`（10 例：签发/校验/篡改/过期/
+    隔离/边界）、`test_terminal_service.py`（6 例：健康检查、无 token / 伪造 /
+    过期 token 拒绝、有效 token 跑真实 PTY 回显、多标签会话隔离）、
+    `test_api_terminal.py`（7 例：token 端点 SSO 开关、健康/WS 反向代理真实
+    终端服务）；前端新增 `terminal-protocol.test.mjs`（协议/地址/快捷键/适配层）
+    与 `terminal-page.test.mjs`（导航入口/路由/样式/新建关闭标签/token 失败
+    提示）；前后端全量测试与覆盖率门禁通过，无 regression。
+
 
 - **issue 详情页评论/活动中的 Git 提交 SHA 支持点击跳转 GitLab 提交页（issue #181）**：
   需求「issue详情页面，如果回复有git提交，则实现可以点击提交，跳转到gitlab对应的提交页面」。

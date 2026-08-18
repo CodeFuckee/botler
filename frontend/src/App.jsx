@@ -8,6 +8,7 @@ import Tasks from './pages/Tasks.jsx'
 import TaskDetail from './pages/TaskDetail.jsx'
 import Settings from './pages/Settings.jsx'
 import Plugins from './pages/Plugins.jsx'
+import Terminal from './pages/Terminal.jsx'
 import Login from './pages/Login.jsx'
 import DialogHost from './components/DialogHost.jsx'
 import { api, setDisplayTz, setSsoEnabled } from './api.js'
@@ -99,6 +100,10 @@ export default function App() {
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           设置
         </NavLink>
+        {/* Web 终端（issue #183）：浏览器内多标签终端，无需再打开系统终端 */}
+        <NavLink to="/terminal" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+          终端
+        </NavLink>
         {/* 登录后用户名称与退出按钮位于导航栏最右（issue #9 第二轮）：
             .user-chip 的 margin-left:auto 承接原版本徽标的"推到最右"职责 */}
         {auth.user && (
@@ -121,6 +126,7 @@ export default function App() {
           <Route path="/labels" element={<Labels />} />
           <Route path="/plugins" element={<Plugins />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/terminal" element={<Terminal />} />
         </Routes>
       </main>
       {/* 自定义对话框宿主（issue #105）：替代浏览器原生 alert/confirm，

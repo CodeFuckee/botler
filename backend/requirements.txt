@@ -9,3 +9,6 @@ python-dotenv>=1.0
 pytest>=8.0
 pytest-cov>=6.0
 minio>=7.2
+# Web 终端（issue #183）：terminado 提供标准 WebSocket 终端服务，Tornado 承载
+tornado>=6.4
+terminado>=0.18

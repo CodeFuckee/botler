@@ -249,3 +249,64 @@ class SsoGuardMiddleware(BaseHTTPMiddleware):
             if sso is not None and sso.enabled() and sso.current_user(request) is None:
                 return JSONResponse({"error": "未登录（SSO 已启用）"}, status_code=401)
         return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# 终端服务短时效 token（issue #183）：Web 终端 WebSocket 的认证凭证
+#
+# 与主后端「共享用户验证」的实现方式：
+#   - 主后端 /api/terminal/token 用与会话 cookie 相同的 HMAC 会话密钥签发
+#     短时效 token（payload 携带 SSO 登录用户信息，默认 60 秒过期）；
+#   - 独立终端服务进程（Tornado + terminado，backend/terminal_service.py）
+#     用同一密钥校验 token（同一份 session_secret.key），校验通过才托管 PTY。
+# 因此 token 结构/签名算法与会话 cookie 完全同构，只是有效期短、仅用于
+# WebSocket 握手，避免把长会话 cookie 直接暴露给独立进程。
+# ---------------------------------------------------------------------------
+
+# 终端 token 默认有效期（秒）：WebSocket 握手后连接已建立，无需长时效
+TERMINAL_TOKEN_TTL_SECONDS = int(os.environ.get("BOTLER_TERM_TOKEN_TTL", "60"))
+
+
+def create_terminal_token(
+    user: dict[str, Any],
+    ttl_seconds: int = TERMINAL_TOKEN_TTL_SECONDS,
+    secret: str | None = None,
+    now: float | None = None,
+) -> str:
+    """签发终端 WebSocket 短时效 token（issue #183）。
+
+    payload 携带 typ=term 声明 + 用户信息（sub/username/name/email）+ exp；
+    签名算法与会话 cookie 相同（HMAC-SHA256）。typ 声明把终端 token 与
+    会话 cookie 隔离：结构同构但用途互不复用（cookie 有效期长，不能当
+    终端 token 用），终端服务用 verify_terminal_token 校验。
+    """
+    secret = secret or get_session_secret()
+    now = time.time() if now is None else now
+    payload = {"typ": "term"}
+    payload.update({k: user.get(k) for k in ("sub", "username", "name", "email")})
+    payload["exp"] = int(now) + int(ttl_seconds)
+    data = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    return f"{data}.{_sign(data, secret)}"
+
+
+def verify_terminal_token(
+    token: str | None,
+    secret: str | None = None,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    """校验终端 token：签名一致且未过期 → payload；否则 None（issue #183）。"""
+    if not token or "." not in token:
+        return None
+    secret = secret or get_session_secret()
+    data, sig = token.rsplit(".", 1)
+    if not hmac.compare_digest(sig, _sign(data, secret)):
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(data.encode()))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("typ") != "term":
+        return None
+    if payload.get("exp", 0) < (time.time() if now is None else now):
+        return None
+    return payload

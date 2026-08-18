@@ -62,6 +62,30 @@ module.exports = {
       time: true,
     },
     {
+      // Web 终端服务（issue #183）：Tornado + terminado 独立进程。
+      // 默认只监听 127.0.0.1:8765（安全隔离，不对外暴露端口），对外经
+      // botler 主后端 /api/terminal/* 反向代理（或 nginx 统一入口，
+      // 见 deploy/nginx-terminal.conf）。与主后端共享同一份会话密钥
+      // （backend/data/session_secret.key，懒生成持久化），WebSocket
+      // 握手用主后端签发的短时效 token 校验（botler.auth 同密钥）。
+      name: 'botler-terminal',
+      script: path.join(ROOT, 'backend/terminal_service.py'),
+      interpreter: path.join(ROOT, 'backend/.venv/bin/python'),
+      cwd: ROOT,
+      env: {
+        // 终端服务进程独立监听端口/地址（安全隔离：默认仅本机）
+        BOTLER_TERM_PORT: '8765',
+        BOTLER_TERM_BIND: '127.0.0.1',
+        // 脚本方式执行时 sys.path 不含项目目录，须显式加 backend
+        PYTHONPATH: path.join(ROOT, 'backend'),
+      },
+      max_restarts: 10,
+      restart_delay: 3000,
+      out_file: path.join(DATA_DIR, 'logs/pm2-terminal-out.log'),
+      error_file: path.join(DATA_DIR, 'logs/pm2-terminal-error.log'),
+      time: true,
+    },
+    {
       // MinIO 对象存储服务（issue #160）：pm2 直接托管 minio 原生
       // 二进制（interpreter: none，否则被当作 JS 解析报 SyntaxError）
       name: 'botler-minio',

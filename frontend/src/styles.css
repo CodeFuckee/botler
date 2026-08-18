@@ -2836,3 +2836,108 @@ code {
   fill: var(--muted);
   font-size: 11px;
 }
+
+
+/* ================================================================
+   Web 终端页（issue #183）：多标签终端工具栏 + xterm 画布 + 快捷键提示
+   ================================================================ */
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+}
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+.terminal-tab:hover { background: var(--bg-hover); }
+.terminal-tab.active {
+  border-color: var(--primary);
+  background: var(--primary-weak);
+  color: var(--primary);
+}
+.terminal-tab-name { font-weight: 600; }
+.terminal-status { font-size: 11px; opacity: 0.8; }
+.terminal-status-connecting { color: var(--warn); }
+.terminal-status-connected { color: var(--ok); }
+.terminal-status-closed { color: var(--err); }
+.terminal-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.terminal-tab-close:hover { background: var(--bg-hover); color: var(--err); }
+.terminal-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px dashed var(--border-hover);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+.terminal-add:hover { color: var(--primary); border-color: var(--primary); }
+.terminal-add:disabled { opacity: 0.5; cursor: not-allowed; }
+.terminal-hint {
+  margin-bottom: var(--space-2);
+  font-size: 12px;
+}
+.terminal-hint kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-card);
+  font-family: inherit;
+  font-size: 11px;
+}
+.terminal-error {
+  margin-bottom: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--err);
+  border-radius: var(--radius);
+  background: var(--err-weak);
+  color: var(--err);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.terminal-body {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #0f1115;
+}
+.terminal-pane { padding: 0; }
+.terminal-host {
+  height: 480px;
+  padding: 8px;
+  box-sizing: border-box;
+}
+.terminal-empty {
+  padding: var(--space-4);
+  text-align: center;
+}

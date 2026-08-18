@@ -1242,7 +1242,7 @@ deploy_to_code01:
       fi
       # minio（issue #160）与 botler 一起由 pm2 管理，旧实例一并
       # 停止（防 9000 端口被旧进程占用导致新实例 EADDRINUSE）
-      PM2_APPS="${APP_NAME} botler-minio"
+      PM2_APPS="${APP_NAME} botler-minio botler-terminal"
       for APP in $PM2_APPS; do
         if command -v pm2 >/dev/null 2>&1 && pm2 describe "$APP" >/dev/null 2>&1; then
           pm2 delete "$APP" >/dev/null 2>&1 && echo "✓ 已停止旧 pm2 $APP" || echo "⚠️ pm2 delete $APP 失败（继续）"
@@ -1336,6 +1336,29 @@ deploy_to_code01:
           echo "❌ MinIO 健康检查 ${HEALTHCHECK_RETRIES:-30} 次全部失败"
           dbg STEP7b "FAIL: MinIO 未就绪"
           pm2 describe botler-minio 2>/dev/null | grep -E "status|restarts" | tr '\n' ' ' || true
+          HEALTHY=false
+        fi
+      fi
+      # 7c. 终端服务健康检查（issue #183）：经主后端 /api/terminal/health
+      # 反向代理探活独立终端服务进程（pm2 botler-terminal，Tornado+terminado）。
+      # 失败同样视为部署失败（exit 1），不允许带病运行。
+      if [ "$HEALTHY" = true ]; then
+        dbg STEP7c "终端服务健康检查 http://localhost:${DEPLOY_PORT}/api/terminal/health"
+        TERM_HEALTHY=false
+        for i in $(seq 1 ${HEALTHCHECK_RETRIES:-30}); do
+          if curl -sf "http://localhost:${DEPLOY_PORT}/api/terminal/health" >/dev/null 2>&1; then
+            echo "✓ 终端服务健康检查通过 (${i}s)"
+            dbg STEP7c "OK: 终端服务健康检查通过 (${i}s)"
+            TERM_HEALTHY=true
+            break
+          fi
+          echo "  终端服务等待中... (${i}s)"
+          sleep 1
+        done
+        if [ "$TERM_HEALTHY" = false ]; then
+          echo "❌ 终端服务健康检查 ${HEALTHCHECK_RETRIES:-30} 次全部失败"
+          dbg STEP7c "FAIL: 终端服务未就绪"
+          pm2 describe botler-terminal 2>/dev/null | grep -E "status|restarts" | tr '\n' ' ' || true
           HEALTHY=false
         fi
       fi

@@ -12,15 +12,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8000',
-      '/webhook': 'http://localhost:8000',
+      // ws: true —— 终端 WebSocket（/api/terminal/ws/*）在开发模式同样代理到后端
+      '/api': { target: 'http://localhost:8000', ws: true },
+      '/webhook': { target: 'http://localhost:8000', ws: true },
     },
   },
   preview: {
     port: 4173,
     proxy: {
-      '/api': backendUrl,
-      '/webhook': backendUrl,
+      '/api': { target: backendUrl, ws: true },
+      '/webhook': { target: backendUrl, ws: true },
     },
   },
   build: {
