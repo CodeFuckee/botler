@@ -271,6 +271,29 @@
     注释，以及 README「E2E 架构」中关于 e2e 阶段位置的描述；
   - 纯 CI 配置调整（无后端/前端代码改动），YAML 校验 + GitLab CI Lint
     验证通过，流水线阶段顺序实测为 deploy → e2e → sync。
+- **executor.py 按职责拆分重构（issue #192）**：`backend/botler/executor.py`
+  3182 行巨型文件拆分为 `backend/botler/executor/` 包（纯重构，行为零变化）：
+  - `executor/workspace.py`：git 工作区管理（prepare / 默认主分支三级解析 /
+    clean / 拉取冲突检测与 agent 手工解决交接 / untracked 残留尽力清理），
+    `WorkspaceMixin` 约 550 行；
+  - `executor/process.py`：引擎子进程执行（claude CLI 生命周期 / hermes /
+    dsh SDK 进程内运行、停止/超时/输出 drain）、引擎输出 JSON 解析与结果
+    判定、CI 流水线等待，`ProcessMixin` 约 1200 行；
+  - `executor/session.py`：会话文件查找、transcript 解析、日志增量读取、
+    `[PROGRESS]` 进度账本解析与渲染，`SessionMixin` 约 300 行；
+  - `executor/prompt.py`：提示词渲染 / 任务环境注入 / gitconfig 与输出脱敏 /
+    转义解码，`PromptMixin` 约 190 行；
+  - `executor/__init__.py`（原 executor.py 主模块）：保留 `ClaudeExecutor`
+    主类的引擎分发与状态机编排，914 行（验收标准「主文件 <1000 行」达成）；
+  - 行为保持：全部函数/方法原样迁移（mixin 聚合，方法体仅新增测试兼容的
+    动态符号引用），对外符号（`ClaudeExecutor` / `format_display_line` /
+    `find_session_file` / `parse_transcript` / `read_log_delta` /
+    `read_session_prompt` / `ExecutorError` / `DshRunner` 等）由主模块统一
+    再导出，引用方（main / scheduler / api/tasks / 测试）零改动；
+  - 新增 `backend/tests/test_executor_split.py` 49 例，覆盖四个新模块的
+    纯函数与 mixin 方法（脱敏 / 转义解码 / 会话解析 / 日志增量 / untracked
+    清理 / 冲突检测 / 结果判定）；后端全量 2200+ 用例通过，无回归。
+
 
 ## [1.3.63] - 2026-08-19
 ### Added
