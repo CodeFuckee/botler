@@ -1774,3 +1774,134 @@ class TestFinishFailedTransientRetry:
         task = executor.db.get_task(task_id)
         assert task["status"] == "failed"
         assert comment_calls["n"] == 1, "403 永久性错误不应重试"
+
+
+# ---- issue #302：dsh 执行前会话根目录 zstd 编码归一化接线 ----
+
+class TestDshSessionRootNormalizationWiring:
+    """dsh 引擎执行前把会话根目录遗留明文 session.jsonl 归一化到 zstd。
+
+    真实调用 _run_dsh_once（stub prepare_workspace 与 DshRunner），
+    预置旧版部署遗留的明文会话文件，断言：归一化真实执行（明文删除、
+    zstd 生成）且任务日志记录；根因见 botler/dsh_sessions.py 模块注释
+    （runtime 根级编码检查遇明文 artifact 拒绝启动，任务 #415 反复失败）。
+    """
+
+    def test_run_dsh_once_normalizes_legacy_session_root(
+            self, executor, monkeypatch, tmp_path):
+        import botler.executor as executor_module
+        from botler import dsh_sessions
+
+        workdir = tmp_path / "workspace" / "demo"
+        workdir.mkdir(parents=True, exist_ok=True)
+        # 旧版部署遗留的明文会话文件（runtime zstd 模式下根级编码检查
+        # 会拒绝启动的形态）
+        session_dir = workdir / ".sessions" / "--proj--" / "sess-legacy"
+        session_dir.mkdir(parents=True)
+        plain = session_dir / "session.jsonl"
+        plain.write_bytes(
+            b'{"type":"session","version":0,"id":"sess-legacy",'
+            b'"createdAt":1,"cwd":"/x","delegationDepth":0}\n'
+            b'{"type":"agent/inbox/spliced","seq":0,"time":1,"data":{}}\n')
+
+        def fake_prepare(repo, resume=False):
+            return workdir, {}
+
+        class FakeDshRunner:
+            def __init__(self, **kw):
+                self.on_line = kw["on_line"]
+                self.session_id = kw.get("session_id")
+                self.usage = None
+
+            def start(self):
+                self.on_line(json.dumps({
+                    "final_response": "已处理",
+                    "finish_reason": "completed",
+                    "session_id": self.session_id or "sid-new"},
+                    ensure_ascii=False))
+
+            def done(self):
+                return True
+
+            def stop(self):
+                pass
+
+            def finish(self, join_timeout: float = 60.0):
+                return 0
+
+        monkeypatch.setattr(executor_module, "DshRunner", FakeDshRunner)
+        monkeypatch.setattr(executor, "prepare_workspace", fake_prepare)
+        executor.config.get().engine = "dsh"
+
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        repo = {"name": "demo", "prompt_template": None,
+                "url": "https://gitlab.example.com/group/demo.git"}
+        issue = {"state": "opened", "title": "标题", "description": "正文",
+                 "web_url": "https://gitlab.example.com/x/-/issues/7",
+                 "project_id": 42, "iid": 7}
+
+        exit_code, _output = executor._run_dsh_once(task_id, repo, issue)
+
+        assert exit_code == 0
+        # 遗留明文被转换删除、zstd artifact 生成（真实归一化逻辑生效）
+        assert not plain.exists()
+        zstd_path = session_dir / dsh_sessions.SESSION_ARTIFACT_ZSTD
+        assert zstd_path.is_file()
+        # 任务日志记录了归一化
+        logs = db.list_logs(task_id)
+        assert any("归一化到 zstd 压缩" in row["message"] for row in logs)
+        assert any("遗留明文 session.jsonl" in row["message"] for row in logs)
+
+    def test_run_dsh_once_skips_log_when_no_legacy(
+            self, executor, monkeypatch, tmp_path):
+        """根目录无明文遗留时不写归一化日志（正常路径不刷屏）。"""
+        import botler.executor as executor_module
+
+        workdir = tmp_path / "workspace" / "demo"
+        workdir.mkdir(parents=True, exist_ok=True)
+
+        def fake_prepare(repo, resume=False):
+            return workdir, {}
+
+        class FakeDshRunner:
+            def __init__(self, **kw):
+                self.on_line = kw["on_line"]
+                self.session_id = kw.get("session_id")
+                self.usage = None
+
+            def start(self):
+                self.on_line(json.dumps({
+                    "final_response": "已处理",
+                    "finish_reason": "completed",
+                    "session_id": self.session_id or "sid-new"},
+                    ensure_ascii=False))
+
+            def done(self):
+                return True
+
+            def stop(self):
+                pass
+
+            def finish(self, join_timeout: float = 60.0):
+                return 0
+
+        monkeypatch.setattr(executor_module, "DshRunner", FakeDshRunner)
+        monkeypatch.setattr(executor, "prepare_workspace", fake_prepare)
+        executor.config.get().engine = "dsh"
+
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        repo = {"name": "demo", "prompt_template": None,
+                "url": "https://gitlab.example.com/group/demo.git"}
+        issue = {"state": "opened", "title": "标题", "description": "正文",
+                 "web_url": "https://gitlab.example.com/x/-/issues/7",
+                 "project_id": 42, "iid": 7}
+
+        exit_code, _output = executor._run_dsh_once(task_id, repo, issue)
+
+        assert exit_code == 0
+        logs = db.list_logs(task_id)
+        assert not any("归一化到 zstd 压缩" in row["message"] for row in logs)

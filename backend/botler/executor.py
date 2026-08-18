@@ -41,6 +41,7 @@ from .database import (
     STATUS_INTERRUPTED,
 )
 from .dsh_runner import DshRunner, DshSdkNotInstalledError
+from .dsh_sessions import effective_session_root, normalize_session_root_encoding
 from .hermes_sdk_runner import HermesSdkRunner, HermesSdkNotInstalledError
 from .events import EventBus, parse_claude_stream_line, parse_hermes_event_line
 from .env_snapshot import (
@@ -2012,6 +2013,24 @@ class ClaudeExecutor:
                     break
                 time.sleep(0.05)
             return runner.finish(), round_stopped, round_timed_out
+
+        # issue #302：dsh runtime 会话持久化默认 zstd 压缩，且启动时会做
+        # 根级编码检查——会话根目录残留旧版部署遗留的明文 session.jsonl
+        # 会让整个 runtime 拒绝启动（encodingMismatch，任务 #415 反复失败
+        # 的根因）。每次执行前把会话根目录归一化到 zstd（转换并删除明文
+        # 遗留文件），保证新会话与断点续跑都能正常启动。
+        try:
+            session_root = effective_session_root(cfg.dsh_session_root, workdir)
+            fixed = normalize_session_root_encoding(session_root)
+            if fixed:
+                self.db.add_log(
+                    task_id, "info",
+                    f"dsh 会话根目录 {session_root} 归一化到 zstd 压缩："
+                    f"转换/清理 {fixed} 个遗留明文 session.jsonl（issue #302）")
+        except Exception as e:  # noqa: BLE001 归一化失败不阻塞执行（runtime 会自报错）
+            self.db.add_log(
+                task_id, "warn",
+                f"dsh 会话根目录编码归一化失败（继续执行）: {e}")
 
         try:
             exit_code, stopped, timed_out = _run_round(dsh_sid, prompt)

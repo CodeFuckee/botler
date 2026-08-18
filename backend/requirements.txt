@@ -12,3 +12,7 @@ minio>=7.2
 # Web 终端（issue #183）：terminado 提供标准 WebSocket 终端服务，Tornado 承载
 tornado>=6.4
 terminado>=0.18
+
+# dsh 会话根目录压缩编码归一化（issue #302）：runtime 默认 zstd 压缩，
+# 遗留明文 session.jsonl 需转成 zstd 分帧格式（zstandard 提供压缩）
+zstandard>=0.22

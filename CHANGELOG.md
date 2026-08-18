@@ -283,6 +283,28 @@
 
 ### Fixed
 
+- **dsh 会话根目录压缩编码归一化：遗留明文 session.jsonl 不再让 runtime 拒绝启动（issue #302）**：
+  任务 #415（tender_system issue #9）反复失败的根因——deepseek-harness runtime 的
+  `session-persistence-jsonl` 插件默认以 zstd 压缩写会话文件（`session.jsonl.zstd`），
+  且加载/恢复会话前会做根级编码检查（ensureRootEncoding）：只要会话根目录存在旧版部署
+  遗留的明文 `session.jsonl`（压缩模式 none），整个 runtime 拒绝启动，报
+  `session artifact ".../session.jsonl" uses .jsonl, but this backend is configured for
+  compression "zstd"`，重试/降级全新会话全部在启动处直接失败：
+  - `backend/botler/dsh_sessions.py`（新增）：`effective_session_root`（dsh 会话根目录
+    解析：显式配置 `dsh.session_root` 用之，否则 `<工作区>/.sessions`，与 SDK 行为一致）、
+    `normalize_session_root_encoding`（把会话根目录归一化到 zstd——遗留明文
+    `session.jsonl` 转成 runtime 兼容的 zstd 分帧格式（首帧恰为头部一行，后续帧按批
+    压缩，解码后与明文逐字节一致）并删除明文；已存在 zstd 副本时以 zstd 为准仅删明文；
+    空明文直接清理；单目录修复失败不阻塞整体）；
+  - `backend/botler/executor.py`：`_run_dsh_once` 在每次 dsh 执行前调用归一化并记日志
+    （修复数量为 0 时不刷日志），归一化失败不阻塞执行（runtime 自会报错）；
+  - `backend/requirements.txt`：新增 `zstandard>=0.22`（归一化压缩用，Docker / pm2 部署
+    均随 requirements 安装）；
+  - **测试**：新增 `backend/tests/test_dsh_sessions.py` 12 例（明文→zstd 转换逐字节
+    一致、首帧恰为一行头部、zstd 副本优先、空明文清理、缺失目录/无遗留/无关文件不动、
+    多项目批量、effective_session_root 解析），`test_executor.py` 新增 2 例
+    `_run_dsh_once` 接线（真实归一化执行 + 无遗留时不写日志），全部通过无 regression。
+
 - **security:semgrep 扫描显式放宽单规则单文件超时（--timeout 30），消除大文件规则
   偶发超时导致 CI 误判失败（issue #274 收尾联动）**：
   `js-hardcoded-secret` 规则对长字符串字面量执行前瞻正则匹配，`Overview.jsx` 等
