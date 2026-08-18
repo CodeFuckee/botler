@@ -5,6 +5,23 @@
 ## [Unreleased]
 ### Changed
 
+- **新增 CHANGELOG.md 发布轮转机制（issue #289）**：此前 `CHANGELOG.md` 遵循 Keep a
+  Changelog 约定却没有任何发布/重置机制，所有条目永远堆积在 `[Unreleased]` 下（曾达
+  4500+ 行、200+ 条），版本节从未生成、历史也不会归档，文件无限膨胀。本次新增发版工具：
+  - `backend/botler/changelog_release.py`：`release_changelog()` 把 `[Unreleased]`
+    封版为 `## [x.y.z] - 日期` 版本节并重置 `[Unreleased]`；按 `keep` 保留最近 N 个
+    版本节，更早的版本节按时间正序归档到 `docs/CHANGELOG-archive.md`（首次自动创建）；
+    版本号缺省读 `data/version.txt`、日期缺省今天；空 `[Unreleased]` / 版本重复 /
+    文件缺失 / 缺 Unreleased 节等场景抛 `ChangelogReleaseError` 且不改动文件；
+    支持 `dry_run` 预览；
+  - `scripts/release_changelog.py`：CLI 封装（`--version/--date/--keep/--dry-run`），
+    发版时一键封版 + 重置 + 归档；
+  - **测试**：新增 `test_release_changelog.py` 17 例（封版重置/内容原样保留/前言与
+    小节保留/版本文件与默认版本/连续多次发版新版本置顶/归档轮转与追加/空节与重复版本
+    与非法版本报错/失败不改文件/dry-run 不写盘/解析单测），修复前模块不存在（复现
+    `ModuleNotFoundError`）、修复后通过；后端全量 pytest（1784 例）与前端测试通过，
+    无 regression。
+
 - **修复定时暂停窗口对全角字符的兼容性：中文输入法常见格式（如「9:00—12:00」全角
   破折号、全角冒号）此前被窗口串解析器判为非法，保存被拒或配置被剔除，导致「设置了
   暂停窗口、到点后仍在运行新任务」（issue #284）**：`parse_window` 解析前对窗口串做

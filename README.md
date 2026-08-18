@@ -177,6 +177,34 @@ bash frontend/e2e/scripts/start-servers.sh tests/overview.spec.js   # 跑单个�
 - **防 flaky**：`playwright.config.js` 配置 `retries: 2` + trace 保留；CI
   `.gitlab-ci.yml` 新增 `e2e` stage（build 之后、deploy 之前，E2E 未通过不部署）。
 
+## CHANGELOG 维护与发布轮转（issue #289）
+
+仓库根目录 `CHANGELOG.md` 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)
+约定：开发期间的变更统一追加到 `## [Unreleased]` 节（新条目置顶）。该节**不会自动重置**——
+它本来的设计就是「累积到下一次发版时一次性封版」。若没有发版动作，`[Unreleased]` 就会一直
+累积（历史上曾达到 4500+ 行），这是**预期行为，不是 bug**；要控制体积，需要在发版时执行
+发布轮转：
+
+```bash
+# 发版：把 [Unreleased] 封版为版本节、重置 [Unreleased]，并归档超龄版本
+python3 scripts/release_changelog.py --version 1.3.17 --date 2026-08-18 --keep 10
+
+# 只预览不写盘（校验版本号/内容/重复，安全演练）
+python3 scripts/release_changelog.py --dry-run
+```
+
+发布轮转脚本的行为（`backend/botler/changelog_release.py`）：
+- **封版**：`[Unreleased]` 全部条目原样移入新版本节 `## [x.y.z] - 日期`；
+- **重置**：`[Unreleased]` 清空，等待下一轮开发继续累积；
+- **归档**：默认在 `CHANGELOG.md` 保留最近 `--keep`（默认 10）个版本节，
+  更早的版本节按时间正序追加到 `docs/CHANGELOG-archive.md`（首次自动创建），
+  主文件体积因此可控；
+- **安全**：版本号缺省读取 `data/version.txt`（再缺省 `1.0.0`）、日期缺省今天；
+  空 `[Unreleased]` / 版本重复 / 文件缺失 / 缺 Unreleased 节等场景报错且不改动文件。
+
+> 约定：版本号与 `data/version.txt` 对齐（构建时 `frontend/scripts/gen-version.mjs`
+> 每次构建自增 patch 位，发布取该版本即可）。发版后可打 Git tag 标记里程碑。
+
 ## 部署（10.0.0.122，Ubuntu 24.04）
 
 前置条件：
