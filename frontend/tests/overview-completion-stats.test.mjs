@@ -1,9 +1,11 @@
-// 概览页 Issue 完成耗时测试（issue #180）：
+// 概览页 Issue 完成耗时测试（issue #180 + #288）：
 // 概览页面最下方新增「Issue 完成耗时」板块——显示平均每个 issue 完成
 // 所需的时间（成功任务的处理用时：系统接收时间 → bot-done 打标时间，
 // 与任务详情「处理用时」issue #49 语义一致）以及该时间的逐日平均走势图。
 // 数据来自本地 tasks 表成功终态任务（GET /api/issues/completion-stats），
 // 无 GitLab 请求压力，低频轮询（60 秒）。
+// issue #288：板块内新增「每个开启仓库的平均耗时与走势」拆分——接口
+// 返回 repos 数组，前端按仓库渲染平均耗时 + 紧凑迷你走势图。
 //
 // 断言：
 // 1. Overview 请求 /api/issues/completion-stats 并低频轮询（60 秒）；
@@ -12,7 +14,9 @@
 //    走势图（SVG 折线 + 数据点 + 日期/数值标注）；
 // 4. 无已完成 issue 时渲染空状态（页面不崩溃）；
 // 5. 接口失败时显示错误提示、不崩溃；
-// 6. styles.css 提供板块与走势图样式类。
+// 6. 有 repos 数据时按仓库渲染平均耗时 + 迷你走势图，无数据仓库
+//    渲染「暂无数据」；
+// 7. styles.css 提供板块、走势图与各仓库明细样式类。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -72,12 +76,28 @@ test('源码：板块渲染平均完成耗时与走势图', () => {
   assert.equal(zhCN['overview.noCompletedIssues'], '暂无已完成 issue', '中文空状态文案应保留')
 })
 
+test('源码：板块渲染每个仓库的平均耗时与走势（issue #288）', () => {
+  assert.match(overview, /completionStats\.repos/, '应遍历接口返回的 repos 拆分')
+  assert.match(overview, /tr\('overview\.completionPerRepoTitle'\)/,
+               '各仓库明细标题应经 t() 国际化')
+  assert.equal(zhCN['overview.completionPerRepoTitle'], '各仓库平均耗时与走势',
+               '中文各仓库明细标题应为「各仓库平均耗时与走势」')
+  assert.match(overview, /tr\('overview\.repoNoData'\)/, '仓库无数据文案应经 t() 国际化')
+  assert.equal(zhCN['overview.repoNoData'], '暂无数据', '中文仓库无数据文案应为「暂无数据」')
+  assert.match(overview, /completion-repo-row/, '应按仓库渲染明细行')
+  assert.match(overview, /compact/, '走势图组件应支持紧凑模式（迷你走势图）')
+})
+
 test('styles.css 提供板块与走势图样式', () => {
   assert.match(styles, /\.completion-stats-section\s*\{/, '应有板块容器样式')
   assert.match(styles, /\.completion-stats-value\s*\{/, '应有平均耗时数字样式')
   assert.match(styles, /\.completion-trend-chart\s*\{/, '应有走势图 SVG 样式')
   assert.match(styles, /\.completion-trend-line\s*\{/, '应有折线样式')
   assert.match(styles, /\.completion-trend-dot\s*\{/, '应有数据点样式')
+  assert.match(styles, /\.completion-repo-list\s*\{/, '应有各仓库明细列表样式')
+  assert.match(styles, /\.completion-repo-row\s*\{/, '应有各仓库明细行样式')
+  assert.match(styles, /\.completion-repo-name\s*\{/, '应有仓库名称样式')
+  assert.match(styles, /\.completion-repo-value\s*\{/, '应有仓库平均耗时样式')
 })
 
 // ---- fmtSeconds 纯函数（issue #180：秒数 → 人类可读）----
@@ -133,6 +153,15 @@ const STATS_PAYLOAD = {
   trend: [
     { date: '2026-08-12', count: 2, avg_seconds: 2700 },
     { date: '2026-08-13', count: 1, avg_seconds: 7200 },
+  ],
+  // issue #288：每个已开启仓库的平均耗时与走势拆分
+  repos: [
+    { repo_id: 1, repo_name: 'alpha', completed_count: 2, avg_seconds: 2700,
+      trend: [{ date: '2026-08-12', count: 2, avg_seconds: 2700 }] },
+    { repo_id: 2, repo_name: 'beta', completed_count: 1, avg_seconds: 7200,
+      trend: [{ date: '2026-08-13', count: 1, avg_seconds: 7200 }] },
+    { repo_id: 3, repo_name: 'gamma', completed_count: 0, avg_seconds: null,
+      trend: [] },
   ],
 }
 
@@ -199,11 +228,20 @@ test('渲染：有已完成 issue 时展示平均耗时、数量与走势图', a
     assert.ok(text.includes('"3"') || text.includes(',"3",'), '应渲染已完成 issue 数量 3')
     // 走势图：SVG 折线 + 数据点 + 日期标注
     const root = r.renderer.root
-    assert.equal(root.findAllByType('polyline').length, 1, '应渲染走势折线')
-    assert.equal(root.findAll((n) => String(n.props.className || '').includes('completion-trend-dot')).length, 2,
-                 '应渲染 2 个数据点（两日）')
+    assert.equal(root.findAllByType('polyline').length, 3,
+                 '应渲染 3 条折线（全局 1 + alpha/beta 各 1）')
+    assert.equal(root.findAll((n) => String(n.props.className || '').includes('completion-trend-dot')).length, 4,
+                 '应渲染 4 个数据点（全局 2 + alpha 1 + beta 1）')
     assert.ok(text.includes('2026-08-12'), '应渲染起始日期标注')
     assert.ok(text.includes('2026-08-13'), '应渲染结束日期标注')
+    // issue #288：各仓库明细——仓库名 + 平均耗时 + 无数据仓库「暂无数据」
+    assert.ok(text.includes('各仓库平均耗时与走势'), '应渲染各仓库明细标题')
+    assert.ok(text.includes('alpha'), '应渲染仓库 alpha 行')
+    assert.ok(text.includes('beta'), '应渲染仓库 beta 行')
+    assert.ok(text.includes('45 分钟'), 'alpha 平均 2700 秒 = 45 分钟')
+    assert.ok(text.includes('2 小时'), 'beta 平均 7200 秒 = 2 小时')
+    assert.ok(text.includes('gamma'), '应渲染无数据仓库 gamma 行')
+    assert.ok(text.includes('暂无数据'), '无数据仓库应显示「暂无数据」')
     // 板块位于 CI/CD 流水线之后（页面最下方）
     assert.ok(text.indexOf('CI/CD 流水线') < text.indexOf('Issue 完成耗时'),
               '完成耗时板块应位于流水线板块之后')
@@ -214,7 +252,7 @@ test('渲染：有已完成 issue 时展示平均耗时、数量与走势图', a
 
 test('渲染：无已完成 issue 时展示空状态，不崩溃', async () => {
   const r = await renderOverview({
-    statsPayload: { completed_count: 0, avg_seconds: null, trend: [] },
+    statsPayload: { completed_count: 0, avg_seconds: null, trend: [], repos: [] },
   })
   try {
     assert.equal(r.renderError, null, '渲染不应崩溃')

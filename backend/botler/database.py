@@ -916,8 +916,9 @@ class Database:
                    ORDER BY id DESC LIMIT ?""",
                 (project_id, issue_iid, limit)).fetchall()
 
-    def succeeded_durations(self) -> list[tuple[str, float]]:
-        """已完成（succeeded）任务的 (完成日, 用时秒数) 列表（issue #180）。
+    def succeeded_durations(self) -> list[tuple[int, str, str, float]]:
+        """已完成（succeeded）任务的 (repo_id, repo_name, 完成日, 用时秒数)
+        列表（issue #180 + #288）。
 
         概览页「Issue 完成耗时」统计的数据源：只取成功终态（succeeded）
         任务——成功时系统会给 issue 打 bot-done 标签（executor issue #49），
@@ -926,13 +927,20 @@ class Database:
         完成日取 finished_at 的 UTC 日期（'YYYY-MM-DD'），供前端按日分组
         绘制走势图。缺时间字段、解析失败（_parse_db_ts 返回 None）或用时
         为负（时钟异常）的行跳过，不影响整体统计。
+
+        issue #288：附带 repo_id 与 repo_name（LEFT JOIN repos，仓库已软
+        删除/名称缺失时回退「未知仓库」），供概览页按「每个开启仓库」拆分
+        平均耗时与走势；调用方按 list_repos（仅未删除）筛选展示仓库。
         """
         with self._conn() as conn:
             rows = conn.execute(
-                """SELECT created_at, finished_at FROM tasks
-                   WHERE status=? AND created_at <> '' AND finished_at <> ''""",
+                """SELECT t.created_at, t.finished_at, t.repo_id,
+                          COALESCE(r.name, '未知仓库') AS repo_name
+                   FROM tasks t LEFT JOIN repos r ON r.id = t.repo_id
+                   WHERE t.status=? AND t.created_at <> '' AND t.finished_at <> ''
+                   ORDER BY t.id""",
                 (STATUS_SUCCEEDED,)).fetchall()
-        out: list[tuple[str, float]] = []
+        out: list[tuple[int, str, str, float]] = []
         for row in rows:
             c = _parse_db_ts(row["created_at"])
             f = _parse_db_ts(row["finished_at"])
@@ -941,7 +949,8 @@ class Database:
             sec = (f - c).total_seconds()
             if sec < 0:
                 continue
-            out.append((f.strftime("%Y-%m-%d"), round(sec, 3)))
+            out.append((row["repo_id"], row["repo_name"],
+                        f.strftime("%Y-%m-%d"), round(sec, 3)))
         return out
 
     def set_task_status(self, task_id: int, status: str | None, **fields) -> None:

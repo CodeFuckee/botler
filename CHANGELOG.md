@@ -5,6 +5,33 @@
 ## [Unreleased]
 ### Added
 
+- **概览页「Issue 完成耗时」增加每个开启仓库的平均耗时与走势（issue #288）**：
+  概览页「Issue 完成耗时」板块（issue #180）在原有全局平均耗时 + 逐日走势图
+  基础上，新增**每个已开启仓库**的平均耗时与走势拆分展示：
+  - `backend/botler/database.py`：`succeeded_durations()` 返回附带
+    repo_id / repo_name（LEFT JOIN repos，仓库软删除/名称缺失回退「未知
+    仓库」）的 (repo_id, repo_name, 完成日, 用时秒数) 列表，供按仓库拆分；
+  - `backend/botler/api/issues.py`：`GET /api/issues/completion-stats`
+    响应新增 `repos` 数组——每个已启用仓库的
+    `{repo_id, repo_name, completed_count, avg_seconds, trend}`（仓库按
+    配置优先级升序、与 overview 一致；无已完成任务仓库
+    completed_count=0 / avg_seconds=null / trend=[]；已禁用仓库不出现，
+    其历史任务仍计入全局统计；无任何成功任务时 repos=[]）；
+  - `frontend/src/pages/Overview.jsx`：板块内新增各仓库明细列表
+    `completion-repo-list`——逐仓库渲染仓库名 / 平均耗时 / 完成数量 /
+    紧凑迷你走势图（`CompletionTrendChart` 新增 `compact` 紧凑模式：
+    更小画布与数据点、隐藏日期刻度文字、保留悬浮提示），无数据仓库
+    显示「暂无数据」；
+  - `frontend/src/locales/zh-CN.json` / `en-US.json`：新增
+    `overview.completionPerRepoTitle` / `overview.repoNoData` /
+    `overview.repoTrendAria` 文案；`frontend/src/styles.css`：新增
+    各仓库明细列表 / 行 / 名称 / 数值 / 紧凑走势图样式；
+  - **测试**：`backend/tests/test_api_issues.py` `TestCompletionStats`
+    新增 4 例（多仓库独立聚合、仓库按优先级排序、禁用仓库排除、无任务
+    仓库空值），`test_empty` 断言同步补 `repos` 字段；
+    `frontend/tests/overview-completion-stats.test.mjs` 新增源码/样式/
+    渲染断言（各仓库行、平均耗时、紧凑折线与数据点、无数据仓库占位）。
+
 - **概览页「其他」分组拖动调整调度顺序（issue #287）**：
   概览页「开放 Issue」的「其他」分组（尚未处理/处理中的 issue）在
   「调度器执行顺序」排序下支持**拖动 issue 上下移动**来手动改变调度顺序：

@@ -3227,6 +3227,60 @@ code {
   fill: var(--muted);
   font-size: 11px;
 }
+.completion-trend-chart.compact {
+  max-width: 240px;
+  padding: var(--space-1);
+}
+.completion-repo-list {
+  margin-top: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.completion-repo-title {
+  font-size: 13px;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.completion-repo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.completion-repo-row:first-of-type {
+  border-top: none;
+}
+.completion-repo-info {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.completion-repo-name {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.completion-repo-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.completion-repo-chart {
+  flex: 1 1 240px;
+  min-width: 160px;
+}
 
 
 /* ================================================================

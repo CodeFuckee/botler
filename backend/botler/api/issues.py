@@ -251,33 +251,68 @@ def issues_overview(request: Request):
 # 本地 SQLite 数据量小，直接实时计算，不做缓存。
 @router.get("/completion-stats")
 def issues_completion_stats(request: Request):
-    """概览页「Issue 完成耗时」板块数据（issue #180）。
+    """概览页「Issue 完成耗时」板块数据（issue #180 + #288）。
 
     返回已完成 issue 的平均完成耗时与按完成日（UTC）分组的逐日平均
     走势：
     - completed_count：已完成（succeeded）issue 数量；
     - avg_seconds：全部已完成 issue 的平均完成耗时（秒，保留 3 位小数）；
     - trend：按完成日分组 [{date, count, avg_seconds}]，按日期升序，
-      供概览页最下方走势图绘制；无数据时 trend 为空数组。
-    完成耗时为负/字段缺失/解析失败的任务行不计入统计（数据层过滤）。
+      供概览页最下方走势图绘制；无数据时 trend 为空数组；
+    - repos：每个**已启用**仓库的拆分统计
+      [{repo_id, repo_name, completed_count, avg_seconds, trend}]，仓库按
+      配置优先级升序（与 overview 一致）；无已完成任务仓库
+      completed_count=0 / avg_seconds=None / trend=[]（issue #288）。
+    完成耗时为负/字段缺失/解析失败的任务行不计入统计（数据层过滤）；
+    已禁用仓库不出现在 repos 列表（其历史任务仍计入全局统计）。
     """
-    pairs = request.app.state.ctx.db.succeeded_durations()
-    total = len(pairs)
+    c = request.app.state.ctx
+    rows = c.db.succeeded_durations()  # (repo_id, repo_name, 完成日, 秒)
+    total = len(rows)
     if total == 0:
-        return {"completed_count": 0, "avg_seconds": None, "trend": []}
-    avg_all = sum(sec for _, sec in pairs) / total
+        return {"completed_count": 0, "avg_seconds": None, "trend": [],
+                "repos": []}
+    avg_all = sum(sec for _, _, _, sec in rows) / total
     by_day: dict[str, list[float]] = {}
-    for day, sec in pairs:
+    for _, _, day, sec in rows:
         by_day.setdefault(day, []).append(sec)
     trend = [
         {"date": day, "count": len(secs),
          "avg_seconds": round(sum(secs) / len(secs), 3)}
         for day, secs in sorted(by_day.items())
     ]
+    # 按仓库拆分（issue #288）：只列已启用仓库，顺序与 overview 一致
+    # （仓库按优先级升序）；该仓库无已完成任务时 avg_seconds=None、trend=[]
+    by_repo: dict[int, list[tuple[str, float]]] = {}
+    for repo_id, _, day, sec in rows:
+        by_repo.setdefault(repo_id, []).append((day, sec))
+    repos_out: list[dict] = []
+    for row in c.db.list_repos():
+        if not row["enabled"]:
+            continue  # 需求：只展示已开启仓库（未启用/已删除不出现）
+        durs = by_repo.get(row["id"], [])
+        entry = {"repo_id": row["id"], "repo_name": row["name"],
+                 "completed_count": len(durs)}
+        if durs:
+            entry["avg_seconds"] = round(
+                sum(sec for _, sec in durs) / len(durs), 3)
+            r_by_day: dict[str, list[float]] = {}
+            for day, sec in durs:
+                r_by_day.setdefault(day, []).append(sec)
+            entry["trend"] = [
+                {"date": day, "count": len(secs),
+                 "avg_seconds": round(sum(secs) / len(secs), 3)}
+                for day, secs in sorted(r_by_day.items())
+            ]
+        else:
+            entry["avg_seconds"] = None
+            entry["trend"] = []
+        repos_out.append(entry)
     return {
         "completed_count": total,
         "avg_seconds": round(avg_all, 3),
         "trend": trend,
+        "repos": repos_out,
     }
 
 

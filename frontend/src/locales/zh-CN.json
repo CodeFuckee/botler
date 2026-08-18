@@ -274,5 +274,8 @@
   "overview.manualOrderSaved": "调度顺序已保存",
   "overview.manualOrderError": "保存调度顺序失败：{msg}",
   "overview.manualOrderDisabledSort": "切换回「调度器执行顺序」后，可在「其他」分组拖动调整调度顺序",
-  "overview.manualOrderDisabledFilter": "清除过滤后，可在「其他」分组拖动调整调度顺序"
+  "overview.manualOrderDisabledFilter": "清除过滤后，可在「其他」分组拖动调整调度顺序",
+  "overview.completionPerRepoTitle": "各仓库平均耗时与走势",
+  "overview.repoNoData": "暂无数据",
+  "overview.repoTrendAria": "该仓库平均完成耗时走势图"
 }

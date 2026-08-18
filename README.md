@@ -509,7 +509,7 @@ GET    /api/tasks/{id}/logs           任务日志
 GET    /api/tasks/{id}/execution      实时执行（增量日志 + 聊天记录，issue #20）
 GET    /api/tasks/{id}/events         任务事件流（SSE 推送：thinking/文本/工具调用/结果逐事件；终态任务连接后回放历史事件；思考过程默认隐藏，任务详情页事件流右侧勾选「显示思考过程」后展开显示，见实时输出功能）
 GET    /api/issues/overview           已启用仓库开放 issue 聚合（10s 缓存，issue #64）
-GET    /api/issues/completion-stats  已完成 issue 平均完成耗时与逐日走势（本地 tasks 表成功终态任务：处理用时 = finished_at - created_at，issue #180）
+GET    /api/issues/completion-stats  已完成 issue 平均完成耗时与逐日走势（本地 tasks 表成功终态任务：处理用时 = finished_at - created_at，issue #180）；repos 字段返回每个已启用仓库的平均耗时与走势拆分（issue #288）
 POST   /api/issues/{project_id}/{iid}/close   关闭指定 issue（概览页右边栏「关闭 issue」按钮，issue #94）
 POST   /api/issues/{project_id}/{iid}/retry   重新执行 issue 对应的任务（概览页右边栏「重试」按钮：复用最近失败/中断任务或新建任务入队，issue #117）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120）

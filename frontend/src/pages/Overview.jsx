@@ -1801,6 +1801,35 @@ export default function Overview() {
                   <span className="muted">{tr('overview.avgCompletion', { n: completionStats.completed_count })}</span>
                 </div>
                 <CompletionTrendChart trend={completionStats.trend} />
+                {/* issue #288：每个开启仓库的平均耗时与走势拆分——接口
+                    repos 数组（仅已启用仓库，按配置优先级升序，无已完成
+                    任务仓库 avg_seconds=null/trend=[]），逐仓库渲染平均
+                    耗时 + 紧凑迷你走势图 */}
+                {Array.isArray(completionStats.repos) && completionStats.repos.length > 0 && (
+                  <div className="completion-repo-list">
+                    <h3 className="completion-repo-title">{tr('overview.completionPerRepoTitle')}</h3>
+                    {completionStats.repos.map((r) => (
+                      <div className="completion-repo-row" key={r.repo_id}>
+                        <div className="completion-repo-info">
+                          <span className="completion-repo-name"
+                                title={r.repo_name}>{r.repo_name}</span>
+                          <span className="completion-repo-value"
+                                title={r.completed_count > 0 ? tr('overview.avgCompletionTitle') : undefined}>
+                            {r.completed_count > 0
+                              ? (fmtSeconds(r.avg_seconds) || <span className="muted">—</span>)
+                              : <span className="muted">{tr('overview.repoNoData')}</span>}
+                          </span>
+                          <span className="muted">{tr('overview.avgCompletion', { n: r.completed_count })}</span>
+                        </div>
+                        {r.completed_count > 0 ? (
+                          <div className="completion-repo-chart">
+                            <CompletionTrendChart trend={r.trend} compact />
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             ) : null}
           </section>
@@ -2046,15 +2075,17 @@ function DiscoverResult({ result }) {
 // 完成耗时（秒），范围 0 → 最大值留 10% 余量；折线 + 数据点，每个点
 // 带 <title> 悬浮提示（日期 / 平均耗时 / 当日完成数）。trend 非数组
 // 或为空时返回 null（不渲染）。
-export function CompletionTrendChart({ trend }) {
+// issue #288：compact 紧凑模式——各仓库明细行的迷你走势图（更小画布、
+// 更小数据点，隐藏日期/刻度文字避免缩小后不可读，仍保留 <title> 提示）。
+export function CompletionTrendChart({ trend, compact = false }) {
   const { tr } = useI18n()
   if (!Array.isArray(trend) || trend.length === 0) return null
-  const W = 640
-  const H = 180
-  const PAD_L = 8
-  const PAD_R = 8
-  const PAD_T = 14
-  const PAD_B = 24
+  const W = compact ? 240 : 640
+  const H = compact ? 48 : 180
+  const PAD_L = compact ? 2 : 8
+  const PAD_R = compact ? 2 : 8
+  const PAD_T = compact ? 4 : 14
+  const PAD_B = compact ? 4 : 24
   const n = trend.length
   const maxSec = Math.max(...trend.map((t) => Number(t.avg_seconds) || 0))
   const yMax = maxSec > 0 ? maxSec * 1.1 : 1
@@ -2068,21 +2099,29 @@ export function CompletionTrendChart({ trend }) {
   const first = trend[0]
   const last = trend[n - 1]
   return (
-    <svg className="completion-trend-chart" viewBox={`0 0 ${W} ${H}`}
-         role="img" aria-label={tr('overview.trendAria')}>
+    <svg className={compact ? 'completion-trend-chart compact' : 'completion-trend-chart'}
+         viewBox={`0 0 ${W} ${H}`}
+         role="img" aria-label={compact
+           ? tr('overview.repoTrendAria')
+           : tr('overview.trendAria')}>
       <line className="completion-trend-axis" x1={PAD_L} y1={H - PAD_B}
             x2={W - PAD_R} y2={H - PAD_B} />
       <polyline className="completion-trend-line" points={points} fill="none" />
       {trend.map((t, i) => (
         <circle key={t.date || i} className="completion-trend-dot"
-                cx={px(i).toFixed(2)} cy={py(t.avg_seconds).toFixed(2)} r="3">
+                cx={px(i).toFixed(2)} cy={py(t.avg_seconds).toFixed(2)}
+                r={compact ? '2' : '3'}>
           <title>{tr('overview.trendPoint', { date: t.date, avg: fmtSeconds(t.avg_seconds) || '—', n: t.count })}</title>
         </circle>
       ))}
-      <text className="completion-trend-label" x={PAD_L} y={H - PAD_B + 16}>{first.date}</text>
-      <text className="completion-trend-label" x={W - PAD_R} y={H - PAD_B + 16}
-            textAnchor="end">{last.date}</text>
-      <text className="completion-trend-label" x={PAD_L} y={PAD_T - 4}>{fmtSeconds(yMax) || ''}</text>
+      {!compact && (
+        <>
+          <text className="completion-trend-label" x={PAD_L} y={H - PAD_B + 16}>{first.date}</text>
+          <text className="completion-trend-label" x={W - PAD_R} y={H - PAD_B + 16}
+                textAnchor="end">{last.date}</text>
+          <text className="completion-trend-label" x={PAD_L} y={PAD_T - 4}>{fmtSeconds(yMax) || ''}</text>
+        </>
+      )}
     </svg>
   )
 }

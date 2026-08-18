@@ -2595,7 +2595,7 @@ class TestCompletionStats:
         resp = tc.get("/api/issues/completion-stats")
         assert resp.status_code == 200
         body = resp.json()
-        assert body == {"completed_count": 0, "avg_seconds": None, "trend": []}
+        assert body == {"completed_count": 0, "avg_seconds": None, "trend": [], "repos": []}
 
     def test_only_succeeded_counted(self, client):
         """只有 succeeded 任务计入统计，其他终态（failed/interrupted/
@@ -2663,3 +2663,71 @@ class TestCompletionStats:
         assert body["avg_seconds"] == 120.0
         assert body["trend"] == [{"date": "2026-08-12", "count": 1,
                                   "avg_seconds": 120.0}]
+
+    def test_repos_breakdown_per_repo(self, client):
+        """repos：每个已启用仓库独立聚合 completed_count/avg_seconds/trend，
+        全局统计不受影响。"""
+        tc, stub, db, tmp_path = client
+        repo_a = _add_repo(db, project_id=42, name="alpha", priority=10)
+        repo_b = _add_repo(db, project_id=43, name="beta", priority=20)
+        # alpha：08-12 完成两条 3600s + 1800s → 日平均 2700s
+        self._mk_succeeded(db, repo_a, 1, "2026-08-12 02:00:00",
+                           "2026-08-12 03:00:00")
+        self._mk_succeeded(db, repo_a, 2, "2026-08-12 10:00:00",
+                           "2026-08-12 10:30:00")
+        # beta：08-13 完成一条 7200s
+        self._mk_succeeded(db, repo_b, 3, "2026-08-13 02:00:00",
+                           "2026-08-13 04:00:00")
+        body = tc.get("/api/issues/completion-stats").json()
+        # 全局：(3600 + 1800 + 7200) / 3 = 4200
+        assert body["completed_count"] == 3
+        assert body["avg_seconds"] == 4200.0
+        assert [r["repo_name"] for r in body["repos"]] == ["alpha", "beta"]
+        assert body["repos"][0] == {
+            "repo_id": repo_a, "repo_name": "alpha", "completed_count": 2,
+            "avg_seconds": 2700.0,
+            "trend": [{"date": "2026-08-12", "count": 2,
+                       "avg_seconds": 2700.0}]}
+        assert body["repos"][1] == {
+            "repo_id": repo_b, "repo_name": "beta", "completed_count": 1,
+            "avg_seconds": 7200.0,
+            "trend": [{"date": "2026-08-13", "count": 1,
+                       "avg_seconds": 7200.0}]}
+
+    def test_repos_sorted_by_priority(self, client):
+        """repos 排序与 overview 一致：仓库按配置优先级升序（数字小先），
+        与入库顺序无关。"""
+        tc, stub, db, tmp_path = client
+        # 先插 beta（priority 20）再插 alpha（priority 10）
+        _add_repo(db, project_id=43, name="beta", priority=20)
+        repo_a = _add_repo(db, project_id=42, name="alpha", priority=10)
+        self._mk_succeeded(db, repo_a, 1, "2026-08-12 02:00:00",
+                           "2026-08-12 03:00:00")
+        body = tc.get("/api/issues/completion-stats").json()
+        assert [r["repo_name"] for r in body["repos"]] == ["alpha", "beta"]
+
+    def test_repos_excludes_disabled(self, client):
+        """已禁用仓库不出现在 repos 列表；其历史成功任务仍计入全局统计。"""
+        tc, stub, db, tmp_path = client
+        repo_on = _add_repo(db, project_id=42, name="on")
+        repo_off = _add_repo(db, project_id=43, name="off", enabled=False)
+        self._mk_succeeded(db, repo_on, 1, "2026-08-12 02:00:00",
+                           "2026-08-12 03:00:00")
+        self._mk_succeeded(db, repo_off, 2, "2026-08-12 02:00:00",
+                           "2026-08-12 02:30:00")
+        body = tc.get("/api/issues/completion-stats").json()
+        assert body["completed_count"] == 2, "全局统计应包含禁用仓库历史任务"
+        assert [r["repo_name"] for r in body["repos"]] == ["on"]
+
+    def test_repos_enabled_repo_without_tasks(self, client):
+        """已启用但无已完成任务的仓库：completed_count=0、avg_seconds=None、
+        trend=[]（前端渲染「暂无数据」）。"""
+        tc, stub, db, tmp_path = client
+        repo_a = _add_repo(db, project_id=42, name="alpha", priority=10)
+        repo_b = _add_repo(db, project_id=43, name="beta", priority=20)
+        self._mk_succeeded(db, repo_a, 1, "2026-08-12 02:00:00",
+                           "2026-08-12 03:00:00")
+        body = tc.get("/api/issues/completion-stats").json()
+        assert body["repos"][1] == {
+            "repo_id": repo_b, "repo_name": "beta", "completed_count": 0,
+            "avg_seconds": None, "trend": []}
