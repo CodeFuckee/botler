@@ -367,6 +367,25 @@
     无 regression。
 
 ### Added
+
+- **概览页开放 Issue 新增过滤条——按标签多选 + 按状态（全部/开放/进行中）过滤，仓库多、issue 多时快速聚焦（issue #230）**：
+  需求——概览页开放 issue 聚合按仓库分组展示，但无按标签（bug/feature/need-verify 等）或状态过滤，仓库多、issue
+  多时用户想只看「待处理 bug」或「带 need-verify 的」只能肉眼翻。本次在前端实现纯前端过滤（数据已全量，零后端
+  改动）：
+  - `frontend/src/pages/Overview.jsx`：新增过滤条（`.issue-filter-bar`）——状态分段按钮（全部/开放/进行中：
+    进行中与置顶 running 组同源判定，有 running/retrying 任务即命中；开放 = 无运行中任务）+ 标签多选胶囊（候选
+    来自未过滤全量数据去重排序，含 bot-done/bot-failed 等平台语义标签；多选 OR 语义命中任一即展示）；过滤仅作用于
+    条目、保留仓库分组结构，过滤激活时无匹配条目的仓库整卡隐藏、全部无匹配显示「没有匹配过滤条件的 issue」+
+    清除过滤按钮；新增纯函数 `loadIssueFilter` / `saveIssueFilter`（localStorage 键 `botler.overview.issueFilter`，
+    非法值/无存储兜底默认、存储异常静默，与 theme.js 同款注入式 storage 设计，刷新后保持）、`issueLabelNames` /
+    `collectLabelOptions`（标签名提取与标签池汇总，对象/字符串/null 元素防御）、`matchesIssueStatus` /
+    `matchesIssueLabels` / `filterIssuesByFilter`（状态+标签组合过滤，组内顺序不变）；
+  - `frontend/src/styles.css`：新增过滤条样式（状态按钮与标签胶囊选中态高亮、清除过滤按钮推到最右）；
+  - **测试**：新增 `frontend/tests/overview-issue-filter.test.mjs` 27 例（load/save 解析与规范化边界、标签池防御、
+    状态/标签/组合过滤语义、过滤条渲染、点击过滤生效、多选 OR 并集、localStorage 预置初始过滤与点击持久化、
+    无匹配空态、无 issue 不渲染过滤条、零 issue 仓库卡片回归保护、过滤激活整卡隐藏）；前端全量测试通过，无
+    regression。
+
 - **界面显示新增深色模式三态——跟随系统 / 浅色 / 深色，夜间查看任务状态不再刺眼（issue #217）**：
   需求——夜间无人值守查看任务/日志时浅色 UI 刺眼，提供 CSS 变量 + `prefers-color-scheme`
   自动适配 + 设置页「界面显示」手动三态切换，偏好持久化 localStorage + 后端配置同步：

@@ -2246,6 +2246,72 @@ code {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* issue #230：开放 issue 过滤条——状态分段按钮 + 标签多选胶囊，仅过滤
+   条目保留仓库分组结构；选中态高亮与 label-pill 视觉呼应，清除过滤
+   按钮推到最右 */
+.issue-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-soft);
+  border-radius: var(--radius);
+}
+.issue-filter-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.issue-filter-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.issue-filter-statuses,
+.issue-filter-labels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+.issue-filter-status,
+.issue-filter-label-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.issue-filter-status:hover,
+.issue-filter-label-chip:hover {
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+.issue-filter-status.active,
+.issue-filter-label-chip.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.issue-filter-reset {
+  margin-left: auto;
+}
+
 .issue-list {
   list-style: none;
   margin: 0;

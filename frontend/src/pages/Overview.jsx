@@ -164,6 +164,116 @@ export function groupIssuesByBotLabel(issues, runningKeys, repoId) {
   return groups
 }
 
+// ---- issue #230：开放 issue 过滤（标签多选 + 状态）----
+// 概览页开放 issue 支持按标签多选（命中任一选中标签即展示）与状态
+// （全部/开放/进行中）过滤，仅过滤条目、保留仓库分组结构；过滤偏好
+// 持久化 localStorage（键 botler.overview.issueFilter），刷新后保持。
+export const ISSUE_FILTER_STORAGE_KEY = 'botler.overview.issueFilter'
+
+// 状态过滤选项：all=全部（不过滤）；open=开放（无运行中任务，含
+// bot-failed/bot-done/其他分组）；running=进行中（有 running/retrying
+// 任务，与置顶 running 分组同源判定）。hint 为按钮悬浮说明文案
+export const ISSUE_STATUS_FILTERS = [
+  { key: 'all', label: '全部', hint: '展示全部开放 issue' },
+  { key: 'open', label: '开放', hint: '仅展示无运行中任务的开放 issue（bot-failed / bot-done / 其他）' },
+  { key: 'running', label: '进行中', hint: '仅展示正在被 bot 执行的 issue' },
+]
+
+// 读取本地过滤偏好：非法 JSON / 未知状态 / 标签非数组或含非字符串
+// 元素时逐项兜底回默认值（手改/旧版本写入），不抛错。
+// storage：localStorage 兼容对象（测试可注入）；无存储环境（SSR）或
+// getItem 抛异常（隐私模式）时返回默认 { status: 'all', labels: [] }
+export function loadIssueFilter(storage) {
+  const def = { status: 'all', labels: [] }
+  try {
+    if (!storage) return def
+    const raw = storage.getItem(ISSUE_FILTER_STORAGE_KEY)
+    if (!raw) return def
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return def
+    const status = ISSUE_STATUS_FILTERS.some((s) => s.key === parsed.status)
+      ? parsed.status : 'all'
+    const labels = Array.isArray(parsed.labels)
+      ? parsed.labels.filter((l) => typeof l === 'string')
+      : []
+    return { status, labels }
+  } catch {
+    return def
+  }
+}
+
+// 保存本地过滤偏好：只写合法结构（未知状态回 all、非字符串标签剔除）；
+// 存储不可用（SSR/隐私模式）或 setItem 抛异常时静默忽略，不影响页面
+export function saveIssueFilter(storage, filter) {
+  try {
+    if (!storage || !filter || typeof filter !== 'object') return
+    const status = ISSUE_STATUS_FILTERS.some((s) => s.key === filter.status)
+      ? filter.status : 'all'
+    const labels = Array.isArray(filter.labels)
+      ? filter.labels.filter((l) => typeof l === 'string')
+      : []
+    storage.setItem(ISSUE_FILTER_STORAGE_KEY, JSON.stringify({ status, labels }))
+  } catch {
+    /* 无存储环境：静默忽略，不影响页面使用 */
+  }
+}
+
+// 提取 issue 的标签名数组：labels 元素可能是 {name} 对象（后端标准）、
+// 纯字符串或 null/缺 name（旧缓存/异常数据），逐一防御兼容
+export function issueLabelNames(issue) {
+  const labels = issue && issue.labels
+  if (!Array.isArray(labels)) return []
+  const names = []
+  for (const l of labels) {
+    if (l == null) continue
+    const name = typeof l === 'string' ? l : l.name
+    if (typeof name === 'string' && name) names.push(name)
+  }
+  return names
+}
+
+// 汇总全部仓库开放 issue 的标签池：去重 + 字典序排序（稳定可预期），
+// 供过滤条候选标签渲染。数据来自未过滤全量，过滤后标签选项不消失
+export function collectLabelOptions(repos) {
+  const names = new Set()
+  for (const r of Array.isArray(repos) ? repos : []) {
+    for (const i of Array.isArray(r && r.issues) ? r.issues : []) {
+      for (const n of issueLabelNames(i)) names.add(n)
+    }
+  }
+  return Array.from(names).sort()
+}
+
+// 单个 issue 是否命中状态过滤：all=不过滤；open=无运行中任务；
+// running=有运行中任务（与 groupIssuesByBotLabel 的 running 判定同源）
+export function matchesIssueStatus(issue, status, runningKeys, repoId) {
+  if (status === 'all') return true
+  const running = !!(runningKeys && typeof runningKeys.has === 'function'
+    && runningKeys.has(`${repoId}:${issue && issue.iid}`))
+  if (status === 'running') return running
+  if (status === 'open') return !running
+  return true
+}
+
+// 单个 issue 是否命中标签过滤：未选中标签 = 不过滤；否则命中任一
+// 选中标签（多选 OR 语义，标签胶囊逐个点选直观好理解）
+export function matchesIssueLabels(issue, labels) {
+  if (!Array.isArray(labels) || labels.length === 0) return true
+  const names = issueLabelNames(issue)
+  return labels.some((l) => names.includes(l))
+}
+
+// 按过滤条件过滤仓库内 issue：保留仓库分组结构、仅过滤条目，组内
+// 保持原始相对顺序（后端已按 updated_at 降序，前端不重排）
+export function filterIssuesByFilter(issues, filter, runningKeys, repoId) {
+  const f = filter || {}
+  const status = f.status || 'all'
+  const labels = Array.isArray(f.labels) ? f.labels : []
+  return (Array.isArray(issues) ? issues : []).filter((i) =>
+    matchesIssueStatus(i, status, runningKeys, repoId)
+    && matchesIssueLabels(i, labels))
+}
+
 // 日志行尾部截取：总行数超过 max 时只保留最后 max 行
 export function trimLogTail(lines, max) {
   if (!Array.isArray(lines)) return []
@@ -249,6 +359,32 @@ export default function Overview() {
   // issue #99：正在运行的 issue 匹配键集合（repo_id:iid），任务每 3 秒
   // 轮询刷新，任务结束（消失）后对应 issue 高亮自动消失
   const runningKeys = runningIssueKeys(tasks)
+
+  // issue #230：开放 issue 过滤偏好——标签多选 + 状态（全部/开放/进行
+  // 中）。初值从 localStorage 恢复（无存储环境/解析失败回默认），变更
+  // 时持久化，刷新后保持
+  const [issueFilter, setIssueFilter] = useState(() =>
+    loadIssueFilter(typeof localStorage !== 'undefined' ? localStorage : null))
+
+  // 过滤偏好持久化（issue #230）：localStorage 不可用（SSR/隐私模式）
+  // 时静默忽略，不影响页面使用
+  useEffect(() => {
+    saveIssueFilter(typeof localStorage !== 'undefined' ? localStorage : null, issueFilter)
+  }, [issueFilter])
+
+  // 过滤后的仓库 issue（issue #230）：保留仓库分组结构、仅过滤条目。
+  // 未过滤时全部仓库卡片照常渲染（含零 issue 仓库的仓库级空状态）；
+  // 过滤激活时无匹配条目的仓库整卡隐藏（避免空卡噪音）。标签候选
+  // 来自未过滤全量数据，过滤后候选标签不因筛选消失
+  const issueFilterActive = issueFilter.status !== 'all' || issueFilter.labels.length > 0
+  const issueLabelOptions = collectLabelOptions(repoIssues)
+  const hasAnyIssue = repoIssues.some((r) => (r.issues || []).length > 0)
+  const filteredRepoIssues = repoIssues
+    .map((r) => ({
+      ...r,
+      issues: filterIssuesByFilter(r.issues, issueFilter, runningKeys, r.repo_id),
+    }))
+    .filter((r) => !issueFilterActive || (r.issues || []).length > 0)
 
   // 拉取全部正在执行的任务（running+retrying 多值过滤，issue #32）
   const load = useCallback(async () => {
@@ -650,6 +786,63 @@ export default function Overview() {
           <section className="issues-section">
             <h2>开放 Issue</h2>
             <p className="muted">已启用仓库的开放 issue，按仓库优先级排序，正在运行的 issue 置顶展示任务执行详情（每 {ISSUE_POLL_MS / 1000} 秒自动刷新）</p>
+
+            {/* issue #230：过滤条——按状态（全部/开放/进行中）+ 标签多选
+                过滤，仅过滤条目、保留仓库分组结构；偏好存 localStorage
+                刷新后保持。状态「开放」= 无运行中任务（含 bot-failed /
+                bot-done/其他分组），「进行中」= 有 running/retrying 任务
+                （与置顶 running 组同源判定） */}
+            {hasAnyIssue && (
+              <div className="issue-filter-bar">
+                <div className="issue-filter-row">
+                  <span className="issue-filter-label" title="按状态过滤开放 issue">状态</span>
+                  <div className="issue-filter-statuses" role="group" aria-label="按状态过滤">
+                    {ISSUE_STATUS_FILTERS.map((s) => (
+                      <button key={s.key} type="button"
+                              className={'issue-filter-status' + (issueFilter.status === s.key ? ' active' : '')}
+                              title={s.hint} aria-pressed={issueFilter.status === s.key}
+                              onClick={() => setIssueFilter((prev) => ({ ...prev, status: s.key }))}>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="issue-filter-row">
+                  <span className="issue-filter-label" title="多选标签，命中任一选中标签的 issue 即展示">标签</span>
+                  <div className="issue-filter-labels">
+                    {issueLabelOptions.length === 0 ? (
+                      <span className="muted small">暂无标签</span>
+                    ) : (
+                      issueLabelOptions.map((name) => {
+                        const active = issueFilter.labels.includes(name)
+                        return (
+                          <button key={name} type="button"
+                                  className={'issue-filter-label-chip' + (active ? ' active' : '')}
+                                  title={active ? `取消过滤「${name}」` : `仅展示带「${name}」标签的 issue`}
+                                  aria-pressed={active}
+                                  onClick={() => setIssueFilter((prev) => ({
+                                    ...prev,
+                                    labels: active
+                                      ? prev.labels.filter((l) => l !== name)
+                                      : prev.labels.concat(name),
+                                  }))}>
+                            {active && <Icon name="check" />}
+                            {name}
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+                {issueFilterActive && (
+                  <button type="button" className="btn btn-small issue-filter-reset"
+                          onClick={() => setIssueFilter({ status: 'all', labels: [] })}
+                          title="清除全部过滤条件，恢复展示全部开放 issue">
+                    清除过滤
+                  </button>
+                )}
+              </div>
+            )}
             {ownerTokenOk === false && (
               <div className="alert alert-warning" role="alert">
                 <Icon name="warning" /> <strong>Owner GitLab Token 未配置</strong>：概览页的 issue 编辑
@@ -669,21 +862,34 @@ export default function Overview() {
                 {issueErrors.map((e, i) => <div key={i}>{e}</div>)}
               </div>
             )}
-            {repoIssues.length === 0 || repoIssues.every((r) => !r.issues || r.issues.length === 0) ? (
+            {!hasAnyIssue ? (
               <div className="empty-state">
                 <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
                 <p className="muted">暂无开放 issue</p>
               </div>
+            ) : filteredRepoIssues.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon" aria-hidden="true"><Icon name="search" /></span>
+                <p className="muted">没有匹配过滤条件的 issue</p>
+                <button type="button" className="btn btn-small"
+                        onClick={() => setIssueFilter({ status: 'all', labels: [] })}>
+                  清除过滤
+                </button>
+              </div>
             ) : (
               <div className="issues-list">
-                {repoIssues.map((r) => (
+                {filteredRepoIssues.map((r) => (
                   <div key={r.repo_id} className="card issue-repo-card">
                     <div className="issue-repo-head">
                       <span className="issue-repo-name" title="仓库"><Icon name="folder" /> {r.repo_name || '（已删除）'}</span>
                       <span className="badge badge-muted" title="仓库优先级：数字越小越优先">
                         优先级 {r.priority ?? 100}
                       </span>
-                      <span className="muted">{r.issues.length} 个开放 issue</span>
+                      <span className="muted" title={issueFilterActive
+                        ? '当前过滤条件下匹配的开放 issue 数量'
+                        : '该仓库开放 issue 总数'}>
+                        {issueFilterActive ? `匹配 ${r.issues.length} 个` : `${r.issues.length} 个开放 issue`}
+                      </span>
                       {/* issue #134：卡片右上角操作组——「对账」按钮 + issue #92
                           「添加 Issue」按钮，整体推到卡片头最右侧 */}
                       <div className="issue-repo-actions">
