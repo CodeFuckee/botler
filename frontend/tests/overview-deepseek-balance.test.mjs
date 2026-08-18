@@ -25,6 +25,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -53,8 +56,10 @@ test('概览页请求余额接口并低频轮询（60 秒）', () => {
 test('未配置（configured=false）时卡片不渲染，已配置才展示', () => {
   assert.match(overview, /dsBalance\s*&&\s*dsBalance\.configured/,
                '应按 configured 控制卡片渲染')
-  assert.match(overview, /DeepSeek 账户余额/, '卡片应有标题')
-  assert.match(overview, /name="refresh" \/> 刷新/, '卡片应提供手动刷新按钮（Lucide RefreshCw）')
+  assert.match(overview, /tr\('overview\.balanceTitle'\)/, '卡片标题应经 t() 国际化')
+  assert.equal(zhCN['overview.balanceTitle'], 'DeepSeek 账户余额', '中文标题应保留')
+  assert.match(overview, /name="refresh" \/> \{tr\('common\.refresh'\)\}/, '刷新按钮应经 t() 国际化（Lucide RefreshCw）')
+  assert.equal(zhCN['common.refresh'], '刷新', '中文刷新文案应保留')
 })
 
 test('styles.css 提供余额卡片样式', () => {
@@ -70,8 +75,9 @@ test('卡片提供「去充值」链接按钮（issue #178）', () => {
   assert.match(overview, /href=\{DEEPSEEK_TOPUP_URL\}/, '链接应指向充值页地址')
   assert.match(overview, /target="_blank"/, '应新标签页打开')
   assert.match(overview, /rel="noreferrer"/, '外链应带 rel=noreferrer')
-  assert.match(overview, /去充值/, '应有「去充值」按钮文案')
-  assert.match(overview, /name="externalLink" \/> 去充值/, '应使用 Lucide ExternalLink 图标')
+  assert.match(overview, /tr\('overview\.recharge'\)/, '「去充值」按钮应经 t() 国际化')
+  assert.equal(zhCN['overview.recharge'], '去充值', '中文「去充值」文案应保留')
+  assert.match(overview, /name="externalLink" \/> \{tr\('overview\.recharge'\)\}/, '应使用 Lucide ExternalLink 图标 + t() 国际化')
 })
 
 // ---- 组件渲染（api.get 通过 vite 模块实例 mock）----

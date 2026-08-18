@@ -23,6 +23,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overviewSrc = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -107,7 +110,8 @@ async function clickDiscover(renderer, index = 0, postImpl) {
 
 test('源码含「发掘」按钮、发掘接口调用与结果提示', () => {
   assert.match(overviewSrc, /discover-btn/, '应有发掘按钮类名')
-  assert.match(overviewSrc, /发掘/, '应有发掘按钮文案')
+  assert.match(overviewSrc, /tr\('overview\.discover'\)/, '发掘按钮应经 t() 国际化')
+  assert.equal(zhCN['overview.discover'], '发掘', '中文「发掘」文案应保留')
   assert.match(
     overviewSrc,
     /api\.post\(`\/api\/repos\/\$\{repo\.repo_id\}\/discover`\)/,
@@ -118,10 +122,12 @@ test('源码含「发掘」按钮、发掘接口调用与结果提示', () => {
     /disabled=\{discoverResults\[r\.repo_id\]\?\.loading\}/,
     '请求中应禁用按钮防重复点击',
   )
-  assert.match(overviewSrc, /发掘中…/, '请求中应显示「发掘中…」')
+  assert.match(overviewSrc, /tr\('overview\.discovering'\)/, '「发掘中…」应经 t() 国际化')
+  assert.equal(zhCN['overview.discovering'], '发掘中…', '中文「发掘中…」文案应保留')
   assert.match(overviewSrc, /DiscoverResult/, '应渲染发掘结果组件')
-  assert.match(overviewSrc, /已创建 \{result\.created\.length\} 个发掘 issue/,
-               '成功应显示已创建发掘 issue 数量')
+  assert.match(overviewSrc, /tr\('overview\.discoverCreated', \{ n: result\.created\.length \}\)/,
+               '「已创建 N 个发掘 issue」应经 t() 国际化并插值数量')
+  assert.ok(zhCN['overview.discoverCreated'].includes('个发掘 issue'), '中文文案应保留')
   assert.match(overviewSrc, /compass/, '发掘按钮应使用 compass 图标')
 })
 

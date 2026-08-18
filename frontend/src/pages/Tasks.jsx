@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { Icon } from '../components/Icon.jsx'
+import { useI18n } from '../i18n.jsx'
 import { UsageSummary } from '../components/UsageCard.jsx'
 
 // 每页条数（与后端 limit 一致，issue #50 翻页）
@@ -70,9 +71,15 @@ export function sourceLabel(t) {
   return t.triggered_by === 'reconcile' ? '对账' : t.triggered_by === 'manual' ? '手动' : 'webhook'
 }
 
+// 来源列 i18n 键后缀（issue #268）：表格与抽屉经 tr('tasks.source' + 后缀) 渲染
+export function sourceLabelKey(t) {
+  return t.triggered_by === 'reconcile' ? 'Reconcile' : t.triggered_by === 'manual' ? 'Manual' : 'Webhook'
+}
+
 // 任务抽屉（issue #70）：窄视口下部分列被隐藏时，点操作列「⋯」按钮
 // 弹出右侧抽屉显示该任务全部字段（含被隐藏列的数据）。
 function TaskDrawer({ task, onClose }) {
+  const { tr } = useI18n()
   const meta = STATUS_META[task.status] || { label: task.status, cls: '' }
   const failedReason =
     (task.status === 'failed' || task.status === 'interrupted') && task.error_message
@@ -82,38 +89,38 @@ function TaskDrawer({ task, onClose }) {
     <div className="drawer-overlay" onClick={onClose}>
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <strong>任务 #{task.id} 全部数据 — #{task.issue_iid} {task.issue_title}</strong>
-          <button className="btn modal-close" onClick={onClose} title="关闭"
-                  aria-label="关闭抽屉"><Icon name="x" /></button>
+          <strong>{tr('tasks.drawerTitle', { id: task.id, iid: task.issue_iid, title: task.issue_title })}</strong>
+          <button className="btn modal-close" onClick={onClose} title={tr('common.close')}
+                  aria-label={tr('tasks.closeDrawer')}><Icon name="x" /></button>
         </div>
         <table className="table kv">
           <tbody>
-            <tr><th>任务</th><td><Link to={`/tasks/${task.id}`}>#{task.id}</Link></td></tr>
-            <tr><th>仓库</th><td>{task.repo_name || '—'}</td></tr>
-            <tr><th>Issue</th><td><Link to={`/tasks/${task.id}`}>#{task.issue_iid}</Link></td></tr>
-            <tr><th>标题</th><td className="pre-wrap">{task.issue_title || '—'}</td></tr>
-            <tr><th>状态</th><td><span className={'badge ' + meta.cls}>{meta.label}</span></td></tr>
-            <tr><th>尝试</th><td>
+            <tr><th>{tr('tasks.task')}</th><td><Link to={`/tasks/${task.id}`}>#{task.id}</Link></td></tr>
+            <tr><th>{tr('tasks.repo')}</th><td>{task.repo_name || '—'}</td></tr>
+            <tr><th>{tr('tasks.issue')}</th><td><Link to={`/tasks/${task.id}`}>#{task.issue_iid}</Link></td></tr>
+            <tr><th>{tr('tasks.title')}</th><td className="pre-wrap">{task.issue_title || '—'}</td></tr>
+            <tr><th>{tr('tasks.status')}</th><td><span className={'badge ' + meta.cls}>{meta.label}</span></td></tr>
+            <tr><th>{tr('tasks.attempt')}</th><td>
               {task.attempt_count}
               {task.resumed && (
-                <span className="badge resume" title="从上次中断的 claude 会话恢复执行（断点续跑）">恢复</span>
+                <span className="badge resume" title={tr('tasks.resumedTitle')}>{tr('tasks.resumed')}</span>
               )}
             </td></tr>
-            <tr><th>来源</th><td>{sourceLabel(task)}</td></tr>
-            <tr><th>失败原因</th><td className="pre-wrap">{failedReason || '—'}</td></tr>
-            <tr><th>提交</th><td>
+            <tr><th>{tr('tasks.source')}</th><td>{tr('tasks.source' + sourceLabelKey(task))}</td></tr>
+            <tr><th>{tr('tasks.reason')}</th><td className="pre-wrap">{failedReason || '—'}</td></tr>
+            <tr><th>{tr('tasks.commit')}</th><td>
               {task.commit_url ? (
                 <a href={task.commit_url} target="_blank" rel="noreferrer"
-                   title={`查看提交 ${task.commit_sha}`}>{shortSha(task.commit_sha)}</a>
+                   title={tr('tasks.viewCommit', { sha: task.commit_sha })}>{shortSha(task.commit_sha)}</a>
               ) : (
                 <span className="muted">—</span>
               )}
             </td></tr>
-            <tr><th>创建时间</th><td>{fmtTime(task.created_at)}</td></tr>
-            <tr><th>用时</th><td>{fmtDuration(task.created_at, task.finished_at) || '—'}</td></tr>
-            <tr><th>操作</th><td>
+            <tr><th>{tr('tasks.createdAt')}</th><td>{fmtTime(task.created_at)}</td></tr>
+            <tr><th>{tr('tasks.duration')}</th><td>{fmtDuration(task.created_at, task.finished_at) || '—'}</td></tr>
+            <tr><th>{tr('tasks.actions')}</th><td>
               <Link to={`/tasks/${task.id}?live=1`} className="btn btn-mini"
-                    title="实时查看 agent 执行进度与聊天记录（issue #20）">执行</Link>
+                    title={tr('tasks.runTitle')}>{tr('tasks.run')}</Link>
             </td></tr>
           </tbody>
         </table>
@@ -140,6 +147,8 @@ export function pageNumbers(totalPages, current) {
 }
 
 export default function Tasks() {
+  // 界面国际化（issue #268）：静态 UI 文案经 t() 翻译（默认中文）
+  const { tr } = useI18n()
   const [data, setData] = useState({ tasks: [], total: 0, stats: {} })
   const [status, setStatus] = useState('')
   const [search, setSearch] = useState('')
@@ -227,7 +236,7 @@ export default function Tasks() {
   // 一键停止所有任务（issue #35）：确认后调后端批量停止，刷新列表
   const stopAll = async () => {
     if (!(await confirmDialog({
-      message: `确定停止所有正在执行的任务吗？当前 ${activeCount} 个活跃任务（排队/执行/重试）将被标记为已中断，执行中的 claude 进程会被强制终止。`,
+      message: tr('tasks.confirmStopAll', { n: activeCount }),
       danger: true,
     }))) {
       return
@@ -236,7 +245,7 @@ export default function Tasks() {
     setStopMsg('')
     try {
       const r = await api.post('/api/tasks/stop-all')
-      setStopMsg(`已停止 ${r.count} 个任务`)
+      setStopMsg(tr('tasks.stopped', { n: r.count }))
       await load()
     } catch (e) {
       setError(e.message)
@@ -248,7 +257,7 @@ export default function Tasks() {
   // 手动重试任务（issue #36）：确认后重新入队执行（接续上次 claude 会话），刷新列表
   const retryTask = async (t) => {
     if (!(await confirmDialog({
-      message: `确定重试任务 #${t.id}（issue #${t.issue_iid} ${t.issue_title || ''}）吗？任务将重新入队执行，并接续上次 claude 会话继续处理。`,
+      message: tr('tasks.confirmRetry', { id: t.id, iid: t.issue_iid, title: t.issue_title || '' }),
     }))) {
       return
     }
@@ -256,7 +265,7 @@ export default function Tasks() {
     setRetryMsg('')
     try {
       await api.post(`/api/tasks/${t.id}/retry`)
-      setRetryMsg(`任务 #${t.id} 已重新入队，开始重试`)
+      setRetryMsg(tr('tasks.retried', { id: t.id }))
       await load()
     } catch (e) {
       setError(e.message)
@@ -270,7 +279,7 @@ export default function Tasks() {
   // 中的引擎进程（停止不可逆），随后刷新列表。请求中禁用防重复点击。
   const stopTask = async (t) => {
     if (!(await confirmDialog({
-      message: `确定停止任务 #${t.id}（issue #${t.issue_iid} ${t.issue_title || ''}）吗？执行中的引擎进程将被强制终止，任务状态标记为已中断，停止不可逆。`,
+      message: tr('tasks.confirmStop', { id: t.id, iid: t.issue_iid, title: t.issue_title || '' }),
       danger: true,
     }))) {
       return
@@ -279,7 +288,7 @@ export default function Tasks() {
     setStopTaskMsg('')
     try {
       await api.post(`/api/tasks/${t.id}/stop`)
-      setStopTaskMsg(`任务 #${t.id} 已停止`)
+      setStopTaskMsg(tr('tasks.stoppedOne', { id: t.id }))
       await load()
     } catch (e) {
       setError(e.message)
@@ -296,10 +305,10 @@ export default function Tasks() {
     try {
       const r = await api.post('/api/tasks/reconcile-all')
       if (r.errors && r.errors.length > 0) {
-        setError(`对账完成：扫描 ${r.scanned} 个 issue，补入队 ${r.enqueued} 个任务；` +
-          `${r.errors.length} 个仓库失败：${r.errors[0]}`)
+        setError(tr('tasks.reconcileDone', { scanned: r.scanned, enqueued: r.enqueued }) + '；' +
+          tr('tasks.reconcileErrors', { n: r.errors.length, msg: r.errors[0] }))
       } else {
-        setReconcileMsg(`对账完成：扫描 ${r.scanned} 个 issue，补入队 ${r.enqueued} 个任务`)
+        setReconcileMsg(tr('tasks.reconcileDone', { scanned: r.scanned, enqueued: r.enqueued }))
       }
       await load()
     } catch (e) {
@@ -320,7 +329,7 @@ export default function Tasks() {
 
   return (
     <div>
-      <h1>任务列表</h1>
+      <h1>{tr('tasks.listTitle')}</h1>
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {stopMsg && <div className="alert alert-ok" onClick={() => setStopMsg('')}>{stopMsg}</div>}
       {retryMsg && <div className="alert alert-ok" onClick={() => setRetryMsg('')}>{retryMsg}</div>}
@@ -340,18 +349,18 @@ export default function Tasks() {
         <div className="form-row wrap">
           {/* 筛选变化重置回第 1 页（issue #50），避免停留在越界页码 */}
           <select className="input" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }}>
-            <option value="">全部状态</option>
+            <option value="">{tr('tasks.allStatus')}</option>
             {Object.entries(STATUS_META).map(([k, v]) => (
               <option key={k} value={k}>{v.label}</option>
             ))}
           </select>
           <select className="input" value={repoId} onChange={(e) => { setRepoId(e.target.value); setPage(1) }}>
-            <option value="">全部仓库</option>
+            <option value="">{tr('tasks.allRepos')}</option>
             {repos.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
           <input
             className="input grow"
-            placeholder="搜索 issue 标题或编号…"
+            placeholder={tr('tasks.searchPlaceholder')}
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
           />
@@ -360,18 +369,18 @@ export default function Tasks() {
             className="btn btn-danger"
             onClick={stopAll}
             disabled={activeCount === 0 || stopping}
-            title={activeCount === 0 ? '当前没有正在执行的任务' : '停止所有排队中、执行中、重试中的任务'}
+            title={activeCount === 0 ? tr('tasks.noActiveTasks') : tr('tasks.stopAllTitle')}
           >
-            <><Icon name="square" /> 停止所有任务{activeCount > 0 ? `（${activeCount}）` : ''}</>
+            <><Icon name="square" /> {activeCount > 0 ? tr('tasks.stopAllWithCount', { n: activeCount }) : tr('tasks.stopAll')}</>
           </button>
           {/* 一键对账所有启用仓库（issue #38）：低危操作无需确认；请求中禁用 */}
           <button
             className="btn btn-gap-left"
             onClick={reconcileAll}
             disabled={reconciling}
-            title="立即扫描所有启用仓库，把漏掉的 issue 补入任务队列"
+            title={tr('tasks.reconcileAllTitle')}
           >
-            <><Icon name="refresh" /> 对账所有仓库{reconciling ? '…' : ''}</>
+            <><Icon name="refresh" /> {tr('tasks.reconcileAll')}{reconciling ? '…' : ''}</>
           </button>
           {/* 手动刷新任务列表（issue #59）：无活跃任务时页面无自动轮询，
               点此重新拉取更新所有任务状态；请求中禁用防重复点击 */}
@@ -379,16 +388,16 @@ export default function Tasks() {
             className="btn btn-gap-left"
             onClick={refreshList}
             disabled={refreshing}
-            title="重新加载任务列表，更新所有任务的显示状态"
+            title={tr('tasks.refreshTitle')}
           >
-            <><Icon name="refresh" /> 刷新{refreshing ? '…' : ''}</>
+            <><Icon name="refresh" /> {tr('common.refresh')}{refreshing ? '…' : ''}</>
           </button>
           {/* issue #235：任务列表可选展示 token 用量列——默认关闭（列表
               不查询用量，无额外开销）；勾选后重新拉取展示 */}
-          <label className="checkbox-label tasks-usage-toggle" title="展示每个任务的 token 用量（无用量数据显示「无数据」）">
+          <label className="checkbox-label tasks-usage-toggle" title={tr('tasks.showUsageTitle')}>
             <input type="checkbox" checked={showUsage}
                    onChange={(e) => setShowUsage(e.target.checked)} />
-            显示用量
+            {tr('tasks.showUsage')}
           </label>
         </div>
 
@@ -400,16 +409,16 @@ export default function Tasks() {
                  style={{ minWidth: tableMinWidth }}>
             <thead>
               <tr>
-                <th>#</th><th>仓库</th><th>Issue</th><th>标题</th>
-                <th>状态</th>
-                {showUsage && <th className="usage-col">用量</th>}
-                <th className={colCls('attempt')}>尝试</th>
-                <th className={colCls('source')}>来源</th>
-                <th className={colCls('reason')}>失败原因</th>
-                <th>提交</th>
-                <th className={colCls('created')}>创建时间</th>
-                <th className={colCls('duration')}>用时</th>
-                <th>操作</th>
+                <th>#</th><th>{tr('tasks.repo')}</th><th>{tr('tasks.issue')}</th><th>{tr('tasks.title')}</th>
+                <th>{tr('tasks.status')}</th>
+                {showUsage && <th className="usage-col">{tr('tasks.usage')}</th>}
+                <th className={colCls('attempt')}>{tr('tasks.attempt')}</th>
+                <th className={colCls('source')}>{tr('tasks.source')}</th>
+                <th className={colCls('reason')}>{tr('tasks.reason')}</th>
+                <th>{tr('tasks.commit')}</th>
+                <th className={colCls('created')}>{tr('tasks.createdAt')}</th>
+                <th className={colCls('duration')}>{tr('tasks.duration')}</th>
+                <th>{tr('tasks.actions')}</th>
               </tr>
             </thead>
           <tbody>
@@ -417,7 +426,7 @@ export default function Tasks() {
               <tr><td colSpan={showUsage ? 13 : 12}>
                 <div className="empty-state">
                   <span className="empty-icon" aria-hidden="true"><Icon name="folderOpen" /></span>
-                  <p className="muted">暂无任务</p>
+                  <p className="muted">{tr('tasks.noTasks')}</p>
                 </div>
               </td></tr>
             )}
@@ -445,20 +454,20 @@ export default function Tasks() {
                   <td className={colCls('attempt')}>
                     {t.attempt_count}
                     {t.resumed && (
-                      <span className="badge resume" title="从上次中断的 claude 会话恢复执行（断点续跑）">恢复</span>
+                      <span className="badge resume" title={tr('tasks.resumedTitle')}>{tr('tasks.resumed')}</span>
                     )}
                   </td>
-                  <td className={colCls('source')}>{sourceLabel(t)}</td>
+                  <td className={colCls('source')}>{tr('tasks.source' + sourceLabelKey(t))}</td>
                   <td className={colCls('reason') ? 'ellipsis col-hidden' : 'ellipsis'} title={failedReason}>
                     {failedReason || <span className="muted">—</span>}
                     {hasDetail && (
-                      <button className="btn btn-mini btn-gap-left" onClick={() => setDetailTask(t)}>详情</button>
+                      <button className="btn btn-mini btn-gap-left" onClick={() => setDetailTask(t)}>{tr('tasks.detail')}</button>
                     )}
                   </td>
-                  <td className="ellipsis" title={t.commit_sha ? `查看提交 ${t.commit_sha}` : undefined}>
+                  <td className="ellipsis" title={t.commit_sha ? tr('tasks.viewCommit', { sha: t.commit_sha }) : undefined}>
                     {t.commit_url ? (
                       <a href={t.commit_url} target="_blank" rel="noreferrer"
-                         title={`查看提交 ${t.commit_sha}`}>{shortSha(t.commit_sha)}</a>
+                         title={tr('tasks.viewCommit', { sha: t.commit_sha })}>{shortSha(t.commit_sha)}</a>
                     ) : (
                       <span className="muted">—</span>
                     )}
@@ -469,7 +478,7 @@ export default function Tasks() {
                   <td className={colCls('duration')}>{fmtDuration(t.created_at, t.finished_at) || <span className="muted">—</span>}</td>
                   <td>
                     <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
-                          title="实时查看 agent 执行进度与聊天记录（issue #20）">执行</Link>
+                          title={tr('tasks.runTitle')}>{tr('tasks.run')}</Link>
                     {/* 单任务停止（issue #214）：仅执行中（running）任务可停止，
                         确认后标记 interrupted 并强制终止引擎进程（不可逆），
                         请求中禁用防重复点击 */}
@@ -478,9 +487,9 @@ export default function Tasks() {
                         className="btn btn-mini btn-danger btn-gap-left"
                         onClick={() => stopTask(t)}
                         disabled={stopId === t.id}
-                        title="手动停止：强制终止该任务的执行进程并标记为已中断（停止不可逆）"
+                        title={tr('tasks.stopTitle')}
                       >
-                        {stopId === t.id ? '停止中…' : '停止'}
+                        {stopId === t.id ? tr('tasks.stopping') : tr('tasks.stop')}
                       </button>
                     )}
                     {/* 手动重试（issue #36）：仅失败/中断任务可重试，请求中禁用防重复点击 */}
@@ -489,9 +498,9 @@ export default function Tasks() {
                         className="btn btn-mini btn-gap-left"
                         onClick={() => retryTask(t)}
                         disabled={retryId === t.id}
-                        title="手动重试：重新入队执行该任务（接续上次 claude 会话）"
+                        title={tr('tasks.retryTitle')}
                       >
-                        {retryId === t.id ? '重试中…' : '重试'}
+                        {retryId === t.id ? tr('tasks.retrying') : tr('tasks.retry')}
                       </button>
                     )}
                     {/* ⋯ 按钮（issue #70）：有列被隐藏时出现在操作列最右侧，
@@ -500,7 +509,7 @@ export default function Tasks() {
                       <button
                         className="btn btn-mini btn-gap-left"
                         onClick={() => setDrawerTask(t)}
-                        title="查看全部字段（窄屏下部分列已隐藏）"
+                        title={tr('tasks.viewAllFields')}
                       >
                         ⋯
                       </button>
@@ -512,7 +521,7 @@ export default function Tasks() {
           </tbody>
           </table>
         </div>
-        <p className="muted small">共 {data.total} 条</p>
+        <p className="muted small">{tr('tasks.total', { n: data.total })}</p>
 
         {/* 翻页组件（issue #50）：多页时显示；上一页/页码/下一页 + 当前页信息 */}
         {totalPages > 1 && (
@@ -521,9 +530,9 @@ export default function Tasks() {
               className="btn btn-sm"
               disabled={page === 1}
               onClick={() => setPage(page - 1)}
-              title="上一页"
+              title={tr('tasks.prevTitle')}
             >
-              ‹ 上一页
+              {tr('tasks.prev')}
             </button>
             {pageNumbers(totalPages, page).map((n, i) =>
               n === '…' ? (
@@ -534,7 +543,7 @@ export default function Tasks() {
                   className={'btn btn-sm' + (n === page ? ' btn-primary' : '')}
                   disabled={n === page}
                   onClick={() => setPage(n)}
-                  title={`第 ${n} 页`}
+                  title={tr('tasks.pageBtnTitle', { n })}
                 >
                   {String(n)}
                 </button>
@@ -544,11 +553,11 @@ export default function Tasks() {
               className="btn btn-sm"
               disabled={page === totalPages}
               onClick={() => setPage(page + 1)}
-              title="下一页"
+              title={tr('tasks.nextTitle')}
             >
-              下一页 ›
+              {tr('tasks.next')}
             </button>
-            <span className="muted small">{`第 ${page} / ${totalPages} 页`}</span>
+            <span className="muted small">{tr('tasks.pageInfo', { page, total: totalPages })}</span>
           </div>
         )}
       </div>
@@ -560,13 +569,13 @@ export default function Tasks() {
         <div className="modal-overlay" onClick={() => setDetailTask(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <strong>失败详细原因 — #{detailTask.issue_iid} {detailTask.issue_title}</strong>
+              <strong>{tr('tasks.detailTitle', { iid: detailTask.issue_iid, title: detailTask.issue_title })}</strong>
               <button className="btn modal-close" onClick={() => setDetailTask(null)}
-                      title="关闭" aria-label="关闭弹窗"><Icon name="x" /></button>
+                      title={tr('common.close')} aria-label={tr('tasks.closeModal')}><Icon name="x" /></button>
             </div>
             {detailTask.error_message && (
               <div className="error-summary">
-                <strong>摘要：</strong>
+                <strong>{tr('tasks.summary')}</strong>
                 <span className="pre-wrap">{detailTask.error_message}</span>
               </div>
             )}
@@ -574,18 +583,18 @@ export default function Tasks() {
               {(detailTask.error_detail?.attempts || []).map((a) => (
                 <div key={a.attempt} className="error-attempt">
                   <div className="error-attempt-head">
-                    <span>第 {a.attempt} 次尝试</span>
-                    <code>退出码: {a.exit_code ?? '—'}</code>
+                    <span>{tr('tasks.attemptN', { n: a.attempt })}</span>
+                    <code>{tr('tasks.exitCode', { code: a.exit_code ?? '—' })}</code>
                   </div>
-                  <pre className="error-attempt-trace">{a.error || '（无输出）'}</pre>
+                  <pre className="error-attempt-trace">{a.error || tr('common.noOutput')}</pre>
                 </div>
               ))}
               {!detailTask.error_detail?.attempts?.length && (
-                <p className="muted">该任务没有更详细的失败记录</p>
+                <p className="muted">{tr('tasks.noDetail')}</p>
               )}
             </div>
             <div className="modal-footer">
-              {detailTask.log_path && <code className="muted small">日志文件: {detailTask.log_path}</code>}
+              {detailTask.log_path && <code className="muted small">{tr('tasks.logFile', { path: detailTask.log_path })}</code>}
             </div>
           </div>
         </div>

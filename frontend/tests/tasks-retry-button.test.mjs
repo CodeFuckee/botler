@@ -25,6 +25,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const tasksSrc = readFileSync(path.join(ROOT, 'src/pages/Tasks.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 stop-all-button.test.mjs 一致）。
@@ -50,7 +53,8 @@ after(() => vite.close())
 // ---- 源码断言 ----
 
 test('任务页源码含重试按钮与确认交互', () => {
-  assert.match(tasksSrc, /重试/, '应有重试按钮文案')
+  assert.match(tasksSrc, /tr\('tasks\.retry'\)/, '重试按钮应经 t() 国际化')
+  assert.equal(zhCN['tasks.retry'], '重试', '中文「重试」文案应保留')
   assert.match(tasksSrc, /confirmDialog/, '点击应先弹自定义确认对话框')
   assert.match(
     tasksSrc,

@@ -23,6 +23,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-issues.test.mjs 一致）。
@@ -218,9 +221,9 @@ test('渲染：混合数据按 failed→done→other 顺序渲染组标题与计
                      ['bot-failed', 'bot-done', '其他'],
                      '组标题顺序应为 failed → done → other')
     const counts = root.findAll((n) => n.props.className === 'issue-group-count')
-    // JSX 中 `{items.length} 个` 产生 [数字, ' 个'] 两个子节点
+    // issue #268：计数经 t('overview.groupCount', { n }) 插值为单字符串（如「2 个」）
     assert.deepEqual(counts.map((c) => c.props.children),
-                     [[1, ' 个'], [2, ' 个'], [2, ' 个']], '组标题计数应正确')
+                     ['1 个', '2 个', '2 个'], '组标题计数应正确')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

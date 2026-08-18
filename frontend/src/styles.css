@@ -1912,6 +1912,21 @@ code {
   font-size: 13px;
   color: var(--muted);
 }
+/* 导航栏界面语言快捷切换（issue #268）：紧凑下拉，置于右上角用户区左侧；
+   margin-left:auto 与 user-chip 共同把切换器推到导航最右（无用户信息时
+   单独占据最右侧） */
+.lang-switch {
+  margin-left: auto;
+  height: 28px;
+  padding: 0 var(--space-2);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+.lang-switch:focus-visible { box-shadow: var(--focus-ring); }
 
 /* ---- 标记库页（issue #29）---- */
 .label-list {

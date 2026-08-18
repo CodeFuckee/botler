@@ -27,6 +27,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const tasksSrc = readFileSync(path.join(ROOT, 'src/pages/Tasks.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与
@@ -51,13 +54,14 @@ after(() => vite.close())
 // ---- 源码断言 ----
 
 test('任务页源码含「刷新」按钮与防重复点击禁用逻辑', () => {
-  assert.match(tasksSrc, /name="refresh" \/> 刷新/, '应有刷新按钮文案（Lucide RefreshCw）')
+  assert.match(tasksSrc, /name="refresh" \/> \{tr\('common\.refresh'\)\}/, '刷新按钮应经 t() 国际化（Lucide RefreshCw）')
+  assert.equal(zhCN['common.refresh'], '刷新', '中文「刷新」文案应保留')
   assert.match(tasksSrc, /disabled=\{refreshing\}/, '请求中应禁用按钮防重复点击')
 })
 
 test('刷新为低危操作：无需确认对话框', () => {
-  assert.ok(tasksSrc.includes('name="refresh" /> 刷新'), '源码应先含刷新按钮（前置条件）')
-  const tail = tasksSrc.slice(tasksSrc.indexOf('name="refresh" /> 刷新'))
+  assert.ok(tasksSrc.includes("name=\"refresh\" /> {tr('common.refresh')}"), '源码应先含刷新按钮（前置条件）')
+  const tail = tasksSrc.slice(tasksSrc.indexOf("name=\"refresh\" /> {tr('common.refresh')}"))
   assert.ok(
     !tail.split('\n').slice(0, 25).some(
       (l) => l.includes('window.confirm') || l.includes('confirmDialog'),

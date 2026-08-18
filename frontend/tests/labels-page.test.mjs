@@ -14,6 +14,9 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
 const labels = readFileSync(path.join(ROOT, 'src/pages/Labels.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
@@ -21,7 +24,8 @@ const apiLabels = readFileSync(path.join(ROOT, '../backend/botler/api/labels.py'
 
 test('顶部导航包含「标记库」入口', () => {
   assert.match(app, /NavLink to="\/labels"/, '导航应有到 /labels 的 NavLink')
-  assert.match(app, /标记库/, '导航链接文案应为「标记库」')
+  assert.match(app, /t\('nav\.labels'\)/, '导航链接应经 t() 国际化')
+  assert.equal(zhCN['nav.labels'], '标记库', '中文文案应为「标记库」')
 })
 
 test('App.jsx 注册 /labels 路由并挂载 Labels 页面', () => {

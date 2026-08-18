@@ -1,5 +1,20 @@
 <!doctype html>
 <html lang="zh-CN">
+    <script>
+      // 界面语言首屏防闪变（issue #268）：应用 JS 加载前按本地偏好
+      // （键 botler.lang，缺省 = 中文）设置 <html lang>，避免英文用户
+      // 刷新时先看到中文再闪变；I18nProvider 挂载后会再次同步。
+      (function () {
+        try {
+          var lang = localStorage.getItem('botler.lang')
+          if (lang === 'zh-CN' || lang === 'en-US') {
+            document.documentElement.lang = lang
+          }
+        } catch (e) {
+          /* 无存储环境（隐私模式）：保持默认中文，不影响页面使用 */
+        }
+      })()
+    </script>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

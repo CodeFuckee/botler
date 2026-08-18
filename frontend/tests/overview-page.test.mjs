@@ -21,6 +21,8 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
@@ -80,7 +82,8 @@ test('每个活跃任务独立订阅事件流（SSE 实时输出）', () => {
 test('运行中 issue 项内渲染任务状态徽标与实时输出（issue #114 整合）', () => {
   assert.match(overview, /STATUS_META/, '任务块应显示任务状态徽标')
   assert.match(overview, /issue-task-log/, '任务块应渲染实时输出日志')
-  assert.match(overview, /（暂无输出）/, '日志为空时应显示占位文案')
+  assert.match(overview, /tr\('overview\.noTaskOutput'\)/, '日志为空占位文案应经 t() 国际化')
+  assert.equal(zhCN['overview.noTaskOutput'], '（暂无输出）', '中文占位文案应保留')
   // issue #114：任务板块已删除，任务信息在开放 issue 列表项内展示
   assert.ok(!overview.includes('当前没有正在执行的任务'),
             '独立任务板块空状态文案应已删除')

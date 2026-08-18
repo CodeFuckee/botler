@@ -23,6 +23,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -58,12 +61,15 @@ test('源码：板块位于概览页最下方（CI/CD 流水线板块之后）',
 })
 
 test('源码：板块渲染平均完成耗时与走势图', () => {
-  assert.match(overview, /Issue 完成耗时/, '板块应有标题')
-  assert.match(overview, /平均完成耗时/, '应有平均完成耗时文案')
+  assert.match(overview, /tr\('overview\.completionTitle'\)/, '板块标题应经 t() 国际化')
+  assert.equal(zhCN['overview.completionTitle'], 'Issue 完成耗时', '中文标题应为「Issue 完成耗时」')
+  assert.match(overview, /tr\('overview\.avgCompletion'/, '平均耗时文案应经 t() 国际化')
+  assert.ok(zhCN['overview.avgCompletion'].includes('平均完成耗时'), '中文平均耗时文案应保留')
   assert.match(overview, /fmtSeconds\(completionStats\.avg_seconds\)/,
                '平均耗时应经 fmtSeconds 人类可读格式化')
   assert.match(overview, /CompletionTrendChart/, '应渲染走势图组件')
-  assert.match(overview, /暂无已完成 issue/, '无数据时应有空状态文案')
+  assert.match(overview, /tr\('overview\.noCompletedIssues'\)/, '空状态文案应经 t() 国际化')
+  assert.equal(zhCN['overview.noCompletedIssues'], '暂无已完成 issue', '中文空状态文案应保留')
 })
 
 test('styles.css 提供板块与走势图样式', () => {

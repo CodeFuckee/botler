@@ -37,6 +37,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-issues.test.mjs 一致）
@@ -406,9 +409,9 @@ async function clickAddIssue(renderer, index = 0) {
 }
 
 test('源码：「添加 Issue」按钮位于「编辑」按钮左侧', () => {
-  const add = overview.indexOf('name="pin" /> 添加 Issue')
-  const edit = overview.indexOf('name="pencil" /> 编辑')
-  const del = overview.indexOf('name="trash" /> 删除')
+  const add = overview.indexOf("tr('overview.addIssue')")
+  const edit = overview.indexOf("tr('common.edit')")
+  const del = overview.indexOf("tr('common.delete')")
   assert.ok(add >= 0 && edit >= 0 && del >= 0, '三个操作按钮文案都应存在')
   assert.ok(add < edit, '「添加 Issue」应位于「编辑」左侧')
   assert.ok(edit < del, '「编辑」应位于「删除」左侧')
@@ -534,7 +537,8 @@ async function openInspirationChat(renderer, index = 0) {
 }
 
 test('源码：灵感条目有「对话」按钮，调用 GET/POST /api/inspirations/{id}/messages', () => {
-  assert.match(overview, /name="message" \/> 对话/, '灵感条目操作区应有「对话」按钮')
+  assert.match(overview, /name="message" \/> \{tr\('overview\.chat'\)\}/, '「对话」按钮应经 t() 国际化')
+  assert.equal(zhCN['overview.chat'], '对话', '中文「对话」文案应保留')
   assert.match(overview, /api\.get\(`\/api\/inspirations\/\$\{ins\.id\}\/messages`\)/,
                '打开面板应 GET /api/inspirations/{id}/messages 加载历史')
   assert.match(overview, /api\.post\(`\/api\/inspirations\/\$\{chatInspiration\.id\}\/messages`/,

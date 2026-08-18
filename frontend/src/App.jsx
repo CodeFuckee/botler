@@ -17,10 +17,13 @@ import { applyTheme, loadThemePreference, saveThemePreference, watchSystemTheme 
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 import { createVersionChecker } from './version-update.js'
 import { Icon } from './components/Icon.jsx'
+import { useI18n, LANG_LABELS } from './i18n.jsx'
 
 export default function App() {
   // SSO 登录状态（issue #27）：null = 检测中；{enabled, user} = 结果。
   // SSO 启用且未登录 → 只渲染登录页，不加载主界面。
+  // 界面国际化（issue #268）：t 翻译 / lang 当前语言 / setLang 切换（默认中文，无 Provider 时回退）
+  const { t, lang, setLang } = useI18n()
   const [auth, setAuth] = useState(null)
   useEffect(() => {
     api.get('/api/auth/status')
@@ -104,7 +107,7 @@ export default function App() {
     return (
       <div className="app-loading">
         <span className="spinner" aria-hidden="true" />
-        <p className="muted">加载中…</p>
+        <p className="muted">{t('common.loading')}</p>
       </div>
     )
   }
@@ -123,57 +126,69 @@ export default function App() {
         <div className="version-update-banner" role="status" aria-live="polite">
           <Icon name="refresh" aria-hidden="true" />
           <span className="version-update-banner-text">
-            检测到新版本 <strong>v{versionUpdate.version}</strong>
-            {versionUpdate.buildTime && <span> · 构建于 {versionUpdate.buildTime}</span>}
-            {versionUpdate.commit && <span> · 提交 {shortSha(versionUpdate.commit)}</span>}
-            ，点击刷新加载最新部署内容。
+            {t('app.versionDetected')} <strong>v{versionUpdate.version}</strong>
+            {versionUpdate.buildTime && <span> · {t('app.builtAt', { time: versionUpdate.buildTime })}</span>}
+            {versionUpdate.commit && <span> · {t('app.commitAt', { sha: shortSha(versionUpdate.commit) })}</span>}
+            {t('app.refreshToLoad')}
           </span>
-          <button className="btn btn-sm" onClick={() => window.location.reload()}>立即刷新</button>
-          <button className="btn btn-sm version-update-banner-dismiss" onClick={() => setVersionUpdate(null)}>忽略</button>
+          <button className="btn btn-sm" onClick={() => window.location.reload()}>{t('app.refreshNow')}</button>
+          <button className="btn btn-sm version-update-banner-dismiss" onClick={() => setVersionUpdate(null)}>{t('app.dismiss')}</button>
         </div>
       )}
       {/* HIG 灵活：导航提供 aria-label 语义（屏幕阅读器可跳过） */}
-      <nav className="topnav" aria-label="主导航">
+      <nav className="topnav" aria-label={t('nav.ariaMain')}>
         <div className="brand">
           <span className="brand-dot"><Icon name="bot" /></span> Botler
         </div>
         <NavLink to="/overview" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          概览
+          {t('nav.overview')}
         </NavLink>
         {/* issue #54：默认页改为概览页，仓库页迁至 /repos */}
         <NavLink to="/repos" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          仓库
+          {t('nav.repos')}
         </NavLink>
         <NavLink to="/tasks" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          任务
+          {t('nav.tasks')}
         </NavLink>
         {/* 统计看板页（issue #264）：成功率/引擎对比/仓库排行聚合视图 */}
         <NavLink to="/stats" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          统计
+          {t('nav.stats')}
         </NavLink>
         <NavLink to="/templates" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          模版
+          {t('nav.templates')}
         </NavLink>
         <NavLink to="/labels" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          标记库
+          {t('nav.labels')}
         </NavLink>
         {/* 插件管理页（issue #145）：所有插件的安装、卸载和设置都在这个界面 */}
         <NavLink to="/plugins" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          插件
+          {t('nav.plugins')}
         </NavLink>
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          设置
+          {t('nav.settings')}
         </NavLink>
         {/* Web 终端（issue #183）：浏览器内多标签终端，无需再打开系统终端 */}
         <NavLink to="/terminal" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          终端
+          {t('nav.terminal')}
         </NavLink>
         {/* 登录后用户名称与退出按钮位于导航栏最右（issue #9 第二轮）：
             .user-chip 的 margin-left:auto 承接原版本徽标的"推到最右"职责 */}
+        {/* 界面语言快捷切换（issue #268）：右上角下拉，中/英即时切换并持久化到 localStorage */}
+        <select
+          className="lang-switch"
+          value={lang}
+          onChange={(e) => setLang(e.target.value)}
+          title={t('nav.langTitle')}
+          aria-label={t('nav.langTitle')}
+        >
+          {Object.entries(LANG_LABELS).map(([code, label]) => (
+            <option key={code} value={code}>{label}</option>
+          ))}
+        </select>
         {auth.user && (
-          <span className="navlink user-chip" title="当前登录的群晖账号">
+          <span className="navlink user-chip" title={t('nav.userTitle')}>
             <Icon name="user" /> {auth.user.username || auth.user.name || auth.user.sub}
-            <button className="btn btn-sm" onClick={logout}>退出</button>
+            <button className="btn btn-sm" onClick={logout}>{t('nav.logout')}</button>
           </span>
         )}
       </nav>

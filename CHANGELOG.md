@@ -5,6 +5,33 @@
 ## [Unreleased]
 ### Added
 
+- **前端界面国际化（中英文切换，issue #268）**：
+  平台可对接 GitLab 开放社区，但前端全部文案硬编码中文（jsx 字符串），英文用户/团队协作有门槛，
+  魔法字符串散落各处也不利于维护。本次引入轻量自研 i18n（React Context + JSON 字典，不引入
+  第三方依赖）：
+  - `frontend/src/i18n.jsx`（新增）：`I18nProvider` / `useI18n` / `translate`——默认语言 zh-CN，
+    en-US 缺失 key 自动回退中文、key 完全缺失原样返回（未翻译文案回退中文不报错）；语言选择持久化
+    到 localStorage（键 botler.lang，与主题 botler.theme issue #217 同模式），刷新后保持；切换
+    即时生效并同步 `<html lang>`（屏幕阅读器/浏览器翻译友好）；无 Provider 环境（SSR/单组件测试）
+    回退中文，现有测试不受影响；
+  - `frontend/src/locales/zh-CN.json` / `en-US.json`（新增）：238 个 key 中英字典，覆盖导航 /
+    概览页（余额/开放 Issue/灵感/流水线/完成耗时/用量统计/对话抽屉）/ 任务页（列表/表格/翻页/
+    抽屉/失败详情/确认对话框）/ 设置页「界面显示」语言行；中文值与原硬编码文案逐字一致（关键
+    测试用稳定文案）；
+  - `frontend/src/main.jsx` + `index.html`：应用挂载包 I18nProvider，首屏 inline 脚本按本地偏好
+    设置 `<html lang>` 防闪变（与主题同模式）；
+  - `frontend/src/App.jsx`：导航文案经 t() 国际化，右上角新增语言快捷切换下拉（中文/English，
+    与 user-chip 同侧）；`frontend/src/pages/Settings.jsx`：「界面显示」卡片新增「界面语言」行
+    （botler.lang，即时切换并持久化）；`frontend/src/pages/Overview.jsx` / `Tasks.jsx`：高频静态
+    文案（标题/按钮/表头/空状态/提示/确认对话框/工具提示）全部经 tr() 翻译，后端错误消息与动态
+    内容（任务状态/仓库名/issue 标题等）保持原文；
+  - `frontend/src/styles.css`：导航语言切换器样式；
+  - **测试**：前端新增 `frontend/tests/i18n.test.mjs` 10 例（translate 中英/回退/缺 key/插值、
+    localStorage 读写与非法值兜底、Provider 默认中文/预置 en-US/即时切换并持久化、无 Provider
+    回退中文不崩溃、Overview/App 集成在 en-US 下渲染英文）；既有源码断言类测试改为「i18n key +
+    字典中文值」双重校验；全量前端单元测试（node --test + c8 覆盖率门禁）通过，无 regression。
+
+
 - **统计分析看板页：成功率 / 引擎对比 / 仓库排行（issue #264）**：
   平台积累了任务执行数据（status/engine/时长/来源）但只有概览页的 DeepSeek 余额卡片与单仓库平均耗时
   （issue #180），任务成功率、各引擎表现对比、仓库处理量排行都无聚合视图。本次新增独立「统计」页

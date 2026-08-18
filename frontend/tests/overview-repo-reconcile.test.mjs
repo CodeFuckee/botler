@@ -22,6 +22,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overviewSrc = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -107,7 +110,8 @@ async function clickReconcile(renderer, index = 0, postImpl) {
 
 test('源码含「对账」按钮、对账接口调用与结果提示', () => {
   assert.match(overviewSrc, /reconcile-btn/, '应有对账按钮类名')
-  assert.match(overviewSrc, /对账/, '应有对账按钮文案')
+  assert.match(overviewSrc, /tr\('overview\.reconcile'\)/, '对账按钮应经 t() 国际化')
+  assert.equal(zhCN['overview.reconcile'], '对账', '中文「对账」文案应保留')
   assert.match(
     overviewSrc,
     /api\.post\(`\/api\/repos\/\$\{repo\.repo_id\}\/reconcile`\)/,
@@ -118,8 +122,10 @@ test('源码含「对账」按钮、对账接口调用与结果提示', () => {
     /disabled=\{reconcileResults\[r\.repo_id\]\?\.loading\}/,
     '请求中应禁用按钮防重复点击',
   )
-  assert.match(overviewSrc, /个待处理 issue 已入队/, '成功应显示入队数')
-  assert.match(overviewSrc, /无需处理/, '无待处理应显示无需处理')
+  assert.match(overviewSrc, /tr\('overview\.reconcileEnqueued'/, '「N 个待处理 issue 已入队」应经 t() 国际化')
+  assert.ok(zhCN['overview.reconcileEnqueued'].includes('个待处理 issue 已入队'), '中文文案应保留')
+  assert.match(overviewSrc, /tr\('overview\.reconcileNoop'\)/, '「无需处理」应经 t() 国际化')
+  assert.equal(zhCN['overview.reconcileNoop'], '无需处理', '中文「无需处理」文案应保留')
   assert.match(overviewSrc, /ReconcileResult/, '应渲染对账结果组件')
 })
 

@@ -14,6 +14,7 @@ import {
   applyTheme,
   saveThemePreference,
 } from '../theme.js'
+import { useI18n, LANG_LABELS } from '../i18n.jsx'
 
 const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
@@ -48,6 +49,8 @@ const NOTIFY_LABELS = {
 const themeStorage = typeof localStorage !== 'undefined' ? localStorage : null
 
 export default function Settings() {
+  // 界面国际化（issue #268）：设置页「界面显示」卡片提供语言切换
+  const { t, lang, setLang } = useI18n()
   const [settings, setSettings] = useState(null)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
@@ -866,6 +869,22 @@ export default function Settings() {
               </td>
             </tr>
             <tr>
+              {/* 界面语言（issue #268）：切换即时生效并持久化到 localStorage
+                  botler.lang（刷新后保持）；语言名以母语展示 */}
+              <th>{t('settings.ui.language')} <code>botler.lang</code></th>
+              <td>
+                <select
+                  className="input"
+                  value={lang}
+                  onChange={(e) => setLang(e.target.value)}
+                >
+                  {Object.entries(LANG_LABELS).map(([code, label]) => (
+                    <option key={code} value={code}>{label}</option>
+                  ))}
+                </select>
+              </td>
+            </tr>
+            <tr>
               <th>显示时区 <code>ui.timezone</code></th>
               <td>
                 <input
@@ -895,6 +914,7 @@ export default function Settings() {
           切换即时预览，保存后写回 config.yaml 并同步浏览器本地偏好，刷新不闪变。
           任务创建/开始/完成时间与执行日志时间戳按显示时区展示；留空则跟随本机浏览器时区
           （默认与访问者本机一致），修改后点击下方「保存界面显示配置」立即生效，无需刷新。
+          {t('settings.ui.languageHint')}
         </p>
       </div>
 

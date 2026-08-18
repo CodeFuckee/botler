@@ -23,6 +23,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -49,7 +52,8 @@ test('概览页独立轮询流水线状态接口（15 秒间隔）', () => {
 
 test('卡片渲染仓库名、状态徽章、stage 节点与 pipeline 链接', () => {
   assert.match(overview, /repo_name/, '卡片应显示仓库名')
-  assert.match(overview, /暂无流水线/, '无流水线时应显示占位文案')
+  assert.match(overview, /tr\('overview\.noPipelines'\)/, '「暂无流水线」应经 t() 国际化')
+  assert.equal(zhCN['overview.noPipelines'], '暂无流水线', '中文「暂无流水线」文案应保留')
   assert.match(overview, /stageClass/, 'stage 节点应使用 stageClass 映射样式类')
   assert.match(overview, /pl\.web_url/, '卡片应链接到 pipeline web_url')
 })

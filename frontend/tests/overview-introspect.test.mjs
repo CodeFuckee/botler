@@ -22,6 +22,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overviewSrc = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -106,7 +109,8 @@ async function clickIntrospect(renderer, index = 0, postImpl) {
 
 test('源码含「自省」按钮、审查接口调用与结果提示', () => {
   assert.match(overviewSrc, /introspect-btn/, '应有自省按钮类名')
-  assert.match(overviewSrc, /自省/, '应有自省按钮文案')
+  assert.match(overviewSrc, /tr\('overview\.introspect'\)/, '自省按钮应经 t() 国际化')
+  assert.equal(zhCN['overview.introspect'], '自省', '中文「自省」文案应保留')
   assert.match(
     overviewSrc,
     /api\.post\(`\/api\/repos\/\$\{repo\.repo_id\}\/introspect`\)/,
@@ -117,9 +121,11 @@ test('源码含「自省」按钮、审查接口调用与结果提示', () => {
     /disabled=\{introspectResults\[r\.repo_id\]\?\.loading\}/,
     '请求中应禁用按钮防重复点击',
   )
-  assert.match(overviewSrc, /自省中…/, '请求中应显示「自省中…」')
+  assert.match(overviewSrc, /tr\('overview\.introspecting'\)/, '「自省中…」应经 t() 国际化')
+  assert.equal(zhCN['overview.introspecting'], '自省中…', '中文「自省中…」文案应保留')
   assert.match(overviewSrc, /IntrospectResult/, '应渲染自省结果组件')
-  assert.match(overviewSrc, /已创建自省 issue/, '成功应显示已创建自省 issue')
+  assert.match(overviewSrc, /tr\('overview\.introspectCreated'\)/, '「已创建自省 issue」应经 t() 国际化')
+  assert.equal(zhCN['overview.introspectCreated'], '已创建自省 issue', '中文文案应保留')
 })
 
 test('styles.css：自省按钮与结果样式', () => {

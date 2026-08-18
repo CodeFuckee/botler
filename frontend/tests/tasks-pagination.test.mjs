@@ -28,6 +28,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const tasksSrc = readFileSync(path.join(ROOT, 'src/pages/Tasks.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 stop-all-button.test.mjs 一致）。
@@ -54,8 +57,10 @@ const PAGE_SIZE = 50
 
 test('任务页源码含 offset 分页参数与翻页控件文案', () => {
   assert.match(tasksSrc, /offset/, '请求应携带 offset 分页参数')
-  assert.match(tasksSrc, /上一页/, '应有「上一页」按钮')
-  assert.match(tasksSrc, /下一页/, '应有「下一页」按钮')
+  assert.match(tasksSrc, /tr\('tasks\.prev'\)/, '「上一页」应经 t() 国际化')
+  assert.ok(zhCN['tasks.prev'].includes('上一页'), '中文「上一页」文案应保留')
+  assert.match(tasksSrc, /tr\('tasks\.next'\)/, '「下一页」应经 t() 国际化')
+  assert.ok(zhCN['tasks.next'].includes('下一页'), '中文「下一页」文案应保留')
   assert.match(tasksSrc, /pageNumbers/, '应有页码数字计算（pageNumbers）')
 })
 

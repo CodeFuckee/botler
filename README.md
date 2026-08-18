@@ -138,6 +138,10 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 配置的文本对话模型——取列表第一个启用且 API Key 非空的项（支持 DeepSeek /
 > OpenAI / Gemini / Anthropic 等，未配置时给出中文提示引导到设置页）；AI
 > 回复失败时输入保留可重试。
+> 界面语言（issue #268）：导航栏右上角与设置页「界面显示」卡片提供「中文 / English」快捷切换，
+> 选择持久化到浏览器本地（localStorage 键 botler.lang），刷新后保持；高频页面（导航 / 概览 /
+> 任务）静态文案即时切换，未翻译文案回退中文；后端错误消息与动态内容保持原文。
+
 
 ## 测试
 

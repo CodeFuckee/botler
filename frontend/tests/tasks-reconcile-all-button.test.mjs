@@ -27,6 +27,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const tasksSrc = readFileSync(path.join(ROOT, 'src/pages/Tasks.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 stop-all-button.test.mjs 一致）。
@@ -50,13 +53,15 @@ after(() => vite.close())
 // ---- 源码断言 ----
 
 test('任务页源码含「对账所有仓库」按钮与对账接口调用', () => {
-  assert.match(tasksSrc, /对账所有仓库/, '应有对账按钮文案')
+  assert.match(tasksSrc, /tr\('tasks\.reconcileAll'\)/, '对账按钮应经 t() 国际化')
+  assert.equal(zhCN['tasks.reconcileAll'], '对账所有仓库', '中文「对账所有仓库」文案应保留')
   assert.match(
     tasksSrc,
     /api\.post\('\/api\/tasks\/reconcile-all'\)/,
     '点击后应调 POST /api/tasks/reconcile-all',
   )
-  assert.match(tasksSrc, /对账完成：扫描/, '成功后应显示对账结果提示')
+  assert.match(tasksSrc, /tr\('tasks\.reconcileDone'/, '对账结果提示应经 t() 国际化')
+  assert.ok(zhCN['tasks.reconcileDone'].includes('对账完成：扫描'), '中文对账提示文案应保留')
   assert.match(tasksSrc, /disabled=\{reconciling\}/, '请求中应禁用按钮防重复点击')
 })
 

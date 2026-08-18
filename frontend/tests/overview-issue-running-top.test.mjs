@@ -25,6 +25,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-issues.test.mjs 一致）。
@@ -234,8 +237,9 @@ test('渲染：运行中的 issue 置顶为「⚙️ 运行中」组，其余组
                      ['运行中', 'bot-failed', 'bot-done', '其他'],
                      'running 组应置顶，其后为 failed → done → other')
     const counts = root.findAll((n) => n.props.className === 'issue-group-count')
+    // issue #268：计数经 t('overview.groupCount', { n }) 插值为单字符串
     assert.deepEqual(counts.map((c) => c.props.children),
-                     [[1, ' 个'], [1, ' 个'], [1, ' 个'], [1, ' 个']],
+                     ['1 个', '1 个', '1 个', '1 个'],
                      '各组计数均应正确')
     // 置顶项保留 issue #99 的高亮类与「运行中」徽章
     const runningItems = root.findAll((n) => n.type === 'li'
@@ -266,7 +270,7 @@ test('渲染：多个运行中 issue 同归 running 组且保持原始相对顺�
                      '102 与 104 均置顶后 other 组为空不渲染')
     const counts = root.findAll((n) => n.props.className === 'issue-group-count')
     assert.deepEqual(counts.map((c) => c.props.children),
-                     [[2, ' 个'], [1, ' 个'], [1, ' 个']], 'running 组计数应为 2')
+                     ['2 个', '1 个', '1 个'], 'running 组计数应为 2')
     // running 组内列表项顺序与原始 issue 顺序一致（102 在 104 前）
     const runningItems = root.findAll((n) => n.type === 'li'
       && String(n.props.className || '').includes('issue-item-running'))

@@ -25,6 +25,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const tasksSrc = readFileSync(path.join(ROOT, 'src/pages/Tasks.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-page.test.mjs 一致）。
@@ -52,7 +55,8 @@ after(() => vite.close())
 // ---- 源码断言 ----
 
 test('任务页源码含「停止所有任务」危险按钮与确认交互', () => {
-  assert.match(tasksSrc, /停止所有任务/, '应有停止按钮文案')
+  assert.match(tasksSrc, /tr\('tasks\.stopAll'|tasks\.stopAllWithCount/, '停止按钮应经 t() 国际化')
+  assert.ok(zhCN['tasks.stopAll'] === '停止所有任务' || zhCN['tasks.stopAllWithCount'].startsWith('停止所有任务'), '中文「停止所有任务」文案应保留')
   assert.match(
     tasksSrc,
     /className="btn btn-danger"/,

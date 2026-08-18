@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App.jsx'
+import { I18nProvider } from './i18n.jsx'
 import { applyTheme, loadThemePreference } from './theme.js'
 import './styles.css'
 
@@ -12,8 +13,10 @@ applyTheme(loadThemePreference(localStorage) || 'system')
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <I18nProvider storage={typeof localStorage !== 'undefined' ? localStorage : null}>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </I18nProvider>
   </React.StrictMode>,
 )

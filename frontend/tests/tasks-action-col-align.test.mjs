@@ -21,6 +21,9 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 const tasks = readFileSync(path.join(ROOT, 'src/pages/Tasks.jsx'), 'utf8')
 
@@ -60,12 +63,14 @@ function marginLeftSum(className) {
 
 test('任务列表操作列单元格内容为"执行"链接（bug 场景存在）', () => {
   // 操作列表头"操作"与单元格内"执行"链接：表头文字与按钮应左边缘对齐
-  assert.match(tasks, /<th>操作<\/th>/, '操作列表头应为"操作"')
+  assert.match(tasks, /\{tr\('tasks\.actions'\)\}/, '操作列表头应经 t() 国际化')
+  assert.equal(zhCN['tasks.actions'], '操作', '中文「操作」文案应保留')
   assert.match(
     tasks,
-    /<td>\s*\n?\s*<Link to=\{`\/tasks\/\$\{t\.id\}\?live=1`\}[\s\S]*?>执行<\/Link>/,
-    '操作列单元格内容应为"执行"链接'
+    /<td>\s*\n?\s*<Link to=\{`\/tasks\/\$\{t\.id\}\?live=1`\}[\s\S]*?>\{tr\('tasks\.run'\)\}<\/Link>/,
+    '操作列单元格内容应为"执行"链接（经 t() 国际化）'
   )
+  assert.equal(zhCN['tasks.run'], '执行', '中文「执行」文案应保留')
 })
 
 test('操作列"执行"按钮左外边距合计应为 0（与表头"操作"文字左边缘对齐）', () => {
@@ -84,7 +89,7 @@ test('操作列"执行"按钮左外边距合计应为 0（与表头"操作"文�
 
 test('失败原因列"详情"按钮与前置文字之间应保留 ≥6px 水平间距（不受操作列修复影响）', () => {
   // "详情"按钮紧跟失败原因文字之后，.btn-mini 原设计 margin-left: 8px 即为该间距
-  const m = tasks.match(/<button className="([^"]+)" onClick=\{\(\) => setDetailTask\(t\)\}>详情<\/button>/)
+  const m = tasks.match(/<button className="([^"]+)" onClick=\{\(\) => setDetailTask\(t\)\}>\{tr\('tasks\.detail'\)\}<\/button>/)
   assert.ok(m, '失败原因列应有"详情"按钮')
   const sum = marginLeftSum(m[1])
   assert.ok(

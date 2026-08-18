@@ -22,6 +22,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
@@ -55,10 +58,14 @@ test('源码：请求用量统计接口并低频轮询（60 秒）', () => {
 })
 
 test('源码：板块含仓库/引擎/时间范围过滤器', () => {
-  assert.match(overview, /Token 用量统计/, '板块应有标题')
-  assert.match(overview, /全部仓库/, '应有仓库过滤器')
-  assert.match(overview, /全部引擎/, '应有引擎过滤器')
-  assert.match(overview, /最近 7 天/, '应有时间范围过滤器（7 天）')
+  assert.match(overview, /tr\('overview\.usageTitle'\)/, '板块标题应经 t() 国际化')
+  assert.equal(zhCN['overview.usageTitle'], 'Token 用量统计', '中文标题应保留')
+  assert.match(overview, /tr\('overview\.allRepos'\)/, '「全部仓库」应经 t() 国际化')
+  assert.equal(zhCN['overview.allRepos'], '全部仓库', '中文文案应保留')
+  assert.match(overview, /tr\('overview\.allEngines'\)/, '「全部引擎」应经 t() 国际化')
+  assert.equal(zhCN['overview.allEngines'], '全部引擎', '中文文案应保留')
+  assert.match(overview, /tr\('overview\.last7Days'\)/, '「最近 7 天」应经 t() 国际化')
+  assert.equal(zhCN['overview.last7Days'], '最近 7 天', '中文文案应保留')
   assert.match(overview, /usage-stats-section/, '应使用 usage-stats-section 容器')
 })
 

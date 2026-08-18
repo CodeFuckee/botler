@@ -21,6 +21,9 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
+// 源码断言改为「i18n key + 字典中文值」双重校验
+const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
 const plugins = readFileSync(path.join(ROOT, 'src/pages/Plugins.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
@@ -37,7 +40,8 @@ after(() => vite.close())
 
 test('顶部导航包含「插件」入口', () => {
   assert.match(app, /NavLink to="\/plugins"/, '导航应有到 /plugins 的 NavLink')
-  assert.match(app, /插件/, '导航链接文案应为「插件」')
+  assert.match(app, /t\('nav\.plugins'\)/, '导航链接应经 t() 国际化')
+  assert.equal(zhCN['nav.plugins'], '插件', '中文文案应为「插件」')
 })
 
 test('App.jsx 注册 /plugins 路由并挂载 Plugins 页面', () => {
