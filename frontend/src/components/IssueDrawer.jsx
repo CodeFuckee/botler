@@ -904,12 +904,19 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             ))}
           </div>
         </div>
-      </div>
-      {/* 移动端底部操作栏（issue #270）：与头部同一组 drawerActions，
-          仅 ≤860px 视口显示（styles.css 控制），sticky 常驻抽屉底部，
-          thumb 可及——关闭 issue/重试/查看执行详情/在 GitLab 中打开 */}
-      <div className="drawer-bottom-actions">
-        {drawerActions}
+        {/* 移动端底部操作栏（issue #270）：与头部同一组 drawerActions，
+            仅 ≤860px 视口显示（styles.css 控制），sticky 常驻抽屉底部，
+            thumb 可及——关闭 issue/重试/查看执行详情/在 GitLab 中打开。
+            issue #326：该栏必须是 .drawer 的「最后一个子项」而非
+            .drawer-overlay 的兄弟节点——overlay 是 flex 行布局
+            （justify-content: flex-end），兄弟节点会与抽屉横向排布，
+            竖屏窄视口下把抽屉挤出屏幕左侧（实测 375px 视口抽屉左移
+            131.5px，内容截断、遮罩右侧露出主页面）；移入抽屉后随
+            margin-top:auto + sticky bottom 推底并常驻，不再参与
+            overlay 的横向布局 */}
+        <div className="drawer-bottom-actions">
+          {drawerActions}
+        </div>
       </div>
       {/* issue #167：任务执行详情第二层右边栏——叠加在本层抽屉之上，
           遮罩点击/×/Esc 关闭；project_id/iid 与 repoName 传给第二层

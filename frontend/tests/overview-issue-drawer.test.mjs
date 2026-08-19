@@ -336,3 +336,25 @@ test('description 为空字符串与纯空白：显示占位不渲染空 Markdow
     }
   }
 })
+
+test('移动端底部操作栏是抽屉内部子项而非遮罩兄弟节点（issue #326）', async () => {
+  // issue #326 回归：.drawer-bottom-actions 必须是 .drawer.issue-drawer 的
+  // 子项——.drawer-overlay 是 flex 行布局（justify-content: flex-end），若
+  // 操作栏作为 overlay 兄弟节点会与抽屉横向排布，竖屏窄视口下把抽屉挤出
+  // 屏幕左侧（实测 375px 视口抽屉左移 131.5px，内容截断、遮罩右侧露出
+  // 主页面）；移入抽屉后不再参与 overlay 横向布局
+  const { renderer, root } = await openDrawer([FULL_ISSUE])
+  try {
+    const bottomActions = root.findAll(
+      (n) => String(n.props.className || '').includes('drawer-bottom-actions'))
+    assert.equal(bottomActions.length, 1, '应渲染一个移动端底部操作栏')
+    const parentCls = String(bottomActions[0].parent?.props?.className || '')
+    assert.ok(parentCls.includes('issue-drawer'),
+              '底部操作栏应是 issue 抽屉子项（父级 className 含 issue-drawer）')
+    assert.ok(!parentCls.includes('drawer-overlay'),
+              '底部操作栏不应是遮罩（drawer-overlay）的直接子项')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})

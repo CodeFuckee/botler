@@ -337,6 +337,24 @@
 
 ### Fixed
 
+- **竖屏窄视口下概览页 issue 详情抽屉被挤出屏幕（issue #326）**：移动端底部
+  操作栏 `.drawer-bottom-actions` 此前是 `.drawer-overlay`（flex 行布局、
+  `justify-content: flex-end`）的**兄弟节点**，≤860px 视口下 `display: flex`
+  后与抽屉横向排布——两者总宽 506.5px 超出 375px 视口，把 375px 宽的抽屉
+  向左挤出 131.5px（抽屉左缘 x=-131.5、右侧 131.5px 露出遮罩下的主页面，
+  两侧内容截断，与主表单内容互相穿插）。修复：
+  - **操作栏移入抽屉内部**：`.drawer-bottom-actions` 改为 `.drawer` 的最后
+    一个子项，不再参与 overlay 横向 flex 排布；`margin-top: auto` 内容不足
+    一屏时推底、`position: sticky; bottom: 0` 内容滚动时常驻底部（原有
+    issue #270 语义不变，实测滚动 200px 底部栏位置恒定）；
+  - **抽屉几何回归**：375px 竖屏视口下抽屉左缘 x=0、右缘=375 贴齐视口，
+    半透明遮罩完整覆盖主页面；第二层任务执行详情抽屉（`.task-detail-drawer`，
+    同为 overlay 固定定位）不受影响，叠加层级正常；
+  - **测试**：`overview-issue-drawer.test.mjs` 新增「底部操作栏是抽屉内部
+    子项而非遮罩兄弟节点」回归用例（旧结构下必失败）；`responsive-mobile.spec.js`
+    E2E 新增抽屉几何断言（动画结束后左缘 ≥0、右缘 ≤ 视口宽、操作栏父级为
+    issue 抽屉）；前端全量单元测试 + 移动端 E2E 通过。
+
 - **工具页面 URL 导入报错——FastMCP/uv 风格仓库（如 Image-Parse-MCP）无工具定义
   文件时给出可操作诊断（issue #325）**：用户从工具页 URL 导入
   `https://github.com/1617110693/Image-Parse-MCP.git` 报

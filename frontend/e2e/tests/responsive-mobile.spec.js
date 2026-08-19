@@ -36,6 +36,26 @@ test.describe('移动端响应式（issue #270）', () => {
     await expect(drawer).toBeVisible()
     const db = await drawer.boundingBox()
     expect(db.width).toBeGreaterThanOrEqual(374)
+    // 等待抽屉滑入动画结束（drawer-in 240ms）再测量几何——
+    // 动画期间 transform 未归位，boundingBox 会偏移视口
+    await page.waitForFunction(() => {
+      const d = document.querySelector('.drawer.issue-drawer')
+      if (!d) return false
+      const t = getComputedStyle(d).transform
+      return t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)'
+    })
+    const settled = await drawer.boundingBox()
+    // issue #326 回归：底部操作栏若作为 .drawer-overlay（flex 行布局）
+    // 的兄弟节点，会与抽屉横向排布把抽屉挤出屏幕左侧（实测 375px 视口
+    // 抽屉左移 131.5px）——抽屉左边界必须贴齐视口左缘（≥0），右边界
+    // 不超出视口，主页面被遮罩完整覆盖
+    expect(settled.x).toBeGreaterThanOrEqual(-0.5)
+    expect(settled.x + settled.width).toBeLessThanOrEqual(375.5)
+    // 底部操作栏必须是抽屉子项（不参与 overlay 横向 flex 排布）
+    const baParentCls = await page.locator('.drawer-bottom-actions').evaluate(
+      (el) => el.parentElement.className)
+    expect(baParentCls).toContain('issue-drawer')
+    expect(baParentCls).not.toContain('drawer-overlay')
     await expect(page.locator('.drawer-bottom-actions')).toBeVisible()
     // 头部操作按钮在窄视口下沉到底部（display:none 隐藏，DOM 保留）
     await expect(page.locator('.drawer.issue-drawer .issue-drawer-actions')).not.toBeVisible()
