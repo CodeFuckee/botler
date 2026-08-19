@@ -3,6 +3,8 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+
+## [1.4.3] - 2026-08-19
 ### Added
 
 - **移动端响应式优化（手机浏览器使用体验，issue #270）**：平台主要面向桌面
@@ -454,7 +456,6 @@
   `created_at` 取 `datetime('now')`（UTC 当天）——日期越过当天后必然
   0 命中导致测试失败；改为跟随系统当天（`date.today()` 与前一天区间），
   任意日期运行均稳定通过。
-
 
 ## [1.3.63] - 2026-08-19
 ### Added
