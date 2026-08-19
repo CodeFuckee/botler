@@ -452,6 +452,19 @@
     4 次尝试；gitlab_client 全量 81 例通过，后端全量测试 + 覆盖率门禁（≥70%）
     通过，无 regression。
 
+### Changed
+- **后端依赖改为「顶层约束 + 锁定文件」双文件模式（issue #209）**：`backend/requirements.txt`
+  保留为顶层约束声明（宽松版本范围），新增 `backend/requirements.lock.txt` 锁定文件
+  （`uv pip compile` 把顶层约束解析为全量钉死版本，直接依赖 + 全部传递依赖 `==`
+  精确版本，共 48 个包）：
+  - **CI 与部署按锁安装**：`backend:test` / `e2e:playwright` / `deploy_to_code01`
+    的 `uv pip install` 与 Docker 镜像 `pip install`、GitHub Actions 后端测试
+    一律改为 `-r requirements.lock.txt`；`security:deps-python`（pip-audit）
+    改扫锁定文件，安全审计结果可复现；
+  - **文档**：README 新增「后端依赖管理与升级流程」章节，依赖升级走显式流程
+    （更新顶层约束 → 重新 `uv pip compile` → 按锁安装跑全量测试 → 提交推送）；
+  - 后端全量测试无 regression。
+
 ### Fixed
 
 - **概览页 issue 详情右边栏头部操作区真实浏览器回归测试（issue #332）**：

@@ -51,7 +51,7 @@ trap cleanup EXIT
 
 # ---------- 0. 前置检查 ----------
 if [ ! -x "$BACKEND/.venv/bin/python" ]; then
-  log "错误：后端虚拟环境不存在（$BACKEND/.venv），请先创建（uv venv + uv pip install -r requirements.txt）"
+  log "错误：后端虚拟环境不存在（$BACKEND/.venv），请先创建（uv venv + uv pip install -r requirements.lock.txt，issue #209）"
   exit 1
 fi
 if [ ! -f "$FRONTEND/dist/index.html" ]; then

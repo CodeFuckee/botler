@@ -91,6 +91,7 @@ backend/
     api/             REST API（repos / tasks / settings / auth）
   config.example.yaml
   requirements.txt
+  requirements.lock.txt
 frontend/            React (Vite) Web UI，构建产物由 FastAPI 托管
 frontend/e2e/        Playwright 浏览器级 E2E（issue #212）：tests/ 用例、
                      fixtures/ mock 夹具、support/ 浏览器级 mock API、
@@ -124,7 +125,9 @@ backend:test 并行）：先跑结构校验（`harmony/scripts/validate_harmony.
 ```bash
 # 后端
 cd backend
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -r requirements.lock.txt
+#   requirements.lock.txt 为锁定文件（issue #209）：按锁安装保证依赖版本一致；
+#   如用 uv 可改：uv pip install -r requirements.lock.txt
 cp config.example.yaml config.yaml
 cp .env.example .env          # 填入 GITLAB_BOT_TOKEN / WEBHOOK_SECRET / ANTHROPIC_*
 .venv/bin/uvicorn botler.main:app --reload --port 8000
@@ -181,6 +184,40 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 键 botler.navCollapsed），刷新后保持；窄视口（≤860px）侧边栏转为抽屉导航
 > （顶栏汉堡按钮打开，遮罩 / 点击导航项关闭），内容区保持全宽不挤压。语言切换 /
 > 快捷键帮助 / 登录用户区位于侧边栏底部。
+
+## 后端依赖管理与升级流程（issue #209）
+
+后端依赖采用「顶层约束 + 锁定文件」双文件模式，与前端 `package-lock.json` 对齐：
+
+- `backend/requirements.txt` —— **顶层约束声明**：只写直接依赖与宽松版本范围
+  （如 `fastapi>=0.111`），附 issue 说明注释；修改依赖时改这里。
+- `backend/requirements.lock.txt` —— **锁定文件**：由 `uv pip compile` 生成，
+  把顶层约束解析为全量钉死版本（直接依赖 + 全部传递依赖 `==` 精确版本），
+  CI / 部署 / Docker 镜像 / 本地开发一律**按锁文件安装**，保证三处环境依赖
+  版本一致、构建可复现；`security:deps-python`（pip-audit）也扫描锁文件，
+  审计结果可复现。
+
+### 依赖升级流程
+
+1. 编辑 `backend/requirements.txt` 更新顶层约束（新增 / 升级 / 降级依赖）；
+2. 重新生成锁文件：
+
+   ```bash
+   cd backend
+   uv pip compile requirements.txt -o requirements.lock.txt --python-version 3.14
+   ```
+
+   （`--python-version` 与 CI/部署环境保持一致，保证解析结果可复现；
+   国内网络可加 `-i https://pypi.tuna.tsinghua.edu.cn/simple`）
+3. 本地按锁安装并跑全量测试：
+
+   ```bash
+   cd backend && .venv/bin/pip install -r requirements.lock.txt
+   .venv/bin/python -m pytest tests/ -q -n auto
+   ```
+
+4. 提交 `requirements.txt` + `requirements.lock.txt` 与代码改动，推送后 CI 按锁
+   安装并验证，全量测试通过即完成升级。
 
 ## 测试
 
@@ -330,7 +367,7 @@ python3 scripts/release.py --force --no-push
 
 ```bash
 git clone <platform-repo> && cd botler
-cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.lock.txt
 cp config.example.yaml config.yaml && cp .env.example .env   # 填入凭据
 cd ../frontend && npm install && npm run build               # 构建 Web UI
 deploy/install-dsh-sdk.sh                # 安装 dsh 引擎 SDK（可选依赖，issue #112）

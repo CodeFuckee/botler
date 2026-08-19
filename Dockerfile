@@ -55,9 +55,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # 先 COPY requirements 单独一层，依赖变更才重装（层缓存）
+# issue #209：requirements.lock.txt（uv pip compile 全量钉死）为实际安装依据，
+# requirements.txt 保留为顶层约束声明
 COPY backend/requirements.txt backend/requirements.txt
+COPY backend/requirements.lock.txt backend/requirements.lock.txt
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir -r backend/requirements.txt -i ${PIP_INDEX_URL} \
+    && /opt/venv/bin/pip install --no-cache-dir -r backend/requirements.lock.txt -i ${PIP_INDEX_URL} \
     # claude CLI：Claude Code 执行器核心依赖
     && npm install -g @anthropic-ai/claude-code --registry=${NPM_REGISTRY_URL}
 

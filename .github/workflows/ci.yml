@@ -179,7 +179,7 @@ jobs:
           # --python 显式指定本 job 的 venv：setup-uv 的 python-version 参数
           # 会激活 workspace/.venv（VIRTUAL_ENV），uv pip install 默认装到
           # 激活环境，导致 backend/.venv 为空（GitLab shell executor 无此行为）
-          uv pip install --python .venv/bin/python -r requirements.txt
+          uv pip install --python .venv/bin/python -r requirements.lock.txt
           # 覆盖率门禁（issue #210）：总覆盖率低于 70% 阻断；xml 供上传
           .venv/bin/python -m pytest tests/ -v --tb=short --cov=botler --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 

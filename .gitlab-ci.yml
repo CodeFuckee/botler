@@ -309,7 +309,8 @@ security:bandit:
 
 # ----------------------------------------------------------
 # --- 后端：pip-audit 依赖已知漏洞扫描（issue #86）---
-# 扫描 backend/requirements.txt 声明的 Python 依赖，与 PyPA 官方
+# 扫描 backend/requirements.lock.txt 锁定的 Python 依赖（issue #209：锁文件为
+# 实际安装与审计依据，保证审计结果可复现），与 PyPA 官方
 # 漏洞数据库（PyPI JSON API / OSV）比对，发现已知 CVE 即阻断。
 # pip-audit 输出不含 severity 字段（数据源不提供），任何已公开
 # 漏洞保守按中危处理阻断（避免「无法定级」变成「静默放行」）；
@@ -385,7 +386,7 @@ security:deps-python:
       for SERVICE in "--vulnerability-service pypi" "--vulnerability-service osv"; do
         echo "--- 数据源: ${SERVICE} ---"
         set +e
-        "$AUDIT_PY" -m pip_audit -r requirements.txt $SERVICE \
+        "$AUDIT_PY" -m pip_audit -r requirements.lock.txt $SERVICE \
           --format json --progress-spinner off -o pip-audit.json
         AUDIT_EXIT=$?
         set -e
@@ -974,7 +975,9 @@ backend:test:
 
       STEP3_START=$(date +%s)
       echo "=== 3. 安装项目依赖 ==="
-      uv pip install -r requirements.txt -i ${PIP_INDEX_URL}
+      # issue #209：按 requirements.lock.txt（uv pip compile 全量钉死）安装，
+      # requirements.txt 仅为顶层约束声明，锁文件为实际安装依据
+      uv pip install -r requirements.lock.txt -i ${PIP_INDEX_URL}
       STEP3_END=$(date +%s)
       echo "⏱️  步骤3 (安装依赖) 用时: $((STEP3_END - STEP3_START)) 秒"
 
@@ -1090,7 +1093,7 @@ e2e:playwright:
         rm -rf .venv
         uv venv .venv
       fi
-      uv pip install -r requirements.txt -i ${PIP_INDEX_URL}
+      uv pip install -r requirements.lock.txt -i ${PIP_INDEX_URL}
       cd ..
       STEP1_END=$(date +%s)
       echo "⏱️  步骤1 (后端依赖) 用时: $((STEP1_END - STEP1_START)) 秒"
@@ -1214,7 +1217,7 @@ deploy_to_code01:
         rm -rf .venv
         uv venv .venv
       fi
-      uv pip install -r requirements.txt -i ${PIP_INDEX_URL} || { dbg STEP2 "FAIL: uv pip install"; exit 1; }
+      uv pip install -r requirements.lock.txt -i ${PIP_INDEX_URL} || { dbg STEP2 "FAIL: uv pip install"; exit 1; }
       cd ..
       dbg STEP2 "OK"
 
