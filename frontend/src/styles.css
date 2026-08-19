@@ -1458,6 +1458,15 @@ code {
   /* apple-design：从右滑入（空间一致性——退出应沿同路径向右） */
   animation: drawer-in 240ms var(--ease-spring);
 }
+/* issue #348：右侧边栏（抽屉）打开时锁定主页面滚动——抽屉打开时只
+   显示抽屉自身的竖直滚动条，不再出现「主页滚动条 + 抽屉滚动条」双
+   滚动条（.drawer-overlay 虽 fixed 全屏覆盖，但主页面 body 仍可滚动、
+   滚动条仍显示）。:has 与项目既有用法一致（.add-method:has(input:checked)/
+   .remote-option:has(input:checked)），任一使用 .drawer-overlay 的右侧
+   边栏（issue 详情 / 流水线详情 / 任务执行详情 / AI 对话）打开即生效 */
+body:has(.drawer-overlay) {
+  overflow: hidden;
+}
 /* issue #85：issue 详情右边栏——复用 drawer 基础样式，加宽容纳正文 */
 .issue-drawer {
   width: 640px;

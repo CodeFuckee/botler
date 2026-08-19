@@ -863,6 +863,24 @@
 
 ### Fixed
 
+- **概览页打开 issue 详情右边栏或流水线右边栏时双滚动条，改为只显示右边栏滚动条（issue #348）**：
+  概览页打开 issue 详情右边栏或流水线右边栏时，页面同时出现两个竖直滚动条——
+  主页面一个、右边栏一个。根因：`.drawer-overlay` 虽以 `position: fixed` 覆盖
+  全屏，但主页面 body 仍可滚动、滚动条仍显示；`.drawer` 自身 `overflow-y: auto`
+  又有滚动条，于是双滚动条并存。修复：
+  - **样式**：`styles.css` 新增 `body:has(.drawer-overlay) { overflow: hidden }`
+    ——任一右侧边栏（`.drawer-overlay`）打开即锁定主页面滚动、隐藏主页滚动条，
+    只保留右边栏自身的滚动条；关闭后自动恢复。`:has` 与项目既有用法一致
+    （`.add-method:has(input:checked)` / `.remote-option:has(input:checked)`），
+    规则作用于全部使用 `.drawer-overlay` 的右侧边栏（issue 详情 / 流水线详情 /
+    任务执行详情 / AI 对话抽屉），行为一致；
+  - **新增测试**：`tests/overview-drawer-scrollbar.test.mjs` 6 例（styles.css
+    源码断言：锁定规则存在且限定抽屉打开、`.drawer` 保留自身滚动条、遮罩全屏；
+    组件渲染断言：IssueDrawer / PipelineDrawer 均渲染 `.drawer-overlay`）；
+    e2e `drawer-scrollbar-lock.spec.js` 2 例（真实 Chromium：打开/关闭 issue 与
+    流水线两个右边栏，断言 body overflow 锁定与恢复、视口不可滚动、抽屉自身仍
+    可滚动）。修复前新单元测试 2 例必失败（锁定规则不存在）；全量前端单元测试
+    （1470 例）无 regression。
 - **概览页「其他」分组拖动手柄图标与 issue 标题不在同一高度、图标偏上（issue #343）**：
   概览页开放 issue 列表「其他」分组（支持拖动排序，issue #287）的拖动手柄图标
   （gripVertical）与 issue 标题行不在同一垂直高度——图标偏上。根因：
