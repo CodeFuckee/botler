@@ -1633,11 +1633,14 @@ class Database:
         """
         if not buckets:
             return (0, 0.0, [])
+        # nosec B608：SQL 中仅拼接整数列别名 b{i}，全部取值走 ? 参数绑定，
+        # 与同文件既有动态列名 SQL 同款注释豁免（bandit 无法识别参数化）
         marks = ", ".join(
-            f"COALESCE(SUM(CASE WHEN dur < ? THEN 1 ELSE 0 END), 0) AS b{i}"
+            f"COALESCE(SUM(CASE WHEN dur < ? THEN 1 ELSE 0 END), 0) AS b{i}"  # nosec B608
             for i in range(len(buckets)))
         sql = (
-            "SELECT COUNT(*) AS cnt, COALESCE(SUM(dur), 0.0) AS total, " + marks + " "
+            # nosec B608：marks 仅由整数索引拼成的列别名（b0..bn），无外部输入
+            "SELECT COUNT(*) AS cnt, COALESCE(SUM(dur), 0.0) AS total, " + marks + " "  # nosec B608
             "FROM ("
             "  SELECT (julianday(finished_at) - julianday(started_at)) * 86400.0 AS dur "
             "  FROM tasks "
