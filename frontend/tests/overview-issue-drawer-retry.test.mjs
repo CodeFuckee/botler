@@ -42,6 +42,7 @@ const dialog = await vite.ssrLoadModule('/src/dialog.js')
 
 const drawerSrc = readFileSync(path.join(ROOT, 'src/components/IssueDrawer.jsx'), 'utf8')
 const overviewSrc = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/IssueListSection.jsx'), 'utf8')
 
 after(() => vite.close())
 

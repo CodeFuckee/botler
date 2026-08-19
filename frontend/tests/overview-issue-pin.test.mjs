@@ -25,7 +25,8 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+const overview = readFileSync(path.join(ROOT, 'src/hooks/useOverviewData.js'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/IssueListSection.jsx'), 'utf8')
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const enUS = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/en-US.json'), 'utf8'))
 

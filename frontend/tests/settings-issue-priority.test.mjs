@@ -18,7 +18,11 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const settingsSrc = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+// issue #201 拆分：任务调度卡片 JSX 移到 components/settings/TasksCard.jsx，
+// setIssuePriority / save 收敛到 hooks/useSettingsData.js——静态断言跟随新文件
+const tasksCard = readFileSync(path.join(ROOT, 'src/components/settings/TasksCard.jsx'), 'utf8')
+const hook = readFileSync(path.join(ROOT, 'src/hooks/useSettingsData.js'), 'utf8')
+const settingsSrc = tasksCard + '\n' + hook
 
 const vite = await createServer({
   server: { middlewareMode: true },

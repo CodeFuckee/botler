@@ -84,16 +84,25 @@ function sectionEntries() {
     const [, id, attrs, body] = m
     const navLabel = /data-nav-label="([^"]+)"/.exec(attrs)?.[1] || null
     const h2 = /<h2[^>]*>([\s\S]*?)<\/h2>/.exec(body)
-    const cards = [...body.matchAll(/<([A-Z][A-Za-z0-9]*(?:Card|Manager))\s*\/>/g)].map((x) => x[1])
+    const cards = [...body.matchAll(/<([A-Z][A-Za-z0-9]*(?:Card|Manager))[^>]*\/>/g)].map((x) => x[1])
     entries.push({ id, navLabel, h2Text: h2 ? stripTags(h2[1]) : null, cards })
   }
   return entries
 }
 
 /** 读取卡片组件源码内首个 h2 文本（即该卡片在设置页渲染出的区块名称）；
- *  先剔除 JSX 块注释（{/* ... *\/}），避免注释里出现 <h2> 字样干扰匹配 */
+ *  先剔除 JSX 块注释（{/* ... *\/}），避免注释里出现 <h2> 字样干扰匹配；
+ *  issue #201 拆分后卡片组件在 components/ 与 components/settings/ 两处 */
 function cardH2Text(componentName) {
-  let src = readFileSync(path.join(ROOT, 'src/components', `${componentName}.jsx`), 'utf8')
+  const candidates = [
+    path.join(ROOT, 'src/components', `${componentName}.jsx`),
+    path.join(ROOT, 'src/components/settings', `${componentName}.jsx`),
+  ]
+  let src = null
+  for (const p of candidates) {
+    try { src = readFileSync(p, 'utf8'); break } catch { /* 尝试下一路径 */ }
+  }
+  assert.ok(src, `${componentName} 组件文件应存在（src/components/ 或 src/components/settings/）`)
   src = src.replace(/\/\*[\s\S]*?\*\//g, '')
   const h2 = /<h2[^>]*>([\s\S]*?)<\/h2>/.exec(src)
   assert.ok(h2, `${componentName} 组件内应有 <h2> 作为设置项名称来源`)
@@ -169,20 +178,38 @@ test('16 个已知设置项名称快照：每个设置项都有对应的名称',
   }
 })
 
-test('卡片区块名称由卡片组件内 h2 提供（4 个卡片区块与导航名称一致）', () => {
+test('卡片区块名称由卡片组件内 h2 提供（15 个卡片区块与导航名称一致）', () => {
+  // issue #201 拆分后：除「版本信息」为页面内联 h2 外，其余 15 个设置区块
+  // 全部由卡片组件提供区块名称（含新拆出的 SsoCard / TasksCard 等）
   const cardSections = sectionEntries().filter((e) => e.cards.length > 0)
-  assert.equal(cardSections.length, 4, '应有 4 个卡片区块（ai-providers/image-models/vision-models/backup）')
+  assert.equal(cardSections.length, 15, '应有 15 个卡片区块（版本信息为页面内联 h2）')
   const expected = {
+    'settings-sso': 'Synology SSO 登录',
     'settings-ai-providers': 'AI API 供应商',
     'settings-image-models': '生图模型',
     'settings-vision-models': '识图模型',
+    'settings-minio': 'MinIO 对象存储',
+    'settings-tasks': '任务调度',
+    'settings-ui': '界面显示',
+    'settings-notifications': '网页通知',
+    'settings-webhook': '消息推送 Webhook',
+    'settings-claude': 'Claude Code',
+    'settings-dsh': 'dsh 引擎',
+    'settings-environment': '本地环境检测',
     'settings-backup': '数据备份',
+    'settings-owner-token': 'Owner GitLab Token',
+    'settings-gitlab-cred': 'GitLab 凭据（只读）',
   }
   for (const entry of cardSections) {
     assert.ok(entry.cards.length === 1, `${entry.id} 应恰好引用一个卡片组件`)
     const h2 = cardH2Text(entry.cards[0])
-    assert.equal(h2, expected[entry.id], `${entry.id} 的卡片组件 ${entry.cards[0]} 内 h2 应为「${expected[entry.id]}」`)
-    assert.equal(resolveName(entry), expected[entry.id], `${entry.id} 导航名称应来自卡片组件内 h2`)
+    assert.ok(h2, `${entry.id} 的卡片组件 ${entry.cards[0]} 内应有 <h2> 作为名称来源`)
+    // 无 data-nav-label 时，导航名称必须严格等于卡片内 h2（owner-token 区块
+    // 用 data-nav-label 提供短名「Owner GitLab Token」，长 h2 含徽章不参与相等断言）
+    if (!entry.navLabel) {
+      assert.equal(h2, expected[entry.id], `${entry.id} 的卡片组件 ${entry.cards[0]} 内 h2 应为「${expected[entry.id]}」`)
+    }
+    assert.equal(resolveName(entry), expected[entry.id], `${entry.id} 导航名称应为「${expected[entry.id]}」`)
   }
 })
 
@@ -206,7 +233,7 @@ function sourceMirrorContent() {
     } else {
       const h2 = /<h2[^>]*>([\s\S]*?)<\/h2>/.exec(hit.body)
       const navLabel = /data-nav-label="([^"]+)"/.exec(hit.attrs)?.[1] || null
-      const cards = [...hit.body.matchAll(/<([A-Z][A-Za-z0-9]*(?:Card|Manager))\s*\/>/g)].map((x) => x[1])
+      const cards = [...hit.body.matchAll(/<([A-Z][A-Za-z0-9]*(?:Card|Manager))[^>]*\/>/g)].map((x) => x[1])
       let labelText = h2 ? stripTags(h2[1]) : (cards.length > 0 ? cardH2Text(cards[0]) : null)
       nodes.push({
         tagName: 'SECTION',

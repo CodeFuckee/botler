@@ -19,7 +19,7 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const src = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+const src = readFileSync(path.join(ROOT, 'src/hooks/useOverviewData.js'), 'utf8')
 
 const vite = await createServer({
   server: { middlewareMode: true },

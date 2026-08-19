@@ -20,7 +20,13 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const settings = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+// issue #201 拆分：MinIO 卡片 JSX 移到 components/settings/MinioCard.jsx，
+// 保存处理函数收敛到 hooks/useSettingsData.js——静态断言跟随新文件；
+// 区块结构（section 锚点 id）仍保留在 Settings.jsx 组合层
+const page = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+const minioCard = readFileSync(path.join(ROOT, 'src/components/settings/MinioCard.jsx'), 'utf8')
+const hook = readFileSync(path.join(ROOT, 'src/hooks/useSettingsData.js'), 'utf8')
+const settings = page + '\n' + minioCard + '\n' + hook
 const nav = readFileSync(path.join(ROOT, 'src/components/SettingsNav.jsx'), 'utf8')
 
 test('设置页挂载「MinIO 对象存储」卡片', () => {

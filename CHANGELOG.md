@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 ### Added
+- **Overview.jsx / Settings.jsx 巨型组件拆分（issue #201）**：概览页
+  （1058 行）与设置页（959 行）两个超千行页面组件按板块拆分为独立组件 +
+  hook，主文件分别降至 132 / 143 行（验收标准 ≤400 行），行为不变、前端
+  全量测试（1297 用例）零回归：
+  - **概览页 `Overview.jsx`**：按板块抽出 `components/overview/`
+    IssueListSection / InspirationSection / PipelineSection /
+    DeepSeekBalanceCard 四个独立组件，数据加载与轮询收敛到
+    `hooks/useOverviewData.js`（复用 `hooks/usePolling.js` 页面可见性
+    轮询），纯函数 / 常量 / 状态映射收敛到 `lib/overview.jsx` 并由
+    `Overview.jsx` 再导出（旧导入路径兼容，IssueDrawer / PipelineDrawer
+    / AddIssueModal 维持原组件）；主文件只做组合编排；
+  - **设置页 `Settings.jsx`**：SSO / MinIO / 任务调度 / 界面显示 / 网页通知
+    / Webhook / Claude Code / dsh 引擎 / 本地环境检测 / Owner GitLab Token
+    / GitLab 凭据 11 个内联卡片抽为 `components/settings/*` 独立组件
+    （AiProvidersCard / ImageModelsCard / VisionModelsCard / BackupManager
+    原卡片组件继续复用），状态 / 数据加载 / 全部处理函数（save*、build*Patch、
+    set*Field、环境检测、指南拉取等）收敛到 `hooks/useSettingsData.js`；
+    设置区块（section 锚点 id）与分组标题保留在组合层——SettingsNav 运行时
+    读取 DOM 动态生成左侧导航的架构（issue #155）不受影响；
+  - **测试**：概览 / 设置页既有静态源码断言跟随新文件路径（卡片组件 +
+    hook，含 `settings-nav-labels` 卡片区块名称解析扩展至
+    `components/settings/`），渲染断言（ssrLoadModule 页面）原样保留；
+    实现前新增测试可复现失败，前端全量测试 + 覆盖率门禁通过。
+
 - **前端轮询定时器支持页面可见性暂停（issue #200）**：概览页 5 个轮询（任务
   3s / 流水线 15s / 开放 issue 15s / 灵感 15s / 余额 60s）、App 通知轮询（10s）、
   任务列表（5s）、任务详情页（详情 5s + 实时执行 3s）、任务详情抽屉（执行续读

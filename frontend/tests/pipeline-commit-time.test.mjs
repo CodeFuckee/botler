@@ -29,7 +29,7 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+const overview = readFileSync(path.join(ROOT, 'src/components/overview/PipelineSection.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
 const vite = await createServer({

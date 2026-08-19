@@ -27,6 +27,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 源码断言改为「i18n key + 字典中文值」双重校验
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/lib/overview.jsx'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/hooks/useOverviewData.js'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/PipelineSection.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-page.test.mjs 一致）

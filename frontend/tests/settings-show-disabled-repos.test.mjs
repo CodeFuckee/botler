@@ -13,7 +13,11 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const settings = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+// issue #201 拆分：界面显示卡片 JSX 移到 components/settings/UiCard.jsx，
+// buildUiPatch / 全局保存收敛到 hooks/useSettingsData.js——静态断言跟随新文件
+const uiCard = readFileSync(path.join(ROOT, 'src/components/settings/UiCard.jsx'), 'utf8')
+const hook = readFileSync(path.join(ROOT, 'src/hooks/useSettingsData.js'), 'utf8')
+const settings = uiCard + '\n' + hook
 
 test('设置页「界面显示」卡片提供「显示未启用项目」复选框开关', () => {
   assert.match(settings, /显示未启用项目/, '应有开关文案')

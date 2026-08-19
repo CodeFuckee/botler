@@ -7,8 +7,8 @@
 // 位于开放 Issue 板块内）。
 //
 // 断言分两层：
-// 1. 源码级：Overview.jsx 中两板块的 JSX 起始位置顺序
-//    （issues-section < pipelines-section），且不再有任务板块标记；
+// 1. 源码级：Overview.jsx 中两板块组件（IssueListSection / PipelineSection）
+//    的挂载位置顺序（issues < pipelines），且不再有任务板块标记；
 // 2. 渲染级：mock 三个数据接口后渲染组件，序列化渲染树文本，
 //    断言「开放 Issue」标题位于「CI/CD 流水线」标题之前；覆盖
 //    有/无运行中任务、无流水线、无 issue 等边界（顺序依然成立、
@@ -23,6 +23,8 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// issue #201 拆分：三个板块改为独立组件，板块顺序由 Overview.jsx
+// 组合顺序（组件挂载顺序）保证；源码级断言改为校验组件挂载顺序。
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-page.test.mjs 一致）
@@ -41,8 +43,8 @@ after(() => vite.close())
 // 板块在源码中的起始位置：流水线 = pipelines-section，
 // 开放 issue = issues-section。两板块应是互不重叠的区间。
 function sectionPositions(src) {
-  const pipes = src.indexOf('className="pipelines-section"')
-  const issues = src.indexOf('className="issues-section"')
+  const pipes = src.indexOf('<PipelineSection')
+  const issues = src.indexOf('<IssueListSection')
   return { pipes, issues }
 }
 

@@ -22,7 +22,12 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const settingsSrc = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+// issue #201 拆分：Owner Token 卡片 JSX 移到 components/settings/OwnerTokenCard.jsx，
+// 保存处理函数与教程拉取收敛到 hooks/useSettingsData.js——静态断言跟随新文件
+const ownerCard = readFileSync(path.join(ROOT, 'src/components/settings/OwnerTokenCard.jsx'), 'utf8')
+const hook = readFileSync(path.join(ROOT, 'src/hooks/useSettingsData.js'), 'utf8')
+const gitlabCredCard = readFileSync(path.join(ROOT, 'src/components/settings/GitlabCredCard.jsx'), 'utf8')
+const settingsSrc = ownerCard + '\n' + gitlabCredCard + '\n' + hook
 
 const vite = await createServer({
   server: { middlewareMode: true },

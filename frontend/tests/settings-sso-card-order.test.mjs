@@ -6,6 +6,10 @@
 // 位于第 4 位——用户打开设置页首屏看不到 SSO 配置入口，误以为没有该功能。
 // 修复目标：SSO 配置卡片移到设置页**顶部第一位**（首屏直接可见），
 // 其余卡片顺序保持不变。
+//
+// issue #201 拆分后：卡片 JSX 移到 components/settings/*，页面顺序由
+// Settings.jsx 组合层（section 锚点顺序 + 卡片挂载顺序）决定——
+// 本测试改为断言 SSO 区块是页面第一个设置区块、卡片组件内首个卡片即 SSO。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -13,40 +17,46 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const settings = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+const page = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+const ssoCard = readFileSync(path.join(ROOT, 'src/components/settings/SsoCard.jsx'), 'utf8')
 
-/** 按源码顺序提取所有设置卡片：{title, pos}（pos 为 <div className="card"> 的行号） */
-function extractCards(src) {
-  const cards = []
-  const re = /<div className="card">\s*<h2>([^<]+)<\/h2>/g
+/** 按源码顺序提取页面全部设置区块 {id, pos}（pos 为 <section> 的行号） */
+function extractSections(src) {
+  const sections = []
+  const re = /<section id="(settings-[a-z-]+)" className="settings-section"[^>]*>/g
   let m
   while ((m = re.exec(src)) !== null) {
     const pos = src.slice(0, m.index).split('\n').length
-    cards.push({ title: m[1], pos })
+    sections.push({ id: m[1], pos })
   }
-  return cards
+  return sections
 }
 
 test('「Synology SSO 登录」卡片是设置页第一个卡片（顶部可见，首屏不滚动即可见）', () => {
-  const cards = extractCards(settings)
-  assert.ok(cards.length >= 4, `设置页应至少包含 4 个配置卡片，实际 ${cards.length} 个`)
-
-  const sso = cards.find((c) => c.title === 'Synology SSO 登录')
-  assert.ok(sso, '设置页应存在「Synology SSO 登录」配置卡片')
-
-  const first = cards[0]
+  const sections = extractSections(page)
+  assert.ok(sections.length >= 16, `设置页应至少包含 16 个设置区块，实际 ${sections.length} 个`)
+  const first = sections[0]
   assert.equal(
-    first.title, 'Synology SSO 登录',
-    `SSO 配置卡片应是设置页第一个卡片（当前第一个是「${first.title}」，SSO 在第 ${cards.indexOf(sso) + 1} 位）`,
+    first.id, 'settings-sso',
+    `SSO 配置区块应是设置页第一个区块（当前第一个是「${first.id}」，SSO 在第 ${sections.findIndex((s) => s.id === 'settings-sso') + 1} 位）`,
   )
+  // 卡片组件内的卡片标题仍是「Synology SSO 登录」
+  assert.match(ssoCard, /<h2>Synology SSO 登录<\/h2>/, 'SsoCard 组件应渲染「Synology SSO 登录」卡片标题')
 })
 
 test('「Synology SSO 登录」卡片应位于「任务调度」等业务配置卡片之前', () => {
-  const cards = extractCards(settings)
-  const sso = cards.find((c) => c.title === 'Synology SSO 登录')
-  const task = cards.find((c) => c.title === '任务调度')
-  const notify = cards.find((c) => c.title === '网页通知')
-  assert.ok(sso, '缺少 SSO 卡片')
-  if (task) assert.ok(sso.pos < task.pos, 'SSO 卡片应在「任务调度」之前')
-  if (notify) assert.ok(sso.pos < notify.pos, 'SSO 卡片应在「网页通知」之前（当前被它压到首屏之外）')
+  const sections = extractSections(page)
+  const sso = sections.find((s) => s.id === 'settings-sso')
+  const task = sections.find((s) => s.id === 'settings-tasks')
+  const notify = sections.find((s) => s.id === 'settings-notifications')
+  assert.ok(sso, '缺少 settings-sso 区块')
+  assert.ok(sso.pos === Math.min(...sections.map((s) => s.pos)), 'SSO 区块应在页面最顶部')
+  if (task) assert.ok(sso.pos < task.pos, 'SSO 区块应在「任务调度」之前')
+  if (notify) assert.ok(sso.pos < notify.pos, 'SSO 区块应在「网页通知」之前（当前被它压到首屏之外）')
+  // 页面组合层挂载顺序：SsoCard 第一个，TasksCard / NotificationsCard 在其后
+  const ssoMount = page.indexOf('<SsoCard')
+  const taskMount = page.indexOf('<TasksCard')
+  const notifyMount = page.indexOf('<NotificationsCard')
+  assert.ok(ssoMount > -1 && ssoMount < taskMount && ssoMount < notifyMount,
+    'Settings.jsx 应先挂载 SsoCard，再挂载 TasksCard / NotificationsCard')
 })

@@ -26,6 +26,8 @@ const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 
 const app = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
 const lazyPages = readFileSync(path.join(ROOT, 'src/pages/lazy.jsx'), 'utf8')
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/hooks/useOverviewData.js'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/IssueListSection.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 app-hooks.test.mjs 一致）。

@@ -23,6 +23,8 @@ import TestRenderer from 'react-test-renderer'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 const overviewSrc = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/IssueListSection.jsx'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/PipelineSection.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-*.test.mjs 一致）
 const vite = await createServer({

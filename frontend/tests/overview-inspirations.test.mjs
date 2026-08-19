@@ -40,7 +40,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
 // 源码断言改为「i18n key + 字典中文值」双重校验
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
+// issue #201 拆分：灵感板块独立组件 + 数据加载收敛到 useOverviewData hook，
+// 源码断言按板块归属分别读取对应文件（页面组合 / hook / 灵感组件）。
 const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/hooks/useOverviewData.js'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/InspirationSection.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-issues.test.mjs 一致）
 const vite = await createServer({
@@ -87,13 +91,15 @@ test('源码：增删改分别调用 POST / PUT / DELETE /api/inspirations', () 
 })
 
 test('源码：灵感板块位于开放 Issue 下方、CI/CD 流水线上方，无右侧边栏（issue #293）', () => {
-  const insp = overview.indexOf('className="inspirations-section"')
-  const issues = overview.indexOf('className="issues-section"')
-  const pipes = overview.indexOf('className="pipelines-section"')
+  // issue #201 拆分：三个板块为独立组件，板块顺序由 Overview.jsx
+  // 组合顺序（组件挂载顺序）保证——开放 Issue → 灵感 → CI/CD 流水线
+  const insp = overview.indexOf('<InspirationSection')
+  const issues = overview.indexOf('<IssueListSection')
+  const pipes = overview.indexOf('<PipelineSection')
   assert.ok(insp >= 0 && issues >= 0 && pipes >= 0,
-            '三个板块标记都应存在')
+            '三个板块组件都应挂载')
   assert.ok(issues < insp && insp < pipes,
-            '灵感板块应位于开放 Issue 板块（issues-section）与 CI/CD 流水线板块（pipelines-section）之间（开放 Issue 下方）')
+            '灵感板块组件应位于开放 Issue 组件（IssueListSection）与 CI/CD 流水线组件（PipelineSection）之间（开放 Issue 下方）')
   assert.ok(!overview.includes('className="overview-sidebar"'),
             '不应再有右侧常驻边栏（overview-sidebar）——灵感组件保持原始位置')
   assert.ok(!overview.includes('className="overview-layout"'),

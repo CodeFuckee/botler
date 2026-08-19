@@ -18,7 +18,13 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const settings = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+// issue #201 拆分：Webhook 卡片 JSX 移到 components/settings/WebhookCard.jsx，
+// 保存处理函数收敛到 hooks/useSettingsData.js——静态断言跟随新文件
+// （「位于网页通知之后」按卡片源码拼接顺序 + 页面区块顺序双重断言）
+const notifyCard = readFileSync(path.join(ROOT, 'src/components/settings/NotificationsCard.jsx'), 'utf8')
+const webhookCard = readFileSync(path.join(ROOT, 'src/components/settings/WebhookCard.jsx'), 'utf8')
+const hook = readFileSync(path.join(ROOT, 'src/hooks/useSettingsData.js'), 'utf8')
+const settings = notifyCard + '\n' + webhookCard + '\n' + hook
 
 test('设置页挂载「消息推送 Webhook」卡片', () => {
   assert.match(settings, /<h2>消息推送 Webhook<\/h2>/, '应有卡片标题')

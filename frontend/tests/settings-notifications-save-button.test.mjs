@@ -15,7 +15,12 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const settings = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+// issue #201 拆分：网页通知卡片 JSX 移到 components/settings/NotificationsCard.jsx，
+// 保存处理函数收敛到 hooks/useSettingsData.js——静态断言跟随新文件
+const notifyCard = readFileSync(path.join(ROOT, 'src/components/settings/NotificationsCard.jsx'), 'utf8')
+const tasksCard = readFileSync(path.join(ROOT, 'src/components/settings/TasksCard.jsx'), 'utf8')
+const hook = readFileSync(path.join(ROOT, 'src/hooks/useSettingsData.js'), 'utf8')
+const settings = notifyCard + '\n' + tasksCard + '\n' + hook
 
 /** 提取指定标题卡片的源码片段（从该 card div 起到下一个 card div 前） */
 function cardSource(src, title) {

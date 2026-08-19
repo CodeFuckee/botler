@@ -22,7 +22,11 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const settingsSrc = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+// issue #201 拆分：界面显示卡片 JSX 移到 components/settings/UiCard.jsx，
+// buildUiPatch / saveUi 收敛到 hooks/useSettingsData.js——静态断言跟随新文件
+const uiCard = readFileSync(path.join(ROOT, 'src/components/settings/UiCard.jsx'), 'utf8')
+const hook = readFileSync(path.join(ROOT, 'src/hooks/useSettingsData.js'), 'utf8')
+const settingsSrc = uiCard + '\n' + hook
 
 const vite = await createServer({
   server: { middlewareMode: true },
@@ -63,8 +67,8 @@ test('「界面显示」卡片提供「界面主题」三态下拉（跟随系�
   assert.equal(labels.system, '跟随系统', 'system 文案应为「跟随系统」')
   assert.equal(labels.light, '浅色', 'light 文案应为「浅色」')
   assert.equal(labels.dark, '深色', 'dark 文案应为「深色」')
-  assert.equal(settingsSrc.includes("import {\n  THEME_MODE_LABELS,"), true,
-               'Settings.jsx 应从 theme.js 导入 THEME_MODE_LABELS')
+  assert.match(uiCard, /import \{ THEME_MODE_LABELS[^}]*\} from '..\/..\/theme\.js'/,
+               'UiCard.jsx 应从 theme.js 导入 THEME_MODE_LABELS（issue #201 拆分后卡片持有）')
 })
 
 test('切换三态即时应用主题并写入 localStorage（无需等保存）', () => {

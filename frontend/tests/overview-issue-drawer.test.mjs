@@ -35,6 +35,7 @@ const { default: IssueDrawer, isEscapeKey, ISSUE_STATE_META } =
 const { api } = await vite.ssrLoadModule('/src/api.js')
 
 const overviewSrc = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+  + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/IssueListSection.jsx'), 'utf8')
 const drawerSrc = readFileSync(path.join(ROOT, 'src/components/IssueDrawer.jsx'), 'utf8')
 
 after(() => vite.close())

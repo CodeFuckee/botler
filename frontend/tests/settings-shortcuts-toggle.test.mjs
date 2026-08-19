@@ -17,7 +17,11 @@ import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const src = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
+// issue #201 拆分：快捷键开关 JSX 移到 components/settings/UiCard.jsx，
+// 启用状态初始化（loadShortcutsEnabled）收敛到 hooks/useSettingsData.js
+const uiCard = readFileSync(path.join(ROOT, 'src/components/settings/UiCard.jsx'), 'utf8')
+const hook = readFileSync(path.join(ROOT, 'src/hooks/useSettingsData.js'), 'utf8')
+const src = uiCard + '\n' + hook
 
 const vite = await createServer({
   server: { middlewareMode: true },
