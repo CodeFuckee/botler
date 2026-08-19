@@ -6,11 +6,13 @@ import { Icon } from '../Icon.jsx'
 import { COMMON_TZ, themeStorage } from '../../hooks/useSettingsData.js'
 import { THEME_MODE_LABELS, applyTheme, saveThemePreference } from '../../theme.js'
 import { saveShortcutsEnabled } from '../../keymap.js'
+import { saveTimelineEnabled } from '../../lib/notesTimeline.js'  // issue #342：评论/活动合并时间线开关
 import { LANG_LABELS } from '../../i18n.jsx'
 
 export default function UiCard({
   settings, setSettings, uiSaveBusy, saveUi, uiSaved,
-  shortcutsEnabled, setShortcutsEnabled, t, lang, setLang,
+  shortcutsEnabled, setShortcutsEnabled, timelineEnabled, setTimelineEnabled,
+  t, lang, setLang,
 }) {
   return (
     <div className="card">
@@ -88,6 +90,27 @@ export default function UiCard({
             </td>
           </tr>
           <tr>
+            {/* issue #342：概览页 issue 详情右边栏「评论与活动」合并时间线
+                显示——开启后评论与系统活动按时间交错为一条时间线（类似
+                GitLab issue 时间线）；localStorage 键 botler.timeline（默认
+                分开显示，与快捷键开关 botler.shortcuts 同模式），切换即时
+                生效、刷新保持 */}
+            <th>合并显示评论与活动（时间线） <code>botler.timeline</code></th>
+            <td>
+              <input
+                type="checkbox"
+                className="check-input timeline-toggle-input"
+                checked={timelineEnabled}
+                onChange={(e) => {
+                  setTimelineEnabled(e.target.checked)
+                  saveTimelineEnabled(
+                    typeof localStorage !== 'undefined' ? localStorage : null,
+                    e.target.checked)
+                }}
+              />
+            </td>
+          </tr>
+          <tr>
             <th>显示时区 <code>ui.timezone</code></th>
             <td>
               <input
@@ -119,6 +142,8 @@ export default function UiCard({
         （默认与访问者本机一致），修改后点击下方「保存界面显示配置」立即生效，无需刷新。
         键盘快捷键（n 新建 issue / r 刷新 / t 跳转任务 / g o 概览 / g s 设置 / / 聚焦搜索）：
         勾选 = 启用（默认），取消 = 全站快捷键立即失效；输入框聚焦时快捷键不触发，避免误操作。
+        合并显示评论与活动（时间线）：勾选 = 概览页 issue 详情右边栏的评论与活动按时间交错为一条
+        时间线展示（类似 GitLab issue 时间线），默认不勾选 = 分开显示（评论 / 活动两个区块）。
         {t('settings.ui.languageHint')}
       </p>
     </div>

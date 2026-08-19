@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 ### Added
+- **概览页 issue 详情右边栏「评论与活动」合并时间线显示（issue #342）**：概览页
+  issue 详情右边栏（`.drawer.issue-drawer`）原先「评论」（用户发言，Markdown
+  渲染）与「活动」（系统事件，纯文本）按 `note.system` 分区为两个区块分开
+  展示（issue #97）；本次在设置页「界面显示」卡片新增开关「合并显示评论与
+  活动（时间线）」（localStorage 键 `botler.timeline`，与快捷键开关
+  `botler.shortcuts` 同模式，默认关闭 = 分开显示，保持 issue #97 现状；
+  切换即时生效、刷新保持），开启后评论与活动按 `created_at` 升序交错合并为
+  一条时间线（同一时刻按 note id 升序，GitLab note id 单调递增保证同秒内
+  顺序稳定），类似 GitLab issue 时间线——左侧竖线 + 节点圆点，评论为卡片
+  节点（复用作者/头像/时间/Markdown 正文/回复按钮与内联回复框，issue
+  #125 交互完整保留）、活动为文本节点（提交 SHA 仍渲染为 GitLab 提交页
+  链接，issue #181）；「添加评论」输入区在时间线底部保留；加载中 / 加载
+  失败重试 / 空列表（「暂无评论与活动」占位）/ 旧数据缺 project_id 兜底
+  与分开显示完全一致：
+  - **改动范围**：新增 `frontend/src/lib/notesTimeline.js`（存储键 + 开关
+    读写 `loadTimelineEnabled` / `saveTimelineEnabled` + 合并排序纯函数
+    `buildTimeline`，异常元素/缺 id/缺 created_at 防御）；`IssueDrawer.jsx`
+    按 `botler.timeline` 在「分开两区块」与「合并时间线」间切换渲染（评论/
+    活动条目渲染提取为共用函数，分开显示输出与 issue #97 逐字节一致）；
+    `UiCard.jsx` / `useSettingsData.js` 新增开关行与状态；`styles.css`
+    新增 `.timeline-list` / `.timeline-item` / `.timeline-comment` /
+    `.timeline-activity` 样式（竖线 + 节点圆点，深浅色主题随变量翻转）；
+  - **新增测试**：`tests/overview-issue-timeline.test.mjs` 新增 17 例——
+    源码断言（抽屉读取 `botler.timeline` / 设置页渲染开关行）、`buildTimeline`
+    排序与防御（正常交错、同时间戳按 id、空/null、异常元素、缺 created_at）、
+    开关读写（默认关闭、'1'/'0'、存储不可用兜底）、默认分开显示防回归、
+    时间线交错渲染、评论/活动条目功能保留（Markdown/头像/回复按钮/linkify）、
+    边界（只有评论/只有活动/空/加载中/失败重试/缺 project_id）与设置页
+    开关切换持久化；全量前端单元测试无 regression。
 - **设置页左侧设置导航栏四周不再留边距（issue #344）**：设置页左侧设置导航栏
   （`.settings-nav`，issue #139 引入、issue #168 支持整体折叠）原先为「悬浮
   卡片」形态——面板带 16px 四边内边距（`padding: var(--space-4)`）+ 卡片背景

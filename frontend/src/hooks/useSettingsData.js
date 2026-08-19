@@ -7,6 +7,7 @@ import { api, setDisplayTz } from '../api.js'
 import { sendTestNotification } from '../notify.js'
 import { applyTheme, saveThemePreference } from '../theme.js'
 import { loadShortcutsEnabled } from '../keymap.js'
+import { loadTimelineEnabled } from '../lib/notesTimeline.js'  // issue #342：评论/活动合并时间线开关
 import { useI18n } from '../i18n.jsx'
 
 // 任务调度数字字段的中文标签（与后端 worker 段字段一一对应）
@@ -50,6 +51,11 @@ export function useSettingsData() {
   // 分发处理器每次按键实时读取，无需刷新即全局生效
   const [shortcutsEnabled, setShortcutsEnabled] = useState(() =>
     loadShortcutsEnabled(typeof localStorage !== 'undefined' ? localStorage : null))
+  // issue #342：概览页 issue 详情右边栏「评论与活动」合并时间线开关——
+  // localStorage 键 botler.timeline（与快捷键开关 botler.shortcuts 同
+  // 模式，默认关闭=分开显示，保持 issue #97 现状）；切换即时生效、刷新保持
+  const [timelineEnabled, setTimelineEnabled] = useState(() =>
+    loadTimelineEnabled(typeof localStorage !== 'undefined' ? localStorage : null))
   const [settings, setSettings] = useState(null)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
@@ -415,5 +421,6 @@ export function useSettingsData() {
     pauseWindowsInput, setPauseWindowsInput, setWorkerField, setIssuePriority,
     setPauseWindowsText, togglePauseWeekday, save, reconcileNow,
     t, lang, setLang, shortcutsEnabled, setShortcutsEnabled,
+    timelineEnabled, setTimelineEnabled,  // issue #342：评论/活动合并时间线开关
   }
 }

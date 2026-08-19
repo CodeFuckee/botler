@@ -1675,6 +1675,74 @@ code {
   flex-shrink: 0;
 }
 
+/* issue #342：评论与活动「合并时间线」显示——设置页「界面显示」开关
+   botler.timeline 开启后，概览页 issue 详情右边栏的评论（用户发言）与
+   活动（系统事件）不再分两个区块，而是按时间交错为一条时间线（类似
+   GitLab issue 时间线）：左侧竖线 + 节点圆点，评论为卡片节点（复用
+   comment-* 内部样式）、活动为文本节点（复用 activity-* 样式） */
+.timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+.timeline-list::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--border);
+}
+.timeline-item {
+  position: relative;
+  padding-left: 32px;
+  margin-bottom: var(--space-3);
+}
+.timeline-item:last-child {
+  margin-bottom: 0;
+}
+/* 节点圆点：活动为中性灰、评论为主色（与 GitLab 时间线节点同视觉层级） */
+.timeline-item::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 18px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--border-hover);
+  border: 2px solid var(--bg);
+  box-sizing: border-box;
+}
+.timeline-comment::before {
+  background: var(--primary);
+}
+/* 时间线评论卡片（观感与分开显示的 comment-item 一致） */
+.timeline-comment {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-3);
+  background: var(--bg);
+}
+/* 时间线活动节点（文本 + 时间，无卡片） */
+.timeline-activity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 13px;
+  padding: var(--space-1) 0;
+}
+.timeline-activity .activity-text {
+  overflow-wrap: break-word;
+  flex: 1;
+  min-width: 0;
+}
+.timeline-activity .activity-time {
+  flex-shrink: 0;
+}
+
 /* issue #125：右边栏「添加评论」与「回复评论」——评论卡片内联回复框
    （回复按钮/输入区/取消与发送）与区块底部新评论输入区 */
 .comment-actions {

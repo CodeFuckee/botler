@@ -52,6 +52,7 @@ import { api, fmtTime, fmtSeconds } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import Markdown, { linkifyCommits } from './Markdown.jsx'
 import TaskDetailDrawer from './TaskDetailDrawer.jsx'  // issue #167：任务执行详情第二层右边栏
+import { loadTimelineEnabled, buildTimeline } from '../lib/notesTimeline.js'  // issue #342：评论/活动合并时间线开关与排序
 
 // issue 状态 → 徽章映射（聚合只返回开放 issue，closed 为兜底映射）
 export const ISSUE_STATE_META = {
@@ -315,9 +316,18 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     loadNotes()
   }, [loadNotes])
 
+  // issue #342：合并时间线开关——设置页「界面显示」卡片切换（localStorage
+  // 键 botler.timeline，默认关闭=分开显示，保持 issue #97 现状）。概览页与
+  // 设置页为不同路由，抽屉挂载时读取一次即拿到最新偏好，刷新后保持
+  const [timeline] = useState(() =>
+    loadTimelineEnabled(typeof localStorage !== 'undefined' ? localStorage : null))
+
   // 分区：system=true 为系统活动事件，false 为用户评论（issue #97）
   const comments = (notes || []).filter((n) => n && !n.system)
   const activities = (notes || []).filter((n) => n && n.system)
+  // issue #342：合并时间线——评论与活动按 created_at 升序交错（同一时刻
+  // 按 note id），由 renderTimelineBody 消费；分开显示模式不使用
+  const timelineItems = timeline ? buildTimeline(notes) : []
 
   // 点击「关闭 issue」：二次确认 → 调用后端关闭 → 成功标记关闭状态
   // 并通知父组件刷新；失败展示错误信息（按钮保留可重试）。
@@ -609,6 +619,21 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     </ul>
   }
 
+  // 合并时间线四态渲染（issue #342，与 renderNotesBody 同款：缺
+  // project_id / 加载中 / 加载失败 / 空列表与内容列表）；内容按
+  // created_at 升序交错，评论与活动条目复用各自渲染函数（时间线类名）
+  function renderTimelineBody() {
+    if (!hasDetail) return <p className="muted">无法加载（缺少仓库信息）</p>
+    if (detailErr) return <p className="muted">加载失败</p>
+    if (notes === null) return <p className="muted">加载中…</p>
+    if (timelineItems.length === 0) return <p className="muted">暂无评论与活动</p>
+    return <ul className="timeline-list">
+      {timelineItems.map((n) => (n.system
+        ? renderActivityItem(n, 'timeline-item timeline-activity', false)
+        : renderCommentItem(n, 'timeline-item timeline-comment')))}
+    </ul>
+  }
+
   // ---- issue #125：添加评论与回复评论 ----
 
   // 评论行计数：轮询快照（issue 对象）+ 本次会话新增。新评论已在
@@ -681,6 +706,104 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     } finally {
       setReplying(false)
     }
+  }
+
+  // ---- issue #342：评论/活动条目渲染（分开显示与合并时间线共用，
+  // 仅条目类名不同） ----
+
+  // 评论条目：作者头像/名字/时间 + Markdown 正文 + 「回复」按钮与内联
+  // 回复框（issue #125）；cls 为条目类名（分开='comment-item'，合并
+  // 时间线='timeline-item timeline-comment'）
+  function renderCommentItem(n, cls) {
+    return (
+      <li key={n.id} className={cls}>
+        <div className="comment-head">
+          <NoteAvatar note={n} />
+          <span className="comment-author">{noteAuthorName(n)}</span>
+          <span className="comment-time">{fmtTime(n.created_at)}</span>
+        </div>
+        <div className="comment-body">
+          {n.body && String(n.body).trim() ? (
+            <Markdown content={n.body} projectUrl={projectUrl} />
+          ) : (
+            <p className="muted">（无内容）</p>
+          )}
+        </div>
+        {/* issue #125：回复评论——「回复」按钮展开内联回复框；
+            发送成功后本地追加回复并收起（同评论列表结构） */}
+        <div className="comment-actions">
+          <button type="button"
+                  className="btn btn-small comment-reply-btn"
+                  onClick={() => startReply(n.id)}
+                  title={`回复 ${noteAuthorName(n)}`}>回复</button>
+        </div>
+        {replyingTo === n.id && (
+          <div className="comment-reply-box">
+            <textarea className="comment-input" rows="2"
+                      placeholder={`回复 @${noteAuthorName(n)}…`}
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value)} />
+            {replyErr && (
+              <div className="issue-drawer-error" role="alert">
+                {replyErr}
+              </div>
+            )}
+            <div className="comment-reply-actions">
+              <button type="button" className="btn btn-small"
+                      onClick={cancelReply} disabled={replying}>取消</button>
+              <button type="button" className="btn btn-small btn-primary"
+                      disabled={replying || !replyText.trim()}
+                      onClick={() => handleSendReply(n.id)}>
+                {replying ? '回复中…' : '发送回复'}
+              </button>
+            </div>
+          </div>
+        )}
+      </li>
+    )
+  }
+
+  // 活动条目：节点圆点 + 系统事件文本（提交引用渲染链接）+ 时间；
+  // cls 为条目类名（分开='activity-item'，合并时间线='timeline-item
+  // timeline-activity'）；合并时间线模式的节点圆点由 CSS 绘制（showDot
+  // 传 false），避免与「•」重复
+  function renderActivityItem(n, cls, showDot = true) {
+    return (
+      <li key={n.id} className={cls}>
+        {showDot && <span className="activity-dot" title="系统活动">•</span>}
+        <span className="activity-text">
+          {n.body ? linkifyCommits(n.body, projectUrl, `act${n.id}-`)
+                  : '（无内容）'}
+        </span>
+        {n.created_at && (
+          <span className="activity-time">{fmtTime(n.created_at)}</span>
+        )}
+      </li>
+    )
+  }
+
+  // 添加评论输入区（issue #125）：分开显示置于评论区底部、合并时间线
+  // 置于时间线底部；可评论条件不满足时返回 null（不渲染）
+  function renderCommentComposer() {
+    if (!canComment) return null
+    return (
+      <div className="comment-composer">
+        <textarea className="comment-input" rows="2"
+                  placeholder="写下你的评论…"
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)} />
+        {postErr && (
+          <div className="issue-drawer-error" role="alert">{postErr}</div>
+        )}
+        <div className="comment-composer-actions">
+          <button type="button" className="btn btn-small btn-primary"
+                  disabled={posting || !commentText.trim()}
+                  onClick={handlePostComment}>
+            {posting ? '发表中…' : '发表评论'}
+          </button>
+        </div>
+      </div>
+    )
   }
 
   // 抽屉操作按钮（issue #270）：同一组按钮在桌面端置于头部右侧
@@ -873,90 +996,31 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
           </div>
         )}
         <div className="issue-notes">
-          <div className="issue-notes-block">
-            <h3>评论</h3>
-            {renderNotesBody(comments, '暂无评论', (n) => (
-              <li key={n.id} className="comment-item">
-                <div className="comment-head">
-                  <NoteAvatar note={n} />
-                  <span className="comment-author">{noteAuthorName(n)}</span>
-                  <span className="comment-time">{fmtTime(n.created_at)}</span>
-                </div>
-                <div className="comment-body">
-                  {n.body && String(n.body).trim() ? (
-                    <Markdown content={n.body} projectUrl={projectUrl} />
-                  ) : (
-                    <p className="muted">（无内容）</p>
-                  )}
-                </div>
-                {/* issue #125：回复评论——「回复」按钮展开内联回复框；
-                    发送成功后本地追加回复并收起（同评论列表结构） */}
-                <div className="comment-actions">
-                  <button type="button"
-                          className="btn btn-small comment-reply-btn"
-                          onClick={() => startReply(n.id)}
-                          title={`回复 ${noteAuthorName(n)}`}>回复</button>
-                </div>
-                {replyingTo === n.id && (
-                  <div className="comment-reply-box">
-                    <textarea className="comment-input" rows="2"
-                              placeholder={`回复 @${noteAuthorName(n)}…`}
-                              value={replyText}
-                              onChange={(e) => setReplyText(e.target.value)} />
-                    {replyErr && (
-                      <div className="issue-drawer-error" role="alert">
-                        {replyErr}
-                      </div>
-                    )}
-                    <div className="comment-reply-actions">
-                      <button type="button" className="btn btn-small"
-                              onClick={cancelReply} disabled={replying}>取消</button>
-                      <button type="button" className="btn btn-small btn-primary"
-                              disabled={replying || !replyText.trim()}
-                              onClick={() => handleSendReply(n.id)}>
-                        {replying ? '回复中…' : '发送回复'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </li>
-            ))}
-            {/* issue #125：添加评论——区块底部输入区；详情加载成功后
-                才显示（加载中/失败时隐藏，避免对不可知目标发言） */}
-            {canComment && (
-              <div className="comment-composer">
-                <textarea className="comment-input" rows="2"
-                          placeholder="写下你的评论…"
-                          value={commentText}
-                          onChange={(e) => setCommentText(e.target.value)} />
-                {postErr && (
-                  <div className="issue-drawer-error" role="alert">{postErr}</div>
-                )}
-                <div className="comment-composer-actions">
-                  <button type="button" className="btn btn-small btn-primary"
-                          disabled={posting || !commentText.trim()}
-                          onClick={handlePostComment}>
-                    {posting ? '发表中…' : '发表评论'}
-                  </button>
-                </div>
+          {timeline ? (
+            /* issue #342：合并时间线——评论（用户发言）与活动（系统事件）
+               按时间交错为一条时间线（类似 GitLab issue 时间线），设置页
+               「界面显示」开关 botler.timeline 切换；加载失败错误横幅 +
+               重试按钮仍在两区块上方共用，添加评论输入区保留在时间线底部 */
+            <div className="issue-notes-block timeline-block">
+              <h3>评论与活动（时间线）</h3>
+              {renderTimelineBody()}
+              {renderCommentComposer()}
+            </div>
+          ) : (
+            <>
+              <div className="issue-notes-block">
+                <h3>评论</h3>
+                {renderNotesBody(comments, '暂无评论',
+                  (n) => renderCommentItem(n, 'comment-item'))}
+                {renderCommentComposer()}
               </div>
-            )}
-          </div>
-          <div className="issue-notes-block">
-            <h3>活动</h3>
-            {renderNotesBody(activities, '暂无活动', (n) => (
-              <li key={n.id} className="activity-item">
-                <span className="activity-dot" title="系统活动">•</span>
-                <span className="activity-text">
-                  {n.body ? linkifyCommits(n.body, projectUrl, `act${n.id}-`)
-                          : '（无内容）'}
-                </span>
-                {n.created_at && (
-                  <span className="activity-time">{fmtTime(n.created_at)}</span>
-                )}
-              </li>
-            ))}
-          </div>
+              <div className="issue-notes-block">
+                <h3>活动</h3>
+                {renderNotesBody(activities, '暂无活动',
+                  (n) => renderActivityItem(n, 'activity-item'))}
+              </div>
+            </>
+          )}
         </div>
         {/* 移动端底部操作栏（issue #270）：与头部同一组 drawerActions，
             仅 ≤860px 视口显示（styles.css 控制），sticky 常驻抽屉底部，
