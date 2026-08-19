@@ -53,9 +53,11 @@ test('导航栏用户区（UserMenu）应为最后一个元素（版本徽标之
 })
 
 test('UserMenu 组件应渲染 user-chip（用户名+退出按钮）', () => {
+  // className 自 issue #221 起为动态拼接（临期时附加 user-chip-expiring），
+  // 断言放宽为样式类存在即可
   assert.match(
     userMenu,
-    /className="user-chip"/,
+    /user-chip/,
     'UserMenu.jsx 应渲染 .user-chip（登录用户区）'
   )
   assert.match(

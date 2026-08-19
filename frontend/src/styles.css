@@ -574,6 +574,7 @@ body {
   line-height: 1.5;
 }
 .toast-error { border-left-color: var(--err, #e5484d); }
+.toast-warning { border-left-color: var(--warn, #b45309); }
 .toast-success { border-left-color: var(--ok, #12823d); }
 .toast-message { flex: 1; min-width: 0; word-break: break-all; }
 .toast-close {
@@ -1042,6 +1043,9 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .btn-danger { color: var(--err); }
 .btn-danger:hover { background: var(--err-weak); border-color: var(--err); }
 .btn-danger:not(:disabled):active { background: var(--err-weak); transform: translateY(1px) scale(0.98); }
+.btn-warning { color: var(--warn); }
+.btn-warning:hover { background: var(--warn-weak); border-color: var(--warn); }
+.btn-warning:not(:disabled):active { background: var(--warn-weak); transform: translateY(1px) scale(0.98); }
 .btn-sm { padding: var(--space-1) var(--space-2); font-size: 12px; }
 .btn-wide { padding: 8px 36px; }
 .btn-upload { cursor: pointer; }
@@ -2207,6 +2211,15 @@ code {
 .user-chip-guest {
   opacity: 0.7;
   font-size: 12px;
+}
+/* 会话临近过期高亮（issue #221）：剩 ≤1 天时用户区整体橙色警示，
+   与「续期」按钮/tooltip 提示配套，引导重新登录续期 */
+.user-chip-expiring {
+  color: var(--warn);
+}
+.user-chip-warn {
+  font-size: 12px;
+  line-height: 1;
 }
 /* 导航栏界面语言快捷切换（issue #268）：紧凑下拉，置于右上角用户区左侧；
    margin-left:auto 与 user-chip 共同把切换器推到导航最右（无用户信息时

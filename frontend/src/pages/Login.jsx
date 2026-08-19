@@ -6,6 +6,9 @@ import { Icon } from '../components/Icon.jsx'
 const ERROR_TEXT = {
   login_failed: '登录失败：与群晖 SSO 服务器通信出错，请检查配置后重试',
   access_denied: '已在群晖 SSO 登录页取消授权',
+  // 会话失效（issue #221）：api.js 统一拦截 401 时带此参数跳转，明确提示
+  // 「登录已过期」而非静默失败——引导用户重新登录
+  session_expired: '登录已过期，请重新登录',
   // 其他群晖返回的 error 原样展示
 }
 

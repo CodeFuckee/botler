@@ -276,3 +276,41 @@ class TestSessionSecurity:
         # 删除 cookie 后请求不再带会话
         tc.cookies.delete("botler_session")
         assert tc.get("/api/settings").status_code == 401
+
+
+class TestApiGuard401Message:
+    """401 响应体 message（issue #221）：会话过期与未登录给出明确区分文案。"""
+
+    def test_unauth_401_message(self, sso_client):
+        """未登录（无会话 cookie）→ 401 响应体为「未登录」。"""
+        tc, _ = sso_client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body.get("error") == "未登录（SSO 已启用）", body
+
+    def test_expired_cookie_401_message(self, sso_client):
+        """会话过期 → 401 响应体明确提示「登录已过期，请重新登录」。"""
+        tc, tmp_path = sso_client
+        secret_path = str(tmp_path / "session.key")
+        secret = get_session_secret(secret_path)
+        # now=0 → exp 落在 1970 年，必然已过期
+        expired = create_session({"sub": "u", "username": "old"},
+                                 days=7, secret=secret, now=0)
+        tc.cookies.set("botler_session", expired)
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body.get("error") == "登录已过期，请重新登录", body
+
+    def test_tampered_cookie_401_message(self, sso_client):
+        """篡改会话 cookie（签名无效）→ 401 响应体同样提示重新登录。"""
+        tc, _ = sso_client
+        _login(tc)
+        jar = tc.cookies
+        tampered = jar["botler_session"][:-4] + "dead"
+        jar.set("botler_session", tampered)
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body.get("error") == "登录已过期，请重新登录", body

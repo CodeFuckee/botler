@@ -230,15 +230,76 @@ test('非 JSON 响应体容错：200 空 body 返回 null（回归）', async ()
 
 // ---- 401 SSO 跳转回归保护（issue #27）----
 
-test('SSO 启用 + 401（非 auth 端点）→ 跳登录页', async () => {
+test('SSO 启用 + 401（非 auth 端点）→ 跳登录页并带过期提示参数', async () => {
   setSsoEnabled(true)
-  const m = installFetch(() => httpResp(401, { error: '未登录' }))
+  const m = installFetch(() => httpResp(401, { error: '登录已过期，请重新登录' }))
   const origLocation = globalThis.window
   const redirects = []
   globalThis.window = { location: { set href(v) { redirects.push(v) }, get href() { return redirects[redirects.length - 1] || '' } } }
   try {
-    await assert.rejects(() => api.get('/api/tasks'), /未登录/)
-    assert.equal(redirects[0], '/login')
+    await assert.rejects(() => api.get('/api/tasks'), /登录已过期，请重新登录/)
+    assert.equal(redirects[0], '/login?error=session_expired')
+  } finally {
+    m.restore()
+    globalThis.window = origLocation
+  }
+})
+
+test('SSO 启用 + 401 不弹 toast（跳转由登录页提示，避免整页重载丢 toast）', async () => {
+  setSsoEnabled(true)
+  const m = installFetch(() => httpResp(401, { error: '登录已过期，请重新登录' }))
+  const origLocation = globalThis.window
+  globalThis.window = { location: { href: '' } }
+  try {
+    await assert.rejects(() => api.get('/api/tasks'), /登录已过期，请重新登录/)
+    assert.equal(currentToasts().length, 0, '401 跳转场景不应弹 toast（跳转后丢失，改由登录页提示）')
+  } finally {
+    m.restore()
+    globalThis.window = origLocation
+  }
+})
+
+// ---- 401 统一覆盖（issue #221）：download / upload 同样拦截 ----
+
+test('SSO 启用 + download 401 → 跳登录页', async () => {
+  setSsoEnabled(true)
+  const m = installFetch(() => httpResp(401, { error: '登录已过期，请重新登录' }))
+  const origLocation = globalThis.window
+  const redirects = []
+  globalThis.window = { location: { set href(v) { redirects.push(v) }, get href() { return redirects[redirects.length - 1] || '' } } }
+  try {
+    await assert.rejects(() => api.download('/api/backups/x/download', 'x'), /登录已过期/)
+    assert.equal(redirects[0], '/login?error=session_expired', 'download 401 也应跳登录页')
+  } finally {
+    m.restore()
+    globalThis.window = origLocation
+  }
+})
+
+test('SSO 启用 + upload 401 → 跳登录页', async () => {
+  setSsoEnabled(true)
+  const m = installFetch(() => httpResp(401, { error: '登录已过期，请重新登录' }))
+  const origLocation = globalThis.window
+  const redirects = []
+  globalThis.window = { location: { set href(v) { redirects.push(v) }, get href() { return redirects[redirects.length - 1] || '' } } }
+  try {
+    const file = new File(['x'], 'x.db')
+    await assert.rejects(() => api.upload('/api/backups/restore/upload', file), /登录已过期/)
+    assert.equal(redirects[0], '/login?error=session_expired', 'upload 401 也应跳登录页')
+  } finally {
+    m.restore()
+    globalThis.window = origLocation
+  }
+})
+
+test('SSO 未启用 + download 401 → 不跳登录页', async () => {
+  setSsoEnabled(false)
+  const m = installFetch(() => httpResp(401, { error: '未登录' }))
+  const origLocation = globalThis.window
+  globalThis.window = { location: { href: '' } }
+  try {
+    await assert.rejects(() => api.download('/api/backups/x/download', 'x'), /未登录/)
+    assert.equal(globalThis.window.location.href, '', 'SSO 未启用时 401 不应跳登录页')
   } finally {
     m.restore()
     globalThis.window = origLocation

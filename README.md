@@ -779,11 +779,18 @@ SSO 登录」卡片填写 Well-known URL / Application ID / Secret 并启用后�
 [`docs/Synology-SSO-配置指南.md`](docs/Synology-SSO-配置指南.md)。
 
 登录后左侧边栏底部展示当前用户区（issue #271）：昵称/头像（OIDC claims 的
-name/picture，头像加载失败或无头像时回退首字母占位）、会话过期时间 tooltip
-（与过期提示联动）与「退出登录」按钮（调用 POST /api/auth/logout，成功后回
-登录页）；未启用 SSO 时右侧弱提示「未登录（开放模式）」，不打扰。用户信息
-复用 /api/auth/me 获取（会话 cookie 携带 picture/exp，旧会话缺失 picture 时
-自动回退首字母）。
+name/picture，头像加载失败或无头像时回退首字母占位）、会话信息 tooltip 与
+「退出登录」按钮（调用 POST /api/auth/logout，成功后回登录页）；未启用 SSO
+时右侧弱提示「未登录（开放模式）」，不打扰。用户信息复用 /api/auth/me 获取
+（会话 cookie 携带 picture/exp，旧会话缺失 picture 时自动回退首字母）。
+
+**会话过期体验闭环（issue #221）**：会话默认 7 天（`sso.session_days`），
+会话信息 tooltip 展示过期时间与**剩余时长**（每分钟刷新）；临近过期（剩
+≤1 天）时用户区橙色高亮 + ⚠ 徽标 + 「续期」按钮（会话为签名 cookie 无法
+服务端延长，续期 = 跳 SSO 登录页重新登录获得新会话）并弹一次提醒 toast；
+会话过期后访问 /api 返回 401（响应体区分「未登录」与「登录已过期，请重新
+登录」），前端统一拦截 401 跳转登录页并明确提示「登录已过期，请重新登录」
+（覆盖全部页面，含备份下载/上传）。
 
 ## 安全说明
 

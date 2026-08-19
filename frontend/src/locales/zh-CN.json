@@ -245,6 +245,9 @@
   "shortcuts.scope.tasks": "任务页",
   "nav.notLoggedIn": "未登录（开放模式）",
   "nav.sessionExpiry": "会话有效期至 {time}",
+  "nav.sessionRemain": "剩余 {remain}",
+  "nav.sessionExpiring": "会话即将过期（剩 {remain}），请重新登录以续期",
+  "nav.renew": "续期",
   "overview.sort": "排序",
   "overview.sortTitle": "切换 issue 排序方法（默认按调度器执行顺序）",
   "overview.sortAria": "排序方法",
@@ -312,5 +315,6 @@
   "tasks.queueCleared": "任务 #{id} 已恢复按系统规则排序",
   "tasks.manualPriority": "人工优先级 {p}",
   "tasks.canceledByUser": "已移出队列",
-  "tasks.canceledByUserTitle": "用户手动移出队列（canceled_by_user），可手动重试重新入队"
+  "tasks.canceledByUserTitle": "用户手动移出队列（canceled_by_user），可手动重试重新入队",
+  "common.unknown": "未知"
 }

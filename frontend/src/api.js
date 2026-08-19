@@ -85,10 +85,14 @@ async function request(method, path, body, opts = {}) {
     let data = null
     try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
     if (!resp.ok) {
-      // 会话失效兜底（issue #27）：SSO 启用时未登录访问受保护 API → 401，
-      // 跳登录页（登录流程自身端点除外，避免死循环）
+      // 会话失效统一拦截（issue #221）：SSO 启用时未登录/会话过期访问受保护
+      // API → 401，跳登录页并带过期提示参数，由登录页明确提示「登录已过期，
+      // 请重新登录」（登录流程自身端点除外，避免死循环，issue #27）。
+      // 不弹 toast：整页跳转后 toast 立即丢失，提示改由登录页展示。
       if (resp.status === 401 && ssoEnabled && !path.startsWith('/api/auth/')) {
-        window.location.href = '/login'
+        window.location.href = '/login?error=session_expired'
+        const msg = data?.error || '登录已过期，请重新登录'
+        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
       }
       const msg = data?.error || data?.detail || `HTTP ${resp.status}`
       const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
@@ -142,7 +146,17 @@ export const api = {
   // 下载备份文件（blob，不走 JSON 解析）
   download: async (path, filename) => {
     const resp = await fetch(path)
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    if (!resp.ok) {
+      // 401 统一拦截（issue #221）：与 request() 同策略——跳登录页带过期
+      // 提示参数；错误信息优先取后端响应体 message
+      if (resp.status === 401 && ssoEnabled && !path.startsWith('/api/auth/')) {
+        window.location.href = '/login?error=session_expired'
+      }
+      let data = null
+      try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
+      const msg = data?.error || data?.detail || `HTTP ${resp.status}`
+      throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    }
     const blob = await resp.blob()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -162,6 +176,10 @@ export const api = {
     let data = null
     try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
     if (!resp.ok) {
+      // 401 统一拦截（issue #221）：与 request() 同策略
+      if (resp.status === 401 && ssoEnabled && !path.startsWith('/api/auth/')) {
+        window.location.href = '/login?error=session_expired'
+      }
       const msg = data?.error || data?.detail || `HTTP ${resp.status}`
       throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
     }

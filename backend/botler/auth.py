@@ -271,6 +271,13 @@ class SsoGuardMiddleware(BaseHTTPMiddleware):
             ctx = getattr(request.app.state, "ctx", None)
             sso = getattr(ctx, "sso", None)
             if sso is not None and sso.enabled() and sso.current_user(request) is None:
+                # 401 响应体区分未登录与会话过期（issue #221）：无会话 cookie
+                # → 首次访问未登录；有 cookie 但签名无效/已过期 → 明确提示
+                # 重新登录（前端据此跳登录页并展示对应文案）
+                if request.cookies.get(SESSION_COOKIE):
+                    return JSONResponse(
+                        {"error": "登录已过期，请重新登录"}, status_code=401
+                    )
                 return JSONResponse({"error": "未登录（SSO 已启用）"}, status_code=401)
         return await call_next(request)
 

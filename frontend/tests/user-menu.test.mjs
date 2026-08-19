@@ -9,7 +9,7 @@
 //    占位；picture 加载失败 → 回退首字母；tooltip 含会话过期时间；
 // 3. 边界：未启用 SSO（user null）→ 弱提示不报错；/api/auth/me 失败 →
 //    保持初始用户；退出按钮 → 调用 logout 接口并跳登录页。
-import { after, mock, test } from 'node:test'
+import { after, beforeEach, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -29,8 +29,12 @@ const vite = await createServer({
   logLevel: 'error',
 })
 after(() => vite.close())
+beforeEach(() => toastMod.clearToasts())
 const { default: UserMenu } = await vite.ssrLoadModule('/src/components/UserMenu.jsx')
-const { api, fmtTime } = await vite.ssrLoadModule('/src/api.js')
+const { api, fmtTime, fmtSeconds } = await vite.ssrLoadModule('/src/api.js')
+// 同一 vite 实例加载 toast 模块（与 UserMenu 内部 import 同一实例，
+// 保证 currentToasts 能看到 showToast 入队的临期提醒）
+const toastMod = await vite.ssrLoadModule('/src/toast.js')
 
 // 模拟浏览器 window（退出登录跳转写 window.location.href）
 globalThis.window = { location: { href: '' } }
@@ -237,6 +241,98 @@ test('退出按钮：调用 POST /api/auth/logout 并跳转登录页', async () 
     })
     assert.ok(posted.includes('/api/auth/logout'), '应调用 POST /api/auth/logout')
     assert.equal(window.location.href, '/login', '退出后应跳转登录页')
+  } finally {
+    mock.restoreAll()
+    if (renderer) await TestRenderer.act(() => renderer.unmount())
+  }
+})
+
+
+// ---- issue #221：会话剩余时间 / 临近过期提示续期 ----
+
+// 会话即将过期用户：12 小时后过期（剩余 12 小时，≤ 1 天阈值）
+function expiringUser(exp = Math.floor(Date.now() / 1000) + 12 * 3600) {
+  return { ...LOGGED_IN_USER, exp }
+}
+
+test('源码：剩余时间经 fmtSeconds 计算，续期跳 /api/auth/login，i18n 词条齐全', () => {
+  assert.match(src, /fmtSeconds/, '应使用 fmtSeconds 计算会话剩余时间')
+  assert.match(src, /window\.location\.href = '\/api\/auth\/login'/, '续期按钮应跳转 SSO 登录端点重新登录')
+  for (const k of ['nav.sessionRemain', 'nav.sessionExpiring', 'nav.renew']) {
+    assert.equal(typeof zhCN[k], 'string', `zh-CN 缺 ${k}`)
+    assert.equal(typeof enUS[k], 'string', `en-US 缺 ${k}`)
+  }
+})
+
+test('会话剩余时间：tooltip 展示「剩余 X」相对时间（非临期）', async () => {
+  mock.method(api, 'get', async (p) => {
+    if (p === '/api/auth/me') return { ...LOGGED_IN_USER }
+    throw new Error('unexpected ' + p)
+  })
+  let renderer = null
+  try {
+    renderer = await renderMenu({ user: LOGGED_IN_USER, ssoEnabled: true })
+    const chip = renderer.root.findByProps({ className: 'user-chip' })
+    const remainSec = Math.floor((LOGGED_IN_USER.exp * 1000 - Date.now()) / 1000)
+    const remainText = fmtSeconds(remainSec)
+    assert.ok(remainText, '剩余时间应可计算')
+    assert.ok(
+      chip.props.title.includes(remainText),
+      `tooltip 应包含剩余时间（期望含 ${remainText}，实际 ${chip.props.title}）`
+    )
+    // 非临期不渲染续期按钮
+    const buttons = renderer.root.findAllByType('button').map((b) => texts(b.props.children).join(''))
+    assert.ok(!buttons.includes('续期'), '非临期不应显示续期按钮')
+    // 非临期不弹临期 toast
+    assert.equal(toastMod.currentToasts().length, 0, '非临期不应弹临期提醒 toast')
+  } finally {
+    mock.restoreAll()
+    if (renderer) await TestRenderer.act(() => renderer.unmount())
+  }
+})
+
+test('临近过期（剩 ≤1 天）：chip 高亮、tooltip 提示续期、显示续期按钮并弹提醒 toast', async () => {
+  const u = expiringUser()
+  mock.method(api, 'get', async (p) => {
+    if (p === '/api/auth/me') return { ...u }
+    throw new Error('unexpected ' + p)
+  })
+  let renderer = null
+  try {
+    renderer = await renderMenu({ user: u, ssoEnabled: true })
+    // chip 高亮 class
+    const chip = renderer.root.findByProps({ className: 'user-chip user-chip-expiring' })
+    // tooltip 提示续期
+    assert.match(chip.props.title, /即将过期/, '临期 tooltip 应提示即将过期')
+    assert.match(chip.props.title, /续期/, '临期 tooltip 应引导续期')
+    // 续期按钮
+    const buttons = renderer.root.findAllByType('button').map((b) => texts(b.props.children).join(''))
+    assert.ok(buttons.includes('续期'), '临期应显示续期按钮')
+    // 临期提醒 toast
+    const toasts = toastMod.currentToasts()
+    assert.equal(toasts.length, 1, '临期应弹一次提醒 toast')
+    assert.match(String(toasts[0].message), /即将过期/, 'toast 应提示会话即将过期')
+  } finally {
+    mock.restoreAll()
+    if (renderer) await TestRenderer.act(() => renderer.unmount())
+  }
+})
+
+test('临近过期：点击续期按钮 → 跳转 /api/auth/login 重新登录', async () => {
+  const u = expiringUser()
+  mock.method(api, 'get', async (p) => {
+    if (p === '/api/auth/me') return { ...u }
+    throw new Error('unexpected ' + p)
+  })
+  window.location.href = ''
+  let renderer = null
+  try {
+    renderer = await renderMenu({ user: u, ssoEnabled: true })
+    const renewBtn = renderer.root.findAllByType('button')
+      .find((b) => texts(b.props.children).join('').includes('续期'))
+    assert.ok(renewBtn, '应有续期按钮')
+    await TestRenderer.act(() => { renewBtn.props.onClick() })
+    assert.equal(window.location.href, '/api/auth/login', '点击续期应跳转 SSO 登录端点')
   } finally {
     mock.restoreAll()
     if (renderer) await TestRenderer.act(() => renderer.unmount())

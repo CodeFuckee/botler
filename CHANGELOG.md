@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 ### Added
+- **SSO 会话过期续期提示与 401 统一处理（issue #221）**：SSO 会话默认 7 天，
+  过期后访问 /api 返回 401，此前前端仅静默跳登录页（用户看到「数据加载失败」而非
+  「登录已过期」）、导航栏无剩余时间展示、临近过期无续期引导。本次闭环会话生命周期：
+  - `backend/botler/auth.py`：`SsoGuardMiddleware` 401 响应体区分未登录与会话过期
+    ——无会话 cookie 返回「未登录（SSO 已启用）」；有 cookie 但签名无效/已过期返回
+    「登录已过期，请重新登录」（前端经统一拦截跳转登录页展示对应提示）；
+  - `frontend/src/api.js`：401 统一拦截覆盖全部页面——`request()` / `download` /
+    `upload` 会话失效时一律跳转 `/login?error=session_expired`（登录流程自身端点
+    除外，避免死循环）；跳转场景不弹 toast（整页跳转后 toast 立即丢失，提示改由
+    登录页展示，错误信息仍抛出让调用方感知）；
+  - `frontend/src/pages/Login.jsx`：错误文案映射新增 `session_expired` →
+    「登录已过期，请重新登录」；
+  - `frontend/src/components/UserMenu.jsx`：会话剩余时间展示（tooltip 在过期时间
+    后追加「剩余 X 天 X 小时」，每分钟刷新不过时）；临近过期（剩 ≤1 天）时导航栏
+    用户区橙色高亮 + ⚠ 徽标 + 「续期」按钮（会话为签名 cookie 无法服务端延长，
+    续期 = 跳 SSO 登录页重新登录获得新会话）+ 进入临期弹一次提醒 toast；
+  - `frontend/src/styles.css`：`user-chip-expiring` / `user-chip-warn` /
+    `toast-warning` / `btn-warning` 样式；i18n：nav.sessionRemain /
+    nav.sessionExpiring / nav.renew / common.unknown 中英词条；
+  - **测试**：后端 `test_auth.py` 新增 3 例（未登录/过期/篡改 cookie 的 401 message
+    区分）；前端 `api-request.test.mjs` 新增 4 例（401 跳转带过期提示参数、跳转不弹
+    toast、download/upload 401 统一拦截、SSO 未启用不跳转），`login-page.test.mjs`
+    新增 1 例（session_expired 文案），`user-menu.test.mjs` 新增 4 例（剩余时间
+    tooltip、临期高亮/续期按钮/提醒 toast、续期跳转、i18n 词条齐全），
+    `version-badge-settings-page.test.mjs` 源码断言随动态 className 放宽；前后端
+    全量测试无 regression。
+
 - **统一日志脱敏工具 log_redact（issue #259）**：平台明文规定凭据不进日志，但
   执行器日志包含 claude 子进程输出、GitLab API 请求细节，异常堆栈可能带上 URL
   中的 token（如 git remote 内嵌凭据）、Authorization 头等内容，存在意外泄露

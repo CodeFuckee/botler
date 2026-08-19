@@ -42,9 +42,10 @@ test('登录页点击按钮跳转 SSO 登录端点 /api/auth/login', () => {
   assert.match(loginSrc, /window\.location\.href = '\/api\/auth\/login'/, '点击应跳转 SSO 登录端点')
 })
 
-test('内置 login_failed / access_denied 错误文案映射', () => {
+test('内置 login_failed / access_denied / session_expired 错误文案映射', () => {
   assert.match(loginSrc, /login_failed:\s*'登录失败：与群晖 SSO 服务器通信出错/, '应有通信失败映射文案')
   assert.match(loginSrc, /access_denied:\s*'已在群晖 SSO 登录页取消授权'/, '应有取消授权映射文案')
+  assert.match(loginSrc, /session_expired:\s*'登录已过期，请重新登录'/, '应有会话过期映射文案（issue #221）')
 })
 
 // ---- 渲染断言 ----
@@ -100,6 +101,12 @@ test('error=access_denied：显示「已在群晖 SSO 登录页取消授权」�
   const { renderer } = await renderLogin('error=access_denied')
   const text = textOf(findAlert(renderer)[0])
   assert.match(text, /已在群晖 SSO 登录页取消授权/)
+})
+
+test('error=session_expired：显示「登录已过期，请重新登录」明确提示（issue #221）', async () => {
+  const { renderer } = await renderLogin('error=session_expired')
+  const text = textOf(findAlert(renderer)[0])
+  assert.match(text, /登录已过期，请重新登录/)
 })
 
 test('未知 error：原样透传展示', async () => {
