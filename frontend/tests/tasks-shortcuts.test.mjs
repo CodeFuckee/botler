@@ -1,14 +1,14 @@
-// 任务页键盘快捷键集成测试（issue #269）：r = 手动刷新任务列表，
-// / = 聚焦搜索框（经 keymap.js focusElement 防御性聚焦，真实 DOM
-// 聚焦搜索框、测试渲染器 ref 为 null 时静默跳过）。
+// 任务页键盘快捷键集成测试（issue #269 / #216）：r = 手动刷新任务列表。
+// issue #216 起 / 升级为全站全局搜索快捷键（App 层注册打开搜索浮层），
+// 任务页不再注册 focus-search——本页搜索框保留点击使用，按 / 不再
+// 产生任何动作（preventDefault 计数为 0 证明未命中任务页快捷键）。
 //
 // 断言：
-// 1. 源码：Tasks 经 useShortcuts 注册 refresh / focus-search 动作，
-//    / 动作走 focusElement(searchRef.current) 防御性聚焦；
+// 1. 源码：Tasks 经 useShortcuts 只注册 refresh 动作，未注册
+//    focus-search（/ 已移交 App 层全局搜索，issue #216）；
 // 2. 行为：按 r 重新拉取 /api/tasks（复用已有 refreshList）；
-// 3. 行为：按 / 命中 focus-search 快捷键（preventDefault 证明命中
-//    并进入动作分发）；focusElement 聚焦行为由 keymap 单测覆盖；
-// 4. 防误触：搜索框聚焦时按 / 不触发。
+// 3. 行为：按 / 不再命中任务页快捷键（不 preventDefault）；输入框
+//    聚焦时按 / 同样不触发（防误触由 keymap.js 统一处理）。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -93,11 +93,10 @@ async function renderTasks() {
 
 // ---- 1. 源码断言 ----
 
-test('源码：Tasks 注册 refresh / focus-search 快捷键动作', () => {
+test('源码：Tasks 只注册 refresh，未注册 focus-search（/ 移交全局搜索）', () => {
   assert.match(src, /useShortcuts\(/, '应使用 useShortcuts 注册')
   assert.match(src, /'refresh': \(\) => refreshList\(\)/, 'r 应复用 refreshList')
-  assert.match(src, /'focus-search': \(\) => focusElement\(searchRef\.current\)/, '/ 应聚焦搜索框 ref')
-  assert.match(src, /ref=\{searchRef\}/, '搜索框应挂 ref')
+  assert.doesNotMatch(src, /focus-search/, '任务页不应再注册 focus-search（issue #216 全局搜索）')
 })
 
 // ---- 2. 行为 ----
@@ -117,12 +116,12 @@ test('行为：按 r 重新拉取任务列表', async () => {
   }
 })
 
-test('行为：按 / 命中 focus-search 快捷键（preventDefault）', async () => {
+test('行为：按 / 不再命中任务页快捷键（全局搜索已接管）', async () => {
   const { renderer, renderError } = await renderTasks()
   try {
     assert.equal(renderError, null)
     const pd = press('/')
-    assert.equal(pd, 1, '按 / 应命中 focus-search（先 preventDefault 再执行动作）')
+    assert.equal(pd, 0, '任务页未注册 focus-search，按 / 不应 preventDefault')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
   }

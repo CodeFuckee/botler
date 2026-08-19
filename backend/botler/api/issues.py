@@ -235,10 +235,13 @@ def _collect(c) -> dict:
     return {"repos": repos, "errors": errors, "total": total}
 
 
-@router.get("/overview")
-def issues_overview(request: Request):
-    """所有已启用仓库的开放 issue 聚合（10 秒 TTL 缓存）。"""
-    c = request.app.state.ctx
+def get_issues_overview(c) -> dict:
+    """所有已启用仓库的开放 issue 聚合（10 秒 TTL 缓存）。
+
+    供 /api/issues/overview 与全局搜索（issue #216 /api/search 的
+    issues 模块）复用——搜索不再单独打 GitLab API，与概览页共享
+    缓存与 per-repo client。
+    """
     now = time.monotonic()
     with _CACHE_LOCK:
         if _CACHE["data"] is not None and now < _CACHE["expires_at"]:
@@ -248,6 +251,13 @@ def issues_overview(request: Request):
         _CACHE["expires_at"] = time.monotonic() + CACHE_TTL_SECONDS
         _CACHE["data"] = result
     return result
+
+
+@router.get("/overview")
+def issues_overview(request: Request):
+    """所有已启用仓库的开放 issue 聚合（10 秒 TTL 缓存）。"""
+    c = request.app.state.ctx
+    return get_issues_overview(c)
 
 
 # ---- issue #180：概览页「Issue 完成耗时」统计 ----

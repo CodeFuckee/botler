@@ -11,6 +11,7 @@ import DialogHost from './components/DialogHost.jsx'
 import ToastHost from './components/ToastHost.jsx'
 import UserMenu from './components/UserMenu.jsx'
 import ShortcutHelpModal from './components/ShortcutHelpModal.jsx'
+import SearchOverlay from './components/SearchOverlay.jsx'
 import { useShortcuts } from './keymap.js'
 import { api, setDisplayTz, setSsoEnabled, shortSha } from './api.js'
 import { applyTheme, loadThemePreference, saveThemePreference, watchSystemTheme } from './theme.js'
@@ -68,6 +69,9 @@ export default function App() {
   const [redirect, setRedirect] = useState(null)
   // 快捷键帮助弹窗（issue #269）：右上角「快捷键帮助」按钮打开
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false)
+  // 全局搜索浮层（issue #216）：侧边栏/顶栏搜索按钮、全站 / 快捷键打开，
+  // 跨模块（任务/issue/灵感/仓库）检索（SearchOverlay 组件内处理）
+  const [searchOpen, setSearchOpen] = useState(false)
   // 快捷键跳转（issue #269）：全局快捷键 t / g o / g s 设置跳转目标，
   // 经 <Navigate> 渲染完成路由切换后立即清除（不依赖 useNavigate——
   // 测试环境 mock Router 无导航上下文也不会崩溃；生产 BrowserRouter
@@ -173,6 +177,9 @@ export default function App() {
     'go-tasks': () => setRedirect('/tasks'),
     'go-overview': () => setRedirect('/overview'),
     'go-settings': () => setRedirect('/settings'),
+    // 全局搜索（issue #216）：/ 打开搜索浮层（输入框聚焦自动不触发，
+    // keymap.js 防误触；任务页原「聚焦本页搜索框」绑定已移除）
+    'focus-search': () => setSearchOpen(true),
   }, { storage: typeof localStorage !== 'undefined' ? localStorage : null })
 
   // 跳转消费后清除 redirect（子组件 <Navigate> 的 effect 先于本父组件
@@ -236,6 +243,16 @@ export default function App() {
           <Icon name="menu" aria-hidden="true" />
         </button>
         <span className="topbar-brand">Botler</span>
+        {/* 全局搜索（issue #216）：移动端顶栏搜索按钮（键盘 / 同样可用） */}
+        <button
+          type="button"
+          className="topbar-search"
+          onClick={() => setSearchOpen(true)}
+          aria-label={t('search.triggerTitle')}
+          title={t('search.triggerTitle')}
+        >
+          <Icon name="search" aria-hidden="true" />
+        </button>
       </header>
       <nav
         className={'sidebar' + (sidebarCollapsed ? ' collapsed' : '') + (mobileNavOpen ? ' open' : '')}
@@ -260,6 +277,19 @@ export default function App() {
             <Icon name={sidebarCollapsed ? 'chevronRight' : 'chevronLeft'} aria-hidden="true" />
           </button>
         </div>
+        {/* 全局搜索入口（issue #216）：展开态显示搜索框样式的按钮，
+            折叠态收成图标（.nav-label 由 .sidebar.collapsed 规则隐藏），
+            点击打开搜索浮层；全站 / 快捷键等效 */}
+        <button
+          type="button"
+          className="sidebar-search"
+          onClick={() => setSearchOpen(true)}
+          title={t('search.triggerTitle')}
+          aria-label={t('search.triggerTitle')}
+        >
+          <Icon name="search" aria-hidden="true" />
+          <span className="nav-label">{t('search.placeholder')}</span>
+        </button>
         <div className="sidebar-nav" id="sidebar-nav" onClick={() => setMobileNavOpen(false)}>
           <NavLink to="/overview" title={t('nav.overview')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
             <Icon name="compass" aria-hidden="true" />
@@ -375,6 +405,9 @@ export default function App() {
           </Routes>
         </Suspense>
       </main>
+      {/* 全局搜索浮层（issue #216）：/ 快捷键 / 侧边栏搜索框 / 移动端
+          顶栏按钮打开；Esc / 遮罩 / × 关闭（组件内自行处理） */}
+      {searchOpen && <SearchOverlay onClose={() => setSearchOpen(false)} />}
       {/* 快捷键帮助弹窗（issue #269）：右上角按钮打开，展示键位与
           启用开关；Esc / 遮罩 / × 关闭（组件内自行监听 Esc） */}
       {shortcutHelpOpen && (

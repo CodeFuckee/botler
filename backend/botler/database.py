@@ -313,6 +313,15 @@ CREATE TABLE IF NOT EXISTS tool_meta (
 """
 
 
+def _like_escape(term: str) -> str:
+    """转义 LIKE 通配符（% _ \）为字面匹配，配合 ESCAPE '\\' 使用。
+
+    全局搜索（issue #216）按字面子串匹配：用户输入 % / _ 不应作为
+    通配符（搜索「100%」应命中字面含 100% 的标题而非任意前缀）。
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _normalize_issue_time(value: str | None) -> str:
     """归一化 GitLab issue 时间字段（ISO8601 含时区 → UTC 无后缀串）。
 
@@ -812,6 +821,47 @@ class Database:
                 """SELECT i.*, r.name AS repo_name FROM inspirations i
                    JOIN repos r ON r.id = i.repo_id
                    ORDER BY i.updated_at DESC, i.id DESC""").fetchall()
+
+    def search_tasks(self, term: str, limit: int = 10) -> list[TaskRow]:
+        """按 issue 标题/编号模糊匹配任务（issue #216 全局搜索）。
+
+        与 list_tasks 的 search 过滤同字段（issue_title / issue_iid），
+        但额外转义 LIKE 通配符——搜索词里的 % _ 按字面匹配；按任务 id
+        倒序（最新任务在前），LIMIT 截断。
+        """
+        like = f"%{_like_escape(term)}%"
+        with self._conn() as conn:
+            return _as_task_list(conn.execute(
+                """SELECT * FROM tasks
+                   WHERE issue_title LIKE ? ESCAPE '\\'
+                      OR CAST(issue_iid AS TEXT) LIKE ? ESCAPE '\\'
+                   ORDER BY id DESC LIMIT ?""", (like, like, limit)).fetchall())
+
+    def search_inspirations(self, term: str, limit: int = 10) -> list[sqlite3.Row]:
+        """按内容模糊匹配灵感（issue #216 全局搜索），JOIN repos 带仓库名。
+
+        与 list_inspirations 同排序（updated_at 降序、同时间按 id 降序）。
+        """
+        like = f"%{_like_escape(term)}%"
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT i.*, r.name AS repo_name FROM inspirations i
+                   JOIN repos r ON r.id = i.repo_id
+                   WHERE i.content LIKE ? ESCAPE '\\'
+                   ORDER BY i.updated_at DESC, i.id DESC LIMIT ?""",
+                (like, limit)).fetchall()
+
+    def search_repos(self, term: str, limit: int = 10) -> list[RepoRow]:
+        """按名称模糊匹配仓库（issue #216 全局搜索），排除软删除。
+
+        与 list_repos 同排序（priority 升序、同优先级按 id）。
+        """
+        like = f"%{_like_escape(term)}%"
+        with self._conn() as conn:
+            return _as_repo_list(conn.execute(
+                """SELECT * FROM repos
+                   WHERE deleted_at IS NULL AND name LIKE ? ESCAPE '\\'
+                   ORDER BY priority, id LIMIT ?""", (like, limit)).fetchall())
 
     def get_inspiration(self, inspiration_id: int) -> sqlite3.Row | None:
         with self._conn() as conn:

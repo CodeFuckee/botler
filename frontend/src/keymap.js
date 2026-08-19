@@ -31,7 +31,9 @@ export const COMBO_TIMEOUT_MS = 2000
 export const SHORTCUT_DEFS = [
   { id: 'new-issue', keys: 'n', scope: ['overview'], labelKey: 'shortcuts.newIssue' },
   { id: 'refresh', keys: 'r', scope: ['overview', 'tasks'], labelKey: 'shortcuts.refresh' },
-  { id: 'focus-search', keys: '/', scope: ['tasks'], labelKey: 'shortcuts.focusSearch' },
+  // issue #216：/ 升级为全站全局搜索快捷键（打开搜索浮层），任务页
+  // 原「聚焦本页搜索框」绑定移除（任务页搜索框仍可点击使用）
+  { id: 'focus-search', keys: '/', scope: ['global'], labelKey: 'shortcuts.focusSearch' },
   { id: 'go-tasks', keys: 't', scope: ['global'], labelKey: 'shortcuts.goTasks' },
   { id: 'go-overview', keys: 'g o', scope: ['global'], labelKey: 'shortcuts.goOverview' },
   { id: 'go-settings', keys: 'g s', scope: ['global'], labelKey: 'shortcuts.goSettings' },

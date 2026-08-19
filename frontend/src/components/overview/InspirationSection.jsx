@@ -46,7 +46,7 @@ export default function InspirationSection({
             ) : (
               <div className="inspirations-list">
                 {inspirationRepos.map((r) => (
-                  <div key={r.repo_id} className="card inspiration-repo-card">
+                  <div key={r.repo_id} className="card inspiration-repo-card" data-repo-id={r.repo_id}>
                     <div className="inspiration-repo-head">
                       <span className="inspiration-repo-name" title={tr('overview.repoTitle')}><Icon name="folder" /> {r.repo_name || tr('common.deleted')}</span>
                       {r.enabled === false && (

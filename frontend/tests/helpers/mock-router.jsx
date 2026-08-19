@@ -59,3 +59,8 @@ export function useSearchParams() {
 export function useNavigate() {
   return (_to) => {}
 }
+
+// 单组件测试环境视为不在 Router 内（Overview 深链消费走静态分支，issue #216）
+export function useInRouterContext() {
+  return false
+}

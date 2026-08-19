@@ -86,6 +86,7 @@ backend/
     api/introspection.py 概览页「自省」API（issue #187）：POST /api/repos/{id}/introspect——收集项目上下文（文件树/README/清单文件）→ 调 AI 对话模型审查 → 把改进建议写入该仓库 issue（分配人 = 仓库 owner）
     api/repo_logo.py  仓库 logo 生成与同步 API（issue #188/#297/#320）：POST /api/repos/{id}/generate-logo——agent 基于仓库 README 生成 logo 提示词 → 调用生图模型（设置页「生图模型」配置）生成 logo 落盘并写 repos 表；GET /api/repos/{id}/logo 读取图片（?download=1 触发下载）；POST /api/repos/{id}/sync-logo 把已生成 logo 上传为 GitLab 项目图标（头像；上传前自动压缩到 200KB 以内并归一为 GitLab 支持格式，issue #310/#318）；POST /api/repos/{id}/sync-logo-from-gitlab 反向同步——把 GitLab 项目当前图标（头像）拉回落盘为本地仓库 logo（issue #320，双向同步闭环）
     api/discover.py  概览页「发掘」API（issue #189/#301）：POST /api/repos/{id}/discover——AI 基于项目功能生成 GitHub 搜索词 → 搜索类似仓库并翻找其开放 issue（过滤 PR）→ AI 整理成若干条需求 → 逐条写入该仓库 issue（分配人 = 仓库 owner，一条需求一个 issue；无论是否找到用户需求 issue 都返回相似仓库列表，未找到时 count=0 不建 issue，issue #301；可选环境变量 GITHUB_TOKEN 提升 GitHub 限额）
+    api/search.py    全局搜索 API（issue #216）：GET /api/search?q=&limit=——跨 4 模块（任务/issue/灵感/仓库）按关键词模糊匹配并按模块分组返回；中文关键词走 LIKE 字面子串（转义 % _ \），issue 模块复用概览 10 秒缓存
     api/stats.py     统计看板 API（issue #264/#274）：GET /api/stats/dashboard——本地任务表聚合（任务总数/成功率/平均耗时/失败数 + 按引擎/仓库/来源分组 + 失败原因 Top（附分类）+ 失败原因分类分布），10 秒 TTL 缓存，与任务列表同表同口径
     auth.py          Synology SSO（OIDC 客户端 / 签名会话 / API 保护中间件）
     api/             REST API（repos / tasks / settings / auth）
@@ -728,6 +729,7 @@ GET    /api/pipelines/overview       概览页 CI/CD 流水线聚合（所有配
 GET    /api/pipelines/{repo_id}/artifacts 下载指定 job 的流水线产物（?job_id=；后端代理 GitLab jobs artifacts zip 归档，per-repo token 优先回退全局 bot token，流式透传 + Content-Disposition attachment；无产物 404、GitLab 故障 502，issue #329）
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138；「每小时余额变化速率」由前端基于历史观测样本计算，issue #304）
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment；?include_usage=1 可选附带 token 用量字段，issue #235）
+GET    /api/search?q=&limit=      全局搜索（issue #216）：跨 4 模块（任务 / GitLab 开放 issue / 灵感 / 仓库）按关键词模糊匹配，结果按模块分组（tasks/issues/inspirations/repos 四个数组，每模块默认 10 条上限 50 条）；中文关键词直接用 LIKE 字面子串匹配（FTS5 默认分词器不切分中文、trigram 对 1~2 字词无效，按 Issue 正文允许的 LIKE 兜底方案）；issues 模块复用概览页 10 秒 TTL 聚合缓存（不额外打爆 GitLab API，仅覆盖已启用仓库）；搜索词中的 % _ 通配符按字面匹配
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url/environment——执行环境快照 JSON：引擎版本/模型/起始提交/平台版本/配置哈希，issue #276；usage——任务 token 用量：engine/model/prompt_tokens/completion_tokens/total_tokens/estimated_cost/currency/raw_usage，无用量数据为 null，issue #235）
 GET    /api/usage/stats               任务 token 用量统计（按 repo_id/engine/since/until 过滤，返回 summary + by_repo/by_engine/by_date 聚合，issue #235）
 GET    /api/stats/dashboard           统计看板（issue #264/#274）：本地任务表聚合——overview（任务总数/成功率/平均耗时/失败数）+ by_engine/by_repo/by_source（分组对比）+ failure_reasons（失败原因 Top 10，failed/interrupted 的 error_message 归一化，每条附 category/category_name 失败分类）+ failure_categories（失败原因分类分布，落库值优先、旧任务实时分类兜底）；days 参数 0=全部/N=最近 N 天，10 秒 TTL 缓存

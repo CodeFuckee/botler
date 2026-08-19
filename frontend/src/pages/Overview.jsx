@@ -2,6 +2,8 @@
 // IssueListSection / InspirationSection / PipelineSection /
 // DeepSeekBalanceCard，数据加载与轮询收敛到 useOverviewData hook，
 // 本文件只做组合编排（主文件 ≤400 行），行为与拆分前一致。
+import { useEffect, useRef } from 'react'
+import { useInRouterContext, useLocation, useNavigate } from 'react-router-dom'
 import { useI18n } from '../i18n.jsx'
 import { useOverviewData } from '../hooks/useOverviewData.js'
 import IssueListSection from '../components/overview/IssueListSection.jsx'
@@ -60,8 +62,27 @@ export {
   eventToLine,
 } from '../lib/overview.jsx'
 export { PIPELINE_STATUS_META, stageClass } from '../components/PipelineDrawer.jsx'
+import { findIssueInRepos, repoScrollSelector } from '../lib/searchJump.js'
 
 export default function Overview() {
+  // 深链消费（?issue=/?repo=，issue #216）依赖 useLocation/useNavigate，
+  // 仅在 Router 上下文内可用；单组件测试（无 Router）渲染静态版不抛
+  // invariant（lib/searchJump 纯函数已单测，Router 版另建集成测试）
+  const inRouter = useInRouterContext()
+  return inRouter ? <OverviewWithRouter /> : <OverviewStatic />
+}
+
+function OverviewStatic() {
+  return <OverviewBody location={null} navigate={null} />
+}
+
+function OverviewWithRouter() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  return <OverviewBody location={location} navigate={navigate} />
+}
+
+function OverviewBody({ location, navigate }) {
   const { tr } = useI18n()
   const {
     dsBalance,
@@ -74,6 +95,63 @@ export default function Overview() {
     loadIssues,
     ...data
   } = useOverviewData()
+
+  // 全局搜索跳转（issue #216）：消费 SearchOverlay 生成的概览页深链——
+  //   ?issue=<project_id>:<iid>      → 数据加载后打开该 issue 详情抽屉
+  //   ?repo=<repo_id>[&section=inspirations] → 滚动定位该仓库卡片并短暂高亮
+  // 消费一次后清理 URL 参数（replace，不产生新历史记录）。repoIssues /
+  // inspirationRepos 为空说明数据未到（首次轮询中），等下一次更新再尝试；
+  // 数据已到但找不到目标（issue 已关闭/超出每仓库条数上限）则只清理参数。
+  const jumpHandledRef = useRef(false)
+  useEffect(() => {
+    if (!location || !navigate) return // 无 Router 上下文（测试）：不做深链消费
+    if (jumpHandledRef.current) return
+    const params = new URLSearchParams(location.search)
+    const issue = params.get('issue')
+    const repo = params.get('repo')
+    if (!issue && !repo) return
+    const clearParams = () => {
+      if (location.search) navigate(location.pathname, { replace: true })
+    }
+    if (repo) {
+      const section = params.get('section')
+      const ready = section === 'inspirations'
+        ? data.inspirationRepos.length > 0
+        : data.repoIssues.length > 0
+      if (!ready) return // 板块数据未到，等轮询更新后重试
+      const selector = repoScrollSelector(repo, section)
+      const doScroll = () => {
+        if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
+          const el = document.querySelector(selector)
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            el.classList.add('search-jump-highlight')
+            setTimeout(() => el.classList.remove('search-jump-highlight'), 2000)
+          }
+        }
+      }
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(doScroll)
+      else doScroll()
+      jumpHandledRef.current = true
+      clearParams()
+      return
+    }
+    if (issue) {
+      const [pid, iid] = issue.split(':')
+      const found = findIssueInRepos(data.repoIssues, pid, iid)
+      if (found) {
+        setSelectedIssue({ issue: found.issue, repoName: found.repoName })
+        jumpHandledRef.current = true
+        clearParams()
+      } else if (data.repoIssues.length > 0) {
+        // 数据已加载但未命中（issue 已关闭/超出上限）：只清理参数不报错
+        jumpHandledRef.current = true
+        clearParams()
+      }
+      // repoIssues 为空：数据未到，等下次轮询更新后重试
+    }
+  }, [data.repoIssues, data.inspirationRepos, location, navigate,
+      setSelectedIssue])
 
   return (
     <div>

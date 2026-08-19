@@ -26,6 +26,7 @@ const { default: Overview } = await vite.ssrLoadModule('/src/pages/Overview.jsx'
 const { default: Tasks } = await vite.ssrLoadModule('/src/pages/Tasks.jsx')
 const { default: Settings } = await vite.ssrLoadModule('/src/pages/Settings.jsx')
 const { default: ShortcutHelpModal } = await vite.ssrLoadModule('/src/components/ShortcutHelpModal.jsx')
+const { default: SearchOverlay } = await vite.ssrLoadModule('/src/components/SearchOverlay.jsx')
 
 after(() => {
   globalThis.fetch = originalFetch
@@ -163,5 +164,40 @@ test('开关：localStorage 关闭时按 t 不跳转（一键禁用生效）', a
     }
   } finally {
     delete globalThis.localStorage
+  }
+})
+
+// ---- 4. 全局搜索（issue #216）----
+
+test('行为：按 / 打开全局搜索浮层（全局快捷键）', async () => {
+  const renderer = await renderAt('/')
+  try {
+    assert.equal(renderer.root.findAllByType(SearchOverlay).length, 0, '初始不应有搜索浮层')
+    press('/')
+    await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+    assert.equal(renderer.root.findAllByType(SearchOverlay).length, 1, '按 / 应打开全局搜索浮层')
+    // 关闭后再次打开（浮层可重复触发）
+    const closeBtn = renderer.root.findAll(
+      (n) => n.type === 'button' && String(n.props.className || '').includes('modal-close'))[0]
+    TestRenderer.act(() => closeBtn.props.onClick())
+    assert.equal(renderer.root.findAllByType(SearchOverlay).length, 0, '× 应关闭浮层')
+    press('/')
+    await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+    assert.equal(renderer.root.findAllByType(SearchOverlay).length, 1, '再次按 / 应重新打开')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+  }
+})
+
+test('行为：侧边栏搜索入口打开全局搜索浮层', async () => {
+  const renderer = await renderAt('/')
+  try {
+    const searchBtn = renderer.root.findAll(
+      (n) => n.type === 'button' && String(n.props.className || '').includes('sidebar-search'))
+    assert.equal(searchBtn.length, 1, '侧边栏应渲染搜索入口按钮')
+    TestRenderer.act(() => searchBtn[0].props.onClick())
+    assert.equal(renderer.root.findAllByType(SearchOverlay).length, 1, '点击侧边栏搜索入口应打开浮层')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
   }
 })

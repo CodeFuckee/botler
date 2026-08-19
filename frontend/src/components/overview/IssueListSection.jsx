@@ -156,7 +156,7 @@ export default function IssueListSection({
             ) : (
               <div className="issues-list">
                 {filteredRepoIssues.map((r) => (
-                  <div key={r.repo_id} className="card issue-repo-card">
+                  <div key={r.repo_id} className="card issue-repo-card" data-repo-id={r.repo_id}>
                     <div className="issue-repo-head">
                       <span className="issue-repo-name" title={tr('overview.repoTitle')}><Icon name="folder" /> {r.repo_name || tr('common.deleted')}</span>
                       <span className="badge badge-muted" title={tr('overview.repoPriorityTitle')}>

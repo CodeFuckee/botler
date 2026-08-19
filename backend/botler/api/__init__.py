@@ -30,6 +30,7 @@ from .usage import router as usage_router  # noqa: E402
 from .stats import router as stats_router  # noqa: E402
 from .skills import router as skills_router  # noqa: E402
 from .tools import router as tools_router  # noqa: E402
+from .search import router as search_router  # noqa: E402
 
 router.include_router(repos_router)
 router.include_router(tasks_router)
@@ -51,3 +52,4 @@ router.include_router(usage_router)
 router.include_router(stats_router)
 router.include_router(skills_router)
 router.include_router(tools_router)
+router.include_router(search_router)

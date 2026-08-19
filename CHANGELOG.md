@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 ### Added
+- **全局搜索：任务 / issue / 灵感 / 仓库跨模块检索（issue #216）**：任务列表
+  有过滤、概览按仓库展示 issue/灵感，但此前无跨模块全局搜索——想找「某个 issue
+  相关的历史任务」「某关键词的灵感」「某仓库的全部记录」只能逐个页面翻。本次新增
+  `GET /api/search?q=<关键词>&limit=<每模块条数>` 统一检索入口与全站搜索浮层：
+  - **后端**：`api/search.py` 新模块——结果按模块分组返回（`tasks` / `issues` /
+    `inspirations` / `repos` 四个数组，每模块默认 10 条、上限 50 条，互不干扰）；
+    tasks 按 issue 标题/编号匹配（与任务列表页搜索同字段，最新在前）、inspirations
+    按内容匹配（JOIN repos 带仓库名）、repos 按名称匹配（排除软删除）；issues
+    模块复用概览页 10 秒 TTL 聚合缓存（`get_issues_overview` 抽出复用，不额外
+    打爆 GitLab API，仅覆盖已启用仓库，单仓库 GitLab 故障跳过不整体失败）；
+    中文关键词按 Issue 正文允许的 LIKE 兜底方案实现（FTS5 默认 unicode61 分词器
+    不切分中文、trigram 要求 ≥3 字符对 1~2 字中文词无效），LIKE 字面子串匹配
+    （`database.py` 新增 `search_tasks` / `search_inspirations` / `search_repos`
+    方法，转义 `% _ \` 通配符）；
+  - **前端**：`SearchOverlay.jsx` 搜索浮层（命令面板观感）——侧边栏搜索入口 /
+    移动端顶栏搜索按钮 / 全站 `/` 快捷键（原任务页「聚焦本页搜索框」绑定移交
+    全局）三种方式打开；输入防抖 300ms 调 `/api/search`，结果按四模块分组、
+    命中关键词 `<mark>` 高亮（`lib/highlightKeyword.js` 纯函数）、↑↓ 键盘导航
+    + Enter 跳转、Esc / × / 遮罩关闭、空关键词不请求、快速连续输入丢弃过期
+    响应（竞态保护）；跳转目标（`lib/searchJump.js` 纯函数集中解析）——任务 →
+    `/tasks/:id`、issue → `/overview?issue=<project_id>:<iid>`（概览页数据加载后
+    自动打开该 issue 详情抽屉）、灵感 → `/overview?repo=<id>&section=inspirations`
+    与仓库 → `/overview?repo=<id>`（概览页滚动定位对应仓库卡片并短暂高亮，
+    卡片渲染补 `data-repo-id` 属性）；
+  - **新增测试**：`backend/tests/test_api_search.py` 19 例（参数校验：缺 q 422 /
+    空白 q 400 / limit 越界 422；四模块匹配正常路径、中文/大小写不敏感、
+    LIKE 通配符转义、软删除仓库排除、未启用仓库 issue 排除、GitLab 故障仓库
+    跳过、limit 截断、无匹配空数组）；`frontend/tests/search-overlay.test.mjs`
+    8 例（源码断言、高亮纯函数、分组渲染、四类跳转目标、键盘导航、空态/失败/
+    关闭边界）与 `search-jump.test.mjs` 5 例（跳转路径与概览深链解析纯函数）；
+    `app-shortcuts.test.mjs` 新增按 `/` 打开浮层与侧边栏入口用例、任务页快捷键
+    用例同步更新（`/` 移交全局搜索）；全量前后端测试无 regression。
 - **概览页 issue 详情右边栏「评论与活动」合并时间线显示（issue #342）**：概览页
   issue 详情右边栏（`.drawer.issue-drawer`）原先「评论」（用户发言，Markdown
   渲染）与「活动」（系统事件，纯文本）按 `note.system` 分区为两个区块分开
