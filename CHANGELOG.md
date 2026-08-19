@@ -572,6 +572,7 @@
     前端全量单元测试（1349 例）+ eslint 通过，相关 E2E 通过，无 regression。
 
 
+- **竖屏显示时概览页 issue 详情右边栏四个操作按钮不在顶部（issue #333）**：
   在竖屏显示时，概览页 issue 详情右边栏的「关闭 issue / 查看执行的详情 /
   在 GitLab 中打开 / 关闭右边栏（×）」四个按钮应放在右边栏顶部并固定在
   顶部、不随右边栏内容滚动——issue #331 已通过 `.issue-drawer .modal-header`
