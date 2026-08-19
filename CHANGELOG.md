@@ -542,6 +542,14 @@
 
 ### Fixed
 
+- **GitHub 镜像同步（sync_to_github）并发互删 /tmp 目录导致流水线失败（issue #334
+  联动）**：sync job 使用固定路径 `/tmp/sync-github-botler` 作为克隆目录；同一
+  runner 并发数 >1 且相邻两次 main push 各自触发 sync 时（如流水线 #1239/#1240
+  并发，2026-08-19 实测），后启动 job 的 `rm -rf` 会删除先启动 job 的工作目录，
+  其 `git push` 报 `fatal: Unable to read current working directory` 且 10 次
+  重试全部失败、流水线判失败。修复：克隆目录改为按 `CI_JOB_ID` 隔离
+  （`/tmp/sync-github-botler-${CI_JOB_ID}`），每 job 独立目录互不干扰。
+
 - **竖屏显示时概览页 issue 详情右边栏按钮拆分：× 固定在顶部、其余操作按钮
   固定在底部（issue #334）**：在竖屏显示时，概览页 issue 详情右边栏的
   「关闭右边栏（×）」按钮应放在右边栏顶部并固定在顶部；「关闭 issue /

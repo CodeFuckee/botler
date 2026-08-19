@@ -1686,7 +1686,13 @@ sync_to_github:
 
       # 完整克隆当前仓库（CI_JOB_TOKEN 只读权限即可），检出本次提交
       # （不用浅克隆：force push 浅历史会导致 GitHub 侧提交链断裂）
-      SYNC_DIR="/tmp/sync-github-botler"
+      # ⚠️ 并发防护（issue #334 实测）：同一 runner 并发数 >1 时，相邻两次
+      # main push 会各自触发 sync job；固定路径 /tmp/sync-github-botler 被
+      # 后启动 job 的 rm -rf 删除后，先启动 job 的 git push 报
+      # 「Unable to read current working directory」且 10 次重试全部失败
+      # （2026-08-19 流水线 #1239/#1240 并发互删实测）。用 CI_JOB_ID 做
+      # 每 job 独立目录，互不干扰。
+      SYNC_DIR="/tmp/sync-github-botler-${CI_JOB_ID}"
       rm -rf "${SYNC_DIR}"
       git clone --quiet "${CI_REPOSITORY_URL}" "${SYNC_DIR}"
       cd "${SYNC_DIR}"
