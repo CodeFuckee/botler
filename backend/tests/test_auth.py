@@ -13,7 +13,14 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from botler.api import router as api_router
-from botler.auth import SsoAuth, SsoGuardMiddleware, create_session, get_session_secret
+from botler.auth import (
+    CSRF_COOKIE,
+    CsrfGuardMiddleware,
+    SsoAuth,
+    SsoGuardMiddleware,
+    create_session,
+    get_session_secret,
+)
 from botler.config import ConfigManager
 from botler.database import Database
 
@@ -90,6 +97,8 @@ def _build_app(tmp_path, config_text: str):
     app = FastAPI()
     app.state.ctx = ctx
     # 与生产一致：guard 中间件 + 完整 api 路由（auth 路由已并入 api_router）
+    # 执行顺序与 main.create_app 相同：SsoGuard → CsrfGuard（issue #263）
+    app.add_middleware(CsrfGuardMiddleware)
     app.add_middleware(SsoGuardMiddleware)
     app.include_router(api_router)
 
@@ -232,6 +241,9 @@ class TestLoginFlow:
         assert me["email"] == "zs@example.com"
         # picture（issue #271）：OIDC claims 头像随会话携带，前端右上角展示
         assert me["picture"] == "https://nas.example.com/avatar/zhangsan.png"
+        # CSRF 防护（issue #263）：登录回调同时下发非 HttpOnly 的 CSRF cookie，
+        # 前端 api.js 读取回填 X-CSRF-Token 请求头
+        assert tc.cookies.get(CSRF_COOKIE) is not None
 
 
 class TestSessionSecurity:

@@ -32,6 +32,10 @@ logger = logging.getLogger("botler.auth")
 # 会话 / state cookie 名称
 SESSION_COOKIE = "botler_session"
 STATE_COOKIE = "botler_sso_state"
+# CSRF 防护 cookie（issue #263）：双提交 cookie 模式，值由会话密钥派生
+# 并绑定具体会话；非 HttpOnly——前端 api.js 需读取该 cookie 回填
+# X-CSRF-Token 请求头（同源 JS 可读、跨站攻击者不可读，构成防护基础）。
+CSRF_COOKIE = "botler_csrf"
 # state 有效期（秒）：用户停在群晖登录页过久则失效，防 CSRF 回放
 STATE_TTL_SECONDS = 300
 
@@ -90,6 +94,19 @@ def verify_session(cookie: str, secret: str, now: float | None = None) -> dict[s
     if not isinstance(payload, dict) or payload.get("exp", 0) < (time.time() if now is None else now):
         return None
     return payload
+
+
+def create_csrf_token(secret: str, session: str) -> str:
+    """派生 CSRF token（issue #263）：HMAC(session_secret, 会话 cookie)。
+
+    双提交 cookie 模式的「与 session_secret 派生」实现：
+    - token 由会话签名密钥 + 具体会话值派生，攻击者无法伪造；
+    - 绑定会话：重新登录（会话 cookie 变化）后 token 自然失效；
+    - 校验规则：请求头 X-CSRF-Token == cookie == 派生期望值。
+    """
+    return hmac.new(
+        secret.encode(), f"botler-csrf-v1:{session}".encode(), hashlib.sha256
+    ).hexdigest()
 
 
 def sso_settings(s) -> dict[str, Any]:
@@ -193,6 +210,10 @@ class SsoAuth:
             return None
         return verify_session(cookie, self._secret())
 
+    def csrf_token_for(self, session: str) -> str:
+        """派生指定会话的 CSRF token（issue #263）：登录下发 / 老会话补发。"""
+        return create_csrf_token(self._secret(), session)
+
     def build_login(self, request: Request) -> tuple[str, str]:
         """构造群晖授权 URL 与 state（state 以 cookie 落盘，回调时校验）。"""
         state = secrets.token_hex(16)
@@ -251,6 +272,68 @@ class SsoGuardMiddleware(BaseHTTPMiddleware):
             sso = getattr(ctx, "sso", None)
             if sso is not None and sso.enabled() and sso.current_user(request) is None:
                 return JSONResponse({"error": "未登录（SSO 已启用）"}, status_code=401)
+        return await call_next(request)
+
+
+class CsrfGuardMiddleware(BaseHTTPMiddleware):
+    """写操作 CSRF 防护（issue #263）：双提交 cookie 模式校验。
+
+    与 SsoGuardMiddleware 共用放行前缀（登录流程自身 / 健康检查），webhook
+    在 /api/ 前缀之外天然豁免。规则：
+    - 仅 SSO 启用且已登录（存在有效会话 cookie）时生效——无会话则无
+      CSRF 风险面，SSO 未启用 / 未登录行为与现状完全一致；
+    - 仅校验非 GET/HEAD/OPTIONS 写请求（读请求无副作用，不校验）；
+    - 已登录写请求：请求头 X-CSRF-Token == botler_csrf cookie ==
+      session_secret 派生期望值，三者任一缺失/不一致 → 403；
+    - 老会话（登录早于 CSRF 上线、无 CSRF cookie）写请求 → 403 但不补发
+      cookie（避免给攻击者放行窗口），前端启动探测 /api/auth/me 时后端
+      补发 cookie，随后写请求恢复正常。
+    """
+
+    # 放行前缀：登录流程自身 / 健康检查（与 SsoGuardMiddleware 同源）
+    PUBLIC_API_PREFIXES = ("/api/auth/", "/api/health", "/api/terminal/health")
+    # 无副作用的读方法：不产生状态变更，无需 CSRF 校验
+    SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+    @staticmethod
+    def _csrf_ok(request: Request, sso: SsoAuth) -> bool:
+        """双提交校验：header == cookie == 派生期望值（三者缺一不可）。"""
+        cookie = request.cookies.get(CSRF_COOKIE)
+        if not cookie:
+            return False
+        session = request.cookies.get(SESSION_COOKIE)
+        header = request.headers.get("X-CSRF-Token")
+        if not header:
+            return False
+        expected = sso.csrf_token_for(session)
+        # 恒定时间比较，防时序侧信道
+        return (
+            hmac.compare_digest(header, cookie)
+            and hmac.compare_digest(cookie, expected)
+        )
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
+        path = request.url.path
+        # 读请求 / 登录流程 / 健康检查 / /api/ 之外的端点（webhook）均放行
+        if request.method in self.SAFE_METHODS or path.startswith(self.PUBLIC_API_PREFIXES):
+            return await call_next(request)
+        if not path.startswith("/api/"):
+            return await call_next(request)
+        ctx = getattr(request.app.state, "ctx", None)
+        sso = getattr(ctx, "sso", None)
+        # SSO 未启用（无会话机制）→ 保持现状，不校验
+        if sso is None or not sso.enabled():
+            return await call_next(request)
+        session = request.cookies.get(SESSION_COOKIE)
+        # 未登录：SsoGuardMiddleware 先行返回 401，CSRF 不重复拦截
+        if not session or sso.current_user(request) is None:
+            return await call_next(request)
+        if not self._csrf_ok(request, sso):
+            logger.warning("CSRF 校验失败: %s %s", request.method, path)
+            return JSONResponse(
+                {"error": "CSRF 校验失败（X-CSRF-Token 缺失或不一致）"},
+                status_code=403,
+            )
         return await call_next(request)
 
 

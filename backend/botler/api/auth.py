@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from ..auth import SESSION_COOKIE, STATE_COOKIE, STATE_TTL_SECONDS
+from ..auth import CSRF_COOKIE, SESSION_COOKIE, STATE_COOKIE, STATE_TTL_SECONDS
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -59,6 +59,12 @@ def auth_callback(request: Request, code: str | None = None,
         SESSION_COOKIE, session_cookie,
         max_age=days * 86400, httponly=True, samesite="lax",
     )
+    # 下发 CSRF token（issue #263）：双提交 cookie 模式，值由会话密钥
+    # 派生并绑定本会话；非 HttpOnly——前端 api.js 需读取回填请求头
+    resp.set_cookie(
+        CSRF_COOKIE, sso.csrf_token_for(session_cookie),
+        max_age=days * 86400, httponly=False, samesite="lax",
+    )
     # 清除一次性 state cookie
     resp.delete_cookie(STATE_COOKIE)
     return resp
@@ -69,6 +75,7 @@ def auth_logout(request: Request):
     """退出登录：清除会话 cookie。"""
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(SESSION_COOKIE)
+    resp.delete_cookie(CSRF_COOKIE)
     return resp
 
 
@@ -79,4 +86,16 @@ def auth_me(request: Request):
     user = sso.current_user(request)
     if user is None:
         raise HTTPException(401, "未登录")
+    # 老会话补发 CSRF cookie（issue #263）：登录早于 CSRF 防护上线的
+    # 会话没有 botler_csrf，前端启动探测本端点时一并下发，避免升级后
+    # 写操作因缺 cookie 一直 403（写请求本身缺失仍 403，不给攻击窗口）
+    if request.cookies.get(CSRF_COOKIE) is None:
+        session = request.cookies.get(SESSION_COOKIE)
+        resp = JSONResponse(user)
+        resp.set_cookie(
+            CSRF_COOKIE, sso.csrf_token_for(session),
+            max_age=min(sso.config.get().sso_session_days or 7, MAX_SESSION_DAYS) * 86400,
+            httponly=False, samesite="lax",
+        )
+        return resp
     return user

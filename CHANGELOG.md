@@ -5,6 +5,32 @@
 ## [Unreleased]
 ### Added
 
+- **写操作 API 增加 CSRF 防护（issue #263）**：平台写操作 API（保存设置、删
+  仓库、创建 issue 等）此前仅依赖 SSO 会话 cookie 鉴权，缺少 CSRF token 校验
+  ——用户登录状态下访问恶意页面，恶意页面可跨站发起写请求（同源策略下 fetch
+  带 cookie 但内容受限，表单/JSON 场景仍有风险面）。本次按 **cookie 双提交
+  模式**补齐防护：
+  - **token 由 session_secret 派生并绑定会话**：`auth.py` 新增
+    `create_csrf_token`（HMAC-SHA256(会话密钥, 会话 cookie)），攻击者无法
+    伪造，重新登录后 token 随会话自然失效；
+  - **登录下发 + 老会话补发**：登录回调（`/api/auth/callback`）成功时随会话
+    cookie 一并下发非 HttpOnly 的 `botler_csrf` cookie（前端 JS 可读回填请求
+    头）；`/api/auth/me` 探测时为 CSRF 上线前的老会话补发，退出登录清除；
+  - **CsrfGuardMiddleware 统一校验**：SSO 启用且已登录时，所有非
+    GET/HEAD/OPTIONS 的 `/api/*` 写请求校验 `X-CSRF-Token` 头 == `botler_csrf`
+    cookie == 派生期望值，不一致返回 403（恒定时间比较防时序侧信道）；SSO
+    未启用（无会话）行为不变，登录流程自身 / 健康检查 / webhook 端点豁免；
+  - **前端零改动接入**：`frontend/src/api.js` 统一请求封装（含 upload）自动
+    附带 `X-CSRF-Token` 头，现有调用无需任何修改；
+  - **测试**：`backend/tests/test_csrf.py` 新增 17 例（token 派生/绑定会话、
+    无头 403、头不匹配 403、cookie 篡改 403、头一致放行、GET 豁免、PUT/DELETE
+    同样保护、未登录 401、登录流程/健康检查/webhook 豁免、老会话写请求 403 +
+    me 补发后恢复、SSO 未启用不校验、登录下发/logout 清除），
+    `frontend/tests/api-csrf.test.mjs` 新增 6 例（POST/PUT/DELETE/upload 自动
+    带头、GET 不带头、cookie 缺失不带头、非浏览器环境容错），实现前全部可
+    复现失败；test_auth.py 同步接入新中间件（34 例通过），后端全量测试 +
+    前端全量测试无 regression。
+
 - **GitLab API 客户端统一「超时 → 重试 → 退避」机制——重试参数可配置 + 写操作安全重试（issue #196）**：
   此前 `gitlab_client.py` 的 `_request` 直接 httpx 请求，失败（超时/5xx/429）即抛
   `GitLabError`，调用方各自写 try/except + fallback（webhook、对账、执行器、概览

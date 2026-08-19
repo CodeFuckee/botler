@@ -626,6 +626,12 @@ name/picture，头像加载失败或无头像时回退首字母占位）、会�
 - SSO 启用后 `/api/*` 除登录流程与健康检查外均需登录（会话为签名 cookie，
   密钥自动生成于 `backend/data/session_secret.key`，已 gitignore；Docker 部署
   由 compose 挂载持久化）
+- **写操作 CSRF 防护（issue #263）**：SSO 启用后所有非 GET/HEAD/OPTIONS 的
+  `/api/*` 写请求校验 `X-CSRF-Token` 请求头（双提交 cookie 模式）——登录回调
+  下发非 HttpOnly 的 `botler_csrf` cookie（值由 `session_secret` 派生并绑定
+  会话），后端校验请求头 == cookie == 派生期望值，不一致返回 403；前端
+  `frontend/src/api.js` 统一请求封装自动附带该头，现有调用零改动；SSO 未启用
+  （无会话）时行为不变，登录流程自身 / 健康检查 / webhook 端点豁免。
 - 风险认知：main 不保护 + bot 直接推，单点失误可能破坏 main；
   缓解：同仓库串行、干净工作区、模版强调「自测通过才推」。个人自用可接受，如需保护请对 main 加 push 保护。
 - CI 的 security 阶段（issue #86）用 5 种免费开源工具做静态代码分析

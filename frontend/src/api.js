@@ -22,9 +22,29 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// 读取 cookie（issue #263）：CSRF 双提交模式前端从 botler_csrf cookie
+// 取值回填请求头；非浏览器环境（node 测试）返回 null，不抛错。
+function getCookie(name) {
+  if (typeof document === 'undefined' || !document.cookie) return null
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'))
+  return m ? decodeURIComponent(m[1]) : null
+}
+
+// 写请求自动附带 CSRF token（issue #263）：与后端双提交 cookie 校验配套
+// ——后端校验 X-CSRF-Token 头 == botler_csrf cookie == 派生期望值。
+// 无 cookie（SSO 未启用 / 未登录）时不带头，行为与现状一致。
+function csrfHeader() {
+  const token = getCookie('botler_csrf')
+  return token ? { 'X-CSRF-Token': token } : {}
+}
+
 // 构造 fetch 选项：JSON 序列化 / multipart 由浏览器自动带 boundary
 function buildFetchOpts(method, body) {
   const opts = { method, headers: {} }
+  // 非 GET/HEAD 写请求带 CSRF 头（读请求无副作用，无需校验）
+  if (method !== 'GET' && method !== 'HEAD') {
+    Object.assign(opts.headers, csrfHeader())
+  }
   if (body !== undefined) {
     if (body instanceof FormData) {
       opts.body = body
@@ -137,7 +157,8 @@ export const api = {
   upload: async (path, file) => {
     const fd = new FormData()
     fd.append('file', file)
-    const resp = await fetch(path, { method: 'POST', body: fd })
+    const headers = { ...csrfHeader() }
+    const resp = await fetch(path, { method: 'POST', headers, body: fd })
     let data = null
     try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
     if (!resp.ok) {

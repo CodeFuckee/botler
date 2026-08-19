@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import router as api_router
-from .auth import SsoAuth, SsoGuardMiddleware
+from .auth import CsrfGuardMiddleware, SsoAuth, SsoGuardMiddleware
 from .backup import BotlerBackup
 from .config import ConfigManager
 from .database import Database
@@ -168,6 +168,9 @@ def create_app(config_path: str | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     # SSO 登录保护（issue #27）：启用后 /api/* 除登录流程/健康检查外需登录
+    # 执行顺序（add 逆序）：SsoGuard（登录校验）→ CsrfGuard（写请求
+    # CSRF 双提交校验，issue #263）→ CORS → 路由
+    app.add_middleware(CsrfGuardMiddleware)
     app.add_middleware(SsoGuardMiddleware)
     app.state.ctx = build_context(config_path)
     app.include_router(api_router)
