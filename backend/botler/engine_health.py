@@ -52,7 +52,8 @@ def probe_claude(cfg: Any) -> dict:
     """
     cmd = [cfg.claude_command, "--version"]
     try:
-        proc = subprocess.run(  # noqa: S603（命令来自部署机配置白名单，与 executor 同源）
+        # 命令来自部署机配置白名单，与 executor 同源（S603 禁用）
+        proc = subprocess.run(  # noqa: S603
             cmd, capture_output=True, text=True, timeout=PROBE_TIMEOUT)
     except FileNotFoundError:
         return {"status": STATUS_FAIL,

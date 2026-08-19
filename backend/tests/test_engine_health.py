@@ -6,10 +6,7 @@
 """
 
 import subprocess
-import time
 from types import SimpleNamespace
-
-import pytest
 
 from botler.engine_health import (
     EngineHealthRegistry,

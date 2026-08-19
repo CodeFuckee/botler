@@ -91,7 +91,6 @@ def _install(executor, monkeypatch, tmp_path, run_once, *, probe_map=None):
     monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
     monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
 
-    real_probe = __import__("botler.engine_health", fromlist=["probe_engine"]).probe_engine
     if probe_map is None:
         monkeypatch.setattr(
             "botler.engine_health.probe_engine",
