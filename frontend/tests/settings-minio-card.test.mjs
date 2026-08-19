@@ -44,7 +44,7 @@ test('卡片字段齐全：启用 / API 地址 / HTTPS / Access Key / Secret Key
   assert.match(settings, /Access Key <code>access_key<\/code>/, '应有 Access Key 输入')
   assert.match(settings, /Secret Key <code>secret_key<\/code>/, '应有 Secret Key 输入')
   assert.match(settings, /桶名 <code>bucket<\/code>/, '应有桶名输入')
-  assert.match(settings, /placeholder="https:\/\/home\.chenkaidi\.top:509\/minio-public"/, '应有公网访问前缀输入框（public_base_url）')
+  assert.match(settings, /placeholder="https:\/\/[^"]*\/minio-public"/, '应有公网访问前缀输入框（public_base_url，http(s) 前缀 + /minio-public）')
   assert.match(settings, /校验 endpoint 证书 <code>verify_ssl<\/code>/, '应有校验证书开关（verify_ssl）')
 })
 

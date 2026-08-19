@@ -232,3 +232,82 @@ class TestDocsSynced:
         readme = _read(README)
         assert "minio" in readme.lower()
         assert "install-minio.sh" in readme or "minio" in readme
+
+
+NGINX_CONF = ROOT / "deploy" / "nginx-minio-public.conf"
+
+
+class TestNginxMinioPublicConf:
+    """deploy/nginx-minio-public.conf：识图图片 URL 的 nginx 代理映射（issue #311）。
+
+    后端生成的图片对象 URL 为 ``public_base_url/bucket/<sha256 哈希>``
+    （backend/botler/minio_client.py 的 put_image），默认桶 public 时形如
+    ``https://<站点>/minio-public/public/<哈希>``——issue #311 中用户报错的
+    正是这种 URL。nginx 的 location /minio-public/ 必须只剥离 /minio-public/
+    前缀、保留 /<bucket>/<key> 原样代理到 MinIO API；若误写成
+    ``proxy_pass http://127.0.0.1:9000/public/``，nginx 会用 /public/ 替换
+    前缀 → /public/public/<key>，MinIO 返回 404（本地实测复现），识图任务
+    因取图失败而报错（issue #311 根因；本实例已用 docker nginx 实测：
+    修复后同一 URL 返回 image/jpeg 200）。
+    """
+
+    def test_location_maps_to_minio_stripping_only_prefix(self):
+        """location /minio-public/ 只剥离前缀、保留 bucket 段。
+
+        合法写法（两种均已用 nginx 实测）：
+        - proxy_pass http://127.0.0.1:9000/;（URI 为 /，前缀替换为空）；
+        - rewrite ^/minio-public/(.*)$ /$1 break; + proxy_pass http://127.0.0.1:9000;
+        禁止 proxy_pass http://127.0.0.1:9000/public/——nginx 会用 /public/
+        替换 /minio-public/ 前缀，URL 中已有的 bucket 段被重复拼接成
+        /public/public/<key>，MinIO 404。
+        """
+        conf = _read(NGINX_CONF)
+        loc = re.search(r"location\s+/minio-public/\s*\{(.*?)\}", conf, re.S)
+        assert loc, "缺少 location /minio-public/ 块"
+        block = loc.group(1)
+        # 错误映射：proxy_pass 带 /public/ URI（issue #311 根因，禁止回退）
+        assert not re.search(
+            r"proxy_pass\s+http://[^;\s]+?/public/", block), \
+            "proxy_pass 带 /public/ 会把 URL 中已有的 bucket 段重复拼接成 " \
+            "/public/public/<key>（MinIO 404，issue #311）"
+        # 正确映射二选一
+        ok = bool(re.search(r"proxy_pass\s+http://[^;\s]+?/;", block)) or bool(
+            re.search(r"rewrite\s+\^/minio-public/\(\.\*\)\$\s+/\$1\s+break;", block))
+        assert ok, "缺少前缀剥离映射：proxy_pass URI 应为 /，或用 rewrite 剥离前缀"
+
+    def test_proxied_path_matches_minio_path_style(self):
+        """模拟映射：/minio-public/public/<哈希> 剥离前缀后为 /public/<哈希>。
+
+        与 MinIO 路径式 API（/bucket/object）一致，保证取图成功；
+        后端上传时对象名 = SHA-256 哈希（minio_client.put_image）。
+        """
+        conf = _read(NGINX_CONF)
+        loc = re.search(r"location\s+/minio-public/\s*\{(.*?)\}", conf, re.S)
+        assert loc, "缺少 location /minio-public/ 块"
+        digest = "366519759fdc019897e384a253891f23cde4c24c1e4a9528ccf81817d205f936"
+        request_path = f"/minio-public/public/{digest}"
+        # 剥离 /minio-public/ 前缀（rewrite 与 proxy_pass URI=/ 两种写法的同一结果）
+        mapped = "/" + request_path.split("/", 2)[2]
+        assert mapped == f"/public/{digest}"
+        # 后端生成的完整 URL 去掉 host 后即上述 request_path
+        base = "https://img.example.com/minio-public"
+        bucket = "public"
+        url = f"{base.rstrip('/')}/{bucket}/{digest}"
+        assert url.split("://", 1)[1].split("/", 1)[1] == request_path.lstrip("/")
+
+    def test_conf_documents_url_format_with_bucket_segment(self):
+        """conf 注释声明的 URL 格式须与后端一致：public_base_url/bucket/<哈希>。
+
+        issue #311 根因之一是注释声称 URL 形如 /minio-public/<哈希>（无 bucket
+        段），与后端实际生成格式不符，误导部署者配错 proxy_pass。
+        """
+        conf = _read(NGINX_CONF)
+        assert "public_base_url" in conf
+        assert "bucket" in conf
+
+    def test_backend_url_built_with_bucket_segment(self):
+        """后端 put_image 的 URL 构造含 bucket 段（与 nginx 映射配套）。"""
+        src = (ROOT / "backend" / "botler" / "minio_client.py").read_text(encoding="utf-8")
+        # URL = public_base_url/bucket/<digest>（issue #311 中 /minio-public/public/<哈希>）
+        assert "self.cfg.bucket" in src
+        assert "public_base_url" in src

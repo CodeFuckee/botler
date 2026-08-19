@@ -219,7 +219,7 @@ browse:
 #     （匿名 s3:GetObject），识图模型（含外部公网网关）可匿名取图；
 #   - 建议用 nginx 代理 MinIO 桶（见 deploy/nginx-minio-public.conf），
 #     public_base_url 填 nginx 代理地址（如
-#     https://home.chenkaidi.top:509/minio-public），无需暴露 9000 端口。
+#     https://<站点>/minio-public），无需暴露 9000 端口。
 # endpoint / 凭据可经 ${ENV} 引用（与部署写入 data/backend/.env 的
 # MINIO_ROOT_USER / MINIO_ROOT_PASSWORD 同源），识图模型必须能访问
 # public_base_url（自建网关走内网地址；外部模型供应商需公网可达）。

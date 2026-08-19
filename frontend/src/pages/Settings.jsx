@@ -668,13 +668,14 @@ export default function Settings() {
               <td>
                 <input
                   className="input grow"
-                  placeholder="https://home.chenkaidi.top:509/minio-public"
+                  placeholder="https://home.chenkaidi.top:448/minio-public"
                   value={settings.minio?.public_base_url || ''}
                   onChange={(e) => setMinioField('public_base_url', e.target.value.trim())}
                 />
                 <div className="muted small">
                   识图模型取图的 http(s) 前缀，对象 URL = public_base_url/bucket/哈希；
-                  建议填 nginx 代理地址（deploy/nginx-minio-public.conf），无需暴露 9000 端口
+                  建议填 nginx 代理地址（deploy/nginx-minio-public.conf），无需暴露 9000 端口；
+                  nginx location 只剥离 /minio-public/ 前缀、保留 bucket 段（issue #311 修复）
                 </div>
               </td>
             </tr>

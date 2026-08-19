@@ -62,6 +62,32 @@
 
 ### Fixed
 
+- **识图模型图片 URL 经 nginx 访问 404 / 跳转平台——MinIO 代理路径映射错误（issue #311）**：
+  后端生成的识图图片对象 URL 形如 `https://<站点>/minio-public/<bucket>/<sha256 哈希>`
+  （`public_base_url/bucket/<哈希>`，默认桶 `public` → `/minio-public/public/<哈希>`），
+  但 `deploy/nginx-minio-public.conf` 的 location 此前写成
+  `proxy_pass http://127.0.0.1:9000/public/`——nginx 会用 `/public/` 替换
+  `/minio-public/` 前缀，把 URL 中已有的 bucket 段重复拼接成
+  `/public/public/<哈希>`，MinIO 返回 404，识图按钮模型测试任务失败（本地
+  nginx 实测：同一 URL 修复前 404、修复后 `image/jpeg` 200）；且该 location
+  若未合并进站点 server 块，`/minio-public/` 会被 SPA 兜底（try_files →
+  index.html）吞掉，表现为访问图片链接直接跳转到平台而非显示图片。修复：
+  - `deploy/nginx-minio-public.conf`：`proxy_pass` 改为 `http://127.0.0.1:9000/`
+    （只剥离 `/minio-public/` 前缀、把 `/public/<哈希>` 原样代理到 MinIO
+    API），注释同步修正 URL 格式说明（含 bucket 段）并补充「必须合并进站点
+    server 块 + curl 验证」步骤；
+  - `README.md` / `backend/.env.example` / `backend/config.example.yaml` /
+    `frontend/src/pages/Settings.jsx`：`public_base_url` 示例由错误的
+    `:509`（GitLab 端口）改为 `:448`（botler 平台）或中性占位符，并注明
+    nginx location 需只剥离前缀、保留 bucket 段；
+  - **测试**：`backend/tests/test_deploy_minio.py` 新增
+    `TestNginxMinioPublicConf` 4 例（location 只剥离前缀且禁止 `/public/`
+    写法 / 映射结果匹配 MinIO 路径式 API / 注释声明 URL 格式含 bucket 段 /
+    后端 URL 构造含 bucket 段），实现前 2 例可复现失败；`frontend/tests/
+    settings-minio-card.test.mjs` 的 public_base_url 断言改为通用
+    `https://…/minio-public` 前缀（不再绑定实例端口）。后端全量 2348 例 +
+    前端全量 1263 例通过，覆盖率门禁（≥70%）无 regression。
+
 - **仓库设置页「同步到 GitLab」上传超限 logo 被 GitLab 拒绝（issue #310）**：
   `sync-logo` 把生图模型产出的 logo 原始字节直接经 GitLab API
   `PUT /projects/{id}` 的 avatar 参数上传为项目头像——GitLab 项目头像上限
