@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 ### Added
+- **任务/日志数据导出为 CSV/JSON（issue #228）**：平台积累大量任务记录（状态/
+  耗时/错误/日志）但无导出能力，用户无法离线分析（统计各仓库失败率、成本估算）
+  或归档。本次新增 `GET /api/tasks/export?format=csv|json` 导出接口与任务列表页
+  「导出」按钮：
+  - **后端**：`api/tasks.py` 新增 `/api/tasks/export`——过滤条件与任务列表完全一致
+    （status 支持逗号分隔多值、repo_id、search），另支持按任务创建时间范围过滤
+    （date_from/date_to，'YYYY-MM-DD' 自动补齐当日 00:00:00 / 23:59:59 边界，
+    完整 'YYYY-MM-DD HH:MM:SS' 直接比较，格式错误 400、起止倒挂 400）；CSV 带
+    UTF-8 BOM（`\ufeff` 前缀）+ `\r\n` 行终止（Excel 打开中文不乱码），表头中文，
+    字段含 id/仓库/issue/状态/引擎/用时（finished_at - created_at 秒）/错误/时间等
+    20 列（多行/逗号内容按 CSV 规则自动引用）；JSON 为同字段英文 key 扁平对象数组
+    （ensure_ascii=False 中文原样，供离线脚本直接 json.load）；响应均
+    Content-Disposition attachment 下载；`database.py` 新增 `list_tasks_export`
+    （与 list_tasks 同套过滤不分页，含已软删除仓库任务历史仍可导出）；
+  - **前端**：`Tasks.jsx` 工具栏新增导出格式选择（CSV/JSON）+「导出」按钮——
+    携带当前筛选（状态/仓库/搜索）经 `api.download` 下载，请求中禁用防重复点击；
+    文案经 i18n（zh-CN / en-US）；
+  - **新增测试**：`backend/tests/test_api_tasks.py` 新增 `TestExportTasks` 12 例
+    （CSV BOM/中文表头/中文内容、缺省格式 csv、\r\n 行终止、JSON 字段完整与中文、
+    用时计算与缺失兜底、空数据（CSV 仅表头/JSON 空数组）、非法 format 422、
+    未知状态 400、status 单/多值 + repo_id + search 过滤、时间范围含边界与
+    仅 from/仅 to、非法时间 400 与起止倒挂 400、CSV 多行逗号引用、软删除仓库
+    仍导出）；`frontend/tests/tasks-export-button.test.mjs` 5 例（源码断言
+    国际化/下载调用/筛选参数、默认 CSV 下载、切换 JSON 且携带筛选、请求中禁用
+    防重复点击）；全量前后端测试无 regression。
 - **全局搜索：任务 / issue / 灵感 / 仓库跨模块检索（issue #216）**：任务列表
   有过滤、概览按仓库展示 issue/灵感，但此前无跨模块全局搜索——想找「某个 issue
   相关的历史任务」「某关键词的灵感」「某仓库的全部记录」只能逐个页面翻。本次新增

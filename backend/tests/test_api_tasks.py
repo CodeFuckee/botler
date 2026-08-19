@@ -845,3 +845,199 @@ class TestTaskEnvironment:
         resp = app_client.get(f"/api/tasks/{task_id}")
         assert resp.status_code == 200
         assert resp.json()["environment"] is None
+
+
+class TestExportTasks:
+    """GET /api/tasks/export：CSV（UTF-8 BOM，Excel 中文兼容）/ JSON 导出。
+
+    验收标准（issue #228）：导出 CSV/JSON 可下载且字段完整、Excel 打开
+    中文正常、测试覆盖。过滤条件与任务列表一致（status/repo_id/search），
+    另支持创建时间范围 date_from/date_to；CSV 必须带 \ufeff BOM 前缀。
+    """
+
+    def _mk_export_task(self, db, repo_id, issue_iid, title="导出任务",
+                        status="succeeded", engine="claude",
+                        error_message=None, created_at="2026-08-01 10:00:00",
+                        finished_at="2026-08-01 10:05:30"):
+        """建任务并补齐导出相关字段（engine/时间），返回 task_id。"""
+        task_id = db.create_task(repo_id, 42, issue_iid, title, triggered_by="webhook")
+        db.set_task_status(task_id, status, engine=engine,
+                           error_message=error_message,
+                           started_at=created_at,
+                           finished_at=finished_at)
+        # created_at 由 create_task 落库（datetime('now')），测试里直接改
+        # 以固定时间范围过滤的预期（与 test_api_issues 同法）
+        with db._conn() as conn:
+            conn.execute("UPDATE tasks SET created_at=? WHERE id=?",
+                         (created_at, task_id))
+        return task_id
+
+    def test_export_csv_has_bom_and_chinese_headers(self, client):
+        """CSV 必须带 UTF-8 BOM 且表头为中文，中文内容不乱码。"""
+        app_client, db = client
+        repo_id = _mk_repo(db, name="demo中文")
+        self._mk_export_task(db, repo_id, 1, title="修复登录问题",
+                             error_message="登录失败")
+        resp = app_client.get("/api/tasks/export?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert "attachment" in resp.headers["content-disposition"]
+        assert 'filename="tasks_export_' in resp.headers["content-disposition"]
+        body = resp.content.decode("utf-8")
+        assert body.startswith("\ufeff"), "CSV 必须以 UTF-8 BOM 开头（Excel 中文兼容）"
+        # 表头中文列
+        for col in ("id", "仓库", "Issue编号", "Issue标题", "状态", "引擎",
+                    "用时(秒)", "错误信息", "创建时间"):
+            assert col in body.splitlines()[0], f"CSV 表头缺少列 {col}"
+        # 数据行含任务数据与中文内容
+        assert "修复登录问题" in body
+        assert "demo中文" in body
+        assert "登录失败" in body
+
+    def test_export_csv_default_format_and_lineterminator(self, client):
+        """format 缺省为 csv；行终止为 \\r\\n（Excel 兼容）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        self._mk_export_task(db, repo_id, 1)
+        resp = app_client.get("/api/tasks/export")
+        body = resp.content.decode("utf-8")
+        assert body.startswith("\ufeff")
+        assert "\r\n" in body
+
+    def test_export_json_fields_and_chinese(self, client):
+        """JSON 导出为扁平对象数组，字段完整且中文原样保留。"""
+        app_client, db = client
+        repo_id = _mk_repo(db, name="demo")
+        self._mk_export_task(db, repo_id, 7, title="中文标题任务",
+                             error_message="失败原因：超时")
+        resp = app_client.get("/api/tasks/export?format=json")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/json")
+        data = resp.json()
+        assert isinstance(data, list) and len(data) == 1
+        row = data[0]
+        assert row["id"] == 1
+        assert row["repo_name"] == "demo"
+        assert row["issue_iid"] == 7
+        assert row["issue_title"] == "中文标题任务"
+        assert row["status"] == "succeeded"
+        assert row["engine"] == "claude"
+        assert row["error_message"] == "失败原因：超时"
+        # 字段完整（issue #228 验收：id/仓库/issue/状态/引擎/耗时/错误/时间等）
+        for key in ("id", "repo_id", "repo_name", "project_id", "issue_iid",
+                    "issue_title", "issue_url", "status", "engine",
+                    "triggered_by", "attempt_count", "exit_code",
+                    "error_message", "failure_category", "commit_sha",
+                    "commit_url", "created_at", "started_at", "finished_at",
+                    "duration_seconds"):
+            assert key in row, f"JSON 导出缺少字段 {key}"
+
+    def test_export_duration_seconds(self, client):
+        """用时 = finished_at - created_at（秒）；缺时间字段为 null。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        self._mk_export_task(db, repo_id, 1, created_at="2026-08-01 10:00:00",
+                             finished_at="2026-08-01 10:05:30")
+        task_id = db.create_task(repo_id, 42, 2, "无结束时间")
+        db.set_task_status(task_id, "running", engine="dsh")
+        resp = app_client.get("/api/tasks/export?format=json")
+        by_iid = {r["issue_iid"]: r for r in resp.json()}
+        assert by_iid[1]["duration_seconds"] == 330
+        assert by_iid[2]["duration_seconds"] is None
+
+    def test_export_empty(self, client):
+        """无任务时 CSV 仅表头、JSON 为空数组。"""
+        app_client, db = client
+        resp = app_client.get("/api/tasks/export?format=csv")
+        body = resp.content.decode("utf-8")
+        lines = body.lstrip("\ufeff").splitlines()
+        assert len(lines) == 1 and "仓库" in lines[0]
+        resp = app_client.get("/api/tasks/export?format=json")
+        assert resp.json() == []
+
+    def test_export_invalid_format(self, client):
+        app_client, db = client
+        resp = app_client.get("/api/tasks/export?format=xlsx")
+        assert resp.status_code == 422
+
+    def test_export_unknown_status_400(self, client):
+        app_client, db = client
+        resp = app_client.get("/api/tasks/export?status=bogus")
+        assert resp.status_code == 400
+
+    def test_export_filters_status_repo_search(self, client):
+        """导出过滤与任务列表一致：status（含多值）/ repo_id / search。"""
+        app_client, db = client
+        repo_a = _mk_repo(db, name="repoA")
+        repo_b = _mk_repo(db, project_id=43, name="repoB")
+        self._mk_export_task(db, repo_a, 1, title="登录问题", status="succeeded")
+        self._mk_export_task(db, repo_a, 2, title="部署问题", status="failed")
+        self._mk_export_task(db, repo_b, 3, title="登录问题", status="succeeded")
+
+        data = app_client.get("/api/tasks/export?format=json&status=succeeded").json()
+        assert {r["issue_iid"] for r in data} == {1, 3}
+        data = app_client.get(
+            "/api/tasks/export?format=json&status=succeeded,failed").json()
+        assert len(data) == 3
+        data = app_client.get(f"/api/tasks/export?format=json&repo_id={repo_a}").json()
+        assert {r["issue_iid"] for r in data} == {1, 2}
+        data = app_client.get("/api/tasks/export?format=json&search=登录").json()
+        assert {r["issue_iid"] for r in data} == {1, 3}
+
+    def test_export_date_range_inclusive(self, client):
+        """date_from/date_to 按创建时间过滤，日期串补齐当日边界。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        self._mk_export_task(db, repo_id, 1, created_at="2026-08-01 10:00:00")
+        self._mk_export_task(db, repo_id, 2, created_at="2026-08-10 10:00:00")
+        self._mk_export_task(db, repo_id, 3, created_at="2026-08-20 10:00:00")
+
+        data = app_client.get(
+            "/api/tasks/export?format=json&date_from=2026-08-10&date_to=2026-08-10").json()
+        assert [r["issue_iid"] for r in data] == [2], "当日 00:00:00~23:59:59 应全含"
+        data = app_client.get(
+            "/api/tasks/export?format=json&date_from=2026-08-10 00:00:00"
+            "&date_to=2026-08-10 23:59:59").json()
+        assert [r["issue_iid"] for r in data] == [2]
+        data = app_client.get(
+            "/api/tasks/export?format=json&date_from=2026-08-01&date_to=2026-08-10").json()
+        assert {r["issue_iid"] for r in data} == {1, 2}
+        # 仅 date_from / 仅 date_to
+        data = app_client.get(
+            "/api/tasks/export?format=json&date_from=2026-08-10").json()
+        assert {r["issue_iid"] for r in data} == {2, 3}
+        data = app_client.get(
+            "/api/tasks/export?format=json&date_to=2026-08-10").json()
+        assert {r["issue_iid"] for r in data} == {1, 2}
+
+    def test_export_invalid_date_400(self, client):
+        app_client, db = client
+        resp = app_client.get("/api/tasks/export?format=json&date_from=2026/08/01")
+        assert resp.status_code == 400
+        resp = app_client.get("/api/tasks/export?format=json&date_to=乱来")
+        assert resp.status_code == 400
+        resp = app_client.get(
+            "/api/tasks/export?format=json&date_from=2026-08-10&date_to=2026-08-01")
+        assert resp.status_code == 400
+
+    def test_export_csv_quotes_newline_in_error(self, client):
+        """含逗号/换行的错误信息在 CSV 中应被正确引用（Excel 不破列）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        self._mk_export_task(db, repo_id, 1, title="多行错误",
+                             error_message="第一行失败\n第二行,带逗号")
+        resp = app_client.get("/api/tasks/export?format=csv")
+        body = resp.content.decode("utf-8")
+        assert '"第一行失败\n第二行,带逗号"' in body, "多行/逗号内容应按 CSV 规则引用"
+
+    def test_export_deleted_repo_still_exports(self, client):
+        """仓库软删除后任务历史仍可导出（仓库名/链接为空不报错）。"""
+        app_client, db = client
+        repo_id = _mk_repo(db, name="已删仓库")
+        self._mk_export_task(db, repo_id, 1, title="历史任务")
+        db.delete_repo(repo_id)
+        resp = app_client.get("/api/tasks/export?format=json")
+        assert resp.status_code == 200
+        row = resp.json()[0]
+        assert row["repo_name"] is None
+        assert row["issue_url"] is None

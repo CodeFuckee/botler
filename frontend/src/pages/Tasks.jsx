@@ -191,6 +191,10 @@ export default function Tasks() {
   // issue #235：任务列表可选展示 token 用量列（默认关闭，勾选后带
   // include_usage=1 重新拉取，后端批量返回避免逐任务 N+1 查询）
   const [showUsage, setShowUsage] = useState(false)
+  // issue #228：任务数据导出——格式（csv/json）与导出请求中状态（防重复点击）。
+  // 导出携带当前筛选（状态/仓库/搜索），后端返回 attachment 下载
+  const [exportFormat, setExportFormat] = useState('csv')
+  const [exporting, setExporting] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -429,6 +433,26 @@ export default function Tasks() {
     setRefreshing(false)
   }
 
+  // 导出当前筛选条件下的任务数据（issue #228）：GET /api/tasks/export 返回
+  // attachment 下载——CSV 带 UTF-8 BOM（Excel 打开中文不乱码）/ JSON（供
+  // 离线分析脚本 json.load）。携带当前 status/repoId/search 筛选与列表一致；
+  // 低危操作无需确认，请求中禁用防重复点击。
+  const exportTasks = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const q = new URLSearchParams({ format: exportFormat })
+      if (status) q.set('status', status)
+      if (repoId) q.set('repo_id', repoId)
+      if (search.trim()) q.set('search', search.trim())
+      await api.download('/api/tasks/export?' + q, `tasks_export.${exportFormat}`)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div>
       <h1>{tr('tasks.listTitle')}</h1>
@@ -494,6 +518,27 @@ export default function Tasks() {
             title={tr('tasks.refreshTitle')}
           >
             <><Icon name="refresh" /> {tr('common.refresh')}{refreshing ? '…' : ''}</>
+          </button>
+          {/* issue #228：任务数据导出——选择格式（CSV/JSON）后点「导出」
+              下载当前筛选条件下的全部任务（CSV 带 UTF-8 BOM，Excel 打开
+              中文不乱码；JSON 供离线分析） */}
+          <select
+            className="input tasks-export-format"
+            value={exportFormat}
+            onChange={(e) => setExportFormat(e.target.value)}
+            title={tr('tasks.exportTitle')}
+            aria-label={tr('tasks.exportTitle')}
+          >
+            <option value="csv">{tr('tasks.exportCsv')}</option>
+            <option value="json">{tr('tasks.exportJson')}</option>
+          </select>
+          <button
+            className="btn btn-gap-left"
+            onClick={exportTasks}
+            disabled={exporting}
+            title={tr('tasks.exportTitle')}
+          >
+            <><Icon name="download" /> {tr('tasks.export')}{exporting ? '…' : ''}</>
           </button>
           {/* issue #235：任务列表可选展示 token 用量列——默认关闭（列表
               不查询用量，无额外开销）；勾选后重新拉取展示 */}

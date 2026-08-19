@@ -328,5 +328,9 @@
   "tasks.manualPriority": "manual priority {p}",
   "tasks.canceledByUser": "Removed from queue",
   "tasks.canceledByUserTitle": "Removed from queue by user (canceled_by_user); can be retried manually",
-  "common.unknown": "Unknown"
+  "common.unknown": "Unknown",
+  "tasks.export": "Export",
+  "tasks.exportTitle": "Export task data under current filters (CSV includes UTF-8 BOM for Excel; JSON for offline analysis)",
+  "tasks.exportCsv": "CSV",
+  "tasks.exportJson": "JSON"
 }

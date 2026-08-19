@@ -1150,6 +1150,43 @@ class Database:
         with self._conn() as conn:
             return conn.execute(sql, params).fetchone()["c"]
 
+    def list_tasks_export(self, status: str | list[str] | None = None,
+                          repo_id: int | None = None, search: str | None = None,
+                          date_from: str | None = None,
+                          date_to: str | None = None) -> list[TaskRow]:
+        """导出任务数据（issue #228）：与 list_tasks 同套过滤条件，不分页全量返回。
+
+        供 GET /api/tasks/export 使用：status（含逗号分隔多值）/ repo_id /
+        search（issue 标题或编号模糊匹配）过滤与任务列表完全一致，另支持
+        创建时间范围 date_from / date_to（API 层已归一化为
+        'YYYY-MM-DD HH:MM:SS' 无时区串，与 created_at 同格式可直接字符串
+        比较）。按 id 倒序（最新在前），与任务列表排序一致。
+        """
+        sql = "SELECT * FROM tasks WHERE 1=1"
+        params: list = []
+        if status:
+            if isinstance(status, str):
+                sql += " AND status=?"
+                params.append(status)
+            else:
+                sql += f" AND status IN ({', '.join('?' * len(status))})"
+                params.extend(status)
+        if repo_id:
+            sql += " AND repo_id=?"
+            params.append(repo_id)
+        if search:
+            sql += " AND (issue_title LIKE ? OR CAST(issue_iid AS TEXT) LIKE ?)"
+            params.extend([f"%{search}%", f"%{search}%"])
+        if date_from:
+            sql += " AND created_at >= ?"
+            params.append(date_from)
+        if date_to:
+            sql += " AND created_at <= ?"
+            params.append(date_to)
+        sql += " ORDER BY id DESC"
+        with self._conn() as conn:
+            return _as_task_list(conn.execute(sql, params).fetchall())
+
     def find_active_task(self, project_id: int, issue_iid: int) -> TaskRow | None:
         with self._conn() as conn:
             return _as_task(conn.execute(

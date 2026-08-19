@@ -1,13 +1,16 @@
 """任务 API：列表（分页/过滤）、详情（含日志）、日志、实时执行（issue #20）、
-SSE 事件流（实时输出功能）。"""
+SSE 事件流（实时输出功能）、数据导出（issue #228）。"""
 
 from __future__ import annotations
 
+import csv
+import io
 import json
+from datetime import datetime
 from pathlib import Path
 from queue import Empty
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from botler.env_snapshot import parse_snapshot
@@ -178,7 +181,163 @@ def list_tasks(
     }
 
 
+# ---- 任务数据导出（issue #228）----
+# CSV 表头用中文（Excel 直接可读，UTF-8 BOM 保证中文不乱码），JSON 用
+# 英文 key（供离线脚本/工具解析）；两者字段集合一致、顺序即列顺序。
+EXPORT_COLUMNS = [
+    ("id", "id"),
+    ("repo_id", "仓库ID"),
+    ("repo_name", "仓库"),
+    ("project_id", "项目ID"),
+    ("issue_iid", "Issue编号"),
+    ("issue_title", "Issue标题"),
+    ("issue_url", "Issue链接"),
+    ("status", "状态"),
+    ("engine", "引擎"),
+    ("triggered_by", "来源"),
+    ("attempt_count", "尝试次数"),
+    ("exit_code", "退出码"),
+    ("error_message", "错误信息"),
+    ("failure_category", "失败分类"),
+    ("commit_sha", "提交SHA"),
+    ("commit_url", "提交链接"),
+    ("created_at", "创建时间"),
+    ("started_at", "开始时间"),
+    ("finished_at", "结束时间"),
+    ("duration_seconds", "用时(秒)"),
+]
+
+
+def _normalize_date_bound(value: str, start: bool) -> str:
+    """时间范围参数归一化（issue #228）：'YYYY-MM-DD' 补齐当日边界
+    （start → 00:00:00，end → 23:59:59），完整 'YYYY-MM-DD HH:MM:SS'
+    原样返回，与 tasks.created_at（UTC 无时区串）同格式可直接字符串
+    比较。格式不合法抛 ValueError（API 层转 400）。
+    """
+    v = value.strip()
+    try:
+        if len(v) == 10:
+            dt = datetime.strptime(v, "%Y-%m-%d")
+            return (dt.strftime("%Y-%m-%d 00:00:00") if start
+                    else dt.strftime("%Y-%m-%d 23:59:59"))
+        return datetime.strptime(v, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        raise ValueError("应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS")
+
+
+def _export_task_row(row, repo: dict | None) -> dict:
+    """任务行 → 导出扁平字典（issue #228）。
+
+    repo 为仓库信息 dict（含 name/url），可能为 None——仓库已软删除时
+    任务历史仍可导出，仓库名/链接为空。用时 = finished_at - created_at
+    （与任务列表「用时」、概览统计 issue #180 语义一致）；缺时间字段或
+    时钟异常（负值）返回 None 不报错。
+    """
+    repo_url = repo.get("url") if repo else None
+    duration: int | None = None
+    if row["created_at"] and row["finished_at"]:
+        try:
+            start = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
+            end = datetime.strptime(row["finished_at"], "%Y-%m-%d %H:%M:%S")
+            secs = int((end - start).total_seconds())
+            duration = secs if secs >= 0 else None
+        except (TypeError, ValueError):
+            duration = None
+    return {
+        "id": row["id"],
+        "repo_id": row["repo_id"],
+        "repo_name": repo.get("name") if repo else None,
+        "project_id": row["project_id"],
+        "issue_iid": row["issue_iid"],
+        "issue_title": row["issue_title"],
+        "issue_url": _issue_url(repo_url, row["issue_iid"]),
+        "status": row["status"],
+        "engine": row["engine"] or "",
+        "triggered_by": row["triggered_by"],
+        "attempt_count": row["attempt_count"],
+        "exit_code": row["exit_code"],
+        "error_message": row["error_message"],
+        "failure_category": row["failure_category"] or "",
+        "commit_sha": row["commit_sha"],
+        "commit_url": _commit_url(repo_url, row["commit_sha"]),
+        "created_at": row["created_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "duration_seconds": duration,
+    }
+
+
+@router.get("/export")
+def export_tasks(
+    request: Request,
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    status: str | None = Query(None),
+    repo_id: int | None = Query(None),
+    search: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+):
+    """导出任务数据（issue #228）：CSV / JSON 文件下载。
+
+    过滤条件与任务列表一致（status 支持逗号分隔多值、repo_id、search），
+    另支持按任务创建时间范围过滤（date_from / date_to，'YYYY-MM-DD' 或
+    'YYYY-MM-DD HH:MM:SS'，按 tasks.created_at 匹配）。CSV 带 UTF-8 BOM
+    （\ufeff）——Excel 直接打开中文不乱码，字段含 id/仓库/issue/状态/引擎/
+    用时/错误/时间等；JSON 为同字段的扁平对象数组（英文 key），供离线
+    分析脚本直接 json.load。响应均为 attachment 下载。
+    """
+    c = ctx_of(request)
+    statuses: str | list[str] | None = status
+    if status:
+        statuses = [s.strip() for s in status.split(",")]
+        unknown = [s for s in statuses if s not in STATUSES]
+        if unknown:
+            raise HTTPException(400, f"未知状态: {','.join(unknown)}（可选: {sorted(STATUSES)}）")
+        if len(statuses) == 1:
+            statuses = statuses[0]
+    try:
+        from_dt = _normalize_date_bound(date_from, start=True) if date_from else None
+        to_dt = _normalize_date_bound(date_to, start=False) if date_to else None
+    except ValueError as e:
+        raise HTTPException(400, f"时间范围参数格式错误: {e}")
+    if from_dt and to_dt and from_dt > to_dt:
+        raise HTTPException(400, "date_from 不能晚于 date_to")
+
+    rows = c.db.list_tasks_export(status=statuses, repo_id=repo_id, search=search,
+                                  date_from=from_dt, date_to=to_dt)
+    # 与列表一致：包含已软删除仓库，任务历史仍能解析出仓库名（issue #62）
+    repos = {r["id"]: {"name": r["name"], "url": r["url"]}
+             for r in c.db.list_repos(include_deleted=True)}
+    records = [_export_task_row(r, repos.get(r["repo_id"])) for r in rows]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if format == "json":
+        payload = json.dumps(records, ensure_ascii=False, indent=2)
+        return Response(
+            content=payload,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition":
+                     f'attachment; filename="tasks_export_{ts}.json"'},
+        )
+
+    # CSV：\ufeff BOM 前缀 + \r\n 行终止——Excel 直接打开中文不乱码
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    writer.writerow([h for _, h in EXPORT_COLUMNS])
+    for rec in records:
+        writer.writerow([rec.get(k) if rec.get(k) is not None else ""
+                         for k, _ in EXPORT_COLUMNS])
+    content = "\ufeff" + buf.getvalue()
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="tasks_export_{ts}.csv"'},
+    )
+
+
 @router.post("/stop-all")
+
 def stop_all_tasks(request: Request):
     """一键停止所有活跃任务（issue #35）。
 
