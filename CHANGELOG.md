@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 ### Added
+- **顶部导航改为可折叠左侧边栏（issue #324）**：顶部导航选项卡过多（11 个
+  横向排布放不下、需横向滚动）改为左侧边栏纵向排布，并支持整体折叠/展开：
+  - **左侧边栏**：品牌 + 11 个导航项（概览/仓库/任务/统计/模版/标记库/插件/
+    技能/工具/设置/终端，图标+文字）纵向排布，sticky 全高悬浮、毛玻璃材质
+    （复用 --nav-bg / --nav-bg-glass token，prefers-reduced-transparency 回退
+    纯色、prefers-contrast 补右分隔边框），底部工具区（语言切换 / 快捷键帮助 /
+    登录用户区）经 margin-top:auto 沉底；
+  - **折叠/展开**：展开态 240px（图标+文字），折叠态收成 56px 图标窄栏（label
+    隐藏、悬停 title 提示目标页，底部工具区隐藏、最大化内容区）；折叠按钮带
+    aria-expanded / aria-controls 无障碍语义，宽度过渡 --dur 200ms（HIG 区间，
+    prefers-reduced-motion 全局降级）；
+  - **偏好持久化**：折叠偏好存 localStorage（`botler.navCollapsed`，与设置页
+    侧边栏 issue #168 同模式），刷新后保持；无存储环境（SSR/隐私模式）默认
+    展开且不崩溃；
+  - **响应式**：窄视口（≤860px）侧边栏转为抽屉导航——顶栏新增汉堡按钮
+    （`botler.nav` 桌面端隐藏），抽屉滑入覆盖内容（`.open`），遮罩 / 点击
+    导航项关闭；侧边栏移出文档流（fixed + translateX），内容区恢复全宽，
+    保持移动端原有布局宽度不横向溢出；
+  - **测试**：新增 `frontend/tests/app-sidebar.test.mjs`（load/save 纯函数边界、
+    源码结构断言、默认展开/折叠切换/持久化渲染断言、CSS 布局断言，10 例），
+    同步更新 hig-layout / apple-design 设计系统验收断言为侧边栏语义；前端全量
+    测试 + 覆盖率通过，vite build / eslint 通过。
 - **Docker compose botler 服务健康检查（healthcheck），容器假死可感知（issue #207）**：
   此前 botler 主服务只有 `restart: unless-stopped`，uvicorn 进程活着但事件循环
   卡死 / 依赖失效时容器仍显示 running，`docker compose ps` 看不出异常。本次

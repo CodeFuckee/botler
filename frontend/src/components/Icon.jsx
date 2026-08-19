@@ -8,9 +8,9 @@
 //   Lucide 无对应图形，不在图标替换范围内。
 import {
   ArrowLeft, ArrowUp, BarChart3, Bot, Brain, Check, CheckCircle2, ChevronDown,
-  ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Eye,
+  ChevronLeft, ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Eye,
   FileText, Flag, Folder, FolderOpen, GripVertical, Hourglass,
-  Image as ImageIcon, Keyboard, Lightbulb, Lock, MessageCircle, Mic, Package,
+  Image as ImageIcon, Keyboard, Lightbulb, Lock, Menu, MessageCircle, Mic, Package,
   Pencil, Pin, Plus, RefreshCw,
   Rocket, Search, Settings, Sparkles, Square, Tag, Terminal as TerminalIcon,
   Trash2, TriangleAlert, Upload, User, Wallet, Wrench, X, XCircle,
@@ -26,6 +26,7 @@ export const ICONS = {
   check: Check,
   checkCircle: CheckCircle2,
   chevronDown: ChevronDown,
+  chevronLeft: ChevronLeft,
   chevronRight: ChevronRight,
   clipboard: ClipboardList,
   coins: Coins,
@@ -43,6 +44,7 @@ export const ICONS = {
   image: ImageIcon,
   lightbulb: Lightbulb,
   lock: Lock,
+  menu: Menu,
   message: MessageCircle,
   mic: Mic,
   package: Package,

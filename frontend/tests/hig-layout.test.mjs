@@ -7,10 +7,11 @@
 // 2. 视觉层次：概览页两大板块（开放 Issue / CI/CD 流水线）结构对齐——
 //    都有 section 容器 + h2 标题（issue #114：独立任务板块删除，
 //    任务信息整合进开放 Issue 板块 running 组的 issue 项内）；
-// 3. 布局响应式：窗口缩放不截断不重叠——顶导航窄视口可横向滚动、
-//    设置页 kv 表格窄视口列宽降级、内容区外边距窄屏回落；
+// 3. 布局响应式：窗口缩放不截断不重叠——左侧边栏窄视口回落图标窄栏
+//    （issue #324）、设置页 kv 表格窄视口列宽降级、内容区外边距窄屏回落；
 // 4. 不在内容流里放全宽按钮：.btn 系列无 width:100% 规则；
-// 5. 导航层浮于内容之上：.topnav 为 sticky 定位。
+// 5. 导航层浮于内容之上：.sidebar 为 sticky 全高定位（issue #324 由顶导航
+//    改为左侧边栏后，导航层仍保持悬浮、不随内容同平面滚动）。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -73,7 +74,7 @@ test('styles.css：内容外边距 token 化（--gutter 桌面 20pt / 窄屏 16p
 })
 
 test('styles.css：内容容器/导航/卡片外边距引用 --gutter token', () => {
-  for (const selector of ['.content', '.topnav', '.card']) {
+  for (const selector of ['.content', '.sidebar', '.card']) {
     const body = ruleBody(selector)
     assert.ok(body, `应存在 ${selector} 规则`)
     assert.match(body, /padding:\s*[^;]*var\(--gutter\)/,
@@ -161,12 +162,15 @@ test('渲染：概览页两板块 h2 标题齐全且自上而下为 开放 Issue
 
 // ---- 检查清单 #5：布局响应式（窗口缩放/窄视口不截断不重叠）----
 
-test('styles.css：顶导航窄视口可横向滚动（导航项多时不截断溢出）', () => {
-  const body = ruleBody('.topnav')
-  assert.ok(body, '应存在 .topnav 规则')
-  assert.match(body, /overflow-x:\s*auto/, '.topnav 应支持横向滚动（窄视口导航项不截断）')
-  assert.match(body, /position:\s*sticky/, '.topnav 应为 sticky（HIG：导航浮于内容之上）')
-  assert.match(body, /top:\s*0/, '.topnav 应吸附视口顶部')
+test('styles.css：左侧边栏 sticky 全高悬浮（导航项多时纵向排布不溢出）', () => {
+  const body = ruleBody('.sidebar')
+  assert.ok(body, '应存在 .sidebar 规则')
+  assert.match(body, /position:\s*sticky/, '.sidebar 应为 sticky（HIG：导航浮于内容之上）')
+  assert.match(body, /top:\s*0/, '.sidebar 应吸附视口顶部')
+  assert.match(body, /height:\s*100vh/, '.sidebar 应占满视口全高（左侧边栏，issue #324）')
+  const navBody = ruleBody('.sidebar-nav')
+  assert.ok(navBody, '应存在 .sidebar-nav 规则')
+  assert.match(navBody, /overflow-y:\s*auto/, '.sidebar-nav 应支持纵向滚动（导航项多不截断）')
 })
 
 test('styles.css：设置页 kv 表格窄视口列宽降级（不挤压输入控件）', () => {

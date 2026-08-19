@@ -2,9 +2,10 @@
 // skill 的核心原则（响应/材质与深度/动效/排版/可及性）逐条断言落地，
 // 并逐页核对 8 个页面共享设计系统、无一遗漏：
 //
-// 1. 材质与深度（Materials & depth）——顶导航毛玻璃悬浮层（半透明 +
-//    backdrop-filter 模糊），内容从其下方滚动；prefers-reduced-transparency
-//    时回退纯色材质；prefers-contrast 时补明确边框；
+// 1. 材质与深度（Materials & depth）——左侧边栏毛玻璃悬浮层（半透明 +
+//    backdrop-filter 模糊，issue #324 由顶导航改为左侧边栏），内容从其
+//    右侧下方滚动；prefers-reduced-transparency 时回退纯色材质；
+//    prefers-contrast 时补明确边框；
 // 2. 动效（Motion）——模态/抽屉「材质化入场」（surface-in/drawer-in/
 //    overlay-in，缩放+位移+淡入而非纯 opacity），时长 150–300ms 区间，
 //    全部受 prefers-reduced-motion 全局降级；帧级流畅 will-change 提示；
@@ -61,21 +62,21 @@ function mediaBlock(query) {
 
 // ---- 1. 材质与深度：顶导航毛玻璃悬浮层 ----
 
-test('styles.css：顶导航为毛玻璃材质（半透明 + backdrop-filter 模糊，内容从其下滚动）', () => {
+test('styles.css：左侧边栏为毛玻璃材质（半透明 + backdrop-filter 模糊，内容从其下滚动）', () => {
   // 纯色兜底：不支持 backdrop-filter / 减弱透明时用 --nav-bg
-  // （@media/@supports 内也有 .topnav 规则，按 position: sticky 特征
+  // （@media/@supports 内也有 .sidebar 规则，按 position: sticky 特征
   //   挑出基础规则——媒体查询内的同名规则不参与本次断言）
-  const body = pickRule('.topnav', 'position: sticky')
-  assert.ok(body, '应存在基础 .topnav 规则')
+  const body = pickRule('.sidebar', 'position: sticky')
+  assert.ok(body, '应存在基础 .sidebar 规则')
   assert.match(body, /background:\s*var\(--nav-bg\)/,
     'topnav 基础规则应使用纯色 --nav-bg 兜底')
-  assert.match(body, /position:\s*sticky/, 'topnav 保持 sticky（内容从其下方滚动）')
+  assert.match(body, /position:\s*sticky/, 'sidebar 保持 sticky（内容从其下方滚动）')
   // 毛玻璃增强：@supports 块内半透明 + 背景模糊 + 饱和度增强
   const supports = styles.match(/@supports\s*\(backdrop-filter:\s*blur\(1px\)\)[^{]*\{([\s\S]*?)\n\}/)
   assert.ok(supports, '应存在 backdrop-filter @supports 回退增强块')
-  assert.match(supports[1], /\.topnav\s*\{/, '@supports 块内应有 .topnav 规则')
+  assert.match(supports[1], /\.sidebar\s*\{/, '@supports 块内应有 .sidebar 规则')
   assert.match(supports[1], /backdrop-filter:\s*blur\(20px\)\s*saturate\(180%\)/,
-    'topnav 应使用 blur(20px) saturate(180%) 毛玻璃效果')
+    'sidebar 应使用 blur(20px) saturate(180%) 毛玻璃效果')
   assert.match(supports[1], /background:\s*var\(--nav-bg-glass\)/,
     '毛玻璃下应使用半透明 --nav-bg-glass 底色')
 })
@@ -92,7 +93,7 @@ test('styles.css：导航材质 token 浅色/深色双份定义（--nav-bg / --n
 test('styles.css：prefers-reduced-transparency 下毛玻璃回退纯色（无模糊）', () => {
   const block = mediaBlock('prefers-reduced-transparency:\\s*reduce')
   assert.ok(block, '应存在 prefers-reduced-transparency: reduce 媒体查询')
-  assert.match(block, /\.topnav\s*\{/, '块内应有 .topnav 规则')
+  assert.match(block, /\.sidebar\s*\{/, '块内应有 .sidebar 规则')
   assert.match(block, /background:\s*var\(--nav-bg\)/, '应回退纯色 --nav-bg')
   assert.match(block, /backdrop-filter:\s*none/, '应关闭 backdrop-filter 模糊')
 })
@@ -102,8 +103,8 @@ test('styles.css：prefers-contrast: more 下悬浮层/卡片补明确边框', (
   assert.ok(block, '应存在 prefers-contrast: more 媒体查询')
   assert.match(block, /\.card\s*\{[\s\S]*?border:\s*1px\s+solid\s+var\(--border\)/,
     '增强对比度下卡片应补明确边框')
-  assert.match(block, /\.topnav\s*\{[\s\S]*?border-bottom:\s*1px\s+solid\s+var\(--border\)/,
-    '增强对比度下导航应补底部分隔边框')
+  assert.match(block, /\.sidebar\s*\{[\s\S]*?border-right:\s*1px\s+solid\s+var\(--border\)/,
+    '增强对比度下侧边栏应补右分隔边框')
 })
 
 // ---- 2. 动效：材质化入场 + 帧级流畅 ----

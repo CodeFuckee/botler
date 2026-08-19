@@ -20,6 +20,32 @@ import { createVersionChecker } from './version-update.js'
 import { Icon } from './components/Icon.jsx'
 import { useI18n, LANG_LABELS } from './i18n.jsx'
 
+// 左侧边栏折叠偏好（issue #324）：与设置页侧边栏（SettingsNav issue #168）
+// 同模式——偏好存 localStorage，'1'/'true' 视为折叠，其余一律展开；
+// 无存储环境（SSR/隐私模式）或 getItem 抛异常时兜底为展开，不影响页面使用。
+export const SIDEBAR_STORAGE_KEY = 'botler.navCollapsed'
+
+/** 读取左侧边栏折叠偏好（issue #324）：storage 兼容对象（测试可注入）。 */
+export function loadSidebarCollapsed(storage) {
+  try {
+    if (!storage) return false
+    const raw = storage.getItem(SIDEBAR_STORAGE_KEY)
+    return raw === '1' || raw === 'true'
+  } catch {
+    return false
+  }
+}
+
+/** 保存左侧边栏折叠偏好（issue #324）：true 写 '1'、false 写 '0'；
+ *  存储不可用（SSR/隐私模式）时静默忽略，不抛错。 */
+export function saveSidebarCollapsed(storage, collapsed) {
+  try {
+    storage?.setItem(SIDEBAR_STORAGE_KEY, collapsed ? '1' : '0')
+  } catch {
+    /* 无存储环境：静默忽略，不影响页面使用 */
+  }
+}
+
 // 路由懒加载加载态（issue #202）：页面 chunk 异步加载期间的轻量占位，
 // 复用 HIG 既有 .spinner / .muted 视觉（居中 spinner + 「加载中…」），
 // 避免路由切换出现空白闪烁；role=status 供屏幕阅读器播报
@@ -59,6 +85,16 @@ export default function App() {
   // 本地偏好存储（issue #217）：无 localStorage 环境（SSR/测试）时用
   // globalThis 访问返回 undefined，theme.js 内部静默忽略，不抛错
   const themeStorage = typeof localStorage !== 'undefined' ? localStorage : null
+  // 左侧边栏折叠偏好（issue #324）：默认展开；偏好持久化 localStorage
+  // （botler.navCollapsed，与设置页 SettingsNav issue #168 同模式），
+  // 刷新后保持；无存储环境（SSR/隐私模式）默认展开且不崩溃
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed(themeStorage))
+  useEffect(() => {
+    saveSidebarCollapsed(themeStorage, sidebarCollapsed)
+  }, [sidebarCollapsed, themeStorage])
+  // 移动端抽屉导航（issue #324）：≤860px 侧边栏移出文档流为抽屉，默认
+  // 收起（汉堡按钮打开、遮罩/点击导航项关闭）；桌面端恒为 false 不渲染
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [, setTzLoaded] = useState(false)
   useEffect(() => {
     if (!auth || (auth.enabled && !auth.user)) return
@@ -181,79 +217,141 @@ export default function App() {
         </div>
       )}
       {/* HIG 灵活：导航提供 aria-label 语义（屏幕阅读器可跳过） */}
-      <nav className="topnav" aria-label={t('nav.ariaMain')}>
-        <div className="brand">
-          <span className="brand-dot"><Icon name="bot" /></span> Botler
-        </div>
-        <NavLink to="/overview" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.overview')}
-        </NavLink>
-        {/* issue #54：默认页改为概览页，仓库页迁至 /repos */}
-        <NavLink to="/repos" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.repos')}
-        </NavLink>
-        <NavLink to="/tasks" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.tasks')}
-        </NavLink>
-        {/* 统计看板页（issue #264）：成功率/引擎对比/仓库排行聚合视图 */}
-        <NavLink to="/stats" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.stats')}
-        </NavLink>
-        <NavLink to="/templates" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.templates')}
-        </NavLink>
-        <NavLink to="/labels" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.labels')}
-        </NavLink>
-        {/* 插件管理页（issue #145）：所有插件的安装、卸载和设置都在这个界面 */}
-        <NavLink to="/plugins" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.plugins')}
-        </NavLink>
-        {/* 技能管理页（issue #282）：展示各执行引擎拥有的技能，查看/编辑 skill.md */}
-        <NavLink to="/skills" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.skills')}
-        </NavLink>
-        {/* 工具管理页（issue #172）：下载/编写 MCP 工具给 agent 使用 */}
-        <NavLink to="/tools" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.tools')}
-        </NavLink>
-        <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.settings')}
-        </NavLink>
-        {/* Web 终端（issue #183）：浏览器内多标签终端，无需再打开系统终端 */}
-        <NavLink to="/terminal" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-          {t('nav.terminal')}
-        </NavLink>
-        {/* 登录后用户名称与退出按钮位于导航栏最右（issue #9 第二轮）：
-            .user-chip 的 margin-left:auto 承接原版本徽标的"推到最右"职责 */}
-        {/* 界面语言快捷切换（issue #268）：右上角下拉，中/英即时切换并持久化到 localStorage */}
-        <select
-          className="lang-switch"
-          value={lang}
-          onChange={(e) => setLang(e.target.value)}
-          title={t('nav.langTitle')}
-          aria-label={t('nav.langTitle')}
-        >
-          {Object.entries(LANG_LABELS).map(([code, label]) => (
-            <option key={code} value={code}>{label}</option>
-          ))}
-        </select>
-        {/* 键盘快捷键（issue #269）：右上角「快捷键帮助」按钮——
-            打开帮助面板展示全部键位 + 启用/禁用开关 */}
+      {/* 左侧边栏导航（issue #324）：顶部导航选项卡过多（11 个）改为
+          左侧边栏，支持整体折叠/展开——展开态 240px 图标+文字；折叠态
+          收成 56px 图标窄栏（label 隐藏、悬停 title 提示），折叠偏好
+          持久化 localStorage（botler.navCollapsed），刷新后保持；
+          窄视口（≤860px）自动回落图标窄栏，不挤压内容区 */}
+      {/* 移动端顶栏（issue #324）：≤860px 显示，汉堡按钮打开左侧抽屉导航；
+          桌面端 CSS display:none 隐藏 */}
+      <header className="topbar">
         <button
           type="button"
-          className="btn btn-sm shortcuts-help-btn"
-          onClick={() => setShortcutHelpOpen(true)}
-          title={t('shortcuts.helpBtnTitle')}
-          aria-label={t('shortcuts.helpBtnTitle')}
+          className="topbar-menu"
+          onClick={() => setMobileNavOpen(true)}
+          aria-label={t('nav.openSidebar')}
+          aria-controls="sidebar-nav"
+          aria-expanded={mobileNavOpen}
         >
-          <Icon name="keyboard" /> {t('shortcuts.helpBtn')}
+          <Icon name="menu" aria-hidden="true" />
         </button>
-        {/* 登录用户区（issue #271）：SSO 登录后右上角显示昵称/头像与「退出
-            登录」按钮（头像失败回退首字母），未启用 SSO 时弱提示「未登录
-            （开放模式）」；会话过期时间 tooltip 展示（与 #221 联动） */}
-        <UserMenu user={auth.user} ssoEnabled={auth.enabled} />
+        <span className="topbar-brand">Botler</span>
+      </header>
+      <nav
+        className={'sidebar' + (sidebarCollapsed ? ' collapsed' : '') + (mobileNavOpen ? ' open' : '')}
+        aria-label={t('nav.ariaMain')}
+      >
+        <div className="sidebar-head">
+          <div className="brand">
+            <span className="brand-dot"><Icon name="bot" /></span>
+            <span className="brand-text">Botler</span>
+          </div>
+          {/* 折叠/展开开关（issue #324）：箭头方向随状态翻转，aria-expanded
+              同步折叠状态、aria-controls 指向导航列表（屏幕阅读器可感知） */}
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={() => setSidebarCollapsed((prev) => !prev)}
+            aria-label={sidebarCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')}
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="sidebar-nav"
+            title={sidebarCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')}
+          >
+            <Icon name={sidebarCollapsed ? 'chevronRight' : 'chevronLeft'} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="sidebar-nav" id="sidebar-nav" onClick={() => setMobileNavOpen(false)}>
+          <NavLink to="/overview" title={t('nav.overview')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="compass" aria-hidden="true" />
+            <span className="nav-label">{t('nav.overview')}</span>
+          </NavLink>
+          {/* issue #54：默认页改为概览页，仓库页迁至 /repos */}
+          <NavLink to="/repos" title={t('nav.repos')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="folder" aria-hidden="true" />
+            <span className="nav-label">{t('nav.repos')}</span>
+          </NavLink>
+          <NavLink to="/tasks" title={t('nav.tasks')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="clipboard" aria-hidden="true" />
+            <span className="nav-label">{t('nav.tasks')}</span>
+          </NavLink>
+          {/* 统计看板页（issue #264）：成功率/引擎对比/仓库排行聚合视图 */}
+          <NavLink to="/stats" title={t('nav.stats')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="chart" aria-hidden="true" />
+            <span className="nav-label">{t('nav.stats')}</span>
+          </NavLink>
+          <NavLink to="/templates" title={t('nav.templates')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="fileText" aria-hidden="true" />
+            <span className="nav-label">{t('nav.templates')}</span>
+          </NavLink>
+          <NavLink to="/labels" title={t('nav.labels')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="tag" aria-hidden="true" />
+            <span className="nav-label">{t('nav.labels')}</span>
+          </NavLink>
+          {/* 插件管理页（issue #145）：所有插件的安装、卸载和设置都在这个界面 */}
+          <NavLink to="/plugins" title={t('nav.plugins')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="package" aria-hidden="true" />
+            <span className="nav-label">{t('nav.plugins')}</span>
+          </NavLink>
+          {/* 技能管理页（issue #282）：展示各执行引擎拥有的技能，查看/编辑 skill.md */}
+          <NavLink to="/skills" title={t('nav.skills')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="sparkles" aria-hidden="true" />
+            <span className="nav-label">{t('nav.skills')}</span>
+          </NavLink>
+          {/* 工具管理页（issue #172）：下载/编写 MCP 工具给 agent 使用 */}
+          <NavLink to="/tools" title={t('nav.tools')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="wrench" aria-hidden="true" />
+            <span className="nav-label">{t('nav.tools')}</span>
+          </NavLink>
+          <NavLink to="/settings" title={t('nav.settings')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="settings" aria-hidden="true" />
+            <span className="nav-label">{t('nav.settings')}</span>
+          </NavLink>
+          {/* Web 终端（issue #183）：浏览器内多标签终端，无需再打开系统终端 */}
+          <NavLink to="/terminal" title={t('nav.terminal')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+            <Icon name="terminal" aria-hidden="true" />
+            <span className="nav-label">{t('nav.terminal')}</span>
+          </NavLink>
+        </div>
+        <div className="sidebar-foot">
+          {/* 界面语言快捷切换（issue #268）：侧边栏底部下拉，中/英即时
+              切换并持久化到 localStorage */}
+          <select
+            className="lang-switch"
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+            title={t('nav.langTitle')}
+            aria-label={t('nav.langTitle')}
+          >
+            {Object.entries(LANG_LABELS).map(([code, label]) => (
+              <option key={code} value={code}>{label}</option>
+            ))}
+          </select>
+          {/* 键盘快捷键（issue #269）：「快捷键帮助」按钮——打开帮助面板
+              展示全部键位 + 启用/禁用开关 */}
+          <button
+            type="button"
+            className="btn btn-sm shortcuts-help-btn"
+            onClick={() => setShortcutHelpOpen(true)}
+            title={t('shortcuts.helpBtnTitle')}
+            aria-label={t('shortcuts.helpBtnTitle')}
+          >
+            <Icon name="keyboard" /> {t('shortcuts.helpBtn')}
+          </button>
+          {/* 登录用户区（issue #271）：SSO 登录后显示昵称/头像与「退出登录」
+              按钮（头像失败回退首字母），未启用 SSO 时弱提示「未登录（开放
+              模式）」；会话过期时间 tooltip 展示（与 #221 联动） */}
+          <UserMenu user={auth.user} ssoEnabled={auth.enabled} />
+        </div>
       </nav>
+      {/* 移动端抽屉遮罩（issue #324）：打开导航时铺满屏幕，点击关闭 */}
+      {mobileNavOpen && (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          onClick={() => setMobileNavOpen(false)}
+          aria-label={t('nav.closeSidebar')}
+        />
+      )}
       {/* 快捷键跳转（issue #269）：redirect 非空时切换路由并立即清空 */}
       {redirect && <Navigate to={redirect} replace />}
       <main className="content">
