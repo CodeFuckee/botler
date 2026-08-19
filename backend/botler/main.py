@@ -32,6 +32,7 @@ from .gitlab_client import GitLabClient
 from .reconciler import Reconciler
 from .scheduler import TaskScheduler
 from .templates import TemplateRenderer
+from .health import build_deps_report, deps_critical_failed
 from .version import build_health_payload, read_version_info
 from .webhook import WebhookHandler, WebhookError
 
@@ -198,13 +199,22 @@ def create_app(config_path: str | None = None) -> FastAPI:
     @app.get("/api/health")
     def health():
         ctx = app.state.ctx
-        # 版本号与前端构建产物同源（issue #233）：读取 dist/version.json
-        # （含构建时间与 commit），缺失时回退 data/version.txt
-        return build_health_payload(
+        # 依赖探测（issue #207）：MinIO 连通（仅启用时）+ 数据目录磁盘
+        # 空间；关键依赖失败 → 503 + ok=false，compose healthcheck
+        # （curl -f）随之失败，容器被标记 unhealthy，假死可感知
+        deps = build_deps_report(ctx.config.get())
+        payload = build_health_payload(
+            # 版本号与前端构建产物同源（issue #233）：读取 dist/version.json
+            # （含构建时间与 commit），缺失时回退 data/version.txt
             load_version_info(),
             scheduler_stats=ctx.scheduler.stats(),
             task_stats=ctx.db.task_stats(),
+            deps=deps,
+            ok=not deps_critical_failed(deps),
         )
+        if deps_critical_failed(deps):
+            return JSONResponse(payload, status_code=503)
+        return payload
 
     # ---- 前端静态托管 ----
     if FRONTEND_DIST.exists():

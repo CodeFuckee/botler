@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 ### Added
+- **Docker compose botler 服务健康检查（healthcheck），容器假死可感知（issue #207）**：
+  此前 botler 主服务只有 `restart: unless-stopped`，uvicorn 进程活着但事件循环
+  卡死 / 依赖失效时容器仍显示 running，`docker compose ps` 看不出异常。本次
+  补齐运行期持续探活：
+  - **compose + Dockerfile 双份 healthcheck**：容器内 `curl -fsS
+    http://127.0.0.1:8000/api/health` 探针（镜像内置 curl），interval 30s /
+    timeout 5s / retries 3 / start_period 60s，Dockerfile 与 docker-compose.yml
+    参数一致（镜像级兜底，不经 compose 也能感知）；
+  - **/api/health 依赖探测（可选增强落地）**：新增 `backend/botler/health.py`，
+    探测 MinIO 连通（仅 `minio.enabled: true` 时，GET /minio/health/live 免凭据
+    live 探针，短超时 2s 保证 healthcheck timeout=5s 内返回）与数据目录磁盘空间
+    （低于 512 MiB 视为依赖失效）；关键依赖失败 → 返回 503 + `ok:false` →
+    healthcheck 失败 → 容器标记 unhealthy；GitLab 连通性有意不纳入（网络抖动
+    不应导致容器被反复标记 unhealthy）；
+  - **verify-docker.sh 覆盖**：`--full` 冒烟新增「compose ps 显示 botler
+    healthy」校验（容器内探针生效，不只宿主机 curl），并模拟事件循环卡死
+    （SIGSTOP 容器主进程）→ 断言容器变 unhealthy → SIGCONT 恢复 → 重新 healthy，
+    覆盖验收标准「模拟事件循环卡死时容器变 unhealthy」；
+  - **测试**：新增 `test_deploy_healthcheck.py`（静态校验 compose/Dockerfile/
+    verify-docker.sh/README 防回退，10 例）+ `test_health_deps.py`（MinIO live
+    探针 ok/fail/超时、磁盘 ok/不足/目录缺失、minio 未启用 skipped、payload
+    deps 字段与 503 语义，15 例），后端 pytest 全量通过。
+
 - **备份/恢复纳入 MinIO 对象存储图片数据（issue #205）**：此前 `backend/botler/backup.py`
   备份包只含 manifest + config.yaml + botler.db，MinIO 图片桶（`data/minio/data`，
   识图上传的图片对象）不在备份范围，恢复/迁移后识图历史图片引用全部失效。本次把

@@ -368,10 +368,17 @@ docker compose up -d --build
 
 # 3. 验证
 docker compose ps                          # 状态 healthy（botler + minio）
-curl http://localhost:8000/api/health      # {"ok":true,"version":"1.3.34","build":{"buildTime":"...","commit":"..."},...}（版本号与前端 version.json 同源，issue #233）
+curl http://localhost:8000/api/health      # {"ok":true,"version":"1.3.34","build":{"buildTime":"...","commit":"..."},"deps":{...},...}（版本号与前端 version.json 同源 issue #233；依赖探测 MinIO 连通/磁盘空间 issue #207，关键依赖失败返回 503）
 curl http://localhost:9000/minio/health/live   # MinIO 健康检查（issue #160）
-./deploy/verify-docker.sh --full           # 冒烟检查（临时数据目录，不碰真实数据，含 MinIO）
+./deploy/verify-docker.sh --full           # 冒烟检查（临时数据目录，不碰真实数据，含 MinIO 与 healthcheck 假死模拟，issue #207）
 ```
+
+**healthcheck（issue #207）**：botler 容器内置 `curl -fsS http://127.0.0.1:8000/api/health`
+探针（Dockerfile 与 compose 双份定义，参数一致：interval 30s / timeout 5s /
+retries 3 / start_period 60s），事件循环卡死或 /api/health 依赖失效（MinIO
+不可达、数据目录磁盘空间低于 512 MiB）时容器被标记 `unhealthy`，
+`docker compose ps` 可感知；`verify-docker.sh --full` 会校验 healthy 状态并
+模拟事件循环卡死（SIGSTOP 主进程）→ 容器变 unhealthy → 恢复 → 重新 healthy。
 
 数据持久化（全部卷挂载，容器重建不丢失）：`data/backend/config.yaml`（Web UI 设置页会写回）、
 `data/backend/.env`（只读）、`data/backend/botler.db`、`data/workspace/`、`data/logs/`、
@@ -603,7 +610,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 ## API 一览
 
 ```
-GET    /api/health                    健康检查（含平台版本号 version 与构建信息 build，与前端 version.json 同源，issue #233）
+GET    /api/health                    健康检查（含平台版本号 version / 构建信息 build / 依赖探测 deps——MinIO 连通（仅启用时）与磁盘空间；关键依赖失败返回 503，issue #207；版本与前端 version.json 同源 issue #233）
 GET    /api/repos                     仓库列表
 POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook + 在目标 GitLab 项目补齐标记库缺失的默认标签（issue #157）；priority 1~999 缺省 100，Web UI 添加仓库表单可填写调度优先级，issue #161）
 GET    /api/repos/browse              浏览服务器目录（无 path 时初始定位到 browse.default_path，默认服务器用户主目录 ~）

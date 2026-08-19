@@ -12,6 +12,9 @@
 #   - 校验幂等（重复 up 无报错）→ down 清理
 #   - MinIO（issue #160）随 compose 一并启动：19000/19001 临时端口校验
 #     /minio/health/live 与 /data 数据目录
+#   - healthcheck 状态（issue #207）：compose ps 显示 botler healthy（容器
+#     内 curl 探针生效），并模拟事件循环卡死（SIGSTOP 主进程）→ 容器变
+#     unhealthy → 恢复（SIGCONT）→ 重新 healthy，验证假死可感知
 # ================================================================
 set -euo pipefail
 
@@ -83,6 +86,23 @@ if [[ "${1:-}" == "--full" ]]; then
   }
   ok "健康检查通过（/api/health 200）"
 
+  echo "----- 校验 compose healthcheck 状态（botler healthy，issue #207）-----"
+  # 宿主机 curl 通过 ≠ 容器内 healthcheck 探针生效：等待 docker compose ps
+  # 显示 botler 为 healthy（容器内 curl /api/health 由 docker 守护进程驱动）
+  COMPOSE_HEALTHY=0
+  for i in $(seq 1 45); do
+    if docker compose -p botler-verify ps --format '{{.Name}}|{{.Status}}' 2>/dev/null \
+      | grep -q '^botler|.*healthy'; then
+      COMPOSE_HEALTHY=1; break
+    fi
+    sleep 2
+  done
+  [ "$COMPOSE_HEALTHY" = 1 ] || {
+    echo "--- 容器状态 ---"; docker compose -p botler-verify ps
+    die "botler 容器未显示 healthy（compose healthcheck 未生效）"
+  }
+  ok "compose ps 显示 botler healthy（容器内 healthcheck 探针生效）"
+
   echo "----- 校验 MinIO 服务（issue #160）-----"
   docker compose -p botler-verify ps | grep -q "minio" || die "minio 容器未运行"
   ok "minio 容器已启动"
@@ -120,6 +140,41 @@ if [[ "${1:-}" == "--full" ]]; then
     /opt/venv/bin/python -c "from deepseek_harness import DeepSeekHarness" \
     || die "deepseek-harness SDK 未内置（dsh 引擎不可用）"
   ok "deepseek-harness SDK 已内置（可导入 DeepSeekHarness）"
+
+  echo "----- 模拟事件循环卡死（issue #207）：SIGSTOP 主进程 → unhealthy → 恢复 -----"
+  # entrypoint 最终 exec uvicorn → 容器 PID 1 即应用进程；SIGSTOP 冻结事件
+  # 循环（进程活着但完全不响应），healthcheck curl 超时 → 连续 3 次失败后
+  # docker 标记 unhealthy——验证「假死无感知」被修复（compose ps 可感知）
+  docker compose -p botler-verify exec -T botler kill -STOP 1 || die "SIGSTOP 主进程失败"
+  HANG_UNHEALTHY=0
+  for i in $(seq 1 60); do
+    if docker compose -p botler-verify ps --format '{{.Name}}|{{.Status}}' 2>/dev/null \
+      | grep -q '^botler|.*unhealthy'; then
+      HANG_UNHEALTHY=1; break
+    fi
+    sleep 3
+  done
+  [ "$HANG_UNHEALTHY" = 1 ] || {
+    echo "--- 容器状态 ---"; docker compose -p botler-verify ps
+    die "事件循环卡死未标记 unhealthy（healthcheck 未感知假死）"
+  }
+  ok "模拟事件循环卡死 → 容器变为 unhealthy（假死可感知）"
+
+  # 恢复运行：SIGCONT 继续，healthcheck 下一次探测成功 → 重新 healthy
+  docker compose -p botler-verify exec -T botler kill -CONT 1 || die "SIGCONT 恢复失败"
+  RESUME_HEALTHY=0
+  for i in $(seq 1 30); do
+    if docker compose -p botler-verify ps --format '{{.Name}}|{{.Status}}' 2>/dev/null \
+      | grep -q '^botler|.*healthy'; then
+      RESUME_HEALTHY=1; break
+    fi
+    sleep 3
+  done
+  [ "$RESUME_HEALTHY" = 1 ] || {
+    echo "--- 容器状态 ---"; docker compose -p botler-verify ps
+    die "恢复运行后未重新 healthy"
+  }
+  ok "恢复运行（SIGCONT）→ 容器重新 healthy"
 
   echo "----- 幂等性：重复 up 无报错 -----"
   BOTLER_DATA_DIR="$TMP" BOTLER_HTTP_PORT=18000 \

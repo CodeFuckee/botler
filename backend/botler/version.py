@@ -65,18 +65,24 @@ def build_health_payload(
     version_info: dict[str, str] | None,
     scheduler_stats: Any = None,
     task_stats: Any = None,
+    deps: dict[str, Any] | None = None,
+    ok: bool = True,
 ) -> dict[str, Any]:
     """组装 /api/health 响应：ok + 版本号（无版本信息时 0.0.0）+ 构建
-    信息 build（buildTime/commit 可选）+ 调度/任务统计（可缺省）。
+    信息 build（buildTime/commit 可选）+ 调度/任务统计（可缺省）+ 依赖
+    探测 deps（issue #207：MinIO 连通 / 磁盘空间，关键依赖失败时调用方
+    置 ok=false 并返回 503）。
 
     拆成纯函数便于单测：不依赖 FastAPI app / 真实 ctx。
     """
     payload: dict[str, Any] = {
-        "ok": True,
+        "ok": ok,
         "version": version_info["version"] if version_info else "0.0.0",
     }
     if version_info:
         payload["build"] = version_info
+    if deps is not None:
+        payload["deps"] = deps
     if scheduler_stats is not None:
         payload["scheduler"] = scheduler_stats
     if task_stats is not None:
