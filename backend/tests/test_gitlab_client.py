@@ -7,6 +7,7 @@ import pytest
 
 from botler.gitlab_client import (
     GitLabClient, GitLabError, is_transient_error,
+    RETRY_MAX_ATTEMPTS, RETRY_BASE_DELAY, RETRY_MAX_DELAY,
 )
 
 
@@ -754,13 +755,13 @@ class TestTransientRequestRetry:
         assert len(calls) == 3, "502 应退避重试到成功"
 
     def test_get_transient_exhausted_raises_502(self, monkeypatch):
-        """持续 502 → 重试耗尽后仍抛 GitLabError(502)。"""
+        """持续 502 → 重试耗尽后仍抛 GitLabError(502)（默认 4 次尝试，issue #196）。"""
         client = make_client()
-        calls = self._install(client, [self._resp(502, "Bad Gateway")] * 3, monkeypatch)
+        calls = self._install(client, [self._resp(502, "Bad Gateway")] * 4, monkeypatch)
         with pytest.raises(GitLabError) as ei:
             client.get_issue(123, 280)
         assert ei.value.status_code == 502
-        assert len(calls) == 3
+        assert len(calls) == 4
 
     def test_get_connect_timeout_retried(self, monkeypatch):
         """传输层超时 → 重试；第三次成功。"""
@@ -799,3 +800,187 @@ class TestTransientRequestRetry:
         items = client.list_open_issues(123)
         assert [i["iid"] for i in items] == [1]
         assert len(calls) == 2, "502 重试后成功，一次分页请求完成"
+
+
+class TestWriteSafeRetry:
+    """写操作（POST/PUT）仅在「确认未生效」时重试（issue #196）。
+
+    「确认未生效」= 服务端必然没有执行写操作：连接未建立/请求未送达
+    （ConnectError/ConnectTimeout/PoolTimeout——TCP 层未建立或未发出任何
+    字节）或服务端明确拒绝执行（429 限流，发生在执行之前）；此时重试
+    不会产生重复提交。读超时/写超时/5xx 等「可能已生效但响应丢失/失败」
+    绝不重试（issue #280 语义保持）。
+    """
+
+    @staticmethod
+    def _resp(status_code: int, text: str = "", json_data=None):
+        """构造最小响应桩（含 status_code/text/content/json()）。"""
+        resp = SimpleNamespace(status_code=status_code, text=text,
+                               content=b"x", _json=json_data)
+        resp.json = lambda: resp._json
+        return resp
+
+    @staticmethod
+    def _install(client, responses, monkeypatch):
+        """替换 _http：request() 依次弹出 responses（异常直接抛），返回调用记录。"""
+        calls: list[tuple] = []
+
+        class FakeHttp:
+            def request(self, method, path, **kwargs):
+                calls.append((method, path))
+                item = responses.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
+        client._http = FakeHttp()
+        monkeypatch.setattr("botler.gitlab_client.time.sleep", lambda s: None)
+        return calls
+
+    def test_post_connect_error_retried_then_success(self, monkeypatch):
+        """评论 POST：首次连接拒绝（请求未送达）→ 退避重试成功。"""
+        client = make_client()
+        responses = [httpx.ConnectError("connection refused"),
+                     self._resp(200, json_data={"id": 1, "body": "hello"})]
+        calls = self._install(client, responses, monkeypatch)
+        note = client.add_comment(123, 196, "hello")
+        assert note["id"] == 1
+        assert len(calls) == 2, "连接拒绝确认未生效，应重试后成功"
+
+    def test_post_connect_timeout_retried(self, monkeypatch):
+        """评论 POST：连接超时（TCP 握手未建立）→ 重试成功。"""
+        client = make_client()
+        responses = [httpx.ConnectTimeout("connect timed out"),
+                     self._resp(200, json_data={"id": 1, "body": "hi"})]
+        calls = self._install(client, responses, monkeypatch)
+        assert client.add_comment(123, 196, "hi")["id"] == 1
+        assert len(calls) == 2
+
+    def test_post_pool_timeout_retried(self, monkeypatch):
+        """评论 POST：连接池超时（请求未发出）→ 重试成功。"""
+        client = make_client()
+        responses = [httpx.PoolTimeout("pool timeout"),
+                     self._resp(200, json_data={"id": 1, "body": "hi"})]
+        calls = self._install(client, responses, monkeypatch)
+        assert client.add_comment(123, 196, "hi")["id"] == 1
+        assert len(calls) == 2
+
+    def test_post_read_timeout_not_retried(self, monkeypatch):
+        """评论 POST：读超时（请求可能已生效、响应丢失）→ 不重试直接抛错。"""
+        client = make_client()
+        calls = self._install(client, [httpx.ReadTimeout("read timed out")], monkeypatch)
+        with pytest.raises(GitLabError):
+            client.add_comment(123, 196, "hi")
+        assert len(calls) == 1, "读超时可能已生效，写操作不重试避免重复评论"
+
+    def test_post_429_retried_then_success(self, monkeypatch):
+        """评论 POST：429 限流（服务端在执行前拒绝）→ 退避重试成功。"""
+        client = make_client()
+        responses = [self._resp(429, "Too Many Requests"),
+                     self._resp(200, json_data={"id": 1, "body": "hi"})]
+        calls = self._install(client, responses, monkeypatch)
+        assert client.add_comment(123, 196, "hi")["id"] == 1
+        assert len(calls) == 2, "429 确认未执行，写操作应重试"
+
+    def test_post_502_still_not_retried(self, monkeypatch):
+        """评论 POST：502（可能已生效）→ 不重试（issue #280 语义保持）。"""
+        client = make_client()
+        calls = self._install(client, [self._resp(502, "Bad Gateway")], monkeypatch)
+        with pytest.raises(GitLabError) as ei:
+            client.add_comment(123, 196, "hi")
+        assert ei.value.status_code == 502
+        assert len(calls) == 1
+
+    def test_create_issue_connect_error_retried_no_duplicate(self, monkeypatch):
+        """建 issue POST：首次连接失败重试成功——只创建一次（共 2 次请求）。"""
+        client = make_client()
+        responses = [httpx.ConnectError("connection refused"),
+                     self._resp(200, json_data={"iid": 196, "title": "t"})]
+        calls = self._install(client, responses, monkeypatch)
+        issue = client.create_issue(123, "标题")
+        assert issue["iid"] == 196
+        assert len(calls) == 2, "连接失败确认未生效，重试只创建一次"
+
+    def test_put_label_connect_error_retried(self, monkeypatch):
+        """标签 PUT：连接失败 → 重试成功。"""
+        client = make_client()
+        responses = [httpx.ConnectError("connection refused"),
+                     self._resp(200, json_data={"id": 1, "title": "t"})]
+        calls = self._install(client, responses, monkeypatch)
+        assert client.add_labels(123, 196, ["bot-done"])["id"] == 1
+        assert len(calls) == 2
+
+    def test_write_connect_error_exhausted_raises(self, monkeypatch):
+        """写操作持续连接失败 → 重试耗尽后仍抛 GitLabError（默认 4 次尝试）。"""
+        client = make_client()
+        calls = self._install(client, [httpx.ConnectError("refused")] * 4, monkeypatch)
+        with pytest.raises(GitLabError):
+            client.add_comment(123, 196, "hi")
+        assert len(calls) == 4
+
+
+class TestRetryConfigurable:
+    """重试次数与退避参数可配置（issue #196）。"""
+
+    @staticmethod
+    def _resp(status_code: int, text: str = "", json_data=None):
+        """构造最小响应桩（含 status_code/text/content/json()）。"""
+        resp = SimpleNamespace(status_code=status_code, text=text,
+                               content=b"x", _json=json_data)
+        resp.json = lambda: resp._json
+        return resp
+
+    @staticmethod
+    def _install(client, responses, monkeypatch):
+        """替换 _http：request() 依次弹出 responses（异常直接抛），返回调用记录。"""
+        calls: list[tuple] = []
+
+        class FakeHttp:
+            def request(self, method, path, **kwargs):
+                calls.append((method, path))
+                item = responses.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
+        client._http = FakeHttp()
+        monkeypatch.setattr("botler.gitlab_client.time.sleep", lambda s: None)
+        return calls
+
+    def test_retry_attempts_configurable(self, monkeypatch):
+        """retry_max_attempts=2 → 首次 502 后仅重试 1 次即成功。"""
+        client = GitLabClient("https://gitlab.example.com", "test-token",
+                              verify_ssl=False, retry_max_attempts=2)
+        responses = [self._resp(502, "Bad Gateway"),
+                     self._resp(200, json_data={"state": "opened"})]
+        calls = self._install(client, responses, monkeypatch)
+        assert client.get_issue(123, 196) == {"state": "opened"}
+        assert len(calls) == 2
+
+    def test_retry_exhausted_respects_config(self, monkeypatch):
+        """retry_max_attempts=2 → 两次 502 后即抛错，不做多余尝试。"""
+        client = GitLabClient("https://gitlab.example.com", "test-token",
+                              verify_ssl=False, retry_max_attempts=2)
+        calls = self._install(client, [self._resp(502, "Bad Gateway")] * 2, monkeypatch)
+        with pytest.raises(GitLabError) as ei:
+            client.get_issue(123, 196)
+        assert ei.value.status_code == 502
+        assert len(calls) == 2
+
+    def test_retry_delay_uses_configured_params(self, monkeypatch):
+        """退避基数/封顶取自构造参数（默认序列 0.5s/1s/2s，封顶 2s）。"""
+        monkeypatch.setattr("botler.gitlab_client.random.uniform", lambda a, b: 0.0)
+        client = GitLabClient("https://gitlab.example.com", "test-token",
+                              verify_ssl=False,
+                              retry_base_delay=0.5, retry_max_delay=2.0)
+        assert client._retry_delay(0) == 0.5
+        assert client._retry_delay(1) == 1.0
+        assert client._retry_delay(2) == 2.0
+        assert client._retry_delay(3) == 2.0, "超过封顶不再增长"
+
+    def test_defaults_match_module_constants(self):
+        """默认构造参数与模块常量一致（未传参时行为与既有调用完全兼容）。"""
+        client = make_client()
+        assert client.retry_max_attempts == RETRY_MAX_ATTEMPTS
+        assert client.retry_base_delay == RETRY_BASE_DELAY
+        assert client.retry_max_delay == RETRY_MAX_DELAY

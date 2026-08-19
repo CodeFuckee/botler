@@ -72,18 +72,32 @@ class GitLabError(Exception):
 # 瞬时故障状态码（issue #280）：网关/WAF 短暂不可用（502/503/504）、服务端
 # 过载（500）、限流（429）时，GET 读取可安全重试；其余 4xx 为永久性错误。
 TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
-# GET 读取重试次数与指数退避上限（含首次最多 RETRY_MAX_ATTEMPTS 次）。
+# 统一「超时 → 重试 → 退避」机制默认参数（issue #196）：重试次数与退避
+# 序列可配置（GitLabClient 构造参数覆盖，见 __init__），默认值为 3 次重试
+# （含首次最多 RETRY_MAX_ATTEMPTS 次请求）、指数退避 0.5s/1s/2s + jitter。
 # 08-17 生产事故（issue #280）：GitLab 短暂不可用返回 502，44 个排队任务
 # 启动阶段 get_issue 一次 502 即全部判失败，且失败评论同样发不出。这里对
-# 幂等读取做退避重试，非 GET（评论/标签等写操作）绝不重试避免重复提交。
-RETRY_MAX_ATTEMPTS = 3
-RETRY_BASE_DELAY = 1.0
-RETRY_MAX_DELAY = 4.0
+# 幂等读取做退避重试；写操作（评论/标签等）仅在本文件定义的「确认未生效」
+# 场景（WRITE_SAFE_TRANSPORT_ERRORS / 429）重试，避免重复提交。
+RETRY_MAX_ATTEMPTS = 4
+RETRY_BASE_DELAY = 0.5
+RETRY_MAX_DELAY = 2.0
+
+# 写操作可安全重试的传输层故障（issue #196）：请求确认未送达服务器——TCP
+# 连接未建立（DNS 解析失败/连接拒绝/不可达 → ConnectError、握手超时 →
+# ConnectTimeout、连接池超时 → PoolTimeout）或请求未发出（LocalProtocolError），
+# 服务端必然未执行写操作，重试不会产生重复。读超时/写超时/响应读取异常等
+# 属于「可能已生效但响应丢失」，写操作绝不重试（避免重复建 issue/评论）。
+WRITE_SAFE_TRANSPORT_ERRORS = (
+    httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout,
+    httpx.LocalProtocolError,
+)
 
 
-def _retry_delay(attempt: int) -> float:
-    """指数退避 + 小抖动（attempt 从 0 开始：1s、2s、4s…封顶）。"""
-    return min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY) + random.uniform(0, 0.3)
+def _retry_delay(attempt: int, base_delay: float = RETRY_BASE_DELAY,
+                 max_delay: float = RETRY_MAX_DELAY) -> float:
+    """指数退避 + 小抖动（attempt 从 0 开始：0.5s、1s、2s…封顶，可配置）。"""
+    return min(base_delay * (2 ** attempt), max_delay) + random.uniform(0, 0.3)
 
 
 def is_transient_error(e: GitLabError) -> bool:
@@ -100,11 +114,19 @@ def is_transient_error(e: GitLabError) -> bool:
 
 class GitLabClient:
     def __init__(self, url: str, token: str, verify_ssl: bool = True,
-                 webhook_base_url: str | None = None):
+                 webhook_base_url: str | None = None,
+                 retry_max_attempts: int = RETRY_MAX_ATTEMPTS,
+                 retry_base_delay: float = RETRY_BASE_DELAY,
+                 retry_max_delay: float = RETRY_MAX_DELAY):
         self.url = url.rstrip("/")
         self.token = token
         self.webhook_base_url = (webhook_base_url or self.url).rstrip("/")
         self.verify_ssl = verify_ssl
+        # 重试参数可配置（issue #196）：统一「超时 → 重试 → 退避」机制，
+        # 重试次数与退避基数/封顶可由调用方按场景调整，默认值见模块常量。
+        self.retry_max_attempts = retry_max_attempts
+        self.retry_base_delay = retry_base_delay
+        self.retry_max_delay = retry_max_delay
         self._bot_id: int | None = None
         self._http = httpx.Client(
             base_url=f"{self.url}/api/v4",
@@ -115,27 +137,41 @@ class GitLabClient:
 
     # ---- 基础请求 ----
 
-    def _http_request_with_retry(self, method: str, path: str, **kwargs) -> httpx.Response:
-        """执行一次 HTTP 请求；GET 读取遇瞬时故障退避重试（issue #280）。
+    def _retry_delay(self, attempt: int) -> float:
+        """指数退避 + 小抖动；基数与封顶取自构造参数（issue #196 可配置）。"""
+        return _retry_delay(attempt, self.retry_base_delay, self.retry_max_delay)
 
-        瞬时故障 = 传输层异常（超时/连接拒绝/DNS）或网关/服务端短暂不可用
-        （429/500/502/503/504）。GET 幂等可安全重试；非 GET（评论/标签等
-        写操作）不重试，避免网络抖动导致重复提交。
+    def _http_request_with_retry(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """执行一次 HTTP 请求；遇可安全重试的失败退避重试（issue #280/#196）。
+
+        瞬时故障分类：
+        - GET 读取幂等：传输层异常（超时/连接拒绝/DNS）与网关/服务端短暂
+          不可用（429/500/502/503/504）均可安全重试——重试不改变服务端状态；
+        - 非 GET 写操作（评论/建 issue/标签等）：仅在「确认未生效」时重试——
+          请求确认未送达（WRITE_SAFE_TRANSPORT_ERRORS：连接未建立/未发出
+          字节）或服务端明确拒绝执行（429 限流，发生在执行之前）；读超时/
+          5xx 等「可能已生效」的失败绝不重试，避免网络抖动导致重复提交
+          （重复建 issue/评论）。
+        重试次数与退避序列取自构造参数（默认 3 次重试、0.5s/1s/2s + jitter）。
         """
-        attempts = RETRY_MAX_ATTEMPTS if method == "GET" else 1
+        attempts = self.retry_max_attempts
         for attempt in range(attempts):
             try:
                 resp = self._http.request(method, path, **kwargs)
-            except httpx.HTTPError:
+            except httpx.HTTPError as e:
                 if attempt >= attempts - 1:
                     raise
-                delay = _retry_delay(attempt)
-                logger.warning("GitLab %s %s 传输层瞬时故障，%.1fs 后重试（第 %d/%d 次）",
-                               method, path, delay, attempt + 1, attempts)
+                if method != "GET" and not isinstance(e, WRITE_SAFE_TRANSPORT_ERRORS):
+                    raise
+                delay = self._retry_delay(attempt)
+                logger.warning("GitLab %s %s 传输层瞬时故障（%s），%.1fs 后重试（第 %d/%d 次）",
+                               method, path, type(e).__name__, delay, attempt + 1, attempts)
                 time.sleep(delay)
                 continue
-            if resp.status_code in TRANSIENT_STATUS_CODES and attempt < attempts - 1:
-                delay = _retry_delay(attempt)
+            retryable = (resp.status_code in TRANSIENT_STATUS_CODES) if method == "GET" \
+                else (resp.status_code == 429)
+            if retryable and attempt < attempts - 1:
+                delay = self._retry_delay(attempt)
                 logger.warning("GitLab %s %s 瞬时故障（HTTP %s），%.1fs 后重试（第 %d/%d 次）",
                                method, path, resp.status_code, delay, attempt + 1, attempts)
                 time.sleep(delay)

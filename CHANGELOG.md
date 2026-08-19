@@ -3,6 +3,36 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定。
 
 ## [Unreleased]
+### Added
+
+- **GitLab API 客户端统一「超时 → 重试 → 退避」机制——重试参数可配置 + 写操作安全重试（issue #196）**：
+  此前 `gitlab_client.py` 的 `_request` 直接 httpx 请求，失败（超时/5xx/429）即抛
+  `GitLabError`，调用方各自写 try/except + fallback（webhook、对账、执行器、概览
+  聚合），无统一的重试/退避机制——内网/ZeroTier 网络抖动（GitLab 偶发 502/超时）
+  会导致 webhook 拒绝入队、对账漏扫、概览显示失败，而这些大多可自动重试恢复。
+  issue #280 已为幂等 GET 读取引入瞬时故障（429/5xx/传输层异常）退避重试，本次
+  在其基础上补齐 issue #196 要求的两项能力：
+  - **重试参数可配置**：`GitLabClient` 构造参数新增 `retry_max_attempts` /
+    `retry_base_delay` / `retry_max_delay`（默认 4 次请求 = 3 次重试、指数退避
+    0.5s/1s/2s + 0~0.3s 抖动），调用方可按场景覆盖；不传参行为与默认常量一致，
+    既有调用完全兼容；
+  - **写操作「确认未生效」才重试**：非 GET（评论 POST / 建 issue POST / 标签 PUT
+    等）仅在请求确认未送达服务器（`WRITE_SAFE_TRANSPORT_ERRORS`：连接拒绝/DNS
+    解析失败 → ConnectError、连接超时 → ConnectTimeout、连接池超时 →
+    PoolTimeout、请求未发出 → LocalProtocolError——TCP 层未建立或未发出任何
+    字节，服务端必然未执行）或服务端明确拒绝执行（429 限流，发生在执行之前）
+    时退避重试，重试不会产生重复提交；读超时/写超时/5xx 等「可能已生效但响应
+    丢失/失败」绝不重试（issue #280 语义保持），避免网络抖动导致重复建 issue /
+    重复评论；
+  - **`_call_with_fallback`（全局 token 失效切 remote token）语义保持不变**：
+    对账/webhook/执行器三处 token 兜底逻辑未触碰，只增强底层请求层的重试；
+  - **测试**：`backend/tests/test_gitlab_client.py` 新增 `TestWriteSafeRetry`
+    9 例（连接拒绝/连接超时/连接池超时重试成功、429 重试成功、读超时/502 不
+    重试、建 issue 连接失败重试只创建一次、写操作重试耗尽抛错）与
+    `TestRetryConfigurable` 4 例（重试次数可配置/耗尽边界/退避序列取自构造参数/
+    默认值与常量一致），实现前全部可复现失败；GET 重试耗尽用例同步适配默认
+    4 次尝试；gitlab_client 全量 81 例通过，后端全量测试 + 覆盖率门禁（≥70%）
+    通过，无 regression。
 
 ## [1.4.3] - 2026-08-19
 ### Added
