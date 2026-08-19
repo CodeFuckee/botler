@@ -434,6 +434,23 @@
 
 ### Fixed
 
+- **概览页 issue 详情右边栏头部操作区真实浏览器回归测试（issue #332）**：
+  「关闭 issue / 查看执行的详情 / 在 GitLab 中打开 / 关闭右边栏（×）」四个
+  操作按钮固定在右边栏顶部、不随内容滚动——issue #331 已通过 styles.css
+  的 `.issue-drawer .modal-header` sticky 规则实现（与流水线详情右边栏
+  同规则），本 issue 补充**真实浏览器级**回归测试（此前
+  `overview-drawer-actions-sticky.test.mjs` 仅做 styles.css 源码级断言，
+  源码含 `position: sticky` 即通过，无法发现「源码有规则、真实浏览器不
+  生效」的回归，如滚动容器/祖先 overflow/布局变更导致 sticky 失效）：
+  - **测试**：新增 `frontend/e2e/tests/issue-drawer-sticky.spec.js`（1 例）
+    ——Playwright 真实 Chromium 打开概览页 issue 详情右边栏，断言四个按钮
+    全部渲染于头部操作区 `.issue-drawer-actions`（在 `.modal-header` 内）、
+    头部 computed style 为 `position: sticky`、抽屉内容可滚动（scrollHeight
+    > clientHeight）、滚动到底后头部 top 坐标保持不动；桌面端（1280×800）
+    实测通过，移动端底部 sticky 操作栏（issue #270）行为不受影响；
+  - **验证**：新 E2E 用例通过；前端全量单元测试（1348 例）+ 后端全量
+    pytest（2555 例）+ 全量 E2E 无 regression。
+
 - **概览页 issue 右边栏详情页移动端（≤860px）无关闭右边栏按钮（issue #330）**：
   移动端响应式（issue #270）把头部操作区 `.issue-drawer-actions` 整体
   `display: none` 下沉到抽屉底部操作栏，但底部操作栏只有「关闭 issue /
