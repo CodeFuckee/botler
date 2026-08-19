@@ -650,6 +650,41 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     }
   }
 
+  // 抽屉操作按钮（issue #270）：同一组按钮在桌面端置于头部右侧
+  // （.issue-drawer-actions）、移动端（≤860px）下沉到抽屉底部操作栏
+  // （.drawer-bottom-actions，sticky 常驻 thumb 可及）——两个容器引用
+  // 同一段 JSX，仅渲染一份按钮逻辑（测试按按钮语义断言时两处同时命中）
+  const drawerActions = (
+    <>
+      {canClose && (
+        <button className="btn btn-danger" onClick={handleCloseIssue}
+                disabled={closing} title="关闭 GitLab 中的 issue">
+          {closing ? '关闭中…' : '关闭 issue'}
+        </button>
+      )}
+      {/* issue #117：失败任务（bot-failed 且无 bot-done）显示重试按钮；
+          重试成功后本地标记 retried 隐藏；任务正在运行（running）时
+          不显示（重试中该 issue 已进入「运行中」组） */}
+      {isFailedTask(i) && !running && !retried && (
+        <button className="btn btn-primary" onClick={handleRetry}
+                disabled={retrying}
+                title="重新执行该 issue 的任务">
+          {retrying ? '重试中…' : '重试'}
+        </button>
+      )}
+      {/* issue #167：查看执行的详情——点击弹出第二层右边栏，展示
+           该 issue 的任务执行详情（任务记录列表 + 事件流/聊天/
+           日志）；无任务记录时第二层显示空态引导 */}
+      {canViewDetail && (
+        <button className="btn" onClick={() => setDetailOpen(true)}
+                title="查看该 issue 任务的执行详情"
+                disabled={detailOpen}>查看执行的详情</button>
+      )}
+      <a className="btn" href={i.web_url} target="_blank" rel="noreferrer"
+         title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
+    </>
+  )
+
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <div className="drawer issue-drawer" onClick={(e) => e.stopPropagation()}>
@@ -658,32 +693,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             #{i.iid} {i.title || '—'}
           </strong>
           <span className="issue-drawer-actions">
-            {canClose && (
-              <button className="btn btn-danger" onClick={handleCloseIssue}
-                      disabled={closing} title="关闭 GitLab 中的 issue">
-                {closing ? '关闭中…' : '关闭 issue'}
-              </button>
-            )}
-            {/* issue #117：失败任务（bot-failed 且无 bot-done）显示重试按钮；
-                重试成功后本地标记 retried 隐藏；任务正在运行（running）时
-                不显示（重试中该 issue 已进入「运行中」组） */}
-            {isFailedTask(i) && !running && !retried && (
-              <button className="btn btn-primary" onClick={handleRetry}
-                      disabled={retrying}
-                      title="重新执行该 issue 的任务">
-                {retrying ? '重试中…' : '重试'}
-              </button>
-            )}
-            {/* issue #167：查看执行的详情——点击弹出第二层右边栏，展示
-                 该 issue 的任务执行详情（任务记录列表 + 事件流/聊天/
-                 日志）；无任务记录时第二层显示空态引导 */}
-            {canViewDetail && (
-              <button className="btn" onClick={() => setDetailOpen(true)}
-                      title="查看该 issue 任务的执行详情"
-                      disabled={detailOpen}>查看执行的详情</button>
-            )}
-            <a className="btn" href={i.web_url} target="_blank" rel="noreferrer"
-               title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
+            {drawerActions}
             <button className="btn modal-close" onClick={onClose} title="关闭"
                     aria-label="关闭右边栏"><Icon name="x" /></button>
           </span>
@@ -894,6 +904,12 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
             ))}
           </div>
         </div>
+      </div>
+      {/* 移动端底部操作栏（issue #270）：与头部同一组 drawerActions，
+          仅 ≤860px 视口显示（styles.css 控制），sticky 常驻抽屉底部，
+          thumb 可及——关闭 issue/重试/查看执行详情/在 GitLab 中打开 */}
+      <div className="drawer-bottom-actions">
+        {drawerActions}
       </div>
       {/* issue #167：任务执行详情第二层右边栏——叠加在本层抽屉之上，
           遮罩点击/×/Esc 关闭；project_id/iid 与 repoName 传给第二层

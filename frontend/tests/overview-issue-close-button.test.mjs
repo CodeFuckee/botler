@@ -120,7 +120,9 @@ function drawerText(root) {
 test('opened issue 显示「关闭 issue」按钮；closed 不显示', async () => {
   const { renderer, root } = await renderDrawer(OPEN_ISSUE)
   try {
-    assert.equal(findCloseButton(root).length, 1, 'opened 应显示关闭按钮')
+    // issue #270：移动端底部操作栏与头部渲染同一组按钮（react-test-renderer
+    // 不应用 CSS，两处都可见），故断言 ≥1 个而非精确 1 个
+    assert.ok(findCloseButton(root).length >= 1, 'opened 应显示关闭按钮')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
   }
@@ -179,7 +181,7 @@ test('点击按钮：confirm 取消则不调用接口', async () => {
       await new Promise((resolve) => setTimeout(resolve, 10))
     })
     assert.equal(postMock.mock.callCount(), 0, '取消确认不应调用接口')
-    assert.equal(findCloseButton(root).length, 1, '按钮应保留')
+    assert.ok(findCloseButton(root).length >= 1, '按钮应保留')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
@@ -219,7 +221,7 @@ test('关闭失败：显示错误信息、按钮保留可重试、回调不触�
     })
     assert.ok(drawerText(root).includes('GitLab API 错误: 500'),
               '应显示错误信息')
-    assert.equal(findCloseButton(root).length, 1, '失败后按钮应保留')
+    assert.ok(findCloseButton(root).length >= 1, '失败后按钮应保留')
     assert.equal(onIssueClosed.mock.callCount(), 0, '失败不应通知刷新')
   } finally {
     await TestRenderer.act(() => renderer.unmount())

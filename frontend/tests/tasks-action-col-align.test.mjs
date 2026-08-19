@@ -88,9 +88,12 @@ test('操作列"执行"按钮左外边距合计应为 0（与表头"操作"文�
 })
 
 test('失败原因列"详情"按钮与前置文字之间应保留 ≥6px 水平间距（不受操作列修复影响）', () => {
-  // "详情"按钮紧跟失败原因文字之后，.btn-mini 原设计 margin-left: 8px 即为该间距
-  const m = tasks.match(/<button className="([^"]+)" onClick=\{\(\) => setDetailTask\(t\)\}>\{tr\('tasks\.detail'\)\}<\/button>/)
-  assert.ok(m, '失败原因列应有"详情"按钮')
+  // "详情"按钮紧跟失败原因文字之后，.btn-mini 原设计 margin-left: 8px 即为该间距。
+  // issue #270：Tasks.jsx 窄视口卡片列表（.tasks-card-actions，flex gap 提供
+  // 间距）也含"详情"按钮且先于表格出现——本断言针对表格失败原因列，正则要求
+  // 按钮带 btn-gap-left 精确命中表格行内按钮（卡片按钮无 btn-gap-left）
+  const m = tasks.match(/<button className="([^"]*btn-gap-left[^"]*)" onClick=\{\(\) => setDetailTask\(t\)\}>\{tr\('tasks\.detail'\)\}<\/button>/)
+  assert.ok(m, '失败原因列应有"详情"按钮（表格行内，带 btn-gap-left）')
   const sum = marginLeftSum(m[1])
   assert.ok(
     sum >= 6,

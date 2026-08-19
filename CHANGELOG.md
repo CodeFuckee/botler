@@ -5,6 +5,48 @@
 ## [Unreleased]
 ### Added
 
+- **移动端响应式优化（手机浏览器使用体验，issue #270）**：平台主要面向桌面
+  浏览器，概览页/任务页在手机浏览器可用但布局/抽屉/表格在窄屏下体验不佳
+  （列挤压、按钮重叠、抽屉占满全屏无法操作），此前窄视口适配仅覆盖设置页
+  导航（issue #139）。本次以 ≤768px 为验收视口、复用 #139 的 860px 断点约定
+  做整体移动化适配：
+  - **概览页卡片网格单列**：≤860px 视口下 `.issues-list` / `.pipelines-list`
+    由 auto-fit 自适应多列降为单列（此前 768px 视口仍排 2 列卡片被压缩），
+    手机竖屏一卡一行完整展示仓库/流水线信息；
+  - **任务页改卡片式列表**：≤860px 视口下 Tasks.jsx 由 12 列表格切换为
+    `.tasks-card-list` 卡片列表（`isMobileViewport` 纯函数 + resize 监听，
+    与列隐藏同源），卡片含标题/状态徽章、仓库/Issue/来源/尝试/创建时间/
+    用时等 meta 网格、失败原因弱底信息块，操作区直接可见「执行/停止/重试/
+    详情」按钮——触屏友好、无横向滚动（表格场景不再需要横向滚动兜底）；
+    桌面端（>860px）仍渲染表格，样式不受影响；
+  - **抽屉全宽 + 底部操作栏**：≤860px 视口下 `.drawer` 全宽（100%，不再
+    92vw 留缝），issue 详情抽屉头部操作按钮（关闭 issue/重试/查看执行的
+    详情/在 GitLab 中打开）下沉为 `.drawer-bottom-actions` 底部 sticky
+    操作栏（内容滚动时 thumb 常驻可及），桌面端保持头部布局不变；任务执行
+    详情第二层抽屉（`.task-detail-drawer`）头部 × 不受影响；
+  - **字体与点击目标**：沿用 `@media (pointer: coarse)` 44px 触控目标约定，
+    卡片操作按钮复用 `.btn-mini` 体系；卡片标题/失败原因任意字符断行防
+    横向溢出；
+  - **设置页/详情页 kv 表格与表单收窄**（移动端实测溢出修复）：`.table.kv`
+    由 table-layout auto 改 fixed + 单元格断词——长值（路径/URL）不再把表格
+    撑到 512px 超出视口；kv 单元格内 `<select class="input">`（固有宽度=最长
+    选项）限宽 100%，选项文本截断但下拉可完整展开；`.form-row` 窄视口换行，
+    控件独占整行不溢出；
+  - **抽屉全宽 flex 收缩修复**（移动端实测）：`.drawer` 作为 `.drawer-overlay`
+    （flex）子项时 `width: 100%` 的百分比基准退化会收缩到内容宽度（375px 视口
+    实测 243px），窄视口显式 `flex-shrink: 0` 保证真正全宽；
+  - **新增测试**：`tests/tasks-responsive-card-list.test.mjs`（`isMobileViewport`
+    断点纯函数 + 375px 渲染卡片列表/无表格、失败任务重试按钮、运行中停止
+    按钮、1000px 仍表格 + CSS 规则断言）、`tests/responsive-mobile-layout.test.mjs`
+    （860px 断点内单列网格/抽屉全宽+禁止收缩/kv 表格 fixed/表单换行+控件限宽/
+    底部操作栏/头部按钮隐藏 + 桌面端不受影响防回归断言）；新增
+    `e2e/tests/responsive-mobile.spec.js` 移动视口（375×667）冒烟 E2E（概览
+    卡片单列/无横向滚动/抽屉全宽+底部操作栏、任务页卡片列表、设置页单栏
+    回落，等效 Chrome DevTools 移动模拟）；既有 `overview-issue-close-button` / `overview-issue-drawer` /
+    `overview-issue-drawer-retry` 三个测试因底部操作栏与头部渲染同一组按钮
+    （react-test-renderer 不应用 CSS）由精确计数改为 ≥1 语义化断言；全量
+    前端测试无 regression。
+
 - **发掘按钮无论是否找到用户需求 issue 都列出相似仓库（issue #301）**：
   「点击发掘按钮时，无论是否找到用户需求issue，都把相似仓库列出」——
   概览页「发掘」不再因相似仓库里翻不到用户需求 issue 而报错，响应始终
@@ -404,6 +446,14 @@
     file:/未知 scheme 拦截、正常协议与相对路径链接不受影响、`<img onerror>` /
     `<iframe>` / 事件属性按纯文本转义、`isSafeUrl` 白名单纯函数边界；修复前
     5 例失败（漏洞复现），修复后 28/28 通过，前端全量测试无 regression。
+
+
+- **修复任务用量统计测试的日期硬编码（issue #270 全量测试收尾）**：
+  `backend/tests/test_task_usage.py` 中 repo + engine + 时间段过滤用例
+  硬编码 `since="2026-08-18" / until="2026-08-18"`，而用例写入的
+  `created_at` 取 `datetime('now')`（UTC 当天）——日期越过当天后必然
+  0 命中导致测试失败；改为跟随系统当天（`date.today()` 与前一天区间），
+  任意日期运行均稳定通过。
 
 
 ## [1.3.63] - 2026-08-19

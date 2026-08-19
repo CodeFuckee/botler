@@ -15,6 +15,7 @@
 """
 
 import json
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -285,9 +286,13 @@ class TestDatabaseTaskUsage:
         db.save_task_usage(tid, engine="claude", model="m",
                            prompt_tokens=100, completion_tokens=50,
                            total_tokens=150)
-        # repo + engine + 时间段过滤
+        # repo + engine + 时间段过滤（issue #270 修复：区间日期跟随系统
+        # 当天——created_at 取 datetime('now') UTC 当天，原硬编码
+        # 2026-08-18 在日期越过当天后必然 0 命中导致测试失败）
+        today = date.today().isoformat()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
         st = db.usage_stats(repo_id=rid, engine="claude",
-                            since="2026-08-18", until="2026-08-18")
+                            since=yesterday, until=today)
         assert st["summary"]["task_count"] == 1
         # 不匹配引擎 → 空
         assert db.usage_stats(engine="hermes")["summary"]["task_count"] == 0

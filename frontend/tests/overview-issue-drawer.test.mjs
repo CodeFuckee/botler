@@ -161,10 +161,12 @@ test('点击 issue 列表项打开右边栏，标题不再是跳转链接', asyn
     const text = drawerText(root)
     assert.ok(text.includes('#64'), '抽屉应显示 issue 编号')
     assert.ok(text.includes('概览页面增加读取已启用的仓库issue'), '抽屉应显示 issue 标题')
-    // 抽屉右上角跳转按钮：href 为 web_url、新窗口打开
+    // 抽屉跳转按钮：href 为 web_url、新窗口打开。issue #270：移动端底部
+    // 操作栏与头部渲染同一组按钮（renderer 不应用 CSS 两处都可见），
+    // 故断言 ≥1 个、并校验首个实例的 target/rel
     const gitlabLinks = root.findAll(
       (n) => n.type === 'a' && n.props.href === FULL_ISSUE.web_url)
-    assert.equal(gitlabLinks.length, 1, '仅右上角跳转按钮应指向 GitLab')
+    assert.ok(gitlabLinks.length >= 1, '跳转按钮应指向 GitLab（头部/底部操作栏）')
     assert.equal(gitlabLinks[0].props.target, '_blank', '跳转按钮应新窗口打开')
     assert.equal(gitlabLinks[0].props.rel, 'noreferrer')
     // 列表项本身是按钮而非链接（点击不再直接跳转）

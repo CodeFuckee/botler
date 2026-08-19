@@ -30,6 +30,18 @@ export const USAGE_COL_WIDTH = 150
 // 12 列宽度总和（styles.css .table.tasks-table min-width 同值）
 export const TABLE_MIN_WIDTH = 1360
 
+// 移动端卡片列表断点（issue #270）：复用设置页窄视口回落（issue #139）
+// 的 860px 断点约定——视口 ≤860px 时任务表格整体切换为卡片式列表
+// （触屏友好、关键操作按钮直接可见、无横向滚动；表格场景不再需要
+// 横向滚动兜底）。与 styles.css 的 @media (max-width: 860px) 保持同步。
+export const MOBILE_BREAKPOINT_PX = 860
+
+// 是否窄视口（≤860px）：SSR/测试环境无 window 时调用方不触发，
+// 组件内默认桌面布局（表格）；异常输入（NaN/≤0/null）按桌面处理
+export function isMobileViewport(viewportWidth) {
+  return Number.isFinite(viewportWidth) && viewportWidth > 0 && viewportWidth <= MOBILE_BREAKPOINT_PX
+}
+
 // .content 与 .card 左右 padding 之和（styles.css 布局常量，issue #53）
 const CONTENT_CARD_PAD_X = 80
 
@@ -168,6 +180,8 @@ export default function Tasks() {
   const [reconciling, setReconciling] = useState(false) // 对账请求进行中
   const [refreshing, setRefreshing] = useState(false) // 手动刷新请求进行中（issue #59）
   const [drawerTask, setDrawerTask] = useState(null) // ⋯ 按钮打开的右侧抽屉任务（issue #70）
+  // 窄视口卡片式列表（issue #270）：≤860px 时表格切换为卡片列表（触屏友好）
+  const [isMobile, setIsMobile] = useState(false) // 默认桌面布局（SSR/无 window 环境）
   const [hiddenCols, setHiddenCols] = useState(() => new Set()) // 窄视口隐藏的列 key 集合（issue #70）
   // issue #235：任务列表可选展示 token 用量列（默认关闭，勾选后带
   // include_usage=1 重新拉取，后端批量返回避免逐任务 N+1 查询）
@@ -226,7 +240,12 @@ export default function Tasks() {
   // SSR 测试环境无 window 时保持默认全显示。
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
-    const update = () => setHiddenCols(hiddenColumnsForWidth(window.innerWidth))
+    const update = () => {
+      setHiddenCols(hiddenColumnsForWidth(window.innerWidth))
+      // 窄视口卡片列表（issue #270）：与列隐藏同源监听 resize，
+      // 跨过 860px 断点时在表格/卡片两种形态间切换
+      setIsMobile(isMobileViewport(window.innerWidth))
+    }
     update()
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
@@ -414,8 +433,95 @@ export default function Tasks() {
           </label>
         </div>
 
-        {/* 12 列表格最小宽度超容器，外包滚动容器防止窄视口下内容溢出卡片（issue #28） */}
-        <div className="table-wrap">
+        {isMobile ? (
+          <div className="tasks-card-list">
+            {data.tasks.length === 0 ? (
+              <div className="card">
+                <div className="empty-state">
+                  <span className="empty-icon" aria-hidden="true"><Icon name="folderOpen" /></span>
+                  <p className="muted">{tr('tasks.noTasks')}</p>
+                </div>
+              </div>
+            ) : data.tasks.map((t) => {
+              const meta = STATUS_META[t.status] || { label: t.status, cls: '' }
+              // 仅失败/中断的任务展示失败原因
+              const failedReason =
+                (t.status === 'failed' || t.status === 'interrupted') && t.error_message
+                  ? t.error_message
+                  : ''
+              // 详细失败原因（每次尝试 + trace）不直接展示，通过按钮弹窗查看
+              const hasDetail = Array.isArray(t.error_detail?.attempts) && t.error_detail.attempts.length > 0
+              return (
+                <div key={t.id} className="card tasks-card">
+                  <div className="tasks-card-head">
+                    <Link to={`/tasks/${t.id}`} className="tasks-card-title"
+                          title={t.issue_title || ''}>
+                      #{t.id} {t.issue_title || '—'}
+                    </Link>
+                    <span className={'badge ' + meta.cls}>{meta.label}</span>
+                  </div>
+                  <dl className="tasks-card-meta">
+                    <div className="tasks-card-meta-row"><dt>{tr('tasks.repo')}</dt><dd>{t.repo_name || '—'}</dd></div>
+                    <div className="tasks-card-meta-row"><dt>{tr('tasks.issue')}</dt><dd><Link to={`/tasks/${t.id}`}>#{t.issue_iid}</Link></dd></div>
+                    <div className="tasks-card-meta-row"><dt>{tr('tasks.source')}</dt><dd>{tr('tasks.source' + sourceLabelKey(t))}</dd></div>
+                    <div className="tasks-card-meta-row"><dt>{tr('tasks.attempt')}</dt><dd>
+                      {t.attempt_count}
+                      {t.resumed && (
+                        <span className="badge resume" title={tr('tasks.resumedTitle')}>{tr('tasks.resumed')}</span>
+                      )}
+                    </dd></div>
+                    {showUsage && (
+                      <div className="tasks-card-meta-row"><dt>{tr('tasks.usage')}</dt><dd>
+                        {t.usage ? <UsageSummary usage={t.usage} /> : <span className="muted">—</span>}
+                      </dd></div>
+                    )}
+                    <div className="tasks-card-meta-row"><dt>{tr('tasks.createdAt')}</dt><dd>{fmtTime(t.created_at)}</dd></div>
+                    <div className="tasks-card-meta-row"><dt>{tr('tasks.duration')}</dt><dd>{fmtDuration(t.created_at, t.finished_at) || <span className="muted">—</span>}</dd></div>
+                    {t.commit_url && (
+                      <div className="tasks-card-meta-row"><dt>{tr('tasks.commit')}</dt><dd>
+                        <a href={t.commit_url} target="_blank" rel="noreferrer"
+                           title={tr('tasks.viewCommit', { sha: t.commit_sha })}>{shortSha(t.commit_sha)}</a>
+                      </dd></div>
+                    )}
+                  </dl>
+                  {failedReason && (
+                    <p className="tasks-card-reason">
+                      <strong>{tr('tasks.reason')}：</strong>{failedReason}
+                    </p>
+                  )}
+                  <div className="tasks-card-actions">
+                    <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
+                          title={tr('tasks.runTitle')}>{tr('tasks.run')}</Link>
+                    {t.status === 'running' && (
+                      <button
+                        className="btn btn-mini btn-danger"
+                        onClick={() => stopTask(t)}
+                        disabled={stopId === t.id}
+                        title={tr('tasks.stopTitle')}
+                      >
+                        {stopId === t.id ? tr('tasks.stopping') : tr('tasks.stop')}
+                      </button>
+                    )}
+                    {(t.status === 'failed' || t.status === 'interrupted') && (
+                      <button
+                        className="btn btn-mini"
+                        onClick={() => retryTask(t)}
+                        disabled={retryId === t.id}
+                        title={tr('tasks.retryTitle')}
+                      >
+                        {retryId === t.id ? tr('tasks.retrying') : tr('tasks.retry')}
+                      </button>
+                    )}
+                    {hasDetail && (
+                      <button className="btn btn-mini" onClick={() => setDetailTask(t)}>{tr('tasks.detail')}</button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="table-wrap">
           {/* table-layout: fixed 固定布局，表格宽度恒等于容器宽度，宽视口不出现水平滚动条（issue #28 第二轮）；
               窄视口隐藏列后 min-width 缩减为剩余列宽总和（issue #70） */}
           <table className={'table tasks-table' + (showUsage ? ' tasks-table-usage' : '')}
@@ -534,6 +640,7 @@ export default function Tasks() {
           </tbody>
           </table>
         </div>
+        )}
         <p className="muted small">{tr('tasks.total', { n: data.total })}</p>
 
         {/* 翻页组件（issue #50）：多页时显示；上一页/页码/下一页 + 当前页信息 */}

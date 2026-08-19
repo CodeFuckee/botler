@@ -3924,3 +3924,151 @@ code {
   overflow-x: auto;
 }
 .badge-warn { background: var(--warn-weak); color: var(--warn); font-size: 11px; }
+
+/* ---- 任务页移动端卡片式列表（issue #270）----
+   窄视口（≤860px）下由 Tasks.jsx 渲染 .tasks-card-list 替代 12 列表格
+   （表格 min-width 1360px 无法在手机竖屏容纳，横向滚动体验差）：
+   卡片纵向堆叠、关键操作按钮直接可见、触屏友好、无横向滚动；
+   桌面端不渲染该列表（isMobile 为 false 时走既有表格分支）。 */
+.tasks-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.tasks-card {
+  margin-bottom: 0;
+}
+.tasks-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.tasks-card-title {
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  /* 深路径/长标题任意字符处断行，不产生横向溢出 */
+  overflow-wrap: anywhere;
+}
+.tasks-card-title:hover { color: var(--primary); }
+.tasks-card-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0;
+  font-size: 13px;
+}
+/* display: contents 让 dt/dd 直接成为网格项，行容器仅作语义分组 */
+.tasks-card-meta-row { display: contents; }
+.tasks-card-meta dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tasks-card-meta dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 失败原因：错误色弱底信息块，完整展示可读（不截断） */
+.tasks-card-reason {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--err-weak);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.tasks-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+/* 抽屉底部操作栏（issue #270）：默认隐藏（桌面端操作按钮在头部
+   .issue-drawer-actions 内）；窄视口下由下方媒体查询切换显示 */
+.drawer-bottom-actions {
+  display: none;
+}
+
+/* ---- 移动端响应式（issue #270）----
+   窄视口（≤860px）整体移动化适配，复用设置页窄视口回落
+   （issue #139）的 860px 断点约定；验收标准要求 ≤768px 三核心页
+   可完成主要操作，860px 断点更早回落保证全覆盖。
+   1) 概览页仓库卡片 / CI 流水线卡片网格降为单列（手机竖屏一卡一行）；
+   2) 抽屉全宽（不再 92vw 留缝），操作按钮下沉到底部 sticky 操作栏；
+   3) 任务页表格由 Tasks.jsx 在同一断点切换为卡片式列表（见上）。 */
+@media (max-width: 860px) {
+  /* 概览页卡片网格单列（此前 auto-fit minmax(280px,1fr) 在 768px
+     视口仍排 2 列，卡片被压缩） */
+  .issues-list,
+  .pipelines-list {
+    grid-template-columns: 1fr;
+  }
+
+  /* 抽屉全宽：紧贴视口左右边缘，操作空间最大化。
+     flex-shrink: 0（实测必需）：.drawer 是 .drawer-overlay（flex）的子项，
+     width:100% 的百分比基准在 flex 布局下会退化为内容宽度（实测 375px
+     视口抽屉被压到 243px），显式禁止收缩才真正全宽 */
+  .drawer {
+    width: 100%;
+    max-width: 100%;
+    flex-shrink: 0;
+  }
+  /* 仅 issue 详情抽屉（含底部操作栏）取消底部留白——操作栏自带
+     padding-bottom 避免双层；其余抽屉（任务执行详情/对话面板）保持
+     16px 底部留白，内容不贴底 */
+  .drawer.issue-drawer {
+    padding-bottom: 0;
+  }
+  /* kv 详情表格收窄适配：table-layout: auto 下表格被长值（路径/URL）撑到
+     512px 超出视口（设置页实测 375px 视口横向溢出 169px）；改 fixed +
+     单元格断词，表格恒等于容器宽度、长值在单元格内换行，窄屏无横向溢出 */
+  .table.kv {
+    table-layout: fixed;
+  }
+  .table.kv th,
+  .table.kv td {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  /* 表单行移动端换行（实测：<select class="input"> 固有宽度=最长选项，
+     单行放不下时把行撑破 120px）；换行后每个控件独占整行不溢出，
+     .input 再限 max-width 兜底（长选项的 select 不被压缩出容器） */
+  .form-row {
+    flex-wrap: wrap;
+  }
+  .form-row .input {
+    max-width: 100%;
+  }
+  /* kv 表格单元格内的表单控件限宽（实测：table-layout: fixed 后 td 收窄到
+     131px，单元格内 select 固有宽度 273px 撑破表格 120px）——控件压缩到
+     单元格宽度内，选项文本截断但下拉可完整展开 */
+  .table.kv .input,
+  .table.kv select,
+  .table.kv textarea {
+    max-width: 100%;
+  }
+  /* 头部操作按钮隐藏（同一组按钮下沉到底部操作栏）——
+     仅作用于概览页 issue 抽屉（.drawer.issue-drawer），任务执行
+     详情第二层抽屉（.task-detail-drawer）头部只有 × 关闭按钮不受影响 */
+  .drawer.issue-drawer .issue-drawer-actions {
+    display: none;
+  }
+  /* 底部操作栏：sticky 常驻抽屉底部（thumb 可及），内容滚动时
+     始终可见；内容不足一屏时由 margin-top:auto 推到底部对齐 */
+  .drawer-bottom-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: auto;
+    padding: var(--space-3) 0 var(--space-4);
+    border-top: 1px solid var(--border);
+    background: var(--bg-card);
+    position: sticky;
+    bottom: 0;
+  }
+}

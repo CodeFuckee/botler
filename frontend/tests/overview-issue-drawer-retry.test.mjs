@@ -191,8 +191,13 @@ test('bot-failed issue 渲染重试按钮，bot-done/普通 issue/running 不渲
     const { renderer, root } = await renderDrawer(c.issue, { running: c.running })
     try {
       const btns = findRetryButtons(root)
-      assert.equal(btns.length, c.expect,
-                   `${c.name}：应渲染 ${c.expect} 个重试按钮`)
+      // issue #270：移动端底部操作栏与头部渲染同一组按钮（renderer 不应用
+      // CSS 两处都可见）——「不显示」仍断言精确 0，「显示」断言 ≥1
+      if (c.expect === 0) {
+        assert.equal(btns.length, 0, `${c.name}：不应渲染重试按钮`)
+      } else {
+        assert.ok(btns.length >= 1, `${c.name}：应渲染重试按钮`)
+      }
       if (c.expect > 0) {
         assert.notEqual(btns[0].props.disabled, true, '无重试请求时按钮应可用')
         assert.ok(drawerText(root).includes('重试'), '按钮文案应为「重试」')
@@ -258,7 +263,7 @@ test('重试失败显示错误信息，按钮保留可重试且不通知父组�
       await new Promise((resolve) => setTimeout(resolve, 10))
     })
     assert.ok(drawerText(root).includes('该 issue 已有任务在执行中'), '应显示错误信息')
-    assert.equal(findRetryButtons(root).length, 1, '失败后按钮应保留可重试')
+    assert.ok(findRetryButtons(root).length >= 1, '失败后按钮应保留可重试')
     assert.equal(onRetriedCalls, 0, '失败不应通知父组件')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
