@@ -1559,9 +1559,10 @@ class Database:
             return self.get_tool(tool_id) is not None
         sets = ", ".join(f"{k}=?" for k in fields)
         with self._conn(write=True) as conn:
+            # 字段名白名单由调用方显式构造（api/tools.py 固定键），无注入风险
             cur = conn.execute(
                 f"UPDATE tools SET {sets}, updated_at=datetime('now') "
-                "WHERE id=?",
+                "WHERE id=?",  # nosec B608
                 (*fields.values(), tool_id))
             return cur.rowcount > 0
 

@@ -324,7 +324,7 @@ DEFAULT_MARKET_TOOLS: list[dict] = [
                        "（MCP 官方 filesystem 参考服务器，默认根目录 /tmp 可在安装后编辑）",
         "kind": KIND_STDIO,
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
         "env": {},
         "url": "",
     },
@@ -375,7 +375,8 @@ def _download_json(url: str) -> dict | list:
         raise ValueError("下载地址必须是 http(s) URL")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "botler-tools/1.0"})
-        with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
+        # scheme 已由上方 _url_scheme 白名单限定为 http/https，B310 误报
+        with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:  # nosec B310
             data = resp.read(MAX_DOWNLOAD_BYTES + 1)
     except Exception as exc:
         raise ValueError(f"下载失败: {exc}") from None
