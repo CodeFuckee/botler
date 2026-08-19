@@ -107,6 +107,10 @@ class StubGitLab:
         self.avatar_calls: list[tuple[int, str, bytes, str]] = []
         self.avatar_error: GitLabError | None = None
         self.avatar_result: dict | None = None
+        # issue #320：项目头像拉取（GitLab → 本地）桩
+        self.avatar_download_calls: list[int] = []
+        self.avatar_download: tuple[bytes, str, str] | None = None
+        self.avatar_download_error: GitLabError | None = None
 
     def _request(self, method, path, params=None):
         self.calls.append(f"{method} {path}")
@@ -134,6 +138,13 @@ class StubGitLab:
         if self.avatar_error is not None:
             raise self.avatar_error
         return self.avatar_result
+
+    def get_project_avatar(self, project_id):
+        """issue #320：记录项目头像拉取调用，可注入 GitLab 故障/无图标。"""
+        self.avatar_download_calls.append(project_id)
+        if self.avatar_download_error is not None:
+            raise self.avatar_download_error
+        return self.avatar_download
 
     def get_user_id_by_username(self, username):
         return None
@@ -574,7 +585,163 @@ class TestSyncLogo:
         assert "读取 logo 文件失败" in r.json()["detail"]
 
 
-class TestSyncLogoCompression:
+class TestSyncLogoFromGitlab:
+    """把 GitLab 项目图标（头像）同步回仓库设置页（issue #320）。
+
+    与 TestSyncLogo（本地 logo → GitLab）方向相反：读取 GitLab 项目当前
+    图标，落盘为本地 logo 并写 repos 表，仓库设置页最左侧即展示 GitLab
+    图标。
+
+    覆盖：
+    - 正常路径：GitLab 侧已设置图标 → 字节落盘 <LOGO_DIR>/<repo_id>.<ext>
+      → repos 表写 logo_path / logo_updated_at / logo_mime → 返回 ok +
+      logo 元信息 + 来源 avatar_url；GET /api/repos/{id}/logo 能读到该图
+      标，仓库列表带 logo 字段；
+    - 覆盖已有本地 logo：本地已生成 logo 时拉取 GitLab 图标会覆盖同名
+      文件并更新 logo_updated_at（GitLab 图标优先级）；
+    - 边界：GitLab 侧未设置图标（avatar_url 为空 → None）400 / 仓库不
+      存在 404 / 软删除 400 / GitLab 调用失败 502；
+    - 与生成图标解耦：不配置 AI / 生图模型也能拉取（仅依赖 GitLab 头像）。
+    """
+
+    def _avatar_url(self, project_id=42, filename="1.png"):
+        return (f"https://gitlab.example.com/uploads/-/system/project/"
+                f"avatar/{project_id}/{filename}")
+
+    def test_success(self, logo_env):
+        """正常路径：GitLab 图标落盘并写 repos 表，读取接口返回图片。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_download = (
+            b"gitlab-avatar-png-bytes", "image/png", self._avatar_url())
+        repo_id = _add_repo(db, 42, "botler")
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo-from-gitlab")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["ok"] is True
+        assert data["logo_path"] == f"{repo_id}.png"
+        assert data["logo_mime"] == "image/png"
+        assert data["logo_updated_at"]
+        assert data["size"] == len(b"gitlab-avatar-png-bytes")
+        assert data["avatar_url"].endswith("42/1.png")
+        # 拉取的是 GitLab 项目 id（非平台仓库 id）
+        assert stub.avatar_download_calls == [42]
+        # 落盘文件内容正确
+        assert (logo_dir / f"{repo_id}.png").read_bytes() == b"gitlab-avatar-png-bytes"
+        # 读取接口返回拉取到的图标
+        r2 = tc.get(f"/api/repos/{repo_id}/logo")
+        assert r2.status_code == 200
+        assert r2.content == b"gitlab-avatar-png-bytes"
+        assert r2.headers["content-type"] == "image/png"
+        # 仓库列表带 logo 字段
+        r3 = tc.get("/api/repos")
+        row = next(x for x in r3.json()["repos"] if x["id"] == repo_id)
+        assert row["logo_path"] == f"{repo_id}.png"
+        assert row["logo_mime"] == "image/png"
+
+    def test_success_without_ai_or_image_model(self, logo_env):
+        """拉取不依赖 AI/生图模型配置（仅依赖 GitLab 头像）。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_download = (
+            b"gitlab-avatar-png-bytes", "image/png", self._avatar_url())
+        repo_id = _add_repo(db, 42, "botler")
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo-from-gitlab")
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] is True
+
+    def test_overwrites_existing_local_logo(self, logo_env):
+        """本地已生成 logo 时，拉取 GitLab 图标覆盖同名文件并更新时间。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_download = (
+            b"gitlab-avatar-new", "image/png", self._avatar_url())
+        repo_id = _add_repo(db, 42, "botler")
+        db.update_repo(repo_id, logo_path=f"{repo_id}.png",
+                       logo_updated_at="2026-08-18 10:00:00",
+                       logo_mime="image/png")
+        logo_dir.mkdir(parents=True, exist_ok=True)
+        (logo_dir / f"{repo_id}.png").write_bytes(b"old-local-logo")
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo-from-gitlab")
+        assert r.status_code == 200, r.text
+        # 同名文件被 GitLab 图标覆盖
+        assert (logo_dir / f"{repo_id}.png").read_bytes() == b"gitlab-avatar-new"
+        row = db.get_repo(repo_id)
+        assert row["logo_path"] == f"{repo_id}.png"
+        assert row["logo_mime"] == "image/png"
+        # logo_updated_at 更新（前端据此击穿缓存）
+        assert row["logo_updated_at"] != "2026-08-18 10:00:00"
+
+    def test_gitlab_avatar_missing(self, logo_env):
+        """GitLab 项目未设置图标（avatar_url 为空）：400 引导先上传。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_download = None
+        repo_id = _add_repo(db, 42, "botler")
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo-from-gitlab")
+        assert r.status_code == 400
+        assert "未设置图标" in r.json()["detail"]
+        # 未落盘任何 logo
+        assert db.get_repo(repo_id)["logo_path"] is None
+
+    def test_repo_not_found(self, logo_env):
+        tc, stub, db, logo_dir = logo_env
+        r = tc.post("/api/repos/999/sync-logo-from-gitlab")
+        assert r.status_code == 404
+        assert "不存在" in r.json()["detail"]
+
+    def test_repo_soft_deleted(self, logo_env):
+        tc, stub, db, logo_dir = logo_env
+        repo_id = _add_repo(db, 42, "botler")
+        db.soft_delete_repo(repo_id)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo-from-gitlab")
+        assert r.status_code == 400
+        assert "已删除" in r.json()["detail"]
+
+    def test_gitlab_error(self, logo_env):
+        """GitLab 查询/下载失败（如权限不足）：502 透传错误信息。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_download_error = GitLabError(
+            "GitLab API 错误 403: Forbidden", 403)
+        repo_id = _add_repo(db, 42, "botler")
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo-from-gitlab")
+        assert r.status_code == 502
+        assert "从 GitLab 同步图标失败" in r.json()["detail"]
+        assert "403" in r.json()["detail"]
+
+
+class TestAvatarMimeFromResponse:
+    """头像 MIME 推测辅助（issue #320）：具体 Content-Type 优先，泛型
+    octet-stream 按 Content-Disposition 文件名 / avatar_url 扩展名推测，
+    兜底 image/png。"""
+
+    def _resp(self, content_type="application/octet-stream",
+              disposition=None):
+        return httpx.Response(
+            200, content=b"x",
+            headers={k: v for k, v in {
+                "content-type": content_type,
+                "content-disposition": disposition,
+            }.items() if v is not None})
+
+    def test_specific_content_type_wins(self):
+        from botler.gitlab_client import _avatar_mime_from_response
+        resp = self._resp(content_type="image/jpeg; charset=utf-8")
+        assert _avatar_mime_from_response(resp, "https://x/1.png") == "image/jpeg"
+
+    def test_octet_stream_uses_disposition_filename(self):
+        from botler.gitlab_client import _avatar_mime_from_response
+        resp = self._resp(
+            disposition='attachment; filename="1.png"; filename*=UTF-8''1.png')
+        assert _avatar_mime_from_response(resp, "https://x/1") == "image/png"
+
+    def test_octet_stream_uses_avatar_url_ext(self):
+        from botler.gitlab_client import _avatar_mime_from_response
+        resp = self._resp()
+        assert _avatar_mime_from_response(
+            resp, "https://gitlab.example.com/uploads/avatar/42/1.jpg") == "image/jpeg"
+
+    def test_unknown_ext_falls_back_png(self):
+        from botler.gitlab_client import _avatar_mime_from_response
+        resp = self._resp()
+        assert _avatar_mime_from_response(resp, "https://x/avatar") == "image/png"
+
     """同步 logo 上传前压缩（issue #310）。
 
     背景：GitLab 项目头像上传上限 200KB（PUT /projects/{id} 的 avatar

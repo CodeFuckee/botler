@@ -486,6 +486,64 @@ def sync_repo_logo(request: Request, repo_id: int):
     }
 
 
+@router.post("/{repo_id}/sync-logo-from-gitlab")
+def sync_logo_from_gitlab(request: Request, repo_id: int):
+    """把 GitLab 项目图标（头像）同步回仓库设置页（issue #320）。
+
+    与 sync-logo（issue #297 本地 logo → GitLab 项目图标）方向相反：
+    读取 GitLab 项目当前图标，落盘为本地 logo 并写 repos 表
+    logo_path / logo_updated_at / logo_mime，仓库设置页最左侧即展示
+    GitLab 图标（可放大/下载/继续「同步到 GitLab」回写，形成双向同步）。
+    身份与 issue 创建链路一致：per-repo client（仓库 remote URL 内嵌
+    token）优先，无 token 回退全局 bot token。
+
+    错误映射：仓库不存在 → 404；已软删除 → 400；GitLab 侧未设置图标
+    （avatar_url 为空）→ 400；GitLab 查询/下载失败 → 502（透传错误
+    信息，如权限不足）；落盘失败 → 500。
+    """
+    c = request.app.state.ctx
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    row = dict(row)  # sqlite3.Row → dict，统一按 dict 访问（issue #187）
+    if row["deleted_at"] is not None:
+        raise HTTPException(400, "仓库已删除")
+
+    # 身份：per-repo client（仓库自身 token）优先，回退全局 bot token
+    # （与 sync-logo / issue 创建同一链路）
+    from .introspection import _issue_create_client
+    from ..gitlab_client import GitLabError
+    client = _issue_create_client(c, row)
+    try:
+        avatar = client.get_project_avatar(row["gitlab_project_id"])
+    except GitLabError as e:
+        raise HTTPException(502, f"从 GitLab 同步图标失败: {e}") from e
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            502, f"从 GitLab 同步图标网络错误: {str(e)[:200]}") from e
+    if not avatar:
+        raise HTTPException(
+            400, "GitLab 项目未设置图标（头像），请先在 GitLab 上传项目图标")
+
+    data, mime, avatar_url = avatar
+    filename, mime = _save_logo(row["id"], data, mime)
+    updated_at = _now_utc_str()
+    c.db.update_repo(
+        row["id"],
+        logo_path=filename,
+        logo_updated_at=updated_at,
+        logo_mime=mime,
+    )
+    return {
+        "ok": True,
+        "logo_path": filename,
+        "logo_mime": mime,
+        "logo_updated_at": updated_at,
+        "size": len(data),
+        "avatar_url": avatar_url,
+    }
+
+
 @router.get("/{repo_id}/logo")
 def get_repo_logo(request: Request, repo_id: int, download: int = 0):
     """读取仓库已生成的 logo 图片（issue #188）。

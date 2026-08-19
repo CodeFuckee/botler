@@ -13,6 +13,7 @@ import logging
 import random
 import re
 import time
+from pathlib import Path
 from urllib.parse import urlparse, unquote
 
 import httpx
@@ -61,6 +62,51 @@ def _looks_like_scp_url(value: str) -> bool:
     （带 scheme 的会被 urlparse 分支处理）。
     """
     return ":" in value and "/" in value and "://" not in value
+
+
+# 头像文件扩展名 → MIME（issue #320）：GitLab 头像接口 Content-Type 通常
+# 返回泛型 application/octet-stream（文件名扩展名才可靠），按扩展名推测
+# 图片 MIME，未知扩展名兜底 image/png（GitLab 头像以 png/jpg 为主）。
+_AVATAR_EXT_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".tiff": "image/tiff",
+    ".svg": "image/svg+xml",
+    ".ico": "image/vnd.microsoft.icon",
+}
+
+
+def _avatar_mime_from_response(resp: httpx.Response, avatar_url: str) -> str:
+    """从头像响应推断图片 MIME（issue #320）。
+
+    优先级：具体 image/* Content-Type（跳过 octet-stream 等泛型值）→
+    Content-Disposition 文件名扩展名（filename*= 优先，兼容 RFC 5987）→
+    avatar_url 路径最后一段文件名扩展名 → 兜底 png（GitLab 头像以 png/
+    jpg 为主）。按文件名取扩展名而非整串正则，避免域名（如
+    example.com）中的点被误判。
+    """
+    ct = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if ct.startswith("image/") and ct != "application/octet-stream":
+        return ct
+    fnames: list[str] = []
+    cd = resp.headers.get("content-disposition") or ""
+    star = re.search(r"filename\*=(?:UTF-8'')?([^;]+)", cd, re.IGNORECASE)
+    plain = re.search(r'filename="?([^";]+)"?', cd, re.IGNORECASE)
+    if star:
+        fnames.append(star.group(1).strip().strip('"'))
+    elif plain:
+        fnames.append(plain.group(1).strip().strip('"'))
+    if avatar_url:
+        fnames.append(unquote(urlparse(avatar_url).path.rsplit("/", 1)[-1]))
+    for fname in fnames:
+        ext = Path(fname).suffix.lower()
+        if ext in _AVATAR_EXT_MIME:
+            return _AVATAR_EXT_MIME[ext]
+    return "image/png"
 
 
 class GitLabError(Exception):
@@ -274,6 +320,38 @@ class GitLabClient:
         proj = self._request("GET", f"/projects/{project_id}")
         assert isinstance(proj, dict)
         return proj
+
+    def get_project_avatar(self, project_id: int) -> tuple[bytes, str, str] | None:
+        """拉取 GitLab 项目图标（头像）字节（issue #320）。
+
+        仓库设置页「从 GitLab 同步」按钮调用——把 GitLab 项目当前图标
+        （头像）拉回本地作为仓库 logo，与 update_project_avatar（本地 →
+        GitLab，issue #297）方向相反。实现：
+        1. GET /projects/{id} 取 avatar_url：为空说明 GitLab 侧未设置
+           图标 → 返回 None（调用方提示用户先去 GitLab 上传）；
+        2. 经 GitLab API GET /projects/{id}/avatar 下载字节——不能直接
+           下载 avatar_url：uploads 资源要求会话鉴权，PRIVATE-TOKEN
+           返回 401，而该 API 端点按 token 鉴权（与上传同一身份）。
+        返回 (字节, 推测 mime, avatar_url)；mime 按响应 Content-Type
+        （octet-stream 等泛型值忽略）→ Content-Disposition 文件名扩展名
+        → avatar_url 扩展名 逐级推测，兜底 image/png。
+        """
+        project = self.get_project(project_id)
+        avatar_url = (project or {}).get("avatar_url") or ""
+        if not avatar_url:
+            return None
+        path = f"/projects/{project_id}/avatar"
+        try:
+            resp = self._http_request_with_retry("GET", path)
+        except httpx.HTTPError as e:
+            raise GitLabError(f"GitLab 请求失败（{path}）: {e}") from e
+        if resp.status_code == 404:
+            raise GitLabError(f"项目图标资源不存在（404）: {path}", 404)
+        if resp.status_code >= 400:
+            raise GitLabError(
+                f"GitLab API 错误 {resp.status_code}: {resp.text[:300]}",
+                resp.status_code)
+        return resp.content, _avatar_mime_from_response(resp, avatar_url), avatar_url
 
     def update_project_avatar(self, project_id: int, filename: str, data: bytes,
                               mime: str) -> dict | None:

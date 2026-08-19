@@ -5,6 +5,36 @@
 ## [Unreleased]
 ### Added
 
+- **仓库设置页支持把 GitLab 图标同步回本页面（issue #320）**：此前仓库管理
+  （设置）页面只能把本地生成的 logo 单向同步到 GitLab（issue #297），GitLab
+  侧更新项目图标（头像）后设置页面无法拉取展示。本次补齐反向同步，形成双向
+  同步闭环：
+  - **后端新增 `POST /api/repos/{id}/sync-logo-from-gitlab`**：经 GitLab
+    API `GET /projects/{id}` 取 avatar_url、`GET /projects/{id}/avatar`
+    下载图标字节（不能直接用 avatar_url 下载——uploads 直链需会话鉴权，
+    PRIVATE-TOKEN 返回 401，API 端点按 token 鉴权与上传同一身份），落盘
+    LOGO_DIR（BOTLER_LOGO_DIR → BOTLER_DATA_DIR/backend/data/logos →
+    backend/data/logos，issue #309 持久目录解析）并写 repos 表
+    logo_path / logo_updated_at / logo_mime，仓库列表最左侧即展示 GitLab
+    图标（可放大/下载/继续「同步到 GitLab」回写）；GitLab 侧未设置图标
+    （avatar_url 为空）返回 400 引导先去 GitLab 上传；身份复用 issue 创建
+    链路（仓库 remote URL 内嵌 token 优先，无 token 回退全局 bot token）；
+    头像 MIME 按响应 Content-Type（跳过 octet-stream 泛型值）→
+    Content-Disposition 文件名扩展名 → avatar_url 扩展名逐级推测，兜底
+    png；`gitlab_client.py` 新增 `get_project_avatar`；
+  - **前端仓库管理页新增「从 GitLab 同步」按钮**：与「同步到 GitLab」方向
+    相反、不依赖本地已生成 logo（未生成 logo 的仓库也能拉取），点击调后端
+    接口并刷新列表；请求中禁用防重复点击、显示「拉取中…」，成功展示「已从
+    GitLab 同步图标」，失败透传后端错误信息（GitLab 未设置图标、权限不足等）；
+  - **测试**：后端新增 `TestSyncLogoFromGitlab` 8 例（正常路径落盘 + 读取
+    接口回读 + 覆盖已有本地 logo + 未设置图标 400 + 仓库不存在 404 + 软删除
+    400 + GitLab 故障 502 + 不依赖 AI/生图模型配置）与
+    `TestAvatarMimeFromResponse` 4 例（具体 Content-Type 优先 / octet-stream
+    按文件名 / 按 URL 扩展名 / 未知扩展名兜底），实现前全部可复现失败；前端
+    新增 `repos-logo-sync-from-gitlab.test.mjs` 5 例（有/无本地 logo 都渲染
+    按钮、点击调接口并刷新列表、请求中禁用、成功展示、失败透传错误），
+    repos-generate-logo / repos-logo-sync 等既有仓库页测试无 regression。
+
 - **概览页 CI/CD 流水线组件支持点击查看运行详情（issue #317）**：此前流水线
   卡片点击直接跳转 GitLab，无法在站内查看运行细节。本次为流水线组件增加右侧
   详情抽屉（交互与 issue 详情右边栏 issue #85 一致）：

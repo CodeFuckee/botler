@@ -28,6 +28,8 @@ export default function Repos() {
   const [logoResults, setLogoResults] = useState({})
   // 同步到 GitLab 结果（issue #297）: repoId -> {loading/project/error}
   const [syncLogoResults, setSyncLogoResults] = useState({})
+  // 从 GitLab 同步图标结果（issue #320）: repoId -> {loading/error}
+  const [syncFromGitlabResults, setSyncFromGitlabResults] = useState({})
   // 放大查看中的 logo（issue #188）: repo 对象（null = 关闭弹窗）
   const [viewLogo, setViewLogo] = useState(null)
 
@@ -166,6 +168,21 @@ export default function Repos() {
       setSyncLogoResults((r) => ({ ...r, [repo.id]: res }))
     } catch (e) {
       setSyncLogoResults((r) => ({ ...r, [repo.id]: { error: e.message } }))
+    }
+  }
+
+  // 从 GitLab 同步图标到本页面（issue #320）：调后端把 GitLab 项目当前
+  // 图标（头像）拉回保存为本地仓库 logo——与「同步到 GitLab」方向相反，
+  // 双向同步闭环；成功后刷新列表展示 GitLab 图标。请求中禁用防重复点击，
+  // 与「生成图标」「同步到 GitLab」同风格。
+  const syncLogoFromGitlab = async (repo) => {
+    setSyncFromGitlabResults((r) => ({ ...r, [repo.id]: { loading: true } }))
+    try {
+      const res = await api.post(`/api/repos/${repo.id}/sync-logo-from-gitlab`)
+      setSyncFromGitlabResults((r) => ({ ...r, [repo.id]: res }))
+      await load()
+    } catch (e) {
+      setSyncFromGitlabResults((r) => ({ ...r, [repo.id]: { error: e.message } }))
     }
   }
 
@@ -317,6 +334,7 @@ export default function Repos() {
               )}
               {logoResults[repo.id] && <LogoResult result={logoResults[repo.id]} />}
               {syncLogoResults[repo.id] && <SyncLogoResult result={syncLogoResults[repo.id]} />}
+              {syncFromGitlabResults[repo.id] && <SyncFromGitlabResult result={syncFromGitlabResults[repo.id]} />}
             </div>
             <div className="repo-actions">
               <button className="btn logo-btn" onClick={() => generateLogo(repo)}
@@ -333,6 +351,13 @@ export default function Repos() {
                     : <><Icon name="upload" /> 同步到 GitLab</>}
                 </button>
               )}
+              <button className="btn" onClick={() => syncLogoFromGitlab(repo)}
+                      disabled={syncFromGitlabResults[repo.id]?.loading}
+                      title="把 GitLab 项目图标（头像）同步到本页面，保存为仓库 logo">
+                {syncFromGitlabResults[repo.id]?.loading
+                  ? <><Icon name="refresh" /> 拉取中…</>
+                  : <><Icon name="download" /> 从 GitLab 同步</>}
+              </button>
               <button className="btn" onClick={() => test(repo)} disabled={testResults[repo.id]?.loading}>
                 {testResults[repo.id]?.loading ? '测试中…' : '测试连通性'}
               </button>
@@ -425,6 +450,23 @@ function SyncLogoResult({ result }) {
       <span className="test-chip ok"
             title={result.project ? `已同步为 ${result.project} 的项目图标` : '已同步到 GitLab'}>
         <Icon name="check" /> 已同步到 GitLab{result.project ? `（${result.project}）` : ''}
+      </span>
+    </div>
+  )
+}
+
+// 从 GitLab 同步图标结果（issue #320）：同步中提示 / 成功（展示来源
+// GitLab 项目图标）/ 失败展示后端错误信息（GitLab 未设置图标、权限
+// 不足等）
+function SyncFromGitlabResult({ result }) {
+  if (result.loading) return (
+    <div className="small muted"><Icon name="refresh" /> 正在从 GitLab 同步图标…</div>
+  )
+  if (result.error) return <div className="alert alert-error small">{result.error}</div>
+  return (
+    <div className="small">
+      <span className="test-chip ok" title="已把 GitLab 项目图标同步到本页面">
+        <Icon name="check" /> 已从 GitLab 同步图标
       </span>
     </div>
   )
