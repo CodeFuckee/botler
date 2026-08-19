@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 ### Added
+- **备份/恢复纳入 MinIO 对象存储图片数据（issue #205）**：此前 `backend/botler/backup.py`
+  备份包只含 manifest + config.yaml + botler.db，MinIO 图片桶（`data/minio/data`，
+  识图上传的图片对象）不在备份范围，恢复/迁移后识图历史图片引用全部失效。本次把
+  MinIO 纳入备份语义「可完整恢复平台状态」：
+  - **备份**：MinIO 启用且配置完整（endpoint/凭据/bucket/public_base_url）时，
+    用 minio SDK 把图片桶全部对象镜像进备份包 `minio/<对象名>` 成员（对象名即
+    图片 SHA-256 哈希，天然幂等）；manifest.json 新增 `minio` 段记录桶名 /
+    对象数 / 总大小 / 每对象 content_type；MinIO 备份失败时中止并清理半成品
+    备份包（要么完整、要么没有，杜绝「看起来完整但缺 MinIO」的备份）；
+  - **恢复**：先还原 MinIO 对象（按原 content_type 幂等上传回桶），再覆盖
+    config.yaml / botler.db，最后自动重启；备份含 MinIO 数据但当前未启用 /
+    未配好 MinIO 时明确报错引导；旧版无 MinIO 段的备份包照常恢复、不触碰 MinIO；
+  - **安全**：备份包成员白名单扩展支持 `minio/<对象名>`（拒绝空段 / `..` 穿越 /
+    反斜杠 / 绝对路径），MinIO 段与 manifest 声明互相印证校验；
+  - **文档**：README 新增「数据备份与恢复」章节、config.example.yaml minio 段
+    注释同步说明；
+  - **测试**：`test_backup.py` 新增 TestMinioBackup 10 例（mock MinIO：备份包含
+    对象/统计、空桶、停用跳过、恢复往返（含上传恢复）、停用报错、读取失败中止
+    无半成品、路径穿越拒绝、manifest 缺失拒绝、旧版兼容），后端 pytest 全量通过。
+
 - **前端 ESLint / 后端 Ruff 代码质量门禁（issue #203）**：此前前端只有
   vite build/test、后端只有 bandit/semgrep 安全扫描，无风格/lint 检查，多
   agent 协作产出代码风格容易漂移、低级 bug（未定义名/未用变量/hooks deps

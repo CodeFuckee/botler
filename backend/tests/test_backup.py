@@ -5,11 +5,13 @@
 """
 
 import io
+import json
 import os
 import sqlite3
 import tarfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -263,3 +265,277 @@ class TestBackupDir:
 
     def test_allowed_files_whitelist(self):
         assert set(ALLOWED_FILES) == {"config.yaml", "botler.db"}
+
+
+# ---- MinIO 对象备份/还原（issue #205，mock MinIO，不做真实外呼） ----
+
+class FakeMinioGetResponse:
+    """minio get_object 响应最小替身：read / headers / close / release_conn。"""
+
+    def __init__(self, data: bytes, content_type: str):
+        self._data = data
+        self.headers = {"Content-Type": content_type}
+
+    def read(self):
+        return self._data
+
+    def close(self):
+        pass
+
+    def release_conn(self):
+        pass
+
+
+class FakeMinioClient:
+    """minio SDK 客户端最小替身：内存桶 + 对象（含 content_type），记录调用。"""
+
+    def __init__(self, objects: dict[str, tuple[bytes, str]] | None = None):
+        self.buckets = {"public"}
+        self.objects: dict[str, tuple[bytes, str]] = dict(objects or {})
+        self.put_calls: list[tuple] = []
+
+    def list_objects(self, bucket, prefix=None, recursive=False):
+        for name, (data, ct) in sorted(self.objects.items()):
+            yield SimpleNamespace(object_name=name, size=len(data), content_type=ct)
+
+    def get_object(self, bucket, name):
+        if name not in self.objects:
+            raise Exception(f"NoSuchKey: {name}")
+        data, ct = self.objects[name]
+        return FakeMinioGetResponse(data, ct)
+
+    def put_object(self, bucket, name, data, length, content_type=None):
+        self.put_calls.append((bucket, name, length, content_type))
+        self.objects[name] = (data.read(), content_type)
+
+
+def _minio_settings(enabled: bool = True) -> SimpleNamespace:
+    """带 minio_* 属性的 Settings 替身（对应 config.yaml minio 段）。"""
+    return SimpleNamespace(
+        minio_enabled=enabled,
+        minio_endpoint="127.0.0.1:9000",
+        minio_secure=False,
+        minio_access_key="test-access",
+        minio_secret_key="test-secret",
+        minio_bucket="public",
+        minio_public_base_url="http://img.example.com:9000",
+        minio_verify_ssl=True,
+    )
+
+
+def _minio_backup_obj(tmp_path, monkeypatch, settings, objects):
+    """构造启用 MinIO 的 BotlerBackup：config.get() 返回 settings 替身，
+    minio.Minio 被替换为内存 fake（MinioImageStore 惰性建连时命中）。"""
+    fake = FakeMinioClient(objects)
+    monkeypatch.setattr("minio.Minio", lambda *a, **k: fake)
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("minio:\n  enabled: true\n", encoding="utf-8")
+    db_path = tmp_path / "botler.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+    conn.execute("INSERT INTO t (v) VALUES ('hello')")
+    conn.commit()
+    conn.close()
+
+    config = SimpleNamespace(get=lambda: settings)
+    bak = BotlerBackup(str(config_path), str(db_path), str(tmp_path / "backups"),
+                       config=config)
+    monkeypatch.setattr(BotlerBackup, "_restart", lambda self, delay=0.0: None)
+    return bak, fake
+
+
+class TestMinioBackup:
+    IMG1 = b"\x89PNG-first-image"
+    IMG2 = b"\x89PNG-second-image"
+
+    @staticmethod
+    def _objects():
+        import hashlib
+        return {
+            hashlib.sha256(TestMinioBackup.IMG1).hexdigest(): (TestMinioBackup.IMG1, "image/png"),
+            hashlib.sha256(TestMinioBackup.IMG2).hexdigest(): (TestMinioBackup.IMG2, "image/jpeg"),
+        }
+
+    def test_create_backup_includes_minio_objects(self, tmp_path, monkeypatch):
+        """MinIO 启用时备份包应包含 minio/<哈希> 成员 + manifest minio 段。"""
+        bak, _ = _minio_backup_obj(tmp_path, monkeypatch,
+                                   _minio_settings(), self._objects())
+        info = bak.create_backup()
+        members = _read_archive(bak, info["name"])
+
+        minio_members = [m for m in members if m.startswith("minio/")]
+        assert len(minio_members) == 2
+        # 对象名 = 图片 SHA-256 哈希
+        import hashlib
+        assert f"minio/{hashlib.sha256(self.IMG1).hexdigest()}" in minio_members
+        # 对象内容原样入包
+        digest2 = hashlib.sha256(self.IMG2).hexdigest()
+        assert members[f"minio/{digest2}"] == self.IMG2
+
+        manifest = json.loads(members["manifest.json"])
+        assert manifest["minio"]["bucket"] == "public"
+        assert manifest["minio"]["object_count"] == 2
+        assert manifest["minio"]["size_bytes"] == len(self.IMG1) + len(self.IMG2)
+        assert manifest["minio"]["objects"] == {
+            hashlib.sha256(self.IMG1).hexdigest(): "image/png",
+            hashlib.sha256(self.IMG2).hexdigest(): "image/jpeg",
+        }
+        # 返回信息带 minio 统计（不含逐对象 map）
+        assert info["minio"]["object_count"] == 2
+        assert "objects" not in info["minio"]
+
+    def test_create_backup_disabled_minio_has_no_minio_members(self, tmp_path, monkeypatch):
+        """MinIO 未启用时备份包与旧版一致：无 minio 成员 / 无 manifest minio 段。"""
+        bak, fake = _minio_backup_obj(tmp_path, monkeypatch,
+                                      _minio_settings(enabled=False), {})
+        info = bak.create_backup()
+        members = _read_archive(bak, info["name"])
+        assert not any(m.startswith("minio/") for m in members)
+        assert "minio" not in json.loads(members["manifest.json"])
+        assert "minio" not in info
+        assert fake.objects == {}
+
+    def test_create_backup_empty_bucket_still_records_minio(self, tmp_path, monkeypatch):
+        """启用但桶为空：备份仍记录 minio 段（object_count=0），无成员。"""
+        bak, _ = _minio_backup_obj(tmp_path, monkeypatch, _minio_settings(), {})
+        info = bak.create_backup()
+        members = _read_archive(bak, info["name"])
+        manifest = json.loads(members["manifest.json"])
+        assert manifest["minio"]["object_count"] == 0
+        assert manifest["minio"]["size_bytes"] == 0
+        assert info["minio"]["object_count"] == 0
+        assert not any(m.startswith("minio/") for m in members)
+
+    def test_restore_roundtrip_with_minio(self, tmp_path, monkeypatch):
+        """备份（含 MinIO）→ 篡改 config/db + 清空 MinIO → 恢复 → 三者全部还原。"""
+        bak, fake = _minio_backup_obj(tmp_path, monkeypatch,
+                                      _minio_settings(), self._objects())
+        info = bak.create_backup()
+
+        # 篡改 config 与 db
+        Path(bak.config_path).write_text("changed: true\n", encoding="utf-8")
+        conn = sqlite3.connect(bak.db_path)
+        conn.execute("INSERT INTO t (v) VALUES ('dirty')")
+        conn.commit()
+        conn.close()
+        # 清空 MinIO 桶（模拟数据丢失）
+        fake.objects.clear()
+
+        result = bak.restore_backup(info["name"])
+        assert "changed: true" not in Path(bak.config_path).read_text(encoding="utf-8")
+        conn = sqlite3.connect(bak.db_path)
+        assert [r[0] for r in conn.execute("SELECT v FROM t")] == ["hello"]
+        conn.close()
+        # MinIO 对象按原内容 + 原 content_type 还原
+        import hashlib
+        d1, d2 = hashlib.sha256(self.IMG1).hexdigest(), hashlib.sha256(self.IMG2).hexdigest()
+        assert fake.objects[d1] == (self.IMG1, "image/png")
+        assert fake.objects[d2] == (self.IMG2, "image/jpeg")
+        assert result["minio"] == {"bucket": "public", "object_count": 2}
+
+    def test_restore_upload_flow_with_minio(self, tmp_path, monkeypatch):
+        """上传恢复同样还原 MinIO 对象。"""
+        bak, fake = _minio_backup_obj(tmp_path, monkeypatch,
+                                      _minio_settings(), self._objects())
+        info = bak.create_backup()
+        import shutil
+        copy_path = os.path.join(os.path.dirname(bak.backup_dir), "upload-copy.tar.gz")
+        shutil.copy(os.path.join(bak.backup_dir, info["name"]), copy_path)
+        fake.objects.clear()
+
+        bak.restore_upload(copy_path)
+        assert len(fake.objects) == 2
+        assert fake.put_calls and all(c[3] in ("image/png", "image/jpeg")
+                                      for c in fake.put_calls)
+
+    def test_restore_with_minio_but_currently_disabled_raises(self, tmp_path, monkeypatch):
+        """备份含 MinIO 数据但当前配置未启用 MinIO → 明确报错且不改 config/db。"""
+        bak, _ = _minio_backup_obj(tmp_path, monkeypatch,
+                                   _minio_settings(), self._objects())
+        info = bak.create_backup()
+        orig_config = Path(bak.config_path).read_text(encoding="utf-8")
+
+        # 恢复时 MinIO 已停用（复用同一 config/db，仅切换配置替身）
+        bak2 = BotlerBackup(bak.config_path, bak.db_path, bak.backup_dir,
+                            config=SimpleNamespace(get=lambda: _minio_settings(enabled=False)))
+        with pytest.raises(BackupError, match="MinIO"):
+            bak2.restore_backup(info["name"])
+        # config / db 未被覆盖（MinIO 还原失败则中止，不进入文件覆盖阶段）
+        assert Path(bak.config_path).read_text(encoding="utf-8") == orig_config
+
+    def test_minio_backup_failure_aborts_without_partial_file(self, tmp_path, monkeypatch):
+        """MinIO 读取失败 → 备份中止报错，且不留半成品 tar.gz。"""
+        bak, fake = _minio_backup_obj(tmp_path, monkeypatch,
+                                      _minio_settings(), self._objects())
+
+        def boom(bucket, name):
+            raise Exception("connection refused")
+
+        monkeypatch.setattr(fake, "get_object", boom)
+        with pytest.raises(BackupError, match="MinIO"):
+            bak.create_backup()
+        assert bak.list_backups() == []  # 半成品已清理
+
+    def test_rejects_minio_path_traversal_member(self, tmp_path, monkeypatch):
+        """minio/../evil 成员必须拒绝（防路径穿越）。"""
+        bak, _ = _minio_backup_obj(tmp_path, monkeypatch,
+                                   _minio_settings(), self._objects())
+        import hashlib
+        content = b"evil"
+        manifest = json.dumps({
+            "app": "botler",
+            "minio": {"bucket": "public", "object_count": 1,
+                      "objects": {"../evil": "image/png"}},
+            "files": {
+                "config.yaml": {"sha256": hashlib.sha256(b"c").hexdigest()},
+            },
+        })
+        path = os.path.join(os.path.dirname(bak.backup_dir), "evil.tar.gz")
+        with tarfile.open(path, "w:gz") as tf:
+            for mname, data in (("manifest.json", manifest.encode()),
+                                ("config.yaml", b"c"),
+                                ("minio/../evil", content)):
+                bio = io.BytesIO(data)
+                ti = tarfile.TarInfo(mname)
+                ti.size = len(data)
+                tf.addfile(ti, bio)
+        with pytest.raises(BackupError, match="非法成员名"):
+            bak.restore_upload(path)
+
+    def test_rejects_minio_members_without_manifest_section(self, tmp_path, monkeypatch):
+        """包内有 minio 成员但 manifest 缺 minio 段 → 拒绝（不一致）。"""
+        bak, _ = _minio_backup_obj(tmp_path, monkeypatch,
+                                   _minio_settings(), self._objects())
+        import hashlib
+        content = b"img"
+        manifest = json.dumps({
+            "app": "botler",
+            "files": {"config.yaml": {"sha256": hashlib.sha256(b"c").hexdigest()}},
+        })
+        path = os.path.join(os.path.dirname(bak.backup_dir), "no-section.tar.gz")
+        with tarfile.open(path, "w:gz") as tf:
+            for mname, data in (("manifest.json", manifest.encode()),
+                                ("config.yaml", b"c"),
+                                ("minio/abc", content)):
+                bio = io.BytesIO(data)
+                ti = tarfile.TarInfo(mname)
+                ti.size = len(data)
+                tf.addfile(ti, bio)
+        with pytest.raises(BackupError, match="minio"):
+            bak.restore_upload(path)
+
+    def test_restore_legacy_archive_without_minio_still_works(self, tmp_path, monkeypatch):
+        """旧版备份包（无 minio 段）在 MinIO 启用环境下照常恢复，不触碰 MinIO。"""
+        bak, fake = _minio_backup_obj(tmp_path, monkeypatch,
+                                      _minio_settings(), self._objects())
+        # 先创建旧版备份：用 config=None 的 BotlerBackup 生成（不含 minio）
+        legacy = BotlerBackup(bak.config_path, bak.db_path, str(tmp_path / "legacy-backups"))
+        monkeypatch.setattr(BotlerBackup, "_restart", lambda self, delay=0.0: None)
+        legacy_info = legacy.create_backup()
+
+        Path(bak.config_path).write_text("changed: true\n", encoding="utf-8")
+        result = bak.restore_upload(os.path.join(legacy.backup_dir, legacy_info["name"]))
+        assert "changed: true" not in Path(bak.config_path).read_text(encoding="utf-8")
+        assert "minio" not in result
+        assert fake.put_calls == []  # 未触碰 MinIO

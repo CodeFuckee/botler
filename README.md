@@ -399,6 +399,33 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 自定义镜像：`docker build -t botler:latest .`（见 Dockerfile 头部注释）。
 停止：`docker compose down`（数据保留）；删除数据：`docker compose down -v`。
 
+## 数据备份与恢复（issue #205）
+
+备份覆盖**可完整恢复平台状态**的全部数据：`config.yaml`（唯一配置事实来源）+
+`botler.db`（SQLite，sqlite backup API 一致性快照，WAL 模式下安全）+
+**MinIO 图片桶对象**（启用且配置完整时，issue #205——识图上传的图片是用户业务数据，
+只备份 DB 不备份对象，恢复后识图历史/图片引用全部失效）。
+
+- **备份包**：`data/backups/botler-backup-<YYYYmmdd-HHMMSS>.tar.gz`，内含
+  `manifest.json`（各文件 sha256 清单 + MinIO 段）+ `config.yaml` + `botler.db`
+  + `minio/<对象名>` 成员（MinIO 启用时，对象名即图片 SHA-256 哈希，天然幂等）；
+- **MinIO 段**：manifest 记录桶名 / 对象数 / 总大小 / 每对象 content_type（还原时
+  按原类型上传，识图 URL 的 Content-Type 保持一致）；
+- **触发**：手动（设置页「数据备份」/ `POST /api/backups`）+ 定时（每天 03:00
+  Asia/Shanghai，`backup.enabled` 开关）；
+- **保留策略**：按 mtime 清理超过 `backup.retention_days`（默认 30）天的备份；
+- **恢复**：`POST /api/backups/restore`（本地历史备份）或
+  `POST /api/backups/restore/upload`（上传备份包）——完整校验成员名白名单 +
+  manifest 校验和后，**先还原 MinIO 对象（幂等覆盖），再覆盖 config.yaml /
+  botler.db**，最后自动重启进程（os.execv，保持 PID 1）；
+- **兼容性**：旧版备份包（无 MinIO 段）照常恢复，不触碰 MinIO；备份含 MinIO
+  数据但当前配置未启用 / 未配好 MinIO 时，恢复会明确报错引导先启用 MinIO；
+- **失败语义**：MinIO 备份失败（连接 / 读取异常）时本次备份中止并清理半成品
+  备份包——宁可失败也不产生「看起来完整但缺 MinIO」的备份；
+- **迁移提示**：`docker compose down -v` 或数据目录迁移时，除
+  `data/backups/` 外请一并迁移 `data/minio/data`（MinIO 数据目录），或直接
+  用备份包恢复。
+
 ## 插件体系（issue #140）
 
 平台把三类能力统一为**插件**，注册进全局插件注册表（`botler.plugins.PluginRegistry`），

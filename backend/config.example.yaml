@@ -233,7 +233,8 @@ browse:
 #   手写等价物——endpoint / access_key / secret_key / public_base_url 等字段
 #   与卡片一一对应，凭据掩码显示、留空保持现有）
 # minio:
-#   enabled: true                    # 识图图片上传开关
+#   enabled: true                    # 识图图片上传开关；启用且配置完整后，数据
+#                                    #   备份/恢复一并覆盖图片桶（issue #205）
 #   endpoint: "127.0.0.1:9000"       # MinIO API 地址（host:port）
 #   secure: false                    # endpoint 是否 https
 #   access_key: ${MINIO_ROOT_USER}   # 访问凭据（留空回退环境变量）
