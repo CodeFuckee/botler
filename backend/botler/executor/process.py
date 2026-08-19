@@ -19,6 +19,7 @@ from pathlib import Path
 from ..dsh_sessions import effective_session_root, normalize_session_root_encoding
 from ..events import parse_claude_stream_line, parse_hermes_event_line
 from ..gitlab_client import PIPELINE_TERMINAL_STATES, GitLabError
+from ..log_redact import redact
 from ..plugins import PluginKind, has_plugin
 from ..usage import finalize_usage, parse_claude_result_usage
 from .common import ExecutorError, STOP_EXIT_CODE, _load_json_output, _row_get, logger
@@ -120,7 +121,9 @@ class ProcessMixin:
                 if chunk == "" and proc.poll() is not None:
                     break
                 if chunk:
-                    f.write(chunk)
+                    # 统一日志脱敏（issue #259）：子进程输出落盘前打码，
+                    # 原始 chunk 仍保留在 chunks 供结果解析/会话落库
+                    f.write(redact(chunk))
                     chunks.append(chunk)
                     if len(chunks) > 20000:  # 约 20MB 上限
                         chunks.pop(0)
@@ -505,7 +508,8 @@ class ProcessMixin:
 
         def _on_line(line: str) -> None:
             """worker 线程回调：写日志 + 收行 + 发布 SSE（单线程顺序调用）。"""
-            log_f.write(line + "\n")
+            # 统一日志脱敏（issue #259）：事件行落盘前打码
+            log_f.write(redact(line) + "\n")
             log_f.flush()
             lines.append(line)
             self._publish_stream_line(task_id, line, parse_hermes_event_line)
@@ -739,7 +743,8 @@ class ProcessMixin:
 
         def _on_line(line: str) -> None:
             """worker 线程回调：写日志 + 收行 + 发布 SSE + 累积聊天记录（单线程顺序调用）。"""
-            log_f.write(line + "\n")
+            # 统一日志脱敏（issue #259）：事件行落盘前打码
+            log_f.write(redact(line) + "\n")
             log_f.flush()
             lines.append(line)
             events = parse_hermes_event_line(line)

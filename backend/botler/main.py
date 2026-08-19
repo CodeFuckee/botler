@@ -30,6 +30,7 @@ from .config import ConfigManager
 from .database import Database
 from .executor import ClaudeExecutor
 from .gitlab_client import GitLabClient
+from .log_redact import install_redact_filter, register_config_secrets
 from .reconciler import Reconciler
 from .scheduler import TaskScheduler
 from .templates import TemplateRenderer
@@ -42,6 +43,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
+# 统一日志脱敏（issue #259）：全仓库所有 logging 输出（executor 子进程
+# 输出、GitLab API 请求细节、webhook 处理日志等）在写入前自动打码
+# token/密钥。挂 root handler 而非 root logger——子 logger 不继承父
+# logger 的 filter，但都会传播到 root handler（见 install_redact_filter）
+install_redact_filter()
 logger = logging.getLogger("botler")
 
 # 前端构建产物目录（frontend/dist），路径随包位置回退
@@ -87,6 +93,9 @@ class AppContext:
 def build_context(config_path: str | None = None) -> AppContext:
     config = ConfigManager(config_path or os.environ.get("BOTLER_CONFIG", str(BACKEND_DIR / "config.yaml")))
     settings = config.load()
+    # 统一日志脱敏（issue #259）：配置中声明的凭据 Key（gitlab token /
+    # ai_providers[].api_key 等）自动纳入脱敏规则，日志打码据此生效
+    register_config_secrets(settings)
     # 外部插件加载（issue #140）：worker.plugin_paths 配置的模块路径逐个
     # 加载注册（失败仅记日志不阻塞启动，见 PluginRegistry.load_external）
     from .plugins import get_registry
@@ -137,6 +146,9 @@ def _sync_config_repos_to_db(ctx: AppContext) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ctx = app.state.ctx
+    # uvicorn 配置日志可能晚于应用导入，启动时幂等补挂日志脱敏 filter
+    # （issue #259），覆盖 uvicorn 新增的 root / access handler
+    install_redact_filter()
     _sync_config_repos_to_db(ctx)
     # 确认 bot 身份（网络不可达时降级为 None，webhook/对账时再取）
     try:

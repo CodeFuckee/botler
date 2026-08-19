@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 ### Added
+- **统一日志脱敏工具 log_redact（issue #259）**：平台明文规定凭据不进日志，但
+  执行器日志包含 claude 子进程输出、GitLab API 请求细节，异常堆栈可能带上 URL
+  中的 token（如 git remote 内嵌凭据）、Authorization 头等内容，存在意外泄露
+  风险。本次新增写入日志前的统一脱敏入口：
+  - **新模块** `backend/botler/log_redact.py`：`redact(text)` 对文本应用全部
+    规则打码（保留前后 3 位便于定位，如 `tok***abc`）；内置正则规则覆盖 git
+    remote URL userinfo、Authorization / Proxy-Authorization 头、Bearer 令牌
+    （纯字母短串如 "Bearer authentication" 不误伤）、GitLab PAT（`glpat-*`）、
+    `${ENV}` 引用名；`register_secret` / `register_secrets` 注册动态密钥
+    （带字符边界防误伤，过短值不注册）；`register_config_secrets(cfg)` 把配置
+    中声明的凭据 Key（gitlab token / owner_token / webhook_secret / dsh
+    api_key / sso client_secret / minio access+secret key / ai_providers、
+    image_models、vision_models 的 api_key / repos URL 内嵌凭据）自动纳入
+    规则，`${ENV}` 引用在配置加载时已展开为明文一并注册；`RedactFilter`
+    （logging.Filter）与 `install_redact_filter()`（挂 root handler + uvicorn
+    logger，lifespan 启动时幂等补挂）；
+  - **日志入口统一走脱敏**：executor 子进程输出（`run_task` 收口处打码 +
+    落盘文件打码）、任务日志落库（`Database.add_log` / `add_logs` / 停止
+    批量写日志）、GitLab API 错误响应（`GitLabError` 构造时打码）、全部
+    logging 输出（root handler 统一挂 filter）；
+  - **测试**：新增 `tests/test_log_redact.py` 29 例——各内置规则打码/不误伤、
+    动态密钥注册与边界防护、配置凭据自动纳入（含 `${ENV}` 展开值、repos URL
+    内嵌凭据）、空输入/幂等/多行/性能（1MB 量级宽松时限）、RedactFilter 单测
+    与 handler 覆盖、Database/GitLabError 集成点脱敏；后端全量测试无 regression。
 - **后端渐进式引入 mypy 类型检查（issue #213）**：后端此前无类型检查工具
   （CI 只有 bandit/semgrep/ruff 均不查类型），类型错误（dict key 拼错、None
   未判）只能运行时暴露。本次按 issue 方案渐进式启用 mypy：

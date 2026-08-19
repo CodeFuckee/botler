@@ -47,6 +47,7 @@ from ..env_snapshot import (  # noqa: F401 （对外再导出，测试 monkeypat
     serialize_snapshot,
 )
 from ..events import EventBus
+from ..log_redact import redact
 from ..git_remote import (  # noqa: F401 （NoGitRemoteError/list_local_remotes/parse_remote_url 对外再导出）
     NoGitRemoteError, build_repo_client_with_username,
     list_local_remotes, parse_remote_url,
@@ -342,6 +343,10 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
                 exit_code, output = -1, f"[executor] 未预期异常: {e}"
                 self.db.add_log(task_id, "error", output)
 
+            # 统一日志脱敏（issue #259）：引擎输出（claude/hermes/dsh 子进程
+            # 输出、异常消息）在进入评论 / 错误详情 / 日志尾部前打码——子进程
+            # 输出可能回显 git remote 内嵌凭据、Authorization 头等敏感串
+            output = redact(output)
             last_output, last_exit = output, exit_code
 
             # 被停止（issue #35）：进程组被杀（STOP_EXIT_CODE）且已登记

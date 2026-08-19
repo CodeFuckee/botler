@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 from botler.failure_classify import category_label, classify_failure
+from botler.log_redact import redact
 import logging
 import os
 import sqlite3
@@ -1245,7 +1246,7 @@ class Database:
                        WHERE status IN ('queued','running','retrying')""")
                 conn.executemany(
                     "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'warn', ?)",
-                    [(tid, "任务已停止：用户一键停止所有任务") for tid in stopped])
+                    [(tid, redact("任务已停止：用户一键停止所有任务")) for tid in stopped])
         return stopped
 
     def stop_task(self, task_id: int) -> str:
@@ -1470,10 +1471,12 @@ class Database:
     # ---- task_logs ----
 
     def add_log(self, task_id: int, level: str, message: str) -> None:
+        # 统一日志脱敏（issue #259）：任务日志可被导出/审计查看，写入前打码，
+        # token/密钥（git remote userinfo、Authorization 头、PAT 等）不落库
         with self._conn(write=True) as conn:
             conn.execute(
                 "INSERT INTO task_logs (task_id, level, message) VALUES (?, ?, ?)",
-                (task_id, level, message))
+                (task_id, level, redact(message)))
 
     def list_logs(self, task_id: int, limit: int = 500) -> list[sqlite3.Row]:
         with self._conn() as conn:
@@ -1486,7 +1489,7 @@ class Database:
         with self._conn(write=True) as conn:
             conn.executemany(
                 "INSERT INTO task_logs (task_id, level, message) VALUES (?, ?, ?)",
-                [(task_id, lv, msg) for lv, msg in entries])
+                [(task_id, lv, redact(msg)) for lv, msg in entries])
 
     # ---- task_progress（issue #281 §4.1：结构化任务进度账本）----
 

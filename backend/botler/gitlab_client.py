@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote
 
 import httpx
+from .log_redact import redact
 from .metrics import inc_gitlab_api_error, inc_gitlab_api_request
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,10 @@ def _avatar_mime_from_response(resp: httpx.Response, avatar_url: str) -> str:
 
 class GitLabError(Exception):
     def __init__(self, message: str, status_code: int | None = None):
-        super().__init__(message)
+        # 统一日志脱敏（issue #259）：GitLab API 错误响应可能回显请求 URL
+        # 中的 token / Authorization 头，构造错误消息时打码，调用方记日志
+        # / 评论 / 落库拿到的都是脱敏后的文本
+        super().__init__(redact(message))
         self.status_code = status_code
 
 
