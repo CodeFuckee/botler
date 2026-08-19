@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 ### Added
+- **工具管理页面（issue #172）**：新增「工具」导航页，管理给 agent 使用的
+  MCP 工具（全局生效，任务执行时注入仓库工作区 `.mcp.json`，agent 通过
+  MCP 协议直接调用）：
+  - **四种来源**：内置工具市场（平台预置 MCP 官方参考服务器模板，一键
+    安装入库后可编辑）；URL 导入（Git 仓库地址自动读取仓库内
+    `.mcp.json` / `mcp.json` / `tool.json` 定义文件，或 JSON 定义文件
+    地址——支持 `mcpServers` 多工具格式与单工具定义格式）；远端市场索引
+    （配置 JSON 索引地址，拉取候选清单逐个安装，地址持久化）；自定义
+    编写（名称 / 描述 / 类型 / 启动命令 / 参数 / 环境变量 / 服务地址）；
+  - **工具管理能力**：列表展示（搜索过滤）、详情、内联编辑、删除（确认）、
+    启用 / 停用开关、来源与类型徽章；stdin 类型（stdio）与远程端点
+    （sse / http）两种 MCP server 形态；
+  - **后端**：新增 SQLite `tools` / `tool_meta` 表（数据库迁移 v20）与
+    `botler/tools.py` 核心模块（定义校验：工具名仅字母数字`_-`、stdio 必须
+    command、sse/http 必须 http(s) url、args/env 类型与长度上限、URL 下载
+    ≤1MB 15s 超时）；`api/tools.py` 提供
+    `GET/POST /api/tools`、`PUT/DELETE /api/tools/{id}`、
+    `POST /api/tools/install`（内置市场）、`POST /api/tools/import`
+    （URL 导入）、`POST /api/tools/market-index`（远端索引拉取）；
+  - **给 agent 使用**：executor（claude 引擎）任务执行前把启用中的工具
+    写入工作区 `.mcp.json` 并追加 `.git/info/exclude` 本地忽略（防止误
+    提交），无启用工具时清理残留；注入失败仅记日志不阻塞任务；
+  - **测试**：后端 `test_tools.py`（45 用例：校验 / CRUD / 市场 / URL
+    导入（JSON 文件 + Git 仓库）/ 索引 / mcpServers 生成 / 工作区注入）、
+    `test_api_tools.py`（20 用例：CRUD + 边界 + 导入 + 索引）、
+    `test_executor_tools.py`（4 用例：注入与异常降级）；前端
+    `tools-page.test.mjs`（11 用例：导航路由 / 列表 / 新建 / 启停 / 删除
+    确认 / 市场安装 / URL 导入 / 索引候选安装）。
+
 - **Overview.jsx / Settings.jsx 巨型组件拆分（issue #201）**：概览页
   （1058 行）与设置页（959 行）两个超千行页面组件按板块拆分为独立组件 +
   hook，主文件分别降至 132 / 143 行（验收标准 ≤400 行），行为不变、前端

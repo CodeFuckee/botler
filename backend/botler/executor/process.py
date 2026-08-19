@@ -250,6 +250,10 @@ class ProcessMixin:
         """
         cfg = self.config.get()
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
+        # MCP 工具注入（issue #172）：任务执行前把启用中的工具写入工作区
+        # .mcp.json（Claude Code 项目级 MCP 配置），供 agent 直接调用；
+        # 注入失败只记日志不阻塞任务（工具配置问题不应拖垮任务执行）
+        self._inject_mcp_tools(task_id, workdir)
         self._capture_env_snapshot(task_id, workdir)
         self._capture_base_sha(task_id, workdir, git_env)
         if resume_session:
@@ -344,6 +348,37 @@ class ProcessMixin:
         finally:
             with self._proc_lock:
                 self._procs.pop(task_id, None)
+
+    def _inject_mcp_tools(self, task_id: int, workdir) -> None:
+        """把启用中的 MCP 工具写入工作区 .mcp.json（issue #172）。
+
+        Claude Code 启动时自动读取项目根目录 .mcp.json 注册 MCP server，
+        agent 即可调用「工具页面」启用/下载/自定义的全部工具（全局生效，
+        issue #172 Q4）。工具由 executor 写入并追加 .git/info/exclude
+        本地忽略，不会被 agent 提交进仓库；无启用工具时清理上次注入的
+        残留文件。异常仅记日志，不阻塞任务执行。
+        """
+        try:
+            from ..tools import write_workspace_mcp_config
+            path = write_workspace_mcp_config(self.db, workdir)
+            if path is None:
+                self.db.add_log(task_id, "info",
+                                "MCP 工具：无启用中的工具，跳过注入")
+            else:
+                self.db.add_log(task_id, "info",
+                                f"MCP 工具已注入工作区 {path.name}（"
+                                f"{self._enabled_tool_count()} 个）")
+        except Exception as exc:  # 工具注入失败不影响任务主体
+            self.db.add_log(task_id, "warn",
+                            f"MCP 工具注入失败（任务继续执行）: {str(exc)[:200]}")
+
+    def _enabled_tool_count(self) -> int:
+        """启用中的工具数量（日志展示用）。"""
+        try:
+            from ..tools import mcp_servers_json
+            return len(mcp_servers_json(self.db)["mcpServers"])
+        except Exception:
+            return 0
 
     # ---- hermes 引擎（issue #47）----
     def _last_json_object(self, output: str) -> dict | None:

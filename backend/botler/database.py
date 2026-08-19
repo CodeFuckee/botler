@@ -201,6 +201,31 @@ CREATE TABLE IF NOT EXISTS issue_manual_orders (
   PRIMARY KEY (repo_id, issue_iid),
   UNIQUE (repo_id, position)
 );
+
+-- MCP 工具管理（issue #172）：工具页面的数据表。工具 = MCP server，
+-- 通过 mcpServers 配置暴露给 agent 调用。来源：builtin（内置市场）/
+-- url（URL 导入）/ market（远端市场索引）/ custom（自定义编写）。
+CREATE TABLE IF NOT EXISTS tools (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'stdio',
+  command TEXT DEFAULT '',
+  args TEXT DEFAULT '[]',
+  env TEXT DEFAULT '{}',
+  url TEXT DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'custom',
+  source_url TEXT DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- 工具页面元信息（键值）：远端市场索引 URL 等
+CREATE TABLE IF NOT EXISTS tool_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -519,6 +544,34 @@ class Database:
                      UNIQUE (repo_id, position)
                    )""")
             conn.execute("PRAGMA user_version = 19")
+
+        if ver < 20:
+            # issue #172：MCP 工具管理表（工具页面：内置市场 / URL 导入 /
+            # 远端市场索引 / 自定义工具）。CREATE TABLE IF NOT EXISTS 已覆盖
+            # 新库；旧库（user_version=19）首次启动时同样建表，并显式推进
+            # 版本号保持迁移链完整（与 issue #287 的 v19 迁移同模式）。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS tools (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     name TEXT NOT NULL UNIQUE,
+                     description TEXT DEFAULT '',
+                     kind TEXT NOT NULL DEFAULT 'stdio',
+                     command TEXT DEFAULT '',
+                     args TEXT DEFAULT '[]',
+                     env TEXT DEFAULT '{}',
+                     url TEXT DEFAULT '',
+                     source TEXT NOT NULL DEFAULT 'custom',
+                     source_url TEXT DEFAULT '',
+                     enabled INTEGER NOT NULL DEFAULT 1,
+                     created_at TEXT DEFAULT (datetime('now')),
+                     updated_at TEXT DEFAULT (datetime('now'))
+                   )""")
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS tool_meta (
+                     key TEXT PRIMARY KEY,
+                     value TEXT NOT NULL DEFAULT ''
+                   )""")
+            conn.execute("PRAGMA user_version = 20")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1457,6 +1510,92 @@ class Database:
             return row
 
 
+    # ---- tools（issue #172：MCP 工具管理）----
+
+    def list_tools(self) -> list[sqlite3.Row]:
+        """列出全部工具（启用/停用都返回，前端按 enabled 展示开关）。
+
+        按 id 升序（安装/创建顺序），与工具页列表稳定对应。
+        """
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM tools ORDER BY id ASC").fetchall()
+
+    def get_tool(self, tool_id: int) -> sqlite3.Row | None:
+        """按 id 查单个工具；不存在返回 None。"""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM tools WHERE id=?", (tool_id,)).fetchone()
+
+    def get_tool_by_name(self, name: str) -> sqlite3.Row | None:
+        """按唯一名查工具（重名冲突检测用）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM tools WHERE name=?", (name,)).fetchone()
+
+    def create_tool(self, name: str, description: str, kind: str,
+                    command: str, args: str, env: str, url: str,
+                    source: str, source_url: str) -> int:
+        """创建工具，返回新记录 id（name 唯一约束冲突由调用方预检）。
+
+        args / env 为 JSON 文本（tools 模块负责序列化与校验）。
+        """
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                """INSERT INTO tools
+                   (name, description, kind, command, args, env, url,
+                    source, source_url, enabled)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                (name, description, kind, command, args, env, url,
+                 source, source_url))
+            return cur.lastrowid
+
+    def update_tool(self, tool_id: int, **fields) -> bool:
+        """按字段更新工具并刷新 updated_at；记录不存在返回 False。
+
+        fields 白名单由调用方保证（api/tools.py 显式构造）。
+        """
+        if not fields:
+            return self.get_tool(tool_id) is not None
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                f"UPDATE tools SET {sets}, updated_at=datetime('now') "
+                "WHERE id=?",
+                (*fields.values(), tool_id))
+            return cur.rowcount > 0
+
+    def delete_tool(self, tool_id: int) -> bool:
+        """删除工具；不存在返回 False。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                "DELETE FROM tools WHERE id=?", (tool_id,))
+            return cur.rowcount > 0
+
+    def set_tool_enabled(self, tool_id: int, enabled: bool) -> bool:
+        """启用/停用工具并刷新 updated_at；不存在返回 False。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                "UPDATE tools SET enabled=?, updated_at=datetime('now') "
+                "WHERE id=?", (1 if enabled else 0, tool_id))
+            return cur.rowcount > 0
+
+    def get_tool_meta(self, key: str) -> str:
+        """读工具页面元信息（如远端市场索引 URL）；无记录返回空串。"""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM tool_meta WHERE key=?",
+                (key,)).fetchone()
+            return row["value"] if row else ""
+
+    def set_tool_meta(self, key: str, value: str) -> None:
+        """写工具页面元信息（UPSERT）。"""
+        with self._conn(write=True) as conn:
+            conn.execute(
+                """INSERT INTO tool_meta (key, value) VALUES (?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (key, value))
+
 # ---- issue #264：统计看板聚合（模块级纯函数，可单测）----
 
 # 失败原因 Top 分布条数上限
@@ -1467,6 +1606,7 @@ _SOURCE_DISPLAY = {"webhook": "webhook", "manual": "手动", "reconcile": "对�
 
 
 def _task_duration_seconds(created_at: str | None,
+
                            finished_at: str | None) -> float | None:
     """任务耗时秒数：finished_at - created_at。
 

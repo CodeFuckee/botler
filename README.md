@@ -437,6 +437,36 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 `GET /api/skills/{engine}/file?skill=...&path=...`（读取文件）、
 `PUT /api/skills/{engine}/file`（保存文件）。
 
+## 工具管理（issue #172）
+
+顶部导航「工具」入口（`/tools`）管理**给 agent 使用的 MCP 工具**，全局
+生效——启用中的工具由 executor（claude 引擎）在任务执行前写入仓库工作区
+`.mcp.json`（Claude Code 项目级 MCP 配置，`mcpServers` 格式）并追加
+`.git/info/exclude` 本地忽略（防止误提交），agent 通过 MCP 协议直接调用。
+工具 = MCP server，支持两种形态：本地命令（stdio：`command` + `args` +
+`env`）与远程端点（sse / http：`url`）。
+
+**四种来源**（`backend/botler/tools.py`）：
+
+- **内置市场**（builtin）：平台预置 MCP 官方参考服务器模板（web-fetch /
+  filesystem / everything / http 示例），一键安装入库，安装后可编辑；
+- **URL 导入**（url）：粘贴 Git 仓库地址（浅克隆后自动读取仓库内
+  `.mcp.json` / `mcp.json` / `tool.json` 定义文件）或 JSON 定义文件地址
+  （`mcpServers` 多工具格式 / 单工具定义格式，≤1MB、15s 超时）；
+- **远端市场索引**（market）：配置 JSON 索引地址（`{"tools": [...]}` 或
+  数组），拉取候选清单后逐个安装，地址持久化到 `tool_meta` 表；
+- **自定义**（custom）：页面表单编写（名称 / 描述 / 类型 / 命令参数 /
+  环境变量 / 服务地址）。
+
+**安全约束**：工具名仅字母数字 `_-`（≤100 字符）；stdio 必须提供
+command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为字符串
+键值对（长度上限）；URL 下载仅允许 http/https、≤1MB。
+
+**API**（`backend/botler/api/tools.py`）：`GET/POST /api/tools`、
+`PUT/DELETE /api/tools/{id}`、`POST /api/tools/install`（内置市场）、
+`POST /api/tools/import`（URL 导入）、`POST /api/tools/market-index`
+（远端索引拉取）。数据表：SQLite `tools` / `tool_meta`（迁移 v20）。
+
 ## Web 终端（issue #183）
 
 浏览器内直接使用系统终端（顶部导航「终端」→ `/terminal`），**无需再打开系统终端**：

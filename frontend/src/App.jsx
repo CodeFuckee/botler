@@ -5,7 +5,7 @@ import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 // 代码按需下载；页面切换期间由 <Suspense> fallback 展示轻量加载态
 import {
   Overview, Repos, Templates, Labels, Tasks, Stats, TaskDetail,
-  Settings, Plugins, Skills, Terminal, Login,
+  Settings, Plugins, Skills, Tools, Terminal, Login,
 } from './pages/lazy.jsx'
 import DialogHost from './components/DialogHost.jsx'
 import ToastHost from './components/ToastHost.jsx'
@@ -213,6 +213,10 @@ export default function App() {
         <NavLink to="/skills" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           {t('nav.skills')}
         </NavLink>
+        {/* 工具管理页（issue #172）：下载/编写 MCP 工具给 agent 使用 */}
+        <NavLink to="/tools" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+          {t('nav.tools')}
+        </NavLink>
         <NavLink to="/settings" className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
           {t('nav.settings')}
         </NavLink>
@@ -267,6 +271,7 @@ export default function App() {
             <Route path="/labels" element={<Labels />} />
             <Route path="/plugins" element={<Plugins />} />
             <Route path="/skills" element={<Skills />} />
+            <Route path="/tools" element={<Tools />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/terminal" element={<Terminal />} />
           </Routes>

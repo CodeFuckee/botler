@@ -4201,3 +4201,77 @@ code {
     bottom: 0;
   }
 }
+
+/* ===== 工具管理页（issue #172）：MCP 工具市场 / 自定义 / 列表管理 ===== */
+
+.tools-toolbar { margin-bottom: var(--space-3); }
+.tools-search { max-width: 320px; }
+
+/* 新建 / 编辑表单 */
+.tools-form { padding: var(--space-3); margin-bottom: var(--space-3); }
+.tools-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.tools-env { grid-column: 1 / -1; }
+.tools-form-actions { margin-top: var(--space-3); }
+@media (max-width: 720px) {
+  .tools-form-grid { grid-template-columns: 1fr; }
+}
+
+/* 已安装工具列表 */
+.tools-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.tools-item { padding: var(--space-3); }
+.tools-item-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.tools-name { font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.tools-desc { margin: var(--space-2) 0 0; word-break: break-word; }
+.tools-source-url { opacity: 0.75; }
+.tools-item-meta { margin-top: var(--space-1); }
+.tools-item-meta code {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  word-break: break-all;
+}
+
+/* 启用开关（无级联动画，纯状态切换） */
+.tools-toggle {
+  width: 36px; height: 20px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  position: relative;
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.tools-toggle.on { background: var(--primary); border-color: var(--primary); }
+.tools-toggle-knob {
+  position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+.tools-toggle.on .tools-toggle-knob { transform: translateX(16px); }
+
+/* 工具市场 */
+.tools-market { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-3); }
+.tools-market-section { padding: var(--space-3); }
+.tools-market-section h3 { margin: 0 0 var(--space-2); font-size: 15px; }
+.tools-market-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.tools-market-item {
+  display: flex; align-items: flex-start; gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-2);
+}
+.tools-market-info { flex: 1; min-width: 0; }
+.tools-market-info p { margin: 4px 0 0; word-break: break-word; }
+.tools-candidates { margin-top: var(--space-3); }
+
+/* 徽章补充（工具页用）：primary / ok */
+.badge-primary { background: var(--primary-weak); color: var(--primary); font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.badge-ok { background: var(--ok-weak, var(--primary-weak)); color: var(--ok, var(--primary)); font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
