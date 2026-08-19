@@ -4464,22 +4464,27 @@ code {
 }
 
 
-/* issue #333：竖屏（orientation: portrait）下 issue 详情右边栏四个操作
-   按钮（关闭 issue / 查看执行的详情 / 在 GitLab 中打开 / 关闭右边栏）
-   同样放在右边栏顶部并固定在顶部，不随右边栏内容滚动而滚动。
+/* issue #334：竖屏（orientation: portrait）下 issue 详情右边栏按钮拆分——
+   1) 「关闭右边栏（×）」按钮放在右边栏顶部并固定在顶部，不随右边栏内容
+      滚动而滚动（头部 sticky 规则 .issue-drawer .modal-header，issue #331
+      不受媒体查询影响天然生效）；
+   2) 「关闭 issue / 查看执行的详情 / 在 GitLab 中打开」按钮放在右边栏
+      底部并固定在底部，不随右边栏内容滚动而滚动（sticky bottom 常驻，
+      thumb 可及）。
    背景：860px 断点（issue #270）把 ≤860px 视口下头部操作区
    .issue-drawer-actions 整体 display:none、按钮下沉到抽屉底部 sticky
-   操作栏（thumb 可及）；竖屏视口需恢复头部操作区显示——头部 sticky
-   规则（.issue-drawer .modal-header，issue #331）不受媒体查询影响天然
-   生效，此处仅覆盖「隐藏头部/显示底部」两条：
-   1) .modal-header flex-wrap：标题一行、操作按钮一行（375px 竖屏四个
-      按钮单行放不下，实测约 388px > 343px 可用宽）；
-   2) .issue-drawer-actions 恢复 display:flex 并 flex-wrap + flex-shrink
-      （覆盖基础规则 flex-shrink:0，使按钮在 sticky 头部内换行不溢出）；
-   3) 底部操作栏同步隐藏，避免与顶部按钮重复；
+   操作栏（.drawer-bottom-actions）；issue #333 竖屏下把四个按钮全部恢复
+   显示在顶部；本 issue 进一步拆分——同一段 drawerActions 渲染在头部
+   操作区与底部操作栏两处，竖屏下用两条规则控制显示拆分：
+   1) 头部操作区恢复 display:flex（覆盖 860px 断点隐藏），但仅保留
+      × 关闭按钮，其余按钮（.btn:not(.modal-close)）隐藏；
+   2) 底部操作栏恢复显示（display:flex，覆盖 issue #333 的 display:none，
+      其余 flex/sticky bottom 布局继承 860px 断点），但隐藏 ×（× 已固定在
+      顶部，避免两处关闭入口）；
    仅作用于 issue 抽屉（.drawer.issue-drawer），任务执行详情第二层
    （.task-detail-drawer）与流水线抽屉（.pipeline-drawer）不受影响；
-   横屏窄视口（orientation: landscape）保持 issue #270 底部操作栏。 */
+   横屏窄视口（orientation: landscape）保持 issue #270 底部操作栏
+   （全部按钮在底部）；桌面端（>860px）保持 issue #331 全部按钮在顶部。 */
 @media (max-width: 860px) and (orientation: portrait) {
   .drawer.issue-drawer .modal-header {
     flex-wrap: wrap;
@@ -4489,7 +4494,19 @@ code {
     flex-wrap: wrap;
     flex-shrink: 1;
   }
+  /* 竖屏下头部操作区只保留 × 关闭按钮，其余按钮（关闭 issue / 查看执行的
+     详情 / 在 GitLab 中打开）置于底部 sticky 操作栏 */
+  .drawer.issue-drawer .issue-drawer-actions .btn:not(.modal-close) {
+    display: none;
+  }
+  /* 底部操作栏恢复显示（覆盖 issue #333 的 display:none），其余布局继承
+     860px 断点（flex-wrap/gap/margin-top:auto/padding/border-top/背景/
+     position:sticky/bottom:0） */
   .drawer.issue-drawer .drawer-bottom-actions {
+    display: flex;
+  }
+  /* 底部操作栏不再重复展示 ×（× 已固定在顶部，避免两处关闭入口） */
+  .drawer.issue-drawer .drawer-bottom-actions .modal-close {
     display: none;
   }
 }

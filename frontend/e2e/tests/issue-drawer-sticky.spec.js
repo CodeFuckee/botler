@@ -98,18 +98,21 @@ test('issue 详情右边栏头部操作区固定在顶部，不随内容滚动�
   expect(Math.abs(after.headerTop - topBefore)).toBeLessThan(2) // 头部固定未移动
 })
 
-// 竖屏视口（issue #333）：在竖屏显示时，issue 详情右边栏的「关闭 issue /
-// 查看执行的详情 / 在 GitLab 中打开 / 关闭右边栏（×）」四个按钮同样要放在
-// 右边栏顶部，并且固定在顶部，不随右边栏内容滚动而滚动。
+// 竖屏视口（issue #334）：在竖屏显示时，issue 详情右边栏的「关闭右边栏
+// （×）」按钮放在右边栏顶部并固定在顶部；「关闭 issue / 查看执行的详情 /
+// 在 GitLab 中打开」按钮放在右边栏底部并固定在底部——均不随右边栏内容
+// 滚动而滚动。
 //
 // 背景：issue #270 移动端响应式把 ≤860px 视口下 issue 抽屉头部操作区
 // （.issue-drawer-actions）整体 display:none、按钮下沉到抽屉底部 sticky
-// 操作栏（.drawer-bottom-actions）——竖屏手机视口（375×667）下四个按钮
-// 不在顶部，与 issue #333 要求不符；本用例在真实 Chromium 竖屏视口打开
-// 抽屉，断言四个按钮渲染于顶部头部操作区且可见、头部 sticky 固定、滚动
-// 后头部坐标不随内容移动、底部操作栏不再重复展示（修复前头部操作区
-// display:none，本用例必失败）。
-test('竖屏视口：issue 详情右边栏四个按钮置于顶部并固定在顶部（issue #333）', async ({ page }) => {
+// 操作栏（.drawer-bottom-actions）；issue #333 竖屏下把四个按钮全部恢复
+// 显示在顶部；issue #334 进一步拆分——× 关闭按钮保留在顶部 sticky 头部，
+// 其余操作按钮置于底部 sticky 操作栏（thumb 可及）。本用例在真实
+// Chromium 竖屏视口打开抽屉，断言 × 渲染于顶部头部操作区且可见、其余
+// 按钮渲染于底部操作栏且可见、头部与底部均 sticky 固定（滚动后坐标不随
+// 内容移动）、两处互不重复（修复前四个按钮全部在顶部、底部操作栏隐藏，
+// 本用例必失败）。
+test('竖屏视口：× 关闭按钮固定在顶部、其余操作按钮固定在底部（issue #334）', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 667 })
   await mockGitLabApis(page, { issues: tallIssueFixture() })
   // 详情接口（评论/活动）：返回空评论，描述文本已足够撑高内容
@@ -132,36 +135,46 @@ test('竖屏视口：issue 详情右边栏四个按钮置于顶部并固定在�
   const drawer = page.locator('.issue-drawer')
   await expect(drawer).toBeVisible()
   const header = drawer.locator('.modal-header')
-
-  // 1. 四个按钮全部渲染在头部操作区（.issue-drawer-actions 位于
-  //    .modal-header 内）且对用户可见（修复前 375px 视口 display:none）
   const actions = drawer.locator('.issue-drawer-actions')
+  const bottomActions = drawer.locator('.drawer-bottom-actions')
+
+  // 1. 竖屏下头部操作区恢复显示，但只保留 × 关闭右边栏按钮（关闭 issue /
+  //    查看执行的详情 / 在 GitLab 中打开 均不在头部，已移到底部操作栏）
   await expect(actions).toBeVisible()
-  for (const name of ['关闭 issue', '查看执行的详情']) {
-    await expect(actions.getByRole('button', { name })).toBeVisible()
-  }
-  await expect(actions.locator('a', { hasText: '在 GitLab 中打开' })).toBeVisible()
   await expect(actions.getByRole('button', { name: '关闭右边栏' })).toBeVisible()
+  await expect(actions.getByRole('button', { name: '关闭 issue' })).toBeHidden()
+  await expect(actions.getByRole('button', { name: '查看执行的详情' })).toBeHidden()
+  await expect(actions.locator('a', { hasText: '在 GitLab 中打开' })).toBeHidden()
 
-  // 2. 头部 computed style 为 sticky 且吸附顶部
-  const pos = await header.evaluate((el) => getComputedStyle(el).position)
-  expect(pos).toBe('sticky')
+  // 2. 底部操作栏恢复显示（sticky 常驻底部），承载其余操作按钮
+  await expect(bottomActions).toBeVisible()
+  for (const name of ['关闭 issue', '查看执行的详情']) {
+    await expect(bottomActions.getByRole('button', { name })).toBeVisible()
+  }
+  await expect(bottomActions.locator('a', { hasText: '在 GitLab 中打开' })).toBeVisible()
+  // 底部不再重复 × 关闭入口（× 已固定在顶部）
+  await expect(bottomActions.getByRole('button', { name: '关闭右边栏' })).toBeHidden()
 
-  // 3. 抽屉内容必须可滚动（scrollHeight > clientHeight），否则断言无意义
+  // 3. 头部与底部 computed style 均 sticky（吸附顶/底）
+  expect(await header.evaluate((el) => getComputedStyle(el).position)).toBe('sticky')
+  expect(await bottomActions.evaluate((el) => getComputedStyle(el).position)).toBe('sticky')
+
+  // 4. 抽屉内容必须可滚动（scrollHeight > clientHeight），否则断言无意义
   const scrollable = await drawer.evaluate((el) => el.scrollHeight > el.clientHeight)
   expect(scrollable).toBe(true)
 
-  // 4. 滚动抽屉内容后，头部 top 坐标保持不动（不随内容滚走）
+  // 5. 滚动抽屉内容后，头部 top 坐标与底部 bottom 坐标均保持不动
   const topBefore = await header.evaluate((el) => el.getBoundingClientRect().top)
+  const bottomBefore = await bottomActions.evaluate(
+    (el) => el.getBoundingClientRect().bottom)
   await drawer.evaluate((el) => { el.scrollTop = el.scrollHeight })
   await page.waitForTimeout(300)
   const after = await drawer.evaluate((el) => ({
     scrollTop: el.scrollTop,
     headerTop: el.querySelector('.modal-header').getBoundingClientRect().top,
+    bottomBottom: el.querySelector('.drawer-bottom-actions').getBoundingClientRect().bottom,
   }))
   expect(after.scrollTop).toBeGreaterThan(100) // 确实发生了滚动
   expect(Math.abs(after.headerTop - topBefore)).toBeLessThan(2) // 头部固定未移动
-
-  // 5. 竖屏下底部操作栏不再重复展示（按钮已全部在顶部）
-  await expect(drawer.locator('.drawer-bottom-actions')).not.toBeVisible()
+  expect(Math.abs(after.bottomBottom - bottomBefore)).toBeLessThan(2) // 底部固定未移动
 })

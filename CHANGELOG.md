@@ -515,7 +515,36 @@
 
 ### Fixed
 
-- **竖屏显示时概览页 issue 详情右边栏四个操作按钮不在顶部（issue #333）**：
+- **竖屏显示时概览页 issue 详情右边栏按钮拆分：× 固定在顶部、其余操作按钮
+  固定在底部（issue #334）**：在竖屏显示时，概览页 issue 详情右边栏的
+  「关闭右边栏（×）」按钮应放在右边栏顶部并固定在顶部；「关闭 issue /
+  查看执行的详情 / 在 GitLab 中打开」按钮应放在右边栏底部并固定在底部，
+  均不随右边栏内容滚动而滚动。issue #333 曾把四个按钮全部放在竖屏顶部，
+  与需求不符（关闭 issue / 查看执行详情 / 打开 GitLab 是高频操作，竖屏单
+  手拇指更宜触达底部）。修复：
+  - **样式**：`styles.css` 在 `@media (max-width: 860px) and
+    (orientation: portrait)` 断点内拆分按钮显示位置——同一段 `drawerActions`
+    渲染在头部操作区与底部操作栏两处（issue #270 既有模式），竖屏下头部
+    操作区恢复显示（`display: flex`，覆盖 860px 断点 `display: none`）但仅
+    保留 × 关闭按钮（`.btn:not(.modal-close)` 隐藏），底部操作栏恢复显示
+    （`display: flex`，覆盖 issue #333 的 `display: none`，其余
+    flex/sticky bottom 布局继承 860px 断点）并隐藏 ×（避免两处关闭入口）；
+    头部 sticky（issue #331 `.issue-drawer .modal-header`）天然生效，底部
+    sticky bottom（issue #270 `.drawer-bottom-actions`）随恢复显示重新生效；
+    仅作用于 issue 抽屉，任务执行详情第二层（.task-detail-drawer）与流水线
+    抽屉（.pipeline-drawer）不受影响；横屏窄视口（orientation: landscape）
+    保持 issue #270 全部按钮在底部；桌面端（>860px）保持 issue #331 全部
+    按钮在顶部；
+  - **测试**：`overview-drawer-actions-sticky.test.mjs` 竖屏源码级用例更新为
+    「头部仅保留 ×、底部操作栏恢复显示并隐藏 ×」断言（非 × 按钮头部隐藏、
+    底部栏 display:flex、底部 × display:none）；`issue-drawer-sticky.spec.js`
+    新增 375×667 竖屏视口真实浏览器用例（× 渲染于头部可见、其余按钮渲染于
+    底部操作栏可见、头部与底部均 sticky 固定——滚动后头部 top 与底部 bottom
+    坐标均不动、两处互不重复）；`responsive-mobile.spec.js` 竖屏抽屉断言同步
+    更新为「头部操作区仅 × 可见 + 底部操作栏可见含「在 GitLab 中打开」」；
+    前端全量单元测试（1349 例）+ eslint 通过，相关 E2E 通过，无 regression。
+
+
   在竖屏显示时，概览页 issue 详情右边栏的「关闭 issue / 查看执行的详情 /
   在 GitLab 中打开 / 关闭右边栏（×）」四个按钮应放在右边栏顶部并固定在
   顶部、不随右边栏内容滚动——issue #331 已通过 `.issue-drawer .modal-header`
