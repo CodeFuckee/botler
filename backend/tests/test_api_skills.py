@@ -262,3 +262,51 @@ class TestWriteSkillFile:
         resp = tc.put("/api/skills/nope/file", json={
             "skill": "animate", "path": "SKILL.md", "content": "x"})
         assert resp.status_code == 404
+
+
+class TestSyncSkills:
+    """同步所有 agent 技能接口（issue #328）：POST /api/skills/sync。
+
+    合并全部执行引擎技能去重后复制到各引擎技能根目录，返回结果统计
+    （merged / deduped / targets 各引擎新增与跳过 / summary 汇总）。
+    fixture 预置：claude 两个技能（animate + nested/group/spike）、
+    hermes grill-me、dsh 的 .dsh/skills 空目录 + .agents/skills 的
+    find-skills。
+    """
+
+    def test_sync_endpoint(self, client):
+        tc, _ = client
+        resp = tc.post("/api/skills/sync")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        s = data["summary"]
+        assert s["engines"] == 3
+        assert s["merged"] == 4     # animate / nested/group/spike / grill-me / find-skills
+        assert s["deduped"] == 0    # 无同名技能
+        assert s["copied"] == 12    # claude+2、hermes+3、.dsh/skills+4、.agents/skills+3
+        assert s["skipped"] == 4    # claude 2、hermes 1、.agents/skills 1
+        assert s["failed"] == 0
+        # 落盘校验：hermes 的 grill-me 复制到 claude 根；claude 的 animate 复制到 hermes 根
+        assert (Path.home() / ".claude" / "skills" / "grill-me"
+                / "SKILL.md").is_file()
+        assert (Path.home() / ".hermes" / "skills" / "animate"
+                / "SKILL.md").is_file()
+        # 缺失的 .dsh/skills 已自动创建并复制全部技能
+        assert (Path.home() / ".dsh" / "skills" / "grill-me"
+                / "SKILL.md").is_file()
+        # 各引擎目标明细：新增/跳过
+        by_engine = {t["engine"]: t for t in data["targets"]}
+        assert "grill-me" in by_engine["claude"]["added"]
+        assert "animate" in by_engine["claude"]["skipped"]
+        assert "animate" in by_engine["hermes"]["added"]
+        assert "grill-me" in by_engine["hermes"]["skipped"]
+        assert "find-skills" in by_engine["dsh"]["skipped"]
+
+    def test_sync_idempotent(self, client):
+        tc, _ = client
+        first = tc.post("/api/skills/sync").json()
+        second = tc.post("/api/skills/sync").json()
+        assert first["summary"]["copied"] == 12
+        assert second["summary"]["copied"] == 0      # 已全部就位
+        assert second["summary"]["skipped"] == 16    # 4 根 × 4 技能全部跳过

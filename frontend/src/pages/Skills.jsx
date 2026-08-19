@@ -44,6 +44,8 @@ export default function Skills() {
   const [original, setOriginal] = useState('') // 加载时的原内容（脏检查）
   const [preview, setPreview] = useState(false) // Markdown 预览开关
   const [busy, setBusy] = useState(false) // 加载 / 保存中
+  const [syncing, setSyncing] = useState(false) // 同步所有 agent 技能中
+  const [syncResult, setSyncResult] = useState(null) // 最近一次同步结果统计
 
   const load = async () => {
     const d = await api.get('/api/skills')
@@ -150,6 +152,27 @@ export default function Skills() {
     } finally { setBusy(false) }
   }
 
+  // 同步所有 agent 技能（issue #328）：后端合并全部执行引擎技能去重后，
+  // 复制到各引擎技能根目录（目标已存在同名技能跳过、缺失根目录自动创建），
+  // 返回合并/去重/新增/跳过统计与各引擎明细，成功后刷新技能列表。
+  const syncAll = async () => {
+    setSyncing(true); setNote(null); setError(''); setSyncResult(null)
+    try {
+      const res = await api.post('/api/skills/sync')
+      setSyncResult(res)
+      const s = res.summary || {}
+      let text = `同步完成：合并 ${s.merged ?? 0} 个技能（去重跳过 ${s.deduped ?? 0} 个重复），新增 ${s.copied ?? 0} 份、跳过 ${s.skipped ?? 0} 份`
+      if (s.failed) text += `、失败 ${s.failed} 份`
+      setNote({ ok: !s.failed, text })
+      // 刷新技能列表（同步后其他引擎可能出现新技能；刷新失败不影响结果提示）
+      try {
+        setData(await api.get('/api/skills'))
+      } catch { /* 列表刷新失败已由 api 层 toast，忽略 */ }
+    } catch (e) {
+      setNote({ ok: false, text: `同步失败：${e.message}` })
+    } finally { setSyncing(false) }
+  }
+
   const dirty = !!file && content !== original
 
   if (!data) return (
@@ -170,10 +193,52 @@ export default function Skills() {
         md 文件（仅支持 md 文档，保存即时生效，删除请通过文件系统操作）。
       </p>
 
+      {/* 同步所有 agent 技能（issue #328）：合并去重后复制到各引擎技能根目录 */}
+      <div className="skills-sync-bar">
+        <button className="btn btn-primary" onClick={syncAll} disabled={syncing || !data}>
+          <Icon name="refresh" />
+          {syncing ? '同步中…' : '同步所有 agent 技能'}
+        </button>
+        <span className="muted small">
+          合并全部执行引擎技能（同名保留引擎注册顺序第一个版本）去重后，
+          复制到各引擎技能根目录；目标已存在同名技能跳过、缺失根目录自动创建。
+        </span>
+      </div>
+
       {error && <div className="alert alert-error" onClick={() => setError('')}>{error}</div>}
       {note && (
         <div className={'alert ' + (note.ok ? 'alert-ok' : 'alert-error')} onClick={() => setNote(null)}>
           <Icon name={note.ok ? 'check' : 'x'} /> {note.text}
+        </div>
+      )}
+
+      {/* 同步明细（issue #328）：去重情况 + 各引擎根目录新增/跳过/失败 */}
+      {syncResult && (
+        <div className="skills-sync-result">
+          <h3>同步明细</h3>
+          {(syncResult.deduped || []).length > 0 && (
+            <p className="muted small skills-sync-dedup">
+              {`去重跳过 ${(syncResult.deduped || []).length} 个重复：${(syncResult.deduped || []).map((d) => `${d.name}（${d.engine}）`).join('、')}`}
+            </p>
+          )}
+          {(syncResult.targets || []).length > 0 && (
+            <table className="table skills-sync-table">
+              <thead>
+                <tr><th>引擎</th><th>技能根目录</th><th>新增</th><th>跳过</th><th>失败</th></tr>
+              </thead>
+              <tbody>
+                {(syncResult.targets || []).map((t, i) => (
+                  <tr key={i}>
+                    <td>{t.engine}</td>
+                    <td className="muted small">{t.root}</td>
+                    <td>{t.added.length}</td>
+                    <td>{t.skipped.length}</td>
+                    <td>{t.errors.length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

@@ -4536,3 +4536,22 @@ code {
 /* 徽章补充（工具页用）：primary / ok */
 .badge-primary { background: var(--primary-weak); color: var(--primary); font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
 .badge-ok { background: var(--ok-weak, var(--primary-weak)); color: var(--ok, var(--primary)); font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+
+/* 技能同步（issue #328）：技能页顶部「同步所有 agent 技能」按钮与结果明细 */
+.skills-sync-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+  flex-wrap: wrap;
+}
+.skills-sync-result {
+  margin: var(--space-3) 0 var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+.skills-sync-result h3 { margin: 0 0 var(--space-2); font-size: 14px; }
+.skills-sync-dedup { margin: 0 0 var(--space-2); word-break: break-all; }
+.skills-sync-table { min-width: 520px; }

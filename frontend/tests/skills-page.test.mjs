@@ -80,7 +80,30 @@ function makeSkill(name, description, extra = {}) {
   return { name, description, path: `/skills/${name}`, root: '/tmp/skills', ...extra }
 }
 
-function mockFetch() {
+// 同步结果 mock（POST /api/skills/sync，issue #328）
+const syncResult = {
+  ok: true,
+  summary: { engines: 3, merged: 5, deduped: 2, copied: 7, skipped: 4, failed: 0 },
+  merged: [
+    { name: 'animate', engine: 'claude', path: '/home/u/.claude/skills/animate' },
+    { name: 'code-testing', engine: 'claude', path: '/home/u/.claude/skills/code-testing' },
+    { name: 'grill-me', engine: 'hermes', path: '/home/u/.hermes/skills/grill-me' },
+    { name: 'find-skills', engine: 'dsh', path: '/home/u/.agents/skills/find-skills' },
+    { name: 'spike', engine: 'hermes', path: '/home/u/.hermes/skills/spike' },
+  ],
+  deduped: [
+    { name: 'animate', engine: 'hermes', path: '/home/u/.hermes/skills/animate' },
+    { name: 'grill-me', engine: 'dsh', path: '/home/u/.agents/skills/grill-me' },
+  ],
+  targets: [
+    { engine: 'claude', root: '/home/u/.claude/skills', added: ['grill-me', 'find-skills'], skipped: ['animate', 'code-testing', 'spike'], errors: [] },
+    { engine: 'hermes', root: '/home/u/.hermes/skills', added: ['animate', 'code-testing', 'find-skills', 'spike'], skipped: ['grill-me'], errors: [] },
+    { engine: 'dsh', root: '/home/u/.dsh/skills', added: ['animate', 'code-testing', 'grill-me', 'find-skills', 'spike'], skipped: [], errors: [] },
+    { engine: 'dsh', root: '/home/u/.agents/skills', added: ['animate', 'code-testing', 'grill-me', 'spike'], skipped: ['find-skills'], errors: [] },
+  ],
+}
+
+function mockFetch({ syncFail = false } = {}) {
   const calls = []
   const originalFetch = global.fetch
   const skillsData = {
@@ -114,6 +137,12 @@ function mockFetch() {
     const url = new URL(String(p), 'http://x')
     if (url.pathname === '/api/skills' && method === 'GET') {
       return { ok: true, status: 200, json: async () => skillsData }
+    }
+    if (url.pathname === '/api/skills/sync' && method === 'POST') {
+      if (syncFail) {
+        return { ok: false, status: 500, json: async () => ({ error: '同步服务不可用' }) }
+      }
+      return { ok: true, status: 200, json: async () => syncResult }
     }
     const m = url.pathname.match(/^\/api\/skills\/([^/]+)\/files$/)
     if (m && method === 'GET') {
@@ -323,6 +352,63 @@ test('交互：确认放弃后切换文件加载新内容', async () => {
     if (renderer) await TestRenderer.act(() => renderer.unmount())
     dialog.installAutoAnswer(null)
     dialog.resetDialogs()
+    m.restore()
+  }
+})
+
+// ---- 同步所有 agent 技能（issue #328）：合并去重后复制到各引擎技能根目录 ----
+
+test('技能页提供「同步所有 agent 技能」入口（按钮 + 后端 POST /api/skills/sync 接口）', () => {
+  assert.match(skills, /同步所有 agent 技能/, '页面应有同步按钮文案')
+  assert.match(skills, /api\.post\('\/api\/skills\/sync'\)/, '同步应调用 POST /api/skills/sync')
+  assert.match(apiSkills, /@router\.post\("\/sync"\)/, '后端应有 POST /api/skills/sync 接口')
+  assert.match(apiSkills, /sync_skills_to_engines/, '后端应调用 sync_skills_to_engines')
+})
+
+test('交互：点击「同步所有 agent 技能」调用接口并展示汇总统计与同步明细', async () => {
+  const m = mockFetch()
+  let renderer = null
+  try {
+    renderer = await mountSkills(m)
+    const buttons = renderer.root.findAllByType('button')
+    const syncBtn = buttons.find((b) => String(b.props.children || '').includes('同步所有 agent 技能'))
+    assert.ok(syncBtn, '应存在「同步所有 agent 技能」按钮')
+    await TestRenderer.act(async () => {
+      syncBtn.props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    })
+    const post = m.calls.find((c) => String(c.p).includes('/api/skills/sync') && c.opts?.method === 'POST')
+    assert.ok(post, '点击同步应发出 POST /api/skills/sync')
+    const text = JSON.stringify(renderer.toJSON())
+    // 汇总统计
+    assert.match(text, /同步完成：合并 5 个技能（去重跳过 2 个重复），新增 7 份、跳过 4 份/, '应展示合并/去重/新增/跳过统计')
+    // 同步明细：去重情况 + 各引擎根目录新增/跳过
+    assert.match(text, /同步明细/, '应展示同步明细区块')
+    assert.match(text, /去重跳过 2 个重复：animate（hermes）、grill-me（dsh）/, '应展示去重明细')
+    assert.match(text, /skills-sync-table/, '应渲染各引擎结果表格')
+    assert.match(text, /\/home\/u\/\.dsh\/skills/, '应展示引擎技能根目录路径')
+  } finally {
+    if (renderer) await TestRenderer.act(() => renderer.unmount())
+    m.restore()
+  }
+})
+
+test('交互：同步失败时展示错误提示', async () => {
+  const m = mockFetch({ syncFail: true })
+  let renderer = null
+  try {
+    renderer = await mountSkills(m)
+    const buttons = renderer.root.findAllByType('button')
+    const syncBtn = buttons.find((b) => String(b.props.children || '').includes('同步所有 agent 技能'))
+    assert.ok(syncBtn, '应存在同步按钮')
+    await TestRenderer.act(async () => {
+      syncBtn.props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    })
+    const text = JSON.stringify(renderer.toJSON())
+    assert.match(text, /同步失败：同步服务不可用/, '失败应展示错误提示')
+  } finally {
+    if (renderer) await TestRenderer.act(() => renderer.unmount())
     m.restore()
   }
 })

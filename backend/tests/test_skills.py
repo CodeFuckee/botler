@@ -24,8 +24,12 @@ from botler.plugins import ExecutorPlugin
 
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
-    """固定 Path.home() 到临时目录，避免污染真实 HOME。"""
+    """固定 Path.home() 到临时目录，并清除 HERMES_HOME / DSH_HOME 环境变量，
+    避免污染真实 HOME 与真实部署机技能目录（_hermes_home / _dsh_home
+    优先读环境变量，未清除会把技能根解析到真实 ~/.hermes、~/.dsh）。"""
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("DSH_HOME", raising=False)
     return tmp_path
 
 
@@ -226,3 +230,119 @@ class TestResolveSkillDir:
         make_skill(tmp_path / "hh" / "skills", "grill-me")
         d = skills.resolve_skill_dir("hermes", "grill-me")
         assert d == (tmp_path / "hh" / "skills" / "grill-me").resolve()
+
+
+class TestSyncSkills:
+    """技能同步（issue #328）：合并全部执行引擎技能去重后，复制到各引擎技能根目录。
+
+    规则（用户已确认）：
+    - 合并所有 executor 引擎技能，同名保留引擎注册顺序第一个版本，其余去重；
+    - 去重后复制到每个引擎的全部技能根目录（方案A）；
+    - 目标已存在同名技能跳过不覆盖；缺失技能根目录自动创建。
+    """
+
+    @staticmethod
+    def _engines():
+        """构造参与同步的内置三引擎插件（注入式，避免污染全局插件注册表）。"""
+        return [ExecutorPlugin(name="claude"), ExecutorPlugin(name="hermes"),
+                ExecutorPlugin(name="dsh")]
+
+    def test_merge_dedupe_and_copy(self, fake_home):
+        # claude：animate；hermes：animate（同名不同内容，应去重）+ grill-me；dsh 根缺失
+        make_skill(fake_home / ".claude" / "skills", "animate", "claude 版")
+        make_skill(fake_home / ".hermes" / "skills", "animate", "hermes 版")
+        make_skill(fake_home / ".hermes" / "skills", "grill-me", "拷问设计")
+        result = skills.sync_skills_to_engines(self._engines())
+        s = result["summary"]
+        assert s["merged"] == 2     # animate（claude 版）+ grill-me（hermes）
+        assert s["deduped"] == 1    # hermes 的 animate 重复被去重
+        assert s["copied"] == 5     # claude 根 +1、dsh 两个缺失根各 +2
+        assert s["skipped"] == 3    # claude 根 animate、hermes 根两个
+        assert s["failed"] == 0
+        # 去重保留引擎注册顺序第一个版本（claude 的 animate）
+        assert [m["name"] for m in result["merged"]] == ["animate", "grill-me"]
+        assert result["merged"][0]["engine"] == "claude"
+        assert result["deduped"] == [{
+            "name": "animate", "engine": "hermes",
+            "root": str(fake_home / ".hermes" / "skills"),
+            "path": str(fake_home / ".hermes" / "skills" / "animate")}]
+        # dsh 缺失根自动创建，复制的是 claude 版 animate
+        dsh_animate = fake_home / ".dsh" / "skills" / "animate" / "SKILL.md"
+        assert dsh_animate.is_file()
+        assert "claude 版" in dsh_animate.read_text(encoding="utf-8")
+        # hermes 已有同名技能未覆盖（跳过）
+        hermes_animate = fake_home / ".hermes" / "skills" / "animate" / "SKILL.md"
+        assert "hermes 版" in hermes_animate.read_text(encoding="utf-8")
+
+    def test_auto_create_missing_roots(self, fake_home):
+        make_skill(fake_home / ".claude" / "skills", "animate")
+        skills.sync_skills_to_engines(self._engines())
+        for root in (fake_home / ".hermes" / "skills",
+                     fake_home / ".dsh" / "skills",
+                     fake_home / ".agents" / "skills"):
+            assert (root / "animate" / "SKILL.md").is_file()
+
+    def test_skip_existing_target_keeps_content(self, fake_home):
+        make_skill(fake_home / ".claude" / "skills", "code-testing", "claude 版")
+        make_skill(fake_home / ".hermes" / "skills", "code-testing", "hermes 版")
+        result = skills.sync_skills_to_engines(self._engines())
+        hermes = next(t for t in result["targets"] if t["engine"] == "hermes")
+        assert "code-testing" in hermes["skipped"]
+        assert "code-testing" not in hermes["added"]
+        content = fake_home / ".hermes" / "skills" / "code-testing" / "SKILL.md"
+        assert "hermes 版" in content.read_text(encoding="utf-8")
+
+    def test_second_run_idempotent(self, fake_home):
+        make_skill(fake_home / ".claude" / "skills", "animate")
+        first = skills.sync_skills_to_engines(self._engines())
+        second = skills.sync_skills_to_engines(self._engines())
+        assert first["summary"]["copied"] > 0
+        assert first["summary"]["skipped"] == 1   # 源引擎自身根已有 animate
+        assert second["summary"]["copied"] == 0   # 已全部就位，重复调用零新增
+        assert second["summary"]["skipped"] == 4  # 4 个技能根全部跳过
+
+    def test_nested_skill_preserved(self, fake_home):
+        make_skill(fake_home / ".claude" / "skills", "nested/group/spike")
+        skills.sync_skills_to_engines(self._engines())
+        assert (fake_home / ".hermes" / "skills" / "nested" / "group"
+                / "spike" / "SKILL.md").is_file()
+
+    def test_external_plugin_skills_dir_participates(self, fake_home):
+        ext = ExecutorPlugin(name="ext_engine")
+        ext.skills_dir = str(fake_home / "ext-skills")
+        make_skill(fake_home / "ext-skills", "research")
+        result = skills.sync_skills_to_engines(self._engines() + [ext])
+        assert "research" in [m["name"] for m in result["merged"]]
+        # research 复制到 claude 根；ext 自身根已存在跳过
+        assert (fake_home / ".claude" / "skills" / "research"
+                / "SKILL.md").is_file()
+        ext_target = next(t for t in result["targets"]
+                          if t["engine"] == "ext_engine")
+        assert "research" in ext_target["skipped"]
+
+    def test_plugin_without_skills_dir_ignored(self, fake_home):
+        make_skill(fake_home / ".claude" / "skills", "animate")
+        ext = ExecutorPlugin(name="ext_engine")
+        result = skills.sync_skills_to_engines(self._engines() + [ext])
+        # ext 无技能目录：不参与合并、也不产生同步目标
+        assert all(t["engine"] != "ext_engine" for t in result["targets"])
+        assert [m["name"] for m in result["merged"]] == ["animate"]
+
+    def test_empty_pool(self, fake_home):
+        result = skills.sync_skills_to_engines(self._engines())
+        assert result["ok"] is True
+        assert result["summary"]["merged"] == 0
+        assert result["summary"]["copied"] == 0
+        assert result["merged"] == []
+        assert result["targets"] == []
+
+    def test_copy_error_recorded(self, fake_home):
+        # 目标路径被损坏符号链接占用 → copytree 失败记录 error，不中断整体同步
+        make_skill(fake_home / ".claude" / "skills", "animate")
+        bad = fake_home / ".hermes" / "skills" / "animate"
+        bad.parent.mkdir(parents=True, exist_ok=True)
+        bad.symlink_to(fake_home / "no-such-target")
+        result = skills.sync_skills_to_engines(self._engines())
+        assert result["summary"]["failed"] == 1
+        hermes = next(t for t in result["targets"] if t["engine"] == "hermes")
+        assert hermes["errors"] and hermes["errors"][0]["name"] == "animate"

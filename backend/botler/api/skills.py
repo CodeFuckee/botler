@@ -6,7 +6,9 @@
   md 文件（递归，相对路径）；
 - ``GET /api/skills/{engine}/file?skill=...&path=...``：读取 md 文件内容；
 - ``PUT /api/skills/{engine}/file``：保存 md 文件内容
-  （body: {skill, path, content}）。
+  （body: {skill, path, content}）；
+- ``POST /api/skills/sync``：同步所有 agent 技能（issue #328）——合并
+  全部执行引擎技能去重后复制到各引擎技能根目录，返回结果统计。
 
 技能名为技能目录相对引擎技能根的路径（``/`` 分隔，可嵌套，如
 ``software-development/spike``），因含斜杠走 query 参数而非路径段。
@@ -32,6 +34,7 @@ from ..skills import (
     list_md_files,
     read_md_file,
     resolve_skill_dir,
+    sync_skills_to_engines,
     write_md_file,
 )
 
@@ -137,3 +140,15 @@ def write_skill_file_api(request: Request, engine: str, body: SkillFilePatch):
     return {"ok": True, "engine": engine, "skill": body.skill,
             "path": body.path, "size": size,
             "is_skill_md": Path(body.path).name.lower() == SKILL_MD.lower()}
+
+
+@router.post("/sync")
+def sync_skills_api(request: Request):
+    """同步所有执行引擎技能（issue #328）。
+
+    合并全部 executor 执行引擎（注册顺序）技能去重后，复制到每个引擎的
+    全部技能根目录：缺失根目录自动创建、目标已存在同名技能跳过不覆盖。
+    返回 merged / deduped / targets（各引擎新增·跳过·失败明细）/
+    summary 汇总统计，供技能页「同步所有 agent 技能」按钮展示。
+    """
+    return sync_skills_to_engines()

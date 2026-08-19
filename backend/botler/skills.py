@@ -17,14 +17,21 @@ Botler 的三个内置执行引擎（claude / hermes / dsh）各自维护一份
 技能页 API（api/skills.py）与 Web UI 基于本模块实现；写入仅支持
 编辑/新增 md 文件，不提供删除（删除会直接影响引擎侧技能行为，
 保留由人工通过文件系统操作）。
+
+技能同步（issue #328）：:func:`sync_skills_to_engines` 合并全部执行引擎
+的技能（同名保留引擎注册顺序第一个版本）去重后，复制到每个引擎的全部
+技能根目录（目标已存在同名技能跳过、缺失根目录自动创建），技能页顶部
+「同步所有 agent 技能」按钮触发。
 """
 
 from __future__ import annotations
 
 import os
+import shutil
+import threading
 from pathlib import Path
 
-from .plugins import ExecutorPlugin
+from .plugins import ExecutorPlugin, PluginKind, list_plugins
 
 logger = __import__("logging").getLogger("botler.skills")
 
@@ -230,3 +237,102 @@ def resolve_skill_dir(engine_name: str, skill_name: str,
         if candidate.is_dir() and (candidate / SKILL_MD).is_file():
             return candidate
     return None
+
+
+# ---- 技能同步（issue #328）：合并全部执行引擎技能去重后复制到各引擎技能根目录 ----
+
+# 同步互斥锁：防止并发触发同步时相互覆盖（FastAPI 写接口并发调用场景）
+_sync_lock = threading.Lock()
+
+
+def _collect_skills_pool(engines: list) -> tuple[list[dict], list[dict]]:
+    """按引擎注册顺序收集全部执行引擎技能，同名去重保留第一个版本。
+
+    返回 ``(merged, deduped)``：merged 为去重后的技能清单（dict 保持
+    插入顺序 = 引擎注册顺序 → 根目录顺序 → 根内名称字典序，同名取第一个），
+    deduped 为被去重跳过的重复技能记录。每条记录为
+    ``{name, engine, root, path}``（name 为技能相对路径，path 为源技能
+    目录绝对路径）。
+    """
+    merged: dict[str, dict] = {}
+    deduped: list[dict] = []
+    for plugin in engines:
+        for root in engine_skills_roots(plugin.name, plugin):
+            for skill in iter_skills(root):
+                record = {
+                    "name": skill["name"],
+                    "engine": plugin.name,
+                    "root": str(root),
+                    "path": skill["path"],
+                }
+                if record["name"] in merged:
+                    deduped.append(record)
+                else:
+                    merged[record["name"]] = record
+    return list(merged.values()), deduped
+
+
+def sync_skills_to_engines(plugins: list | None = None) -> dict:
+    """同步所有执行引擎技能（issue #328）。
+
+    合并全部 executor 执行引擎（注册顺序）的技能，同名保留注册顺序第一个
+    版本（其余去重跳过），再把去重后的技能复制到**每个**引擎的全部技能
+    根目录（方案A，用户已确认）：
+
+    - 目标根目录不存在自动创建；
+    - 目标已存在同名技能（目录或文件）跳过，不覆盖（保留引擎侧既有内容）；
+    - 单技能复制失败记录到 ``errors``，不中断整体同步（保留现场便于排查）。
+
+    ``plugins`` 可选指定参与同步的执行引擎插件列表（默认全局注册表的全部
+    executor 插件；测试可注入自定义列表隔离全局注册表）。
+
+    返回结果统计：``merged`` 去重后技能清单、``deduped`` 去重跳过的重复
+    技能、``targets`` 各引擎根目录的 added / skipped / errors 明细、
+    ``summary`` 汇总计数（merged / deduped / copied / skipped / failed）。
+    """
+    engines = list(plugins) if plugins is not None \
+        else list_plugins(PluginKind.EXECUTOR)
+    with _sync_lock:
+        merged, deduped = _collect_skills_pool(engines)
+        targets: list[dict] = []
+        copied = skipped = failed = 0
+        for plugin in engines:
+            for root in engine_skills_roots(plugin.name, plugin):
+                entry = {"engine": plugin.name, "root": str(root),
+                         "added": [], "skipped": [], "errors": []}
+                for skill in merged:
+                    # 技能名来自 iter_skills（相对路径、无 .. / 绝对路径），
+                    # 直接按组件拼接目标路径，结构保持不变
+                    target = root.joinpath(*Path(skill["name"]).parts)
+                    if target.exists():
+                        entry["skipped"].append(skill["name"])
+                        skipped += 1
+                        continue
+                    try:
+                        root.mkdir(parents=True, exist_ok=True)
+                        # symlinks=True 保留符号链接本身、不解析跟随，
+                        # 避免把链接指向的外部文件内容复制进技能目录
+                        shutil.copytree(Path(skill["path"]), target,
+                                        symlinks=True)
+                        entry["added"].append(skill["name"])
+                        copied += 1
+                    except OSError as e:
+                        entry["errors"].append(
+                            {"name": skill["name"], "message": str(e)})
+                        failed += 1
+                if entry["added"] or entry["skipped"] or entry["errors"]:
+                    targets.append(entry)
+        return {
+            "ok": True,
+            "summary": {
+                "engines": len(engines),
+                "merged": len(merged),
+                "deduped": len(deduped),
+                "copied": copied,
+                "skipped": skipped,
+                "failed": failed,
+            },
+            "merged": merged,
+            "deduped": deduped,
+            "targets": targets,
+        }
