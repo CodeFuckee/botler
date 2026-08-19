@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Icon } from './Icon.jsx'
 import { api } from '../api.js'
 
@@ -15,6 +15,10 @@ import { api } from '../api.js'
  * 按钮调 POST /api/repos/{id}/remote-user 重新读取并落库；该用户作为
  * 灵感组件「添加 Issue」时的默认分配人（后端在提交时按用户名解析）。
  * 仓库用户只读展示（来源是 remote url，不做手填，防止填错账号）。
+ *
+ * issue #237：新增「任务参数」区——仓库级任务超时（秒）/ 最大重试次数 /
+ * 执行引擎三个可选字段，留空 = 继承全局（设置页「任务调度」卡片配置），
+ * 保存时提交 null 清空；提示文案展示全局默认值（来自 /api/settings）。
  */
 export default function RepoEditModal({ repo, onClose, onSaved }) {
   const [name, setName] = useState(repo.name || '')
@@ -25,6 +29,23 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
   // issue #153：仓库用户（remote url 用户名）与「重新读取 remote」状态
   const [remoteUsername, setRemoteUsername] = useState(repo.remote_username || '')
   const [readingRemote, setReadingRemote] = useState(false)
+  // issue #237：仓库级任务参数覆盖——空串 = 继承全局（保存提交 null 清空）
+  const [timeoutSeconds, setTimeoutSeconds] = useState(
+    repo.timeout_seconds != null ? String(repo.timeout_seconds) : '')
+  const [maxRetries, setMaxRetries] = useState(
+    repo.max_retries != null ? String(repo.max_retries) : '')
+  const [engine, setEngine] = useState(repo.engine || '')
+  // 全局默认值（提示「留空继承全局」时展示，来自设置页 worker 段）
+  const [globalWorker, setGlobalWorker] = useState(null)
+
+  // issue #237：读取全局 worker 配置用于提示（失败静默，仅提示缺失）
+  useEffect(() => {
+    let alive = true
+    api.get('/api/settings').then((data) => {
+      if (alive && data?.worker) setGlobalWorker(data.worker)
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [])
 
   // issue #153：调后端重新读取仓库 remote url 的用户名并落库
   const readRemoteUser = async () => {
@@ -53,12 +74,42 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
       setError('优先级需为 1~999 之间的整数')
       return
     }
+    // issue #237：任务参数校验——留空继承全局；非空时校验取值范围与引擎白名单
+    let timeout = null
+    if (timeoutSeconds.trim() !== '') {
+      const t = Number(timeoutSeconds)
+      if (!Number.isInteger(t) || t < 1 || t > 7200) {
+        setError('任务超时需为 1~7200 之间的整数（秒）')
+        return
+      }
+      timeout = t
+    }
+    let retries = null
+    if (maxRetries.trim() !== '') {
+      const r = Number(maxRetries)
+      if (!Number.isInteger(r) || r < 0 || r > 20) {
+        setError('最大重试次数需为 0~20 之间的整数')
+        return
+      }
+      retries = r
+    }
+    let eng = null
+    if (engine.trim() !== '') {
+      eng = engine.trim().toLowerCase()
+      if (!['claude', 'hermes', 'dsh'].includes(eng)) {
+        setError('执行引擎需为 claude / hermes / dsh 之一')
+        return
+      }
+    }
     setBusy(true)
     try {
       await api.put(`/api/repos/${repo.id}`, {
         name: trimmedName,
         enabled,
         priority: num,
+        timeout_seconds: timeout,
+        max_retries: retries,
+        engine: eng,
       })
       onSaved()
     } catch (e) {
@@ -67,6 +118,10 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
       setBusy(false)
     }
   }
+
+  const globalTimeout = globalWorker?.task_timeout_seconds
+  const globalRetries = globalWorker?.max_retries
+  const globalEngine = globalWorker?.engine || 'claude'
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -115,6 +170,50 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
             灵感组件「添加 Issue」时将该用户设为默认分配人
           </span>
         </label>
+
+        {/* issue #237：仓库级任务参数覆盖——留空 = 继承全局（设置页「任务调度」卡片） */}
+        <div className="edit-field-group">
+          <div className="muted small edit-group-title">任务参数（留空 = 继承全局）</div>
+
+          <label className="edit-field">
+            任务超时（秒）
+            <input
+              className="input"
+              placeholder={globalTimeout != null ? `留空继承全局（${globalTimeout}s）` : '留空继承全局'}
+              value={timeoutSeconds}
+              onChange={(e) => setTimeoutSeconds(e.target.value)}
+            />
+          </label>
+          <div className="muted small">
+            1~7200 之间的整数；留空继承全局（当前 {globalTimeout ?? '—'} 秒），大仓库可单独调大
+          </div>
+
+          <label className="edit-field">
+            最大重试次数
+            <input
+              className="input"
+              placeholder={globalRetries != null ? `留空继承全局（${globalRetries} 次）` : '留空继承全局'}
+              value={maxRetries}
+              onChange={(e) => setMaxRetries(e.target.value)}
+            />
+          </label>
+          <div className="muted small">
+            0~20 之间的整数（0 = 不重试）；留空继承全局（当前 {globalRetries ?? '—'} 次）
+          </div>
+
+          <label className="edit-field">
+            执行引擎
+            <input
+              className="input"
+              placeholder={globalEngine ? `留空继承全局（${globalEngine}）` : '留空继承全局'}
+              value={engine}
+              onChange={(e) => setEngine(e.target.value)}
+            />
+          </label>
+          <div className="muted small">
+            claude / hermes / dsh 之一；留空继承全局（当前 {globalEngine || '—'}）
+          </div>
+        </div>
 
         <label className="edit-checkbox">
           <input

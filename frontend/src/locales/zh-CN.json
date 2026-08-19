@@ -332,5 +332,10 @@
   "tasks.export": "导出",
   "tasks.exportTitle": "导出当前筛选条件下的任务数据（CSV 带 UTF-8 BOM，Excel 打开中文不乱码；JSON 供离线分析）",
   "tasks.exportCsv": "CSV",
-  "tasks.exportJson": "JSON"
+  "tasks.exportJson": "JSON",
+  "tasks.effectiveTimeout": "生效超时",
+  "tasks.effectiveMaxRetries": "生效重试",
+  "tasks.effectiveEngine": "生效引擎",
+  "tasks.paramSourceRepo": "仓库覆盖",
+  "tasks.paramSourceGlobal": "继承全局"
 }

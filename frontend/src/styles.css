@@ -1961,6 +1961,19 @@ code {
   color: var(--muted);
   font-style: italic;
 }
+/* issue #237：仓库设置弹窗「任务参数」分组——组标题 + 字段间距 */
+.repo-edit .edit-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px dashed var(--border);
+  margin-top: var(--space-2);
+}
+.repo-edit .edit-group-title {
+  font-weight: 600;
+  color: var(--text);
+}
 /* 失败详细原因弹窗（任务列表「详情」按钮） */
 /* 注意（issue #33）：.btn-mini 不设 margin-left——该 class 同时用于操作列「执行」链接，
    而「执行」是单元格第一个内容，左外边距会使其与表头文字左边缘不对齐；

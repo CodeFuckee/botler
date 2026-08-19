@@ -915,8 +915,12 @@ def issue_tasks(request: Request, project_id: int, iid: int):
     if row is None:
         raise HTTPException(404, "仓库不存在或未启用")
     rows = c.db.list_tasks_by_issue(project_id, iid)
-    repo = {"name": row["name"], "url": row["url"]}
-    return {"tasks": [_task_to_dict(r, repo) for r in rows],
+    # issue #237：带出仓库级覆盖字段，任务序列化按「仓库级 > 全局」解析生效参数
+    repo = {"name": row["name"], "url": row["url"],
+            "timeout_seconds": row["timeout_seconds"],
+            "max_retries": row["max_retries"], "engine": row["engine"]}
+    return {"tasks": [_task_to_dict(r, repo, settings=c.config.get())
+                      for r in rows],
             "total": len(rows)}
 
 

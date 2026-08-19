@@ -20,6 +20,7 @@ from botler.executor import (
     read_session_prompt,
 )
 from botler.failure_classify import category_advice
+from botler.repo_params import effective_task_params
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -78,13 +79,18 @@ def _usage_to_dict(row) -> dict | None:
     }
 
 
-def _task_to_dict(row, repo: dict | None = None, usage_row=None) -> dict:
+def _task_to_dict(row, repo: dict | None = None, usage_row=None,
+                   settings=None) -> dict:
     """把任务行转为 API 字典。
 
     error_detail 为 executor 写入的 JSON 字符串（每次尝试的失败详情），
     这里解析成结构化对象供前端「查看详细原因」按钮使用；解析失败返回 None。
-    repo 为仓库信息 dict（含 name/url），用于拼接 repo_name 与 commit_url。
+    repo 为仓库信息 dict（含 name/url 与仓库级覆盖字段），用于拼接
+    repo_name / commit_url 与解析任务生效参数。
     usage_row（issue #235）：该任务最近一次执行的 token 用量行（无则 None）。
+    settings（issue #237）：全局配置，配合 repo 按「仓库级 > 全局」解析
+    该任务实际生效的超时/重试/引擎与来源；未传入（无仓库上下文等）时
+    生效字段返回 None，前端展示「—」。
     """
     detail = None
     if row["error_detail"]:
@@ -93,6 +99,10 @@ def _task_to_dict(row, repo: dict | None = None, usage_row=None) -> dict:
         except ValueError:
             detail = None
     repo_url = repo.get("url") if repo else None
+    # issue #237：任务实际生效参数——按「仓库级 > 全局」解析（仓库字段
+    # 留空 = 继承全局）；settings 未传入（旧调用方）时返回 None，前端兜底
+    eff = (effective_task_params(repo, settings)
+           if settings is not None else None)
     return {
         "id": row["id"],
         "repo_id": row["repo_id"],
@@ -126,6 +136,15 @@ def _task_to_dict(row, repo: dict | None = None, usage_row=None) -> dict:
         # issue #120：执行引擎按任务落库——任务页/概览页展示该任务实际
         # 使用的引擎（claude / hermes / dsh；未执行或旧任务可能为空串）
         "engine": row["engine"] or "",
+        # issue #237：任务实际生效的超时/重试/引擎与来源（仓库级覆盖 or
+        # 继承全局）——任务列表/详情展示「生效参数」用；与 executor 执行
+        # 时解析口径一致（effective_task_params），展示与执行不脱节
+        "timeout_seconds": eff["timeout_seconds"] if eff else None,
+        "timeout_source": eff["timeout_source"] if eff else None,
+        "max_retries": eff["max_retries"] if eff else None,
+        "max_retries_source": eff["max_retries_source"] if eff else None,
+        "effective_engine": eff["engine"] if eff else None,
+        "engine_source": eff["engine_source"] if eff else None,
         # issue #236：引擎降级原因——主引擎不可用自动降级到备用引擎时的
         # 原因文案（如「引擎 claude 不可用（...），已降级 dsh 执行」）；
         # 未发生降级为空串，任务详情页展示
@@ -169,8 +188,13 @@ def list_tasks(
             statuses = statuses[0]
     rows = c.db.list_tasks(status=statuses, repo_id=repo_id, search=search,
                            limit=limit, offset=offset)
-    # issue #62：包含已软删除的仓库，任务历史仍能解析出仓库名
-    repos = {r["id"]: {"name": r["name"], "url": r["url"]}
+    # issue #62：包含已软删除的仓库，任务历史仍能解析出仓库名；
+    # issue #237：带出仓库级覆盖字段（timeout_seconds/max_retries/engine）
+    # 供按「仓库级 > 全局」解析任务生效参数
+    repos = {r["id"]: {"name": r["name"], "url": r["url"],
+                       "timeout_seconds": r["timeout_seconds"],
+                       "max_retries": r["max_retries"],
+                       "engine": r["engine"]}
              for r in c.db.list_repos(include_deleted=True)}
     # issue #235：任务列表可选展示 token 用量（include_usage=1 时批量
     # 查询，避免逐任务 N+1；默认不查询，列表无额外开销）
@@ -178,7 +202,8 @@ def list_tasks(
                  if include_usage else {})
     return {
         "tasks": [_task_to_dict(r, repos.get(r["repo_id"]),
-                                usage_map.get(r["id"])) for r in rows],
+                                usage_map.get(r["id"]),
+                                c.config.get()) for r in rows],
         # total 与 list_tasks 同套过滤条件（issue #50 翻页组件按 total 计算总页数）
         "total": c.db.count_tasks(status=statuses, repo_id=repo_id, search=search),
         "stats": c.db.task_stats(),
@@ -476,7 +501,8 @@ def get_task(request: Request, task_id: int):
         raise HTTPException(404, "任务不存在")
     repo = c.db.get_repo(row["repo_id"])
     task = _task_to_dict(row, dict(repo) if repo else None,
-                         usage_row=c.db.get_task_usage(task_id))
+                         usage_row=c.db.get_task_usage(task_id),
+                         settings=c.config.get())
     task["logs"] = [dict(l) for l in c.db.list_logs(task_id)]
     # 附上完整执行日志文件尾部（stdout/stderr）
     file_tail = None

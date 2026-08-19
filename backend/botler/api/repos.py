@@ -7,6 +7,11 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..repo_params import (
+    MAX_RETRIES_MAX, MAX_RETRIES_MIN, TIMEOUT_MAX, TIMEOUT_MIN,
+    engine_choices, normalize_engine,
+)
+
 from ..config import RepoConfig
 from ..database import DEFAULT_PRIORITY
 from ..gitlab_client import GitLabError
@@ -32,6 +37,15 @@ class RepoCreate(BaseModel):
         description="调度优先级（issue #51）：1~999 整数，数字越小越优先，缺省 100")
     webhook_url: str | None = Field(
         default=None, description="webhook 回调地址覆盖（默认用当前请求的 base_url）")
+    # 仓库级任务参数覆盖（issue #237）：None/留空 = 继承全局 worker 配置
+    timeout_seconds: int | None = Field(
+        default=None, ge=TIMEOUT_MIN, le=TIMEOUT_MAX,
+        description="任务超时（秒）：1~7200，留空继承全局 worker.task_timeout_seconds")
+    max_retries: int | None = Field(
+        default=None, ge=MAX_RETRIES_MIN, le=MAX_RETRIES_MAX,
+        description="任务最大重试次数：0~20，留空继承全局 worker.max_retries")
+    engine: str | None = Field(
+        default=None, description="执行引擎（claude / hermes / dsh，插件注册表），留空继承全局 worker.engine")
 
 
 class LocalPathBody(BaseModel):
@@ -71,6 +85,15 @@ class RepoUpdate(BaseModel):
     priority: int | None = Field(
         default=None, ge=1, le=999,
         description="调度优先级（issue #51）：1~999 整数，数字越小越优先")
+    # 仓库级任务参数覆盖（issue #237）：None = 清空继承全局；前端留空提交 null
+    timeout_seconds: int | None = Field(
+        default=None, ge=TIMEOUT_MIN, le=TIMEOUT_MAX,
+        description="任务超时（秒）：1~7200，留空继承全局 worker.task_timeout_seconds")
+    max_retries: int | None = Field(
+        default=None, ge=MAX_RETRIES_MIN, le=MAX_RETRIES_MAX,
+        description="任务最大重试次数：0~20，留空继承全局 worker.max_retries")
+    engine: str | None = Field(
+        default=None, description="执行引擎（claude / hermes / dsh，插件注册表），留空继承全局 worker.engine")
 
 
 def _repo_row_to_dict(row) -> dict:
@@ -85,6 +108,10 @@ def _repo_row_to_dict(row) -> dict:
         "prompt_template": row["prompt_template"],
         "enabled": bool(row["enabled"]),
         "priority": row["priority"],
+        # issue #237：仓库级任务参数覆盖（None = 继承全局，编辑弹窗展示/清空用）
+        "timeout_seconds": row["timeout_seconds"],
+        "max_retries": row["max_retries"],
+        "engine": row["engine"] or None,
         # issue #188：仓库 logo 元信息（「生成图标」生成后写入；前端按
         # logo_path 是否非空决定是否展示 logo，logo_updated_at 作 img
         # src 缓存击穿参数）
@@ -153,6 +180,10 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
         remote_name=repo_dict.get("remote_name"),
         remote_username=repo_dict.get("remote_username"),
         priority=repo_dict["priority"],
+        # issue #237：仓库级任务参数覆盖（None = 继承全局，不写 config.yaml）
+        timeout_seconds=repo_dict.get("timeout_seconds"),
+        max_retries=repo_dict.get("max_retries"),
+        engine=repo_dict.get("engine"),
     ))
     config.update_section("repos", [config.repo_to_config_dict(r) for r in kept])
 
@@ -288,7 +319,9 @@ def add_repo(request: Request, body: RepoCreate):
         prompt_template=body.prompt_template, enabled=body.enabled,
         local_path=local_path, remote_name=remote_name,
         remote_username=remote_username,
-        priority=body.priority if body.priority is not None else DEFAULT_PRIORITY)
+        priority=body.priority if body.priority is not None else DEFAULT_PRIORITY,
+        timeout_seconds=body.timeout_seconds, max_retries=body.max_retries,
+        engine=body.engine)
     _sync_repo_to_config(request.app, _repo_row_to_dict(c.db.get_repo(repo_id)))
 
     source = f"local_path={local_path}" if local_path else f"url={url}"
@@ -313,6 +346,14 @@ def update_repo(request: Request, repo_id: int, body: RepoUpdate):
     if fields.get("url") and "remote_username" not in fields:
         from ..git_remote import parse_remote_url
         fields["remote_username"] = parse_remote_url(fields["url"])["username"]
+    # issue #237：仓库级引擎——strip + 小写归一，空串视为清空（继承全局），
+    # 非法引擎名 400（与设置页 worker.engine 白名单同源：插件注册表）
+    if "engine" in fields:
+        engine = normalize_engine(fields.get("engine"))
+        if engine is not None and engine not in engine_choices():
+            raise HTTPException(
+                400, f"engine 取值非法: {engine}（可选 {' / '.join(engine_choices())}）")
+        fields["engine"] = engine
     if fields:
         c.db.update_repo(repo_id, **fields)
     updated = _repo_row_to_dict(c.db.get_repo(repo_id))

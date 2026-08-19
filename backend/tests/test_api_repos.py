@@ -807,3 +807,102 @@ class TestAddRepoSyncDefaultLabels:
         resp = self._add(client, monkeypatch)
         assert resp.status_code == 409
         assert stub.created_labels == []
+
+
+class TestRepoTaskParamsOverride:
+    """仓库级任务参数覆盖（issue #237）：timeout_seconds / max_retries / engine。
+
+    三个字段均为可选（None = 继承全局）：编辑弹窗保存/清空走 PUT，接口
+    校验取值范围与引擎白名单；列表/详情带出字段供前端展示生效参数。
+    """
+
+    def _mk_repo(self, tc) -> int:
+        return tc.app.state.ctx.db.upsert_repo(
+            42, "demo", "https://gitlab.example.com/group/demo.git")
+
+    def test_update_saves_three_params(self, client):
+        """PUT 一次保存超时/重试/引擎，列表与详情带出。"""
+        tc, stub, tmp_path = client
+        repo_id = self._mk_repo(tc)
+        resp = tc.put(f"/api/repos/{repo_id}", json={
+            "timeout_seconds": 600, "max_retries": 5, "engine": "dsh"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["timeout_seconds"] == 600
+        assert data["max_retries"] == 5
+        assert data["engine"] == "dsh"
+        row = tc.app.state.ctx.db.get_repo(repo_id)
+        assert row["timeout_seconds"] == 600
+        assert row["max_retries"] == 5
+        assert row["engine"] == "dsh"
+
+    def test_update_engine_normalized(self, client):
+        """engine 大写/带空白归一化小写落库。"""
+        tc, stub, tmp_path = client
+        repo_id = self._mk_repo(tc)
+        resp = tc.put(f"/api/repos/{repo_id}", json={"engine": "  DSH  "})
+        assert resp.status_code == 200
+        assert resp.json()["engine"] == "dsh"
+
+    def test_update_invalid_engine_rejected(self, client):
+        """非法引擎名 400，原值不变（与设置页 worker.engine 白名单同源）。"""
+        tc, stub, tmp_path = client
+        repo_id = self._mk_repo(tc)
+        resp = tc.put(f"/api/repos/{repo_id}", json={"engine": "bogus"})
+        assert resp.status_code == 400
+        assert "engine" in resp.json()["detail"]
+        assert tc.app.state.ctx.db.get_repo(repo_id)["engine"] is None
+
+    def test_update_out_of_range_rejected(self, client):
+        """超时越界（0 / 7201）与重试越界（-1 / 21）pydantic 422 拒绝。"""
+        tc, stub, tmp_path = client
+        repo_id = self._mk_repo(tc)
+        for bad in [{"timeout_seconds": 0}, {"timeout_seconds": 7201},
+                    {"max_retries": -1}, {"max_retries": 21}]:
+            resp = tc.put(f"/api/repos/{repo_id}", json=bad)
+            assert resp.status_code == 422, f"{bad} 应返回 422"
+        row = tc.app.state.ctx.db.get_repo(repo_id)
+        assert row["timeout_seconds"] is None and row["max_retries"] is None
+
+    def test_update_null_clears_params(self, client):
+        """PUT null 清空三个字段 → 落库 NULL（继承全局），不残留旧值。"""
+        tc, stub, tmp_path = client
+        repo_id = self._mk_repo(tc)
+        tc.put(f"/api/repos/{repo_id}", json={
+            "timeout_seconds": 600, "max_retries": 5, "engine": "dsh"})
+        resp = tc.put(f"/api/repos/{repo_id}", json={
+            "timeout_seconds": None, "max_retries": None, "engine": None})
+        assert resp.status_code == 200
+        row = tc.app.state.ctx.db.get_repo(repo_id)
+        assert row["timeout_seconds"] is None
+        assert row["max_retries"] is None
+        assert row["engine"] is None
+
+    def test_add_repo_with_params(self, client, monkeypatch):
+        """添加仓库时带三字段同样落库。"""
+        tc, stub, _ = client
+        from botler.gitlab_client import GitLabClient
+        monkeypatch.setattr(
+            GitLabClient, "register_webhook",
+            lambda self, project_id, secret: {"id": 1})
+        resp = tc.post("/api/repos", json={
+            "url": "https://gitlab.example.com/group/p.git",
+            "timeout_seconds": 900, "max_retries": 3, "engine": "hermes"})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["timeout_seconds"] == 900
+        assert data["max_retries"] == 3
+        assert data["engine"] == "hermes"
+
+    def test_list_repos_includes_params(self, client):
+        """列表接口带出三字段（编辑弹窗初始值数据源）。"""
+        tc, stub, tmp_path = client
+        repo_id = self._mk_repo(tc)
+        tc.put(f"/api/repos/{repo_id}", json={
+            "timeout_seconds": 600, "max_retries": 5, "engine": "dsh"})
+        resp = tc.get("/api/repos")
+        assert resp.status_code == 200
+        repo = next(r for r in resp.json()["repos"] if r["id"] == repo_id)
+        assert repo["timeout_seconds"] == 600
+        assert repo["max_retries"] == 5
+        assert repo["engine"] == "dsh"

@@ -361,6 +361,109 @@ class TestRunTaskSuccessCriteria:
         assert db.get_task(task_id)["engine"] == "dsh"
 
 
+class TestRepoLevelTaskParamsOverride(TestRunTaskSuccessCriteria):
+    """仓库级任务参数覆盖（issue #237）：执行器按「仓库级 > 全局」取生效参数。
+
+    复用 TestRunTaskSuccessCriteria._install（fake _run_once + 桩 gitlab）。
+
+    - 仓库 engine 覆盖 → 本次任务按仓库引擎执行并落库；
+    - 仓库 max_retries 覆盖 → 重试循环按仓库次数执行；
+    - 仓库 timeout 覆盖 → _run_once 环境（生效配置）带仓库超时；
+    - 覆盖在任务收尾后清理，不泄漏到后续任务。
+    """
+
+    def test_repo_engine_override_used(self, executor, monkeypatch, tmp_path):
+        """仓库 engine=dsh 覆盖全局 claude → 任务按 dsh 执行并落库。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, engine="dsh")
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"final_response": "已修复并推送",
+                             "finish_reason": "completed",
+                             "session_id": "dsh-sess-1"}, ensure_ascii=False)
+        seen_engines = []
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=lambda *a: seen_engines.append(a[5]) or (0, output),
+                      issue_state="opened")
+
+        executor.run_task(task_id)
+
+        assert seen_engines == ["dsh"], "run_once 应收到仓库覆盖引擎 dsh"
+        assert db.get_task(task_id)["engine"] == "dsh"
+
+    def test_repo_max_retries_zero_no_retry(self, executor, monkeypatch, tmp_path):
+        """仓库 max_retries=0（覆盖全局 2）→ 首次失败即收尾，不再重试。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, max_retries=0)
+        task_id = _mk_task(db, repo_id)
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=lambda *a: (1, "exit 1"), issue_state="opened")
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert task["attempt_count"] == 1, "max_retries=0 应只尝试一次"
+        assert "重试耗尽（0 次）" in (task["error_message"] or "")
+
+    def test_repo_max_retries_three_attempts(self, executor, monkeypatch, tmp_path):
+        """仓库 max_retries=3（覆盖全局 2）→ 共尝试 4 次后收尾。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, max_retries=3)
+        task_id = _mk_task(db, repo_id)
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=lambda *a: (1, "exit 1"), issue_state="opened")
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert task["attempt_count"] == 4, "max_retries=3 应共尝试 4 次"
+
+    def test_override_cleaned_after_run(self, executor, monkeypatch, tmp_path):
+        """任务收尾后覆盖表清理，后续任务回退全局（不泄漏）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, engine="dsh")
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "ok"}, ensure_ascii=False)
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=lambda *a: (0, output), issue_state="opened")
+
+        executor.run_task(task_id)
+
+        assert task_id not in executor._task_cfg_overrides, "覆盖应在收尾后清理"
+        # 全局配置未被污染
+        assert executor.config.get().engine == "claude"
+
+    def test_effective_cfg_available_during_run(self, executor, monkeypatch, tmp_path):
+        """任务执行中 _effective_cfg(task_id) 返回仓库级生效配置（超时覆盖）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, timeout_seconds=600, max_retries=1, engine="hermes")
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "ok"}, ensure_ascii=False)
+        captured = {}
+
+        def fake_run_once(*a):
+            cfg = executor._effective_cfg(task_id)
+            captured["timeout"] = cfg.task_timeout_seconds
+            captured["retries"] = cfg.max_retries
+            captured["engine"] = cfg.engine
+            return (0, output)
+
+        self._install(executor, monkeypatch, tmp_path,
+                      run_once=fake_run_once, issue_state="opened")
+        executor.run_task(task_id)
+
+        assert captured["timeout"] == 600
+        assert captured["retries"] == 1
+        assert captured["engine"] == "hermes"
+        assert executor._effective_cfg(task_id).task_timeout_seconds == 1800, "收尾后回退全局"
+
+
 # ---- issue #8 会话断点续跑 ----
 
 class _FakeStdout:

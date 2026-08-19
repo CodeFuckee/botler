@@ -145,7 +145,7 @@ def test_user_version_marker(tmp_path):
     db = Database(str(tmp_path / "ver.db"))
     with db._conn() as conn:
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 22
+    assert ver == 23
 
 
 def test_legacy_db_gets_remote_username_column(tmp_path):
@@ -179,7 +179,7 @@ def test_legacy_db_gets_remote_username_column(tmp_path):
         cols = {r["name"] for r in conn2.execute("PRAGMA table_info(repos)")}
         assert "remote_username" in cols
         ver = conn2.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 22  # v9 旧库迁移应推进到最新版本（v22：engine_fallback，issue #236）
+    assert ver == 23  # v9 旧库迁移应推进到最新版本（v23：repos 仓库级参数覆盖，issue #237）
     # 新列可正常写入读取
     repo_id = db.upsert_repo(
         42, "demo", "https://gitlab.example.com/group/demo.git",

@@ -184,6 +184,10 @@ class RepoConfig:
     remote_name: str | None = None
     remote_username: str | None = None  # 仓库用户（issue #153）：remote url userinfo 用户名
     priority: int = 100  # 调度优先级（issue #51）：1~999，数字越小越优先
+    # 仓库级任务参数覆盖（issue #237）：None = 继承全局 worker 段对应配置
+    timeout_seconds: int | None = None  # 任务超时（秒），覆盖 worker.task_timeout_seconds
+    max_retries: int | None = None  # 任务最大重试次数，覆盖 worker.max_retries
+    engine: str | None = None  # 执行引擎，覆盖 worker.engine
 
 
 @dataclass
@@ -655,6 +659,17 @@ class ConfigManager:
                 remote_name=r.get("remote_name"),
                 remote_username=r.get("remote_username"),
                 priority=int(r.get("priority", 100)),
+                # issue #237：仓库级任务参数覆盖（config.yaml 手工配置 →
+                # 启动同步 DB；None/空 = 继承全局）
+                timeout_seconds=(int(r["timeout_seconds"])
+                                 if r.get("timeout_seconds") not in (None, "")
+                                 else None),
+                max_retries=(int(r["max_retries"])
+                             if r.get("max_retries") not in (None, "")
+                             else None),
+                engine=(str(r["engine"]).strip()
+                        if r.get("engine") not in (None, "")
+                        else None),
             ))
 
         bot_id = gitlab.get("bot_id")
@@ -939,5 +954,13 @@ class ConfigManager:
             d["remote_name"] = repo.remote_name
         if repo.remote_username:
             d["remote_username"] = repo.remote_username
+        # issue #237：仓库级任务参数覆盖——仅非空值写回 config.yaml
+        # （空 = 继承全局，不落盘，回读与 DB 口径一致）
+        if repo.timeout_seconds is not None:
+            d["timeout_seconds"] = repo.timeout_seconds
+        if repo.max_retries is not None:
+            d["max_retries"] = repo.max_retries
+        if repo.engine:
+            d["engine"] = repo.engine
         return d
 

@@ -37,14 +37,22 @@ after(() => vite.close())
 
 const REPOS = [
   { id: 1, name: '高优先级仓库', url: 'https://gitlab.example.com/group/a.git',
-    gitlab_project_id: 11, enabled: true, priority: 1 },
+    gitlab_project_id: 11, enabled: true, priority: 1,
+    // issue #237：仓库级任务参数覆盖——仓库 1 配置了覆盖，仓库 2 留空继承全局
+    timeout_seconds: 600, max_retries: 3, engine: 'dsh' },
   { id: 2, name: '普通仓库', url: 'https://gitlab.example.com/group/b.git',
-    gitlab_project_id: 22, enabled: true, priority: 100 },
+    gitlab_project_id: 22, enabled: true, priority: 100,
+    timeout_seconds: null, max_retries: null, engine: null },
 ]
 
-function mockApi(repos = REPOS) {
+const WORKER = {
+  task_timeout_seconds: 1800, max_retries: 2, engine: 'claude',
+}
+
+function mockApi(repos = REPOS, worker = WORKER) {
   mock.method(api, 'get', async (pathname) => {
     if (pathname === '/api/repos') return { repos }
+    if (pathname === '/api/settings') return { worker }
     throw new Error('unexpected ' + pathname)
   })
 }
@@ -182,7 +190,11 @@ test('修改后保存：PUT 携带 name/enabled/priority，成功后关闭弹窗
     await click(renderer, findButtons(renderer, '保存')[0])
 
     assert.equal(putPath, '/api/repos/2', '应 PUT 到对应仓库')
-    assert.deepEqual(putBody, { name: '改名后的仓库', enabled: false, priority: 50 })
+    // issue #237：保存固定携带三字段（仓库 2 未配置 → null = 清空/继承全局）
+    assert.deepEqual(putBody, {
+      name: '改名后的仓库', enabled: false, priority: 50,
+      timeout_seconds: null, max_retries: null, engine: null,
+    })
     assert.equal(findModal(renderer).length, 0, '保存成功后弹窗应关闭')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
@@ -260,6 +272,123 @@ test('名称为空：前端校验拦截，不发请求', async () => {
     assert.equal(putCalled, false, '空名称不应发请求')
     assert.match(modalText(renderer), /名称/, '应提示名称必填')
     assert.equal(findModal(renderer).length, 1, '校验失败弹窗不应关闭')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// ---- issue #237：仓库级任务参数覆盖（超时/重试/引擎） ----
+
+// 弹窗内按 placeholder 模式定位任务参数输入框（超时/重试/引擎）
+function findParamInputs(renderer) {
+  const inputs = findInputs(renderer)
+  const ph = (i) => String(i.props.placeholder || '')
+  return {
+    timeout: inputs.find((i) => /留空继承全局（\d+s）/.test(ph(i))),
+    retries: inputs.find((i) => /留空继承全局（\d+ 次）/.test(ph(i))),
+    engine: inputs.find((i) => /留空继承全局（claude）/.test(ph(i))),
+  }
+}
+
+test('打开弹窗回填任务参数三字段（仓库覆盖值）', async () => {
+  mockApi()
+  const { renderer } = await renderRepos()
+  try {
+    await click(renderer, findButtons(renderer, '设置')[0]) // 仓库 1（高优先级仓库）
+    const { timeout, retries, engine } = findParamInputs(renderer)
+    assert.equal(timeout.props.value, '600', '任务超时应回填 600')
+    assert.equal(retries.props.value, '3', '最大重试应回填 3')
+    assert.equal(engine.props.value, 'dsh', '引擎应回填 dsh')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('任务参数提示展示全局默认值（继承全局时）', async () => {
+  mockApi()
+  const { renderer } = await renderRepos()
+  try {
+    await click(renderer, findButtons(renderer, '设置')[1]) // 仓库 2（未配置 → 提示继承全局）
+    const modal = findModal(renderer)[0]
+    const texts = textOf(modal)
+    assert.match(texts, /任务超时（秒）/, '应有任务超时字段')
+    assert.match(texts, /1800/, '提示应展示全局默认超时 1800 秒')
+    assert.match(texts, /claude/, '提示应展示全局默认引擎 claude')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('保存任务参数：PUT 携带三字段配置值', async () => {
+  mockApi()
+  const { renderer } = await renderRepos()
+  let putBody = null
+  mock.method(api, 'put', async (pathname, body) => { putBody = body; return {} })
+  try {
+    await click(renderer, findButtons(renderer, '设置')[0]) // 仓库 1（高优先级仓库）
+    const { timeout, retries, engine } = findParamInputs(renderer)
+    await change(renderer, timeout, '900')
+    await change(renderer, retries, '5')
+    await change(renderer, engine, 'HERMES')
+    await click(renderer, findButtons(renderer, '保存')[0])
+    assert.equal(putBody.timeout_seconds, 900, '超时应提交 900')
+    assert.equal(putBody.max_retries, 5, '重试应提交 5')
+    assert.equal(putBody.engine, 'hermes', '引擎应小写归一化提交 hermes')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('清空任务参数：留空提交 null（继承全局）', async () => {
+  mockApi()
+  const { renderer } = await renderRepos()
+  let putBody = null
+  mock.method(api, 'put', async (pathname, body) => { putBody = body; return {} })
+  try {
+    await click(renderer, findButtons(renderer, '设置')[0]) // 仓库 1 初始 600/3/dsh
+    const { timeout, retries, engine } = findParamInputs(renderer)
+    await change(renderer, timeout, '')
+    await change(renderer, retries, '')
+    await change(renderer, engine, '')
+    await click(renderer, findButtons(renderer, '保存')[0])
+    assert.equal(putBody.timeout_seconds, null, '清空超时应提交 null')
+    assert.equal(putBody.max_retries, null, '清空重试应提交 null')
+    assert.equal(putBody.engine, null, '清空引擎应提交 null')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('任务参数非法值：前端校验拦截，不发请求', async () => {
+  mockApi()
+  const { renderer } = await renderRepos()
+  let putCalled = false
+  mock.method(api, 'put', async () => { putCalled = true })
+  try {
+    await click(renderer, findButtons(renderer, '设置')[1])
+    const { timeout, retries, engine } = findParamInputs(renderer)
+    // 超时越界
+    await change(renderer, timeout, '0')
+    await click(renderer, findButtons(renderer, '保存')[0])
+    assert.equal(putCalled, false, '超时 0 不应发请求')
+    assert.match(modalText(renderer), /1~7200/, '应提示超时取值范围')
+    // 重试越界
+    await change(renderer, timeout, '')
+    await change(renderer, retries, '-1')
+    await click(renderer, findButtons(renderer, '保存')[0])
+    assert.equal(putCalled, false, '重试 -1 不应发请求')
+    assert.match(modalText(renderer), /0~20/, '应提示重试取值范围')
+    // 引擎非法
+    await change(renderer, retries, '')
+    await change(renderer, engine, 'bogus')
+    await click(renderer, findButtons(renderer, '保存')[0])
+    assert.equal(putCalled, false, '非法引擎不应发请求')
+    assert.match(modalText(renderer), /claude \/ hermes \/ dsh/, '应提示引擎白名单')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

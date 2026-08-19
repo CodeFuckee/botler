@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 ### Added
+- **仓库级任务参数覆盖：超时 / 重试 / 引擎按仓库差异化（issue #237）**：
+  任务超时（task_timeout_seconds）、重试次数（max_retries）、执行引擎
+  （worker.engine）原先都是全局配置，所有仓库共用一套参数——小工具仓库
+  10 分钟足够、大型仓库 30 分钟可能不够，全局一刀切导致任务频繁超时或
+  白白等待；某些仓库更适合特定引擎（纯前端用 claude、数据仓库用 dsh）
+  也无法按仓库差异化。本次新增仓库级覆盖：
+  - **repos 表新增三个可选字段**：`timeout_seconds`（任务超时，1~7200 秒）、
+    `max_retries`（重试次数，0~20）、`engine`（执行引擎，claude/hermes/dsh，
+    插件注册表白名单）——留空（NULL）= 继承全局，行为与现状完全一致；
+    数据库迁移 v23 为旧库补列，config.yaml → DB → config.yaml 双向往返同步；
+  - **解析口径统一**：新增 `botler/repo_params.py`（`effective_task_params`），
+    调度器/执行器与任务列表/详情共用同一「仓库级 > 全局」解析，展示与执行
+    不脱节；执行器 `run_task` 领取任务后按仓库解析生效配置（frozen Settings
+    用 dataclasses.replace 生成任务级副本，收尾即清理、多仓库并行安全），
+    claude/hermes/dsh 三引擎的超时控制与环境快照均取任务生效值；
+  - **仓库编辑弹窗**（RepoEditModal）新增「任务参数」分组：三个字段可编辑/
+    清空（留空提交 null 落库 NULL），提示文案展示全局默认值（来自设置页）；
+  - **任务列表/详情展示生效参数与来源**：任务抽屉与详情页新增「生效超时 /
+    生效重试 / 生效引擎」行，标注「仓库覆盖」或「继承全局」，接口
+    GET /api/tasks（列表/详情/概览右边栏/搜索）统一返回 timeout_seconds /
+    max_retries / effective_engine 与 timeout_source / max_retries_source /
+    engine_source；
+  - **新增测试**：`backend/tests/test_repo_params.py` 12 例（覆盖/继承/部分
+    覆盖/清空/engine 归一化/sqlite3.Row 兼容）、test_api_repos.py 仓库参数
+    保存/清空/非法值 8 例、test_api_tasks.py 任务生效参数 6 例、
+    test_executor.py 仓库级引擎/重试/超时生效与覆盖清理 5 例；前端
+    repos-edit-modal 任务参数保存/清空/校验 5 例与 tasks-effective-params
+    抽屉/详情展示 3 例，全量测试无 regression。
 - **聚合告警：任务失败率 / 队列堆积 / token 失效 / 磁盘空间主动通知（issue #229）**：
   平台有通知通道（网页通知 + webhook 推送，issue #21/#136）与 bot-failed 标签，
   但异常（连续 N 个任务失败、队列长时间堆积、GitLab token 失效、磁盘满）没有

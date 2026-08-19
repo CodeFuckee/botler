@@ -36,6 +36,7 @@ import time
 from pathlib import Path
 
 from ..config import ConfigManager
+from ..repo_params import effective_task_params, settings_with_overrides
 from ..database import (
     Database, STATUS_RUNNING, STATUS_RETRYING, STATUS_SUCCEEDED, STATUS_FAILED,
     STATUS_INTERRUPTED,
@@ -143,6 +144,11 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         # _build_prompt / _resume_prompt 据此追加「先手工解决冲突」指引，
         # 由 agent 完成合并，而不是让任务在准备阶段直接失败
         self._pull_conflict_workdirs: set[Path] = set()
+        # issue #237：任务级生效配置覆盖表——run_task 领取任务后按
+        # 「仓库级 > 全局」解析（超时/重试/引擎）暂存，_run_* 引擎执行 /
+        # 超时控制 / 环境快照经 _effective_cfg(task_id) 读取；任务收尾
+        # （含失败/停止路径）时清理。key 为 task_id，多仓库并行安全。
+        self._task_cfg_overrides: dict[int, object] = {}
     # ---- GitLab 调用兜底 ----
     def _call_with_fallback(self, repo, call):
         """用全局 client 执行 call(client)；遇 401/403（全局 token 失效）
@@ -230,6 +236,14 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         base.mkdir(parents=True, exist_ok=True)
         return base / f"task_{task_id}.log"
 
+    def _effective_cfg(self, task_id: int):
+        """任务生效配置（issue #237）：仓库级覆盖 > 全局。
+
+        run_task 按仓库解析的生效配置存于 _task_cfg_overrides；无覆盖
+        （测试直接调用 _run_once 等路径）时回退全局配置，行为与旧版一致。
+        """
+        return self._task_cfg_overrides.get(task_id) or self.config.get()
+
     # ---- 引擎健康探测与降级（issue #236） ----
     def _engine_chain(self, cfg) -> list[str]:
         """引擎降级链：主引擎 + worker.fallback_engines 备用引擎。
@@ -290,8 +304,36 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
 
     # ---- 重试与结果判定 ----
     def run_task(self, task_id: int) -> None:
-        """任务主流程：单次或重试执行，写状态机与收尾评论。"""
+        """任务主流程：单次或重试执行，写状态机与收尾评论。
+
+        issue #237：领取任务后按「仓库级 > 全局」解析生效配置（超时/
+        重试/引擎）——仓库字段留空时与全局完全一致；生效配置暂存
+        _task_cfg_overrides 供引擎执行 / 超时控制取值，收尾后清理。
+        """
+        task = self.db.get_task(task_id)
+        if task is None:
+            logger.warning("任务 %s 不存在，跳过", task_id)
+            return
         cfg = self.config.get()
+        repo = self.db.get_repo(task["repo_id"])
+        eff = effective_task_params(repo, cfg)
+        eff_cfg = settings_with_overrides(
+            cfg, timeout_seconds=eff["timeout_seconds"],
+            max_retries=eff["max_retries"], engine=eff["engine"])
+        self._task_cfg_overrides[task_id] = eff_cfg
+        try:
+            self._run_task_body(task_id, eff_cfg)
+        finally:
+            # 覆盖仅在任务生命周期内生效（含失败/停止路径），
+            # 收尾即清理，避免泄漏影响后续任务
+            self._task_cfg_overrides.pop(task_id, None)
+
+    def _run_task_body(self, task_id: int, cfg) -> None:
+        """任务主循环（issue #237 重构）：cfg 为仓库级覆盖后的生效配置。
+
+        原 run_task 主体整体保留（引擎降级链 / 重试循环 / 收尾），仅
+        cfg 来源改为调用方传入的生效配置，其余行为与旧版完全一致。
+        """
         # issue #236：引擎降级链——主引擎 + worker.fallback_engines 备用引擎
         # （去重、剔除主引擎与未注册引擎）；未配置备用引擎时行为与旧版一致
         engine_chain = self._engine_chain(cfg)

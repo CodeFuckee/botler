@@ -1041,3 +1041,96 @@ class TestExportTasks:
         row = resp.json()[0]
         assert row["repo_name"] is None
         assert row["issue_url"] is None
+
+
+class TestEffectiveTaskParamsInTaskList:
+    """任务列表/详情返回实际生效参数与来源（issue #237）。
+
+    timeout_seconds / max_retries / effective_engine 为按「仓库级 > 全局」
+    解析的生效值，timeout_source / max_retries_source / engine_source 为
+    来源（repo=仓库覆盖 / global=继承全局），前端据此展示「继承 or 覆盖」。
+    """
+
+    def test_repo_override_shown_in_list(self, client):
+        """仓库配置了覆盖 → 列表返回仓库级生效值与来源 repo。"""
+        tc, db = client
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, timeout_seconds=600, max_retries=5, engine="dsh")
+        task_id = _mk_task(db, repo_id)
+        resp = tc.get("/api/tasks")
+        assert resp.status_code == 200
+        task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
+        assert task["timeout_seconds"] == 600 and task["timeout_source"] == "repo"
+        assert task["max_retries"] == 5 and task["max_retries_source"] == "repo"
+        assert task["effective_engine"] == "dsh" and task["engine_source"] == "repo"
+
+    def test_no_override_inherits_global(self, client):
+        """仓库未配置 → 继承全局（worker 默认 1800s / 2 次 / claude）。"""
+        tc, db = client
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        resp = tc.get("/api/tasks")
+        task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
+        assert task["timeout_seconds"] == 1800 and task["timeout_source"] == "global"
+        assert task["max_retries"] == 2 and task["max_retries_source"] == "global"
+        assert task["effective_engine"] == "claude" and task["engine_source"] == "global"
+
+    def test_partial_override_mixes_sources(self, client):
+        """只配超时 → 超时 repo 覆盖，重试/引擎仍继承全局。"""
+        tc, db = client
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, timeout_seconds=300)
+        task_id = _mk_task(db, repo_id)
+        resp = tc.get("/api/tasks")
+        task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
+        assert task["timeout_seconds"] == 300 and task["timeout_source"] == "repo"
+        assert task["max_retries_source"] == "global"
+        assert task["engine_source"] == "global"
+
+    def test_cleared_params_inherit_global(self, client):
+        """清空（NULL）后 → 继承全局（与未配置一致）。"""
+        tc, db = client
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, timeout_seconds=600, max_retries=5, engine="dsh")
+        db.update_repo(repo_id, timeout_seconds=None, max_retries=None, engine=None)
+        task_id = _mk_task(db, repo_id)
+        resp = tc.get("/api/tasks")
+        task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
+        assert task["timeout_source"] == "global"
+        assert task["max_retries_source"] == "global"
+        assert task["engine_source"] == "global"
+
+    def test_detail_includes_effective_params(self, client):
+        """任务详情同样返回生效参数与来源。"""
+        tc, db = client
+        repo_id = _mk_repo(db)
+        db.update_repo(repo_id, timeout_seconds=900, max_retries=3, engine="hermes")
+        task_id = _mk_task(db, repo_id)
+        resp = tc.get(f"/api/tasks/{task_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["timeout_seconds"] == 900 and data["timeout_source"] == "repo"
+        assert data["max_retries"] == 3 and data["max_retries_source"] == "repo"
+        assert data["effective_engine"] == "hermes" and data["engine_source"] == "repo"
+
+    def test_global_custom_worker_config_used(self, tmp_path):
+        """全局 worker 自定义（非默认）时继承值为自定义值。"""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(CONFIG_TEXT.replace("worker: {}", """worker:
+  task_timeout_seconds: 3600
+  max_retries: 4
+  engine: dsh"""), encoding="utf-8")
+        config = ConfigManager(str(config_path))
+        db = Database(str(tmp_path / "t2.db"))
+        ctx = SimpleNamespace(config=config, db=db, gitlab=None, config_path=str(config_path))
+        app = FastAPI()
+        app.state.ctx = ctx
+        app.include_router(api_router)
+        tc = TestClient(app)
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        resp = tc.get("/api/tasks")
+        task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
+        assert task["timeout_seconds"] == 3600 and task["timeout_source"] == "global"
+        assert task["max_retries"] == 4 and task["max_retries_source"] == "global"
+        assert task["effective_engine"] == "dsh" and task["engine_source"] == "global"

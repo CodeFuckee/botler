@@ -327,6 +327,22 @@ export default function TaskDetail() {
             {/* issue #236：执行引擎 + 降级原因——任务详情能看出实际使用的引擎
                 与降级原因（主引擎不可用自动降级到备用引擎） */}
             <tr><th>执行引擎</th><td>{task.engine || '—'}</td></tr>
+            {/* issue #237：任务实际生效参数与来源（仓库级覆盖 or 继承全局） */}
+            <tr><th>生效超时</th><td>
+              {task.timeout_seconds != null
+                ? `${task.timeout_seconds} 秒（${task.timeout_source === 'repo' ? '仓库覆盖' : '继承全局'}）`
+                : '—'}
+            </td></tr>
+            <tr><th>生效重试</th><td>
+              {task.max_retries != null
+                ? `${task.max_retries} 次（${task.max_retries_source === 'repo' ? '仓库覆盖' : '继承全局'}）`
+                : '—'}
+            </td></tr>
+            <tr><th>生效引擎</th><td>
+              {task.effective_engine
+                ? `${task.effective_engine}（${task.engine_source === 'repo' ? '仓库覆盖' : '继承全局'}）`
+                : '—'}
+            </td></tr>
             {task.engine_fallback && (
               <tr><th>降级原因</th><td className="pre-wrap">{task.engine_fallback}</td></tr>
             )}

@@ -102,6 +102,9 @@ class RepoRow(TypedDict):
     prompt_template: str | None
     enabled: int | None
     priority: int | None
+    timeout_seconds: int | None
+    max_retries: int | None
+    engine: str | None
     deleted_at: str | None
     logo_path: str | None
     logo_updated_at: str | None
@@ -143,6 +146,9 @@ CREATE TABLE IF NOT EXISTS repos (
   prompt_template TEXT,
   enabled INTEGER DEFAULT 1,
   priority INTEGER DEFAULT 100,
+  timeout_seconds INTEGER,
+  max_retries INTEGER,
+  engine TEXT,
   deleted_at TEXT,
   logo_path TEXT,
   logo_updated_at TEXT,
@@ -691,6 +697,19 @@ class Database:
             if "engine_fallback" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN engine_fallback TEXT DEFAULT ''")
             conn.execute("PRAGMA user_version = 22")
+            ver = 22
+        if ver < 23:
+            # issue #237：仓库级任务参数覆盖——repos 表新增可选字段
+            # timeout_seconds / max_retries / engine（NULL = 继承全局）。
+            # 新库 _SCHEMA 已含；旧库（user_version=22）补列。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+            if "timeout_seconds" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN timeout_seconds INTEGER")
+            if "max_retries" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN max_retries INTEGER")
+            if "engine" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN engine TEXT")
+            conn.execute("PRAGMA user_version = 23")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -969,11 +988,14 @@ class Database:
                     enabled: bool = True, local_path: str | None = None,
                     remote_name: str | None = None,
                     remote_username: str | None = None,
-                    priority: int = DEFAULT_PRIORITY) -> int:
+                    priority: int = DEFAULT_PRIORITY,
+                    timeout_seconds: int | None = None,
+                    max_retries: int | None = None,
+                    engine: str | None = None) -> int:
         with self._conn(write=True) as conn:
             conn.execute(
-                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, remote_username, priority)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, remote_username, priority, timeout_seconds, max_retries, engine)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(gitlab_project_id) DO UPDATE SET
                      name=excluded.name, url=excluded.url,
                      prompt_template=excluded.prompt_template,
@@ -981,9 +1003,13 @@ class Database:
                      remote_name=excluded.remote_name,
                      remote_username=excluded.remote_username,
                      priority=excluded.priority,
+                     timeout_seconds=excluded.timeout_seconds,
+                     max_retries=excluded.max_retries,
+                     engine=excluded.engine,
                      deleted_at=NULL""",
                 (project_id, name, url, prompt_template, 1 if enabled else 0,
-                 local_path, remote_name, remote_username, priority),
+                 local_path, remote_name, remote_username, priority,
+                 timeout_seconds, max_retries, engine),
             )
             # 冲突更新路径 lastrowid 不可靠（issue #62：重新添加已删除仓库），
             # 按唯一键 project_id 反查
@@ -1030,7 +1056,7 @@ class Database:
                    WHERE id=?""", (repo_id,))
 
     def update_repo(self, repo_id: int, **fields) -> None:
-        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "priority", "logo_path", "logo_updated_at", "logo_mime"}
+        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "priority", "timeout_seconds", "max_retries", "engine", "logo_path", "logo_updated_at", "logo_mime"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return

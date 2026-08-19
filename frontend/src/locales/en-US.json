@@ -332,5 +332,10 @@
   "tasks.export": "Export",
   "tasks.exportTitle": "Export task data under current filters (CSV includes UTF-8 BOM for Excel; JSON for offline analysis)",
   "tasks.exportCsv": "CSV",
-  "tasks.exportJson": "JSON"
+  "tasks.exportJson": "JSON",
+  "tasks.effectiveTimeout": "Effective timeout",
+  "tasks.effectiveMaxRetries": "Effective max retries",
+  "tasks.effectiveEngine": "Effective engine",
+  "tasks.paramSourceRepo": "Repo override",
+  "tasks.paramSourceGlobal": "Inherit global"
 }

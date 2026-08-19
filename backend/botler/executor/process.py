@@ -151,9 +151,10 @@ class ProcessMixin:
             return  # 已采集过（重试/续跑），保持首次快照
         try:
             snapshot = collect_env_snapshot(
-                engine=self._engine(self.config.get()),
+                # issue #237：环境快照记录实际生效引擎/配置（仓库级覆盖 > 全局）
+                engine=self._engine(self._effective_cfg(task_id)),
                 workdir=workdir,
-                cfg=self.config.get(),
+                cfg=self._effective_cfg(task_id),
             )
         except Exception as e:  # noqa: BLE001 采集失败不阻塞任务执行
             logger.warning("任务 %s 环境快照采集失败: %s", task_id, e)
@@ -251,7 +252,9 @@ class ProcessMixin:
         工作区保留）；执行后解析 JSON 输出中的 session_id 落库。本方法由
         ClaudeEnginePlugin（botler.plugins.executors）委托调用。
         """
-        cfg = self.config.get()
+        # issue #237：仓库级任务参数覆盖——超时等取任务生效配置
+        # （仓库级 > 全局，run_task 解析暂存，无覆盖时等价全局）
+        cfg = self._effective_cfg(task_id)
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         # MCP 工具注入（issue #172）：任务执行前把启用中的工具写入工作区
         # .mcp.json（Claude Code 项目级 MCP 配置），供 agent 直接调用；
@@ -486,7 +489,8 @@ class ProcessMixin:
         from botler.executor import (  # 动态取包级符号：测试 monkeypatch botler.executor.<名> 才能生效
             HermesSdkRunner, HermesSdkNotInstalledError,
         )
-        cfg = self.config.get()
+        # issue #237：仓库级任务参数覆盖——超时等取任务生效配置
+        cfg = self._effective_cfg(task_id)
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_history))
         self._capture_env_snapshot(task_id, workdir)
         self._capture_base_sha(task_id, workdir, _git_env)
@@ -618,7 +622,8 @@ class ProcessMixin:
         from botler.executor import (  # 动态取包级符号：测试 monkeypatch botler.executor.<名> 才能生效
             DshRunner, DshSdkNotInstalledError,
         )
-        cfg = self.config.get()
+        # issue #237：仓库级任务参数覆盖——超时等取任务生效配置
+        cfg = self._effective_cfg(task_id)
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         self._capture_env_snapshot(task_id, workdir)
         self._capture_base_sha(task_id, workdir, _git_env)

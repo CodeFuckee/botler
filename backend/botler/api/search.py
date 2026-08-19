@@ -103,13 +103,16 @@ def search(
     # 任务序列化需要仓库名/URL（与 tasks 列表端点同法：包含软删除仓库，
     # 历史任务仍能解析出仓库名，issue #62）
     repos = {
-        r["id"]: {"name": r["name"], "url": r["url"]}
+        # issue #237：带出仓库级覆盖字段，任务序列化按「仓库级 > 全局」解析生效参数
+        r["id"]: {"name": r["name"], "url": r["url"],
+                  "timeout_seconds": r["timeout_seconds"],
+                  "max_retries": r["max_retries"], "engine": r["engine"]}
         for r in c.db.list_repos(include_deleted=True)
     }
     return {
         "query": term,
         "tasks": [
-            _task_to_dict(r, repos.get(r["repo_id"]))
+            _task_to_dict(r, repos.get(r["repo_id"]), settings=c.config.get())
             for r in c.db.search_tasks(term, limit)
         ],
         "issues": _search_issues(c, term, limit),

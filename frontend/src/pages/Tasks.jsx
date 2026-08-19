@@ -90,6 +90,11 @@ export function sourceLabelKey(t) {
   return t.triggered_by === 'reconcile' ? 'Reconcile' : t.triggered_by === 'manual' ? 'Manual' : 'Webhook'
 }
 
+// 生效参数来源文案（issue #237）：repo = 仓库覆盖，global = 继承全局
+export function paramSourceKey(source) {
+  return source === 'repo' ? 'Repo' : 'Global'
+}
+
 // 任务抽屉（issue #70）：窄视口下部分列被隐藏时，点操作列「⋯」按钮
 // 弹出右侧抽屉显示该任务全部字段（含被隐藏列的数据）。
 function TaskDrawer({ task, onClose }) {
@@ -121,6 +126,22 @@ function TaskDrawer({ task, onClose }) {
               )}
             </td></tr>
             <tr><th>{tr('tasks.source')}</th><td>{tr('tasks.source' + sourceLabelKey(task))}</td></tr>
+            {/* issue #237：任务实际生效参数与来源（仓库级覆盖 or 继承全局） */}
+            <tr><th>{tr('tasks.effectiveTimeout')}</th><td>
+              {task.timeout_seconds != null
+                ? `${task.timeout_seconds} 秒（${tr('tasks.paramSource' + paramSourceKey(task.timeout_source))}）`
+                : '—'}
+            </td></tr>
+            <tr><th>{tr('tasks.effectiveMaxRetries')}</th><td>
+              {task.max_retries != null
+                ? `${task.max_retries} 次（${tr('tasks.paramSource' + paramSourceKey(task.max_retries_source))}）`
+                : '—'}
+            </td></tr>
+            <tr><th>{tr('tasks.effectiveEngine')}</th><td>
+              {task.effective_engine
+                ? `${task.effective_engine}（${tr('tasks.paramSource' + paramSourceKey(task.engine_source))}）`
+                : '—'}
+            </td></tr>
             <tr><th>{tr('tasks.reason')}</th><td className="pre-wrap">{failedReason || '—'}</td></tr>
             <tr><th>{tr('tasks.commit')}</th><td>
               {task.commit_url ? (

@@ -652,11 +652,14 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `gitlab.webhook_secret` | — | webhook 校验 secret |
 | `worker.max_concurrent_repos` | 3 | 跨仓库并行上限 |
 | `repos[].priority` | 100 | 仓库调度优先级（1~999 整数，数字越小越优先；多个仓库同时有排队任务时按优先级派发，同优先级按任务提交时间排序） |
+| `repos[].timeout_seconds` | 空 | 仓库级任务超时（秒，1~7200；issue #237）。留空 = 继承全局 `worker.task_timeout_seconds`；仓库编辑弹窗「任务参数」分组可配置/清空，任务列表/详情展示该任务实际生效值与其来源（仓库覆盖 / 继承全局） |
+| `repos[].max_retries` | 空 | 仓库级任务重试次数（0~20；issue #237）。留空 = 继承全局 `worker.max_retries`（0 = 不重试）；其余同上 |
+| `repos[].engine` | 空 | 仓库级执行引擎（claude / hermes / dsh，插件注册表白名单；issue #237）。留空 = 继承全局 `worker.engine`；其余同上 |
 | `worker.issue_priority` | `["bug","test","feature"]` | issue 标签处理优先级（同仓库队列内按此顺序选任务派发，越靠前越先处理；未列出的标签排在最后，同优先级按 issue 创建时间升序（创建早的 issue 先处理）；设置页「任务调度」卡片可修改） |
-| `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟） |
-| `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
+| `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟）；可按仓库覆盖（`repos[].timeout_seconds`，issue #237） |
+| `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试）；可按仓库覆盖（`repos[].max_retries`，issue #237） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
-| `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（hermes-agent SDK，进程内调用，issue #171）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84/#171）；设置页「任务调度」卡片可切换（issue #113） |
+| `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（hermes-agent SDK，进程内调用，issue #171）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84/#171）；设置页「任务调度」卡片可切换（issue #113）；可按仓库覆盖（`repos[].engine`，issue #237） |
 | `worker.fallback_engines` | `[]` | 备用引擎降级（issue #236）：主引擎健康探测不可用或连续 `fallback_after_failures` 次「引擎类」失败（命令缺失 / API key 无效 / SDK 错误）时，按此顺序自动降级到备用引擎重试任务，并在任务记录与 issue 评论注明「引擎 X 不可用，已降级 Y 执行」；空列表 = 不降级（保持旧行为）。每次任务开始前做轻量健康探测（claude 检查 `claude --version`、hermes 检查 runner 可加载、dsh 检查 SDK 导入），探测结果展示在设置页「任务调度」卡片与插件管理页（引擎状态徽章）；引擎恢复后下一任务自动回到主引擎。设置页「任务调度」卡片可编辑 |
 | `worker.fallback_after_failures` | `2` | 连续引擎类失败降级阈值（issue #236）：正整数；任务级失败（代码改不对）不累计不降级 |
 | `worker.pause_windows` | `[]` | 定时暂停窗口（issue #169）：窗口串数组（`HH:MM-HH:MM`，24 小时制，支持跨天如 `22:00-02:00`）。窗口内停止开始新任务，已经开始执行的任务可以继续执行，未开始执行的任务等到窗口结束后自动开始执行；空数组 = 不启用（默认）。设置页「任务调度」卡片可编辑；兼容全角字符（issue #284：`09：00—12：00` 等中文输入法格式自动归一化为半角） |
