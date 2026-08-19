@@ -271,6 +271,23 @@ npm run lint                               # 检查全部前端代码（src + te
 CI 对应 job：`lint:backend`（ruff）与 `lint:frontend`（eslint）位于 security
 阶段，lint 失败即阻断流水线（`allow_failure: false`）。
 
+## 后端类型检查（mypy，issue #213）
+
+后端此前无类型检查工具（CI 只有 bandit/semgrep/ruff 均不查类型），类型错误
+（dict key 拼错、None 未判）只能运行时暴露。本次渐进式引入 mypy，先扫
+botler/ 纯逻辑核心模块（`gitlab_client.py` / `scheduler.py` / `database.py`），
+错误清零后作为阻断门禁；后续逐步扩大扫描范围并收紧规则（见
+`backend/mypy.ini`）。关键行已类型化：`database.py` 的 tasks / repos 行
+返回 `TaskRow` / `RepoRow` TypedDict，`row["commit_shaa"]` 这类拼错在
+mypy 下秒级拦截（含 "Did you mean" 提示）。
+
+```bash
+cd backend && uv pip install mypy           # 首次安装（已加入 requirements.txt 锁文件）
+mypy                                          # 走 mypy.ini，检查核心模块
+```
+CI 对应 job：`backend:mypy`（build 阶段，独立 `.venv-mypy`，`allow_failure:
+false` 阻断门禁，按 requirements.lock.txt 安装依赖）。
+
 ### E2E 架构（issue #212）
 
 - **链路**：真实浏览器（Chromium）→ vite preview（前端构建产物，SPA 路由，`/api`

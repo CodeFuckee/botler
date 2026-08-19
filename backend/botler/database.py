@@ -19,6 +19,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import TypedDict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,85 @@ _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript",
                 "engine", "environment", "base_sha",
                 "failure_category"}
+
+# ---- 关键行类型化（issue #213）----
+# tasks / repos 表行类型：mypy 下 dict key 拼错（如 row["commit_shaa"]）与
+# None 未判在静态检查时即报错，不再等到运行时才暴露。返回对象运行时仍是
+# sqlite3.Row（支持按列名取值），仅静态类型提升为 TypedDict，零运行时开销。
+
+
+class TaskRow(TypedDict):
+    """tasks 表行（issue #213）：任务状态机数据行类型。"""
+
+    id: int
+    repo_id: int
+    project_id: int
+    issue_iid: int
+    issue_title: str | None
+    status: str
+    attempt_count: int | None
+    triggered_by: str | None
+    exit_code: int | None
+    error_message: str | None
+    error_detail: str | None
+    log_path: str | None
+    started_at: str | None
+    finished_at: str | None
+    commit_sha: str | None
+    hermes_history: str | None
+    issue_labels: str | None
+    issue_updated_at: str | None
+    issue_created_at: str | None
+    engine: str | None
+    dsh_transcript: str | None
+    environment: str | None
+    base_sha: str | None
+    failure_category: str | None
+    manual_priority: int | None
+    created_at: str | None
+
+
+class RepoRow(TypedDict):
+    """repos 表行（issue #213）：仓库注册信息行类型。"""
+
+    id: int
+    gitlab_project_id: int
+    name: str
+    url: str
+    local_path: str | None
+    remote_name: str | None
+    remote_username: str | None
+    prompt_template: str | None
+    enabled: int | None
+    priority: int | None
+    deleted_at: str | None
+    logo_path: str | None
+    logo_updated_at: str | None
+    logo_mime: str | None
+    created_at: str | None
+
+
+def _as_task(row: sqlite3.Row | None) -> TaskRow | None:
+    """sqlite3.Row → TaskRow 静态类型收窄（issue #213）。
+
+    运行时对象保持不变（sqlite3.Row 支持按列名取值，行为与 TypedDict
+    下标访问一致），仅提升静态类型，让 mypy 能校验 key 拼写与 None 处理。
+    """
+    return cast(TaskRow, row) if row is not None else None
+
+
+def _as_task_list(rows: list[sqlite3.Row]) -> list[TaskRow]:
+    return [cast(TaskRow, r) for r in rows]
+
+
+def _as_repo(row: sqlite3.Row | None) -> RepoRow | None:
+    """sqlite3.Row → RepoRow 静态类型收窄（issue #213），见 _as_task。"""
+    return cast(RepoRow, row) if row is not None else None
+
+
+def _as_repo_list(rows: list[sqlite3.Row]) -> list[RepoRow]:
+    return [cast(RepoRow, r) for r in rows]
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
@@ -847,7 +927,7 @@ class Database:
                 "SELECT id FROM repos WHERE gitlab_project_id=?", (project_id,)).fetchone()
             return row["id"]
 
-    def list_repos(self, include_deleted: bool = False) -> list[sqlite3.Row]:
+    def list_repos(self, include_deleted: bool = False) -> list[RepoRow]:
         """列出仓库；默认过滤已软删除（deleted_at 非空）的行（issue #62）。
 
         任务历史的仓库名解析等场景需要包含已删除仓库时传 include_deleted=True。
@@ -858,14 +938,14 @@ class Database:
             sql = ("SELECT * FROM repos ORDER BY priority, id"
                    if include_deleted else
                    "SELECT * FROM repos WHERE deleted_at IS NULL ORDER BY priority, id")
-            return conn.execute(sql).fetchall()
+            return _as_repo_list(conn.execute(sql).fetchall())
 
-    def get_repo(self, repo_id: int) -> sqlite3.Row | None:
+    def get_repo(self, repo_id: int) -> RepoRow | None:
         with self._conn() as conn:
-            return conn.execute("SELECT * FROM repos WHERE id=?", (repo_id,)).fetchone()
+            return _as_repo(conn.execute("SELECT * FROM repos WHERE id=?", (repo_id,)).fetchone())
 
     def get_repo_by_project_id(self, project_id: int,
-                               include_deleted: bool = False) -> sqlite3.Row | None:
+                               include_deleted: bool = False) -> RepoRow | None:
         """按 gitlab project_id 查询；默认不返回已软删除的行（issue #62）。"""
         with self._conn() as conn:
             sql = ("SELECT * FROM repos WHERE gitlab_project_id=?"
@@ -970,12 +1050,12 @@ class Database:
                  labels_json, issue_updated_at or "", issue_created_at or ""))
             return cur.lastrowid
 
-    def get_task(self, task_id: int) -> sqlite3.Row | None:
+    def get_task(self, task_id: int) -> TaskRow | None:
         with self._conn() as conn:
-            return conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            return _as_task(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
 
     def list_tasks(self, status: str | list[str] | None = None, repo_id: int | None = None,
-                   search: str | None = None, limit: int = 50, offset: int = 0) -> list[sqlite3.Row]:
+                   search: str | None = None, limit: int = 50, offset: int = 0) -> list[TaskRow]:
         sql = "SELECT * FROM tasks WHERE 1=1"
         params: list = []
         if status:
@@ -995,7 +1075,7 @@ class Database:
         sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         with self._conn() as conn:
-            return conn.execute(sql, params).fetchall()
+            return _as_task_list(conn.execute(sql, params).fetchall())
 
     def count_tasks(self, status: str | list[str] | None = None,
                     repo_id: int | None = None, search: str | None = None) -> int:
@@ -1019,27 +1099,27 @@ class Database:
         with self._conn() as conn:
             return conn.execute(sql, params).fetchone()["c"]
 
-    def find_active_task(self, project_id: int, issue_iid: int) -> sqlite3.Row | None:
+    def find_active_task(self, project_id: int, issue_iid: int) -> TaskRow | None:
         with self._conn() as conn:
-            return conn.execute(
+            return _as_task(conn.execute(
                 """SELECT * FROM tasks WHERE project_id=? AND issue_iid=?
                    AND status IN ('queued','running','retrying')""",
-                (project_id, issue_iid)).fetchone()
+                (project_id, issue_iid)).fetchone())
 
-    def find_latest_task(self, project_id: int, issue_iid: int) -> sqlite3.Row | None:
+    def find_latest_task(self, project_id: int, issue_iid: int) -> TaskRow | None:
         """该 issue 最近一次的任务记录（issue #117：概览页重试按钮用）。
 
         按任务 id 倒序取最新一条（id 递增即创建先后，同 issue 可能因
         重新指派/对账补入队存在多条任务记录）；无记录返回 None。
         """
         with self._conn() as conn:
-            return conn.execute(
+            return _as_task(conn.execute(
                 """SELECT * FROM tasks WHERE project_id=? AND issue_iid=?
                    ORDER BY id DESC LIMIT 1""",
-                (project_id, issue_iid)).fetchone()
+                (project_id, issue_iid)).fetchone())
 
     def list_tasks_by_issue(self, project_id: int, issue_iid: int,
-                            limit: int = 50) -> list[sqlite3.Row]:
+                            limit: int = 50) -> list[TaskRow]:
         """该 issue 的全部任务记录（issue #167：概览页右边栏
         「查看执行的详情」数据源）。
 
@@ -1048,10 +1128,10 @@ class Database:
         供前端任务列表切换查看。
         """
         with self._conn() as conn:
-            return conn.execute(
+            return _as_task_list(conn.execute(
                 """SELECT * FROM tasks WHERE project_id=? AND issue_iid=?
                    ORDER BY id DESC LIMIT ?""",
-                (project_id, issue_iid, limit)).fetchall()
+                (project_id, issue_iid, limit)).fetchall())
 
     def succeeded_durations(self) -> list[tuple[int, str, str, float]]:
         """已完成（succeeded）任务的 (repo_id, repo_name, 完成日, 用时秒数)

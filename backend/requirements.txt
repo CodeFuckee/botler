@@ -17,6 +17,10 @@ prometheus-client>=0.20
 pytest-xdist>=3.0
 # 代码质量门禁（issue #203）：ruff check botler tests（规则见 ruff.toml，仅 F 组）
 ruff>=0.9
+# 类型检查（issue #213）：渐进式 mypy 门禁——先扫核心纯逻辑模块
+# （gitlab_client/scheduler/database），错误清零后进 CI；
+# 后续逐步扩大扫描范围与收紧规则
+mypy>=2.0
 minio>=7.2
 # Web 终端（issue #183）：terminado 提供标准 WebSocket 终端服务，Tornado 承载
 tornado>=6.4

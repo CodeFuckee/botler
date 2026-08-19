@@ -219,7 +219,10 @@ class TaskScheduler:
             task["repo_id"], task["issue_iid"])
         manual = task["manual_priority"]
         try:
-            manual_value = int(manual)
+            # manual_priority 为 INT 列（TaskRow 类型 int | None）；历史脏数据
+            # 可能写入非数字串，int() 转换失败时按 0 兜底（issue #213 类型化后
+            # None 分支显式处理，不再依赖 int(None) 抛错）
+            manual_value = int(manual) if manual is not None else 0
         except (TypeError, ValueError):
             manual_value = 0
         if manual is not None:

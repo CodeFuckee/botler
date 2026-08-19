@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 ### Added
+- **后端渐进式引入 mypy 类型检查（issue #213）**：后端此前无类型检查工具
+  （CI 只有 bandit/semgrep/ruff 均不查类型），类型错误（dict key 拼错、None
+  未判）只能运行时暴露。本次按 issue 方案渐进式启用 mypy：
+  - **配置**：新增 `backend/mypy.ini`——先扫 botler/ 纯逻辑核心模块
+    （`gitlab_client.py` / `scheduler.py` / `database.py`），`check_untyped_defs`
+    开启（未注解函数体同样检查，None 未判 / key 拼错静态暴露），
+    `follow_imports = skip` 收敛范围（executor 等历史债务后续 issue 逐步纳入）；
+  - **关键行类型化**：`database.py` 新增 `TaskRow` / `RepoRow` TypedDict
+    （tasks / repos 表全列），`get_task` / `list_tasks` / `find_active_task` /
+    `find_latest_task` / `list_tasks_by_issue` / `get_repo` / `get_repo_by_project_id` /
+    `list_repos` 返回类型由 `sqlite3.Row` 提升为 TypedDict（`_as_task` /
+    `_as_repo` 等助手 cast 收窄，运行时对象不变、零开销）——`row["commit_shaa"]`
+    这类拼错在 mypy 下秒级拦截（含 "Did you mean" 提示）；
+  - **修复**：`gitlab_client.py` `update_project_avatar` 返回类型收窄
+    （dict | list | None → dict | None，assert 静态收窄，与文件内既有模式一致）；
+    `scheduler.py` 人工优先级 None 分支显式处理（不再依赖 int(None) 抛错兜底）；
+  - **CI**：新增 `backend:mypy` job（build 阶段，独立 `.venv-mypy` 避免与
+    `backend:test` 并行安装竞态，按 requirements.lock.txt 安装依赖，
+    `allow_failure: false` 阻断门禁）；mypy 已加入 `requirements.txt` 并随锁文件
+    固定（mypy==2.3.1）；
+  - **测试**：新增 `tests/test_mypy_gate.py` 9 例——核心模块零错误、mypy.ini
+    扫描范围、TypedDict key 拼错被拦截（对照正确 key 不误报）、CI job 存在且
+    阻断、依赖声明、tasks/repos 行运行时形状与取值行为不回归；后端全量测试
+    无 regression。
 - **新增 Prometheus 指标端点 /metrics（issue #208）**：平台此前只有 /api/health 与日志，
   无结构化运行指标（任务队列长度、执行时长分布、失败率、webhook 处理延迟、GitLab API
   调用次数/错误率、磁盘空间等均无法持续观测）。本次新增 `GET /metrics`（Prometheus

@@ -373,9 +373,13 @@ class GitLabClient:
         avatar_url 等字段）。需要 Maintainer 及以上角色（bot token /
         仓库 remote token 均满足）。
         """
-        return self._request(
+        resp = self._request(
             "PUT", f"/projects/{project_id}",
             files={"avatar": (filename, data, mime)})
+        # _request 声明返回 dict | list | None，头像上传成功返回项目对象
+        # （dict）；静态类型收窄到 dict | None（issue #213，mypy 门禁）
+        assert isinstance(resp, dict) or resp is None
+        return resp
 
     def get_project_by_path(self, path: str) -> dict:
         """path 形如 group/project，需 URL 编码。"""

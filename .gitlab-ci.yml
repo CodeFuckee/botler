@@ -1040,6 +1040,65 @@ backend:test:
         path: backend/coverage.xml
     expire_in: 1 week
 
+# ----------------------------------------------------------
+# --- 后端：mypy 类型检查门禁（issue #213）---
+# 后端此前无类型检查工具（CI 只有 bandit/semgrep/ruff 均不查类型），
+# 类型错误（dict key 拼错、None 未判）只能运行时暴露。本次渐进式引入
+# mypy：先扫 botler/ 纯逻辑核心模块（gitlab_client / scheduler /
+# database，见 backend/mypy.ini），错误清零后作为阻断门禁；后续逐步
+# 扩大扫描范围并收紧规则。与 backend:test 同 stage 并行，为避免并发
+# 写同一 .venv 的安装竞态（与 security 阶段 .venv-semgrep/.venv-lint
+# 同模式），使用独立 .venv-mypy；依赖按 requirements.lock.txt 安装
+# （mypy 已随 issue #213 加入锁文件）。
+# ----------------------------------------------------------
+backend:mypy:
+  extends: [.backend_setup, .docs_only_skip]
+  stage: build
+  tags:
+    - linux
+    - code01
+  timeout: 15m
+  allow_failure: false
+  cache:
+    key: uv-cache-${CI_COMMIT_REF_SLUG}
+    paths:
+      - backend/.uv-cache/
+    policy: pull-push
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      # uv 缓存目录（与 backend:test / security:bandit 共享 CI 缓存）
+      export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
+
+      echo "=== 1. 确保 uv 可用 ==="
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+      echo "=== 2. 独立 mypy 虚拟环境（shell executor 工作目录跨 job 保留）==="
+      if [ ! -x .venv-mypy/bin/python ]; then
+        rm -rf .venv-mypy
+        uv venv .venv-mypy
+      fi
+
+      echo "=== 3. 安装项目依赖（requirements.lock.txt 含 mypy==2.3.1）==="
+      uv pip install --python .venv-mypy/bin/python -r requirements.lock.txt -i ${PIP_INDEX_URL}
+
+      echo "=== 4. mypy 类型检查（mypy.ini：核心模块零错误门禁）==="
+      .venv-mypy/bin/mypy --version
+      .venv-mypy/bin/mypy
+      echo "✓ mypy 检查通过（gitlab_client / scheduler / database 零错误）"
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [backend:mypy] 总用时: ${DURATION} 秒"
+      echo "========================================="
+
 # ================================================================
 # Stage: e2e —— 浏览器级端到端测试（Playwright，issue #212）
 # ----------------------------------------------------------------
