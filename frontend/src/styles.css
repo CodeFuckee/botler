@@ -4539,12 +4539,25 @@ code {
    （全部按钮在底部）；桌面端（>860px）保持 issue #331 全部按钮在顶部。 */
 @media (max-width: 860px) and (orientation: portrait) {
   .drawer.issue-drawer .modal-header {
-    flex-wrap: wrap;
+    /* issue #341：标题与 × 关闭按钮强制同一行——禁止换行（覆盖 issue #334
+       的 flex-wrap: wrap），标题过长时由 .issue-drawer-title 省略号截断、
+       按钮保持完整；修复前标题过长时 × 关闭按钮被挤到第二行 */
+    flex-wrap: nowrap;
   }
   .drawer.issue-drawer .issue-drawer-actions {
     display: flex;
     flex-wrap: wrap;
-    flex-shrink: 1;
+    /* issue #341：× 关闭按钮不压缩——改回 flex-shrink: 0（issue #334 曾
+       改为 1 允许收缩），标题过长时由标题侧省略号截断、按钮保持完整 */
+    flex-shrink: 0;
+  }
+  /* issue #341：标题占满剩余空间（flex-grow: 1）并可收缩（flex-shrink: 1）
+     触发省略号——配合全局 min-width: 0 / overflow: hidden /
+     text-overflow: ellipsis / white-space: nowrap，标题过长时尽可能显示、
+     其余以省略号截断；× 关闭按钮（.issue-drawer-actions）flex-shrink: 0
+     保持完整不被压缩 */
+  .drawer.issue-drawer .issue-drawer-title {
+    flex: 1 1 auto;
   }
   /* 竖屏下头部操作区只保留 × 关闭按钮，其余按钮（关闭 issue / 查看执行的
      详情 / 在 GitLab 中打开）置于底部 sticky 操作栏 */

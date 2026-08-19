@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 ### Added
+- **竖屏下概览页 issue 详情右边栏标题与 × 关闭按钮同行、标题过长省略号（issue #341）**：
+  竖屏（≤860px 且 orientation: portrait，手机/窄窗口竖屏）下概览页 issue 详情
+  右边栏头部（`.drawer.issue-drawer .modal-header`）原先允许换行（issue #334
+  的 `flex-wrap: wrap`）——标题过长时右上角「关闭右边栏（×）」按钮被挤到第二行；
+  本次要求 × 关闭按钮与标题始终同一行，标题放不下时尽可能显示、其余以省略号
+  截断（ellipsis），按钮保持完整不被压缩：
+  - **改动范围**：仅在竖屏断点（`@media (max-width: 860px) and
+    (orientation: portrait)`）内调整 issue 抽屉头部三条规则——头部
+    `flex-wrap: nowrap`（覆盖 issue #334 的 wrap，标题与按钮强制同行）；
+    头部操作区 `flex-shrink: 0`（× 按钮不被压缩，issue #334 曾改为 1）；
+    新增标题 `flex: 1 1 auto`（占满剩余空间、可收缩，配合全局
+    `min-width: 0 / overflow: hidden / text-overflow: ellipsis /
+    white-space: nowrap` 触发省略号）。横屏窄视口（landscape，头部操作区整体
+    隐藏、按钮在底部操作栏）与桌面端（>860px，原本就同行 + 省略号）不受影响；
+    仅作用于概览页 issue 抽屉（`.drawer.issue-drawer`），任务执行详情第二层/
+    流水线抽屉不波及；
+  - **新增测试**：`tests/overview-drawer-actions-sticky.test.mjs` 更新 issue
+    #334 旧断言（头部 `flex-wrap: wrap` → `nowrap`、操作区 `flex-shrink: 1`
+    → `0`）并新增 2 例——竖屏断点内头部禁止换行 + 标题 `flex: 1 1 auto` +
+    操作区 `flex-shrink: 0`（源码级防回归）、标题全局省略号四件套保留（省略号
+    依赖）；e2e `issue-drawer-sticky.spec.js` 新增 2 例——375×667 竖屏视口下
+    超长标题与 × 按钮同行（bounding top 相等）、标题溢出省略
+    （scrollWidth > clientWidth + text-overflow: ellipsis）、× 按钮完整落在
+    视口内；短标题边界（完整显示、不省略）。全量前端单元测试（1367 例）无
+    regression。
 - **竖屏下概览页 issue 详情右边栏底部按钮改为右对齐（issue #340）**：竖屏
   （≤860px 且 orientation: portrait，手机/窄窗口竖屏）下概览页 issue 详情
   右边栏的底部 sticky 操作栏（`.drawer.issue-drawer .drawer-bottom-actions`，

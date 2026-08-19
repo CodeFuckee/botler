@@ -309,17 +309,18 @@ test('styles.css：竖屏下 issue 抽屉头部仅保留 × 关闭按钮、其�
   assert.match(actions[1], /display:\s*flex/, '竖屏下头部操作区应恢复显示（flex）')
   // 375px 竖屏按钮较多时头部允许换行，避免溢出 sticky 头部（截断/横向滚动）
   assert.match(actions[1], /flex-wrap:\s*wrap/, '竖屏下头部操作区应允许按钮换行')
-  assert.match(actions[1], /flex-shrink:\s*1/,
-               '竖屏下头部操作区应可收缩（覆盖基础规则 flex-shrink:0）')
+  assert.match(actions[1], /flex-shrink:\s*0/,
+               '竖屏下头部操作区不应被压缩（× 关闭按钮保持完整）')
   // 竖屏下头部操作区只保留 × 关闭按钮——其余按钮（关闭 issue / 查看执行的
   // 详情 / 在 GitLab 中打开）移到底部 sticky 操作栏，不在头部重复
   const headHide = block.match(/\.drawer\.issue-drawer\s+\.issue-drawer-actions\s+\.btn:not\(\.modal-close\)\s*\{([^}]*)\}/)
   assert.ok(headHide, 'portrait 断点内应声明头部操作区「非 × 按钮」隐藏规则')
   assert.match(headHide[1], /display:\s*none/, '竖屏下头部操作区非 × 按钮应隐藏（仅保留 ×）')
-  // 头部（.modal-header）整体允许换行：标题一行、关闭按钮一行
+  // 头部（.modal-header）禁止换行：标题与 × 关闭按钮强制同一行
+  // （issue #341：标题过长时由省略号截断，按钮保持完整，不再换行）
   const header = block.match(/\.drawer\.issue-drawer\s+\.modal-header\s*\{([^}]*)\}/)
-  assert.ok(header, 'portrait 断点内应声明 issue 抽屉头部换行规则')
-  assert.match(header[1], /flex-wrap:\s*wrap/, '竖屏下头部应允许换行（标题与按钮分行）')
+  assert.ok(header, 'portrait 断点内应声明 issue 抽屉头部布局规则')
+  assert.match(header[1], /flex-wrap:\s*nowrap/, '竖屏下头部应禁止换行（标题与关闭按钮同行）')
   // 底部操作栏（.drawer-bottom-actions）在竖屏下恢复显示（sticky 常驻底部，
   // 继承 860px 断点的 flex/sticky/bottom 布局），承载「关闭 issue / 查看执行
   // 的详情 / 在 GitLab 中打开」按钮——覆盖 issue #333 的 display:none
@@ -347,4 +348,43 @@ test('styles.css：竖屏下 issue 抽屉底部操作栏按钮右对齐（issue 
                '竖屏下底部操作栏按钮应右对齐（justify-content: flex-end）')
   // 布局继承不受影响：仍为 flex 行容器（sticky 常驻底部布局来自 860px 断点）
   assert.match(bottom[1], /display:\s*flex/, '竖屏下底部操作栏仍应保持 flex 布局')
+})
+
+// 竖屏标题与 × 关闭按钮同行 + 省略号（issue #341）：竖屏（≤860px 且
+// orientation: portrait）下概览页 issue 详情右边栏头部（.modal-header）
+// 原先允许换行（issue #334 的 flex-wrap: wrap）——标题过长时 × 关闭按钮
+// 被挤到第二行；本 issue 要求 × 关闭按钮与标题始终同一行，标题过长时
+// 尽可能显示、其余以省略号截断（ellipsis），按钮完整不被压缩。修复前
+// 竖屏断点内 header 为 flex-wrap: wrap、actions 为 flex-shrink: 1、无
+// 标题 flex 规则，本用例必失败。
+test('styles.css：竖屏下 issue 抽屉标题与 × 关闭按钮同行、标题省略号（issue #341）', () => {
+  const block = portraitMediaBlock(styles)
+  // 头部禁止换行：标题与 × 关闭按钮强制同一行
+  const header = block.match(/\.drawer\.issue-drawer\s+\.modal-header\s*\{([^}]*)\}/)
+  assert.ok(header, 'portrait 断点内应声明 issue 抽屉头部布局规则')
+  assert.match(header[1], /flex-wrap:\s*nowrap/,
+               '竖屏下头部应禁止换行（标题与关闭按钮同行）')
+  // 标题占满剩余空间并可收缩（flex: 1 1 auto）——配合全局 min-width: 0
+  // 触发省略号截断（标题尽可能显示，其余省略号）
+  const title = block.match(/\.drawer\.issue-drawer\s+\.issue-drawer-title\s*\{([^}]*)\}/)
+  assert.ok(title, 'portrait 断点内应声明 issue 抽屉标题规则')
+  assert.match(title[1], /flex:\s*1\s+1\s+auto/,
+               '竖屏下标题应占满剩余空间并可收缩（flex: 1 1 auto）')
+  // × 关闭按钮不压缩：标题被截断时按钮保持完整可见
+  const actions = block.match(/\.drawer\.issue-drawer\s+\.issue-drawer-actions\s*\{([^}]*)\}/)
+  assert.ok(actions, 'portrait 断点内应声明 issue 抽屉头部操作区规则')
+  assert.match(actions[1], /flex-shrink:\s*0/,
+               '竖屏下 × 关闭按钮不应被压缩（flex-shrink: 0）')
+})
+
+// 标题省略号依赖的全局规则（issue #341）：省略号由 .issue-drawer-title
+// 全局规则生效（min-width: 0 + overflow: hidden + text-overflow: ellipsis
+// + white-space: nowrap）——竖屏断点内只需保证「头部不换行 + 标题可收缩 +
+// 按钮不压缩」，省略号本身依赖全局规则；该全局规则缺失时竖屏省略号会失效
+test('styles.css：issue 抽屉标题全局省略号四件套保留（issue #341 依赖）', () => {
+  const body = ruleBody(styles, '\\.issue-drawer-title')
+  assert.match(body, /min-width:\s*0/, '标题应可收缩至 0（flex 下省略号前提）')
+  assert.match(body, /overflow:\s*hidden/, '标题应隐藏溢出内容')
+  assert.match(body, /text-overflow:\s*ellipsis/, '标题溢出应显示省略号')
+  assert.match(body, /white-space:\s*nowrap/, '标题应禁止换行（单行省略）')
 })

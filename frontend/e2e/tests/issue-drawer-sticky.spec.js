@@ -315,3 +315,112 @@ test('流水线详情右边栏头部紧贴抽屉顶部，滚动后顶部无内�
   expect(info.inHeader,
          `滚动后抽屉顶部条带应命中头部而非内容（命中：${info.elCls}）`).toBe(true)
 })
+
+// 竖屏标题与 × 关闭按钮同行 + 省略号（issue #341）：竖屏（375×667）下
+// issue 详情右边栏头部原先 flex-wrap: wrap——标题过长时 × 关闭按钮被挤到
+// 第二行；本用例在真实 Chromium 竖屏视口用超长标题断言：
+//   1) 头部 flex-wrap computed style 为 nowrap（标题与按钮不换行）；
+//   2) 标题与 × 关闭按钮同一行（bounding top 相等）；
+//   3) 标题溢出省略（scrollWidth > clientWidth + text-overflow: ellipsis
+//      + white-space: nowrap + overflow: hidden）——标题尽可能显示、
+//      其余以省略号截断；
+//   4) × 关闭按钮完整可见、未被压缩出视口。
+// 修复前竖屏头部 flex-wrap 为 wrap（标题与按钮分行），本用例必失败。
+test('竖屏视口：超长标题与 × 关闭按钮同行且省略号截断（issue #341）', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 })
+  const longTitle = ('这是一个超长的 issue 标题，用于验证竖屏下标题与关闭按钮'
+    + '同一行时超出部分以省略号截断并尽可能完整显示，避免按钮被挤到第二行').repeat(6)
+  const fixture = tallIssueFixture()
+  fixture.repos[0].issues[0].title = longTitle
+  await mockGitLabApis(page, { issues: fixture })
+  // 详情接口（评论/活动）：返回空评论即可
+  await page.route('**/api/issues/123/332/detail', (route) => {
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notes: [], engine: 'claude', task_id: null,
+        task_duration_seconds: null, task_status: null,
+      }),
+    })
+  })
+
+  await page.goto('/overview')
+  await page.locator('.issue-link').first().click()
+  const drawer = page.locator('.issue-drawer')
+  await expect(drawer).toBeVisible()
+  // 等 drawer-in 滑入动画（240ms）完成后再断言几何位置，避免中间帧偏移
+  await page.waitForTimeout(600)
+  const header = drawer.locator('.modal-header')
+
+  // 1. 头部禁止换行（标题与按钮同一行）
+  expect(await header.evaluate((el) => getComputedStyle(el).flexWrap)).toBe('nowrap')
+
+  // 2. 标题与 × 关闭按钮同行 + 标题省略号 + 按钮完整可见
+  const layout = await drawer.evaluate((el) => {
+    const title = el.querySelector('.issue-drawer-title')
+    const close = el.querySelector('.issue-drawer-actions .modal-close')
+    const tr = title.getBoundingClientRect()
+    const cr = close.getBoundingClientRect()
+    const cs = getComputedStyle(title)
+    return {
+      sameLine: Math.abs(tr.top - cr.top) < 5,
+      titleOverflow: title.scrollWidth > title.clientWidth,
+      textOverflow: cs.textOverflow,
+      whiteSpace: cs.whiteSpace,
+      overflowX: cs.overflowX,
+      closeWidth: cr.width,
+      closeInViewport: cr.right <= window.innerWidth && cr.left >= 0,
+    }
+  })
+  expect(layout.sameLine,
+         '标题与 × 关闭按钮应处于同一行（垂直居中偏移 <5px，换行时差 >38px）').toBe(true)
+  expect(layout.titleOverflow, '超长标题应发生溢出（scrollWidth > clientWidth）').toBe(true)
+  expect(layout.textOverflow).toBe('ellipsis')
+  expect(layout.whiteSpace).toBe('nowrap')
+  expect(layout.overflowX).toBe('hidden')
+  expect(layout.closeWidth, '× 关闭按钮不应被压缩').toBeGreaterThan(0)
+  expect(layout.closeInViewport, '× 关闭按钮应完整落在视口内').toBe(true)
+})
+
+// 边界（issue #341）：竖屏下短标题不截断——标题完整显示、与 × 关闭按钮
+// 同行、按钮完整可见（省略号只在标题放不下时触发）
+test('竖屏视口：短标题完整显示、不省略（issue #341 边界）', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 })
+  const fixture = tallIssueFixture()
+  fixture.repos[0].issues[0].title = '短标题测试'
+  await mockGitLabApis(page, { issues: fixture })
+  await page.route('**/api/issues/123/332/detail', (route) => {
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notes: [], engine: 'claude', task_id: null,
+        task_duration_seconds: null, task_status: null,
+      }),
+    })
+  })
+
+  await page.goto('/overview')
+  await page.locator('.issue-link').first().click()
+  const drawer = page.locator('.issue-drawer')
+  await expect(drawer).toBeVisible()
+  // 等 drawer-in 滑入动画（240ms）完成后再断言几何位置
+  await page.waitForTimeout(600)
+  const header = drawer.locator('.modal-header')
+
+  expect(await header.evaluate((el) => getComputedStyle(el).flexWrap)).toBe('nowrap')
+  const info = await drawer.evaluate((el) => {
+    const title = el.querySelector('.issue-drawer-title')
+    const close = el.querySelector('.issue-drawer-actions .modal-close')
+    const tr = title.getBoundingClientRect()
+    const cr = close.getBoundingClientRect()
+    return {
+      sameLine: Math.abs(tr.top - cr.top) < 5,
+      noOverflow: title.scrollWidth <= title.clientWidth,
+      closeVisible: cr.width > 0 && cr.height > 0,
+    }
+  })
+  expect(info.sameLine,
+         '标题与 × 关闭按钮应处于同一行（垂直居中偏移 <5px，换行时差 >38px）').toBe(true)
+  expect(info.noOverflow, '短标题不应被截断（无省略号）').toBe(true)
+  expect(info.closeVisible, '× 关闭按钮应完整可见').toBe(true)
+})
