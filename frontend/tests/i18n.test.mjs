@@ -210,8 +210,6 @@ test('集成：Overview 在 I18nProvider(en-US) 下渲染英文板块标题', as
     if (pathname === '/api/pipelines/overview') return { pipelines: [], errors: [] }
     if (pathname === '/api/issues/overview') return { repos: [] }
     if (pathname.startsWith('/api/inspirations')) return { repos: [] }
-    if (pathname === '/api/usage/stats') return { summary: null, by_engine: [], by_repo: [] }
-    if (pathname.startsWith('/api/issues/completion-stats')) return { completed_count: 0, trend: [] }
     if (pathname.startsWith('/api/deepseek/balance')) return { configured: false }
     if (pathname.startsWith('/api/notifications')) return { events: [] }
     throw new Error('unexpected ' + pathname)

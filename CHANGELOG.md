@@ -5,7 +5,30 @@
 ## [Unreleased]
 ### Added
 
-- **仓库设置页支持把 GitLab 图标同步回本页面（issue #320）**：此前仓库管理
+- **issue完成耗时和token用量统计从概览页移动到统计页（issue #322）**：概览页
+  最下方的「Issue 完成耗时」（issue #180/#288）与「Token 用量统计」（issue
+  #235）两个统计板块整体迁入「统计」页（issue #264 看板页），概览页回归
+  任务/流水线等实时运行信息，统计数据集中到统计页一处：
+  - **前端 `Stats.jsx`**：迁入「Issue 完成耗时」板块（平均完成耗时 + 逐日
+    走势图 + 各仓库平均耗时与走势拆分，`CompletionTrendChart` 组件同步迁移）
+    与「Token 用量统计」板块（按仓库/引擎/时间范围过滤器 + 合计 tokens/估算
+    费用 + 按引擎/仓库分组表格）；两个板块沿用原 60 秒低频轮询与接口
+    （`GET /api/issues/completion-stats` / `GET /api/usage/stats`），零后端
+    改动；dashboard 无任务（空态）时两个板块仍独立渲染各自空态，互不干扰；
+    用量过滤器仓库下拉改由 `GET /api/repos` 提供（原概览页复用开放 issue
+    聚合列表）；
+  - **前端 `Overview.jsx`**：移除两个统计板块及对应状态/轮询/常量/走势图组件
+    （`COMPLETION_STATS_POLL_MS` / `USAGE_STATS_POLL_MS` 随迁至统计页）；
+  - **i18n**：涉及的 `overview.*` 文案 key 全部重命名为 `stats.*`（zh-CN /
+    en-US 双语同步）；
+  - **测试**：原 `overview-completion-stats.test.mjs` /
+    `overview-usage-stats.test.mjs` 迁移重写为 `stats-completion-stats.test.mjs`
+    / `stats-usage-stats.test.mjs`（断言对象改为统计页，并新增「概览页不再
+    包含该板块」迁移校验）；`stats-page.test.mjs` 补充迁入板块源码/空态断言；
+    `overview-issue-task` / `overview-inspirations` 等概览页测试同步更新板块
+    顺序/引用；实现前新增测试可复现失败，全量前端测试 + 覆盖率门禁通过。
+
+- **仓库设置页支持把 GitLab 图标同步回本页面（issue #320）**：此前仓库管理**仓库设置页支持把 GitLab 图标同步回本页面（issue #320）**：此前仓库管理
   （设置）页面只能把本地生成的 logo 单向同步到 GitLab（issue #297），GitLab
   侧更新项目图标（头像）后设置页面无法拉取展示。本次补齐反向同步，形成双向
   同步闭环：

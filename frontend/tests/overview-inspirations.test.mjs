@@ -90,9 +90,8 @@ test('源码：灵感板块位于开放 Issue 下方、CI/CD 流水线上方，�
   const insp = overview.indexOf('className="inspirations-section"')
   const issues = overview.indexOf('className="issues-section"')
   const pipes = overview.indexOf('className="pipelines-section"')
-  const completion = overview.indexOf('className="completion-stats-section"')
-  assert.ok(insp >= 0 && issues >= 0 && pipes >= 0 && completion >= 0,
-            '四个板块标记都应存在')
+  assert.ok(insp >= 0 && issues >= 0 && pipes >= 0,
+            '三个板块标记都应存在')
   assert.ok(issues < insp && insp < pipes,
             '灵感板块应位于开放 Issue 板块（issues-section）与 CI/CD 流水线板块（pipelines-section）之间（开放 Issue 下方）')
   assert.ok(!overview.includes('className="overview-sidebar"'),

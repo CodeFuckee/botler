@@ -173,7 +173,6 @@ async function renderOverview({ issuesPayload, storage } = {}) {
     if (pathname === '/api/settings') return { gitlab: {} }
     if (pathname === '/api/inspirations/overview') return { repos: [] }
     if (pathname === '/api/settings/deepseek-balance') return { configured: false, balance: null, error: null }
-    if (pathname === '/api/issues/completion-stats') return { completed_count: 0, avg_seconds: null, trend: [] }
     throw new Error('unexpected ' + pathname)
   })
   const realStorage = global.localStorage

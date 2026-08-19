@@ -71,8 +71,6 @@ async function renderOverview() {
     if (pathname === '/api/settings') return { gitlab: { owner_token_masked: true } }
     if (pathname === '/api/inspirations/overview') return { repos: [] }
     if (pathname === '/api/settings/deepseek-balance') return { configured: false }
-    if (pathname === '/api/issues/completion-stats') return { completed_count: 0, avg_seconds: null, trend: [] }
-    if (pathname.startsWith('/api/usage/stats')) return { summary: [], by_repo: [], by_engine: [], by_date: [] }
     return {}
   })
   let renderer = null

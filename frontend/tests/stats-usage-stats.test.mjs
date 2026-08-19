@@ -1,17 +1,19 @@
-// 概览页 Token 用量统计板块测试（issue #235）。
+// 统计页 Token 用量统计板块测试（issue #235 + #322）。
+// issue #322：该板块自概览页迁入统计页。
 //
-// 需求：统计页（概览页板块）按仓库/引擎/时间段聚合——本地 task_usage 表
+// 需求：统计页按仓库/引擎/时间段聚合——本地 task_usage 表
 // （GET /api/usage/stats），无 GitLab 请求压力；展示合计 token 数与估算
 // 费用（未配置单价只展示 token 数），按引擎/仓库分组明细；空数据显示
 // 「暂无用量数据」空态；过滤器（仓库/引擎/时间范围）变化立即重拉。
 //
 // 断言：
-// 1. Overview 请求 /api/usage/stats 并低频轮询（60 秒）；
+// 1. Stats 请求 /api/usage/stats 并低频轮询（60 秒）；
 // 2. 板块含过滤器（仓库/引擎/时间范围），过滤器变化带查询参数重拉；
 // 3. 有数据时渲染合计 tokens + 任务数 + 估算费用 + 按引擎/仓库分组表格；
 // 4. 无数据时渲染空状态（页面不崩溃）；
 // 5. 接口失败显示错误提示、不崩溃；
-// 6. styles.css 提供板块与分组表格样式类。
+// 6. styles.css 提供板块与分组表格样式类；
+// 7. 概览页（Overview.jsx）不再包含该板块（issue #322 迁移完成）。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -25,7 +27,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
 // 源码断言改为「i18n key + 字典中文值」双重校验
 const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
-const overview = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
+const statsSrc = readFileSync(path.join(ROOT, 'src/pages/Stats.jsx'), 'utf8')
+const overviewSrc = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
 const vite = await createServer({
@@ -33,7 +36,7 @@ const vite = await createServer({
   appType: 'custom',
   logLevel: 'error',
 })
-const { default: Overview } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
+const { default: Stats } = await vite.ssrLoadModule('/src/pages/Stats.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 
 after(() => vite.close())
@@ -49,24 +52,33 @@ function textOf(node) {
 // ---- 源码断言 ----
 
 test('源码：请求用量统计接口并低频轮询（60 秒）', () => {
-  assert.match(overview, /\/api\/usage\/stats/,
+  assert.match(statsSrc, /\/api\/usage\/stats/,
                '应请求 GET /api/usage/stats')
-  assert.match(overview, /USAGE_STATS_POLL_MS\s*=\s*60000/,
+  assert.match(statsSrc, /USAGE_STATS_POLL_MS\s*=\s*60000/,
                '用量统计轮询间隔应为 60 秒')
-  assert.match(overview, /setInterval\(loadUsageStats/,
+  assert.match(statsSrc, /setInterval\(loadUsageStats/,
                '应独立定时轮询用量统计接口')
 })
 
 test('源码：板块含仓库/引擎/时间范围过滤器', () => {
-  assert.match(overview, /tr\('overview\.usageTitle'\)/, '板块标题应经 t() 国际化')
-  assert.equal(zhCN['overview.usageTitle'], 'Token 用量统计', '中文标题应保留')
-  assert.match(overview, /tr\('overview\.allRepos'\)/, '「全部仓库」应经 t() 国际化')
-  assert.equal(zhCN['overview.allRepos'], '全部仓库', '中文文案应保留')
-  assert.match(overview, /tr\('overview\.allEngines'\)/, '「全部引擎」应经 t() 国际化')
-  assert.equal(zhCN['overview.allEngines'], '全部引擎', '中文文案应保留')
-  assert.match(overview, /tr\('overview\.last7Days'\)/, '「最近 7 天」应经 t() 国际化')
-  assert.equal(zhCN['overview.last7Days'], '最近 7 天', '中文文案应保留')
-  assert.match(overview, /usage-stats-section/, '应使用 usage-stats-section 容器')
+  assert.match(statsSrc, /tr\('stats\.usageTitle'\)/, '板块标题应经 t() 国际化')
+  assert.equal(zhCN['stats.usageTitle'], 'Token 用量统计', '中文标题应保留')
+  assert.match(statsSrc, /tr\('stats\.allRepos'\)/, '「全部仓库」应经 t() 国际化')
+  assert.equal(zhCN['stats.allRepos'], '全部仓库', '中文文案应保留')
+  assert.match(statsSrc, /tr\('stats\.allEngines'\)/, '「全部引擎」应经 t() 国际化')
+  assert.equal(zhCN['stats.allEngines'], '全部引擎', '中文文案应保留')
+  assert.match(statsSrc, /tr\('stats\.last7Days'\)/, '「最近 7 天」应经 t() 国际化')
+  assert.equal(zhCN['stats.last7Days'], '最近 7 天', '中文文案应保留')
+  assert.match(statsSrc, /usage-stats-section/, '应使用 usage-stats-section 容器')
+})
+
+test('源码：概览页不再包含该板块（issue #322 迁移完成）', () => {
+  assert.ok(!overviewSrc.includes('usage-stats-section'),
+            '概览页应移除 usage-stats-section 板块')
+  assert.ok(!overviewSrc.includes('loadUsageStats'),
+            '概览页应移除用量统计轮询逻辑')
+  assert.ok(!overviewSrc.includes('/api/usage/stats'),
+            '概览页应不再请求用量统计接口')
 })
 
 test('styles.css 提供统计板块样式', () => {
@@ -77,43 +89,37 @@ test('styles.css 提供统计板块样式', () => {
 
 // ---- 渲染断言 ----
 
-function mockOverviewApi(stats = null, error = null) {
+const DASHBOARD = {
+  overview: { task_count: 1, succeeded_count: 1, failed_count: 0,
+              interrupted_count: 0, success_rate: 1,
+              avg_duration_seconds: 100 },
+  by_engine: [], by_repo: [], by_source: [], failure_reasons: [],
+  failure_categories: [],
+}
+
+function mockStatsApi(stats = null, error = null) {
   mock.method(api, 'get', async (pathname) => {
     if (pathname.startsWith('/api/usage/stats')) {
       if (error) throw new Error(error)
       return stats
     }
-    if (pathname === '/api/issues/overview') {
-      return { repos: [{ repo_id: 1, repo_name: 'demo', issues: [] }], errors: [], total: 0 }
-    }
-    if (pathname === '/api/pipelines/overview') {
-      return { pipelines: [], errors: [] }
-    }
-    if (pathname === '/api/inspirations/overview') {
-      return { repos: [], errors: [] }
-    }
-    if (pathname === '/api/tasks') {
-      return { tasks: [], total: 0, stats: { queued: 0, running: 0, retrying: 0 } }
-    }
-    if (pathname === '/api/settings/deepseek-balance') {
-      return { configured: false, balance: null, error: null }
-    }
-    if (pathname === '/api/settings') {
-      return { gitlab: { owner_token_masked: '' } }
+    if (pathname.startsWith('/api/stats/dashboard')) return DASHBOARD
+    if (pathname === '/api/repos') {
+      return { repos: [{ id: 1, name: 'demo' }, { id: 2, name: 'other' }] }
     }
     if (pathname === '/api/issues/completion-stats') {
       return { completed_count: 0, avg_seconds: null, trend: [] }
     }
-    return { repos: [], errors: [] }
+    return { repos: [] }
   })
 }
 
-async function renderOverview() {
+async function renderStats() {
   let renderer = null
   let renderError = null
   await TestRenderer.act(async () => {
     try {
-      renderer = TestRenderer.create(React.createElement(Overview))
+      renderer = TestRenderer.create(React.createElement(Stats))
       await new Promise((resolve) => setTimeout(resolve, 50))
     } catch (e) { renderError = e }
   })
@@ -135,8 +141,8 @@ const STATS = {
 }
 
 test('渲染：有数据时展示合计 tokens、任务数与分组表格', async () => {
-  mockOverviewApi(STATS)
-  const { renderer, renderError } = await renderOverview()
+  mockStatsApi(STATS)
+  const { renderer, renderError } = await renderStats()
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
     const text = textOf(renderer.root)
@@ -151,13 +157,43 @@ test('渲染：有数据时展示合计 tokens、任务数与分组表格', asyn
   }
 })
 
+test('渲染：过滤器切换触发带参数重拉（仓库过滤）', async () => {
+  const calls = []
+  mock.method(api, 'get', async (pathname) => {
+    calls.push(pathname)
+    if (pathname.startsWith('/api/usage/stats')) return STATS
+    if (pathname.startsWith('/api/stats/dashboard')) return DASHBOARD
+    if (pathname === '/api/repos') {
+      return { repos: [{ id: 1, name: 'demo' }, { id: 2, name: 'other' }] }
+    }
+    if (pathname === '/api/issues/completion-stats') {
+      return { completed_count: 0, avg_seconds: null, trend: [] }
+    }
+    return { repos: [] }
+  })
+  const { renderer, renderError } = await renderStats()
+  try {
+    assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
+    // usage-stats-filter 第一个为仓库过滤器（value='' → 切换为 1）
+    const filters = renderer.root.findAll((n) => n.type === 'select'
+      && String(n.props.className || '').includes('usage-stats-filter'))
+    assert.ok(filters.length >= 3, '应有仓库/引擎/时间范围三个过滤器')
+    await TestRenderer.act(() => filters[0].props.onChange({ target: { value: '1' } }))
+    assert.ok(calls.some((p) => p.startsWith('/api/usage/stats?') && p.includes('repo_id=1')),
+              `切换仓库后应携带 repo_id=1 重拉，实际调用：${calls.filter((p) => p.startsWith('/api/usage/stats')).join(', ')}`)
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
 test('渲染：无数据时显示空状态不崩溃', async () => {
-  mockOverviewApi({
+  mockStatsApi({
     summary: { task_count: 0, prompt_tokens: 0, completion_tokens: 0,
                total_tokens: 0, estimated_cost: 0, costed_count: 0 },
     currency: 'USD', by_repo: [], by_engine: [], by_date: [],
   })
-  const { renderer, renderError } = await renderOverview()
+  const { renderer, renderError } = await renderStats()
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
     const text = textOf(renderer.root)
@@ -168,8 +204,8 @@ test('渲染：无数据时显示空状态不崩溃', async () => {
 })
 
 test('渲染：接口失败显示错误提示不崩溃', async () => {
-  mockOverviewApi(null, 'boom')
-  const { renderer, renderError } = await renderOverview()
+  mockStatsApi(null, 'boom')
+  const { renderer, renderError } = await renderStats()
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
     const text = textOf(renderer.root)

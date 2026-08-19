@@ -4,7 +4,6 @@ import IssueDrawer, { ENGINE_META } from '../components/IssueDrawer.jsx'
 import PipelineDrawer, { PIPELINE_STATUS_META, stageClass } from '../components/PipelineDrawer.jsx'
 import { useI18n } from '../i18n.jsx'
 import { Icon } from '../components/Icon.jsx'
-import { fmtTokens, fmtCost } from '../components/UsageCard.jsx'
 import AddIssueModal from '../components/AddIssueModal.jsx'
 import { useShortcuts } from '../keymap.js'
 import {
@@ -44,15 +43,6 @@ export const DEEPSEEK_BALANCE_POLL_MS = 60000
 // DeepSeek 开放平台充值页（issue #178）：余额卡片「去充值」链接按钮的跳转
 // 目标，点击后在新标签页打开官方充值页，方便用户直接在 DeepSeek 页面充值
 export const DEEPSEEK_TOPUP_URL = 'https://platform.deepseek.com/top_up'
-
-// Issue 完成耗时统计轮询间隔（issue #180）：平均完成耗时与走势图数据
-// 来自本地 tasks 表成功终态任务（GET /api/issues/completion-stats），
-// 无 GitLab 请求压力，低频轮询即可（任务完成后再等下一轮刷新）
-export const COMPLETION_STATS_POLL_MS = 60000
-
-// Token 用量统计轮询间隔（issue #235）：数据来自本地 task_usage 表
-// （GET /api/usage/stats），无 GitLab 请求压力，沿用 60 秒低频轮询
-export const USAGE_STATS_POLL_MS = 60000
 
 // 流水线整体状态 → 徽章映射（issue #39，#317 起随详情抽屉组件维护，
 // 概览页卡片复用；样式类复用任务状态徽章 status-*）
@@ -576,19 +566,6 @@ export default function Overview() {
   // 每小时余额变化速率（issue #304）：{currency: {ratePerHour, windowMs}}，
   // 由 balanceRate 模块基于 localStorage 历史观测样本计算（纯前端）
   const [dsRate, setDsRate] = useState({})
-  // Issue 完成耗时统计（issue #180）：null=加载中；{completed_count,
-  // avg_seconds, trend} 为 /api/issues/completion-stats 返回
-  const [completionStats, setCompletionStats] = useState(null)
-  const [completionStatsError, setCompletionStatsError] = useState('')
-  // Token 用量统计（issue #235）：null=加载中；{summary, by_repo,
-  // by_engine, by_date, currency} 为 /api/usage/stats 返回；过滤器
-  // usageRepoId（''=全部仓库）/ usageEngine（''=全部引擎）/
-  // usageRange（'7'|'30'|'0'=最近 7/30 天或全部）
-  const [usageStats, setUsageStats] = useState(null)
-  const [usageStatsError, setUsageStatsError] = useState('')
-  const [usageRepoId, setUsageRepoId] = useState('')
-  const [usageEngine, setUsageEngine] = useState('')
-  const [usageRange, setUsageRange] = useState('7')
   // 任务集合签名：任务增删 / 状态变化时重建事件流连接
   const tasksKey = tasks.map((t) => `${t.id}:${t.status}`).sort().join('|')
 
@@ -906,51 +883,6 @@ export default function Overview() {
     const t = setInterval(loadDeepSeekBalance, DEEPSEEK_BALANCE_POLL_MS)
     return () => clearInterval(t)
   }, [loadDeepSeekBalance])
-
-  // 已完成 issue 平均耗时与逐日走势（issue #180，独立低频轮询）：数据
-  // 来自本地 tasks 表成功终态任务，无 GitLab 请求压力；接口失败保留
-  // 上次数据并展示错误提示，不影响页面其他板块
-  const loadCompletionStats = useCallback(async () => {
-    try {
-      const d = await api.get('/api/issues/completion-stats', { silent: true })
-      setCompletionStats(d || { completed_count: 0, avg_seconds: null, trend: [] })
-      setCompletionStatsError('')
-    } catch (e) {
-      setCompletionStatsError(e.message)
-    }
-  }, [])
-
-  useEffect(() => {
-    loadCompletionStats()
-    const t = setInterval(loadCompletionStats, COMPLETION_STATS_POLL_MS)
-    return () => clearInterval(t)
-  }, [loadCompletionStats])
-
-  // Token 用量统计（issue #235）：按仓库/引擎/时间段聚合，数据来自本地
-  // task_usage 表（GET /api/usage/stats），无 GitLab 请求压力，沿用 60 秒
-  // 低频轮询；过滤器变化时立即重拉（不清空旧数据避免闪烁）
-  const loadUsageStats = useCallback(async () => {
-    const q = new URLSearchParams()
-    if (usageRepoId) q.set('repo_id', usageRepoId)
-    if (usageEngine) q.set('engine', usageEngine)
-    if (usageRange && usageRange !== '0') {
-      q.set('since', new Date(Date.now() - Number(usageRange) * 86400000)
-        .toISOString().slice(0, 10))
-    }
-    try {
-      const d = await api.get('/api/usage/stats?' + q, { silent: true })
-      setUsageStats(d || { summary: {}, by_repo: [], by_engine: [], by_date: [] })
-      setUsageStatsError('')
-    } catch (e) {
-      setUsageStatsError(e.message)
-    }
-  }, [usageRepoId, usageEngine, usageRange])
-
-  useEffect(() => {
-    loadUsageStats()
-    const t = setInterval(loadUsageStats, USAGE_STATS_POLL_MS)
-    return () => clearInterval(t)
-  }, [loadUsageStats])
 
   // ---- 灵感增删改（issue #131）：仅写 Botler 本地数据库 ----
 
@@ -1859,154 +1791,7 @@ export default function Overview() {
             )}
           </section>
 
-          {/* issue #180：Issue 完成耗时——平均每个 issue 完成所需的时间
-              （成功任务的处理用时：系统接收时间 → bot-done 打标时间，与任务
-              详情「处理用时」issue #49 语义一致）与逐日平均走势图，置于
-              概览页最下方。数据来自本地 tasks 表成功终态任务
-              （GET /api/issues/completion-stats），无 GitLab 请求压力 */}
-          <section className="completion-stats-section">
-            <h2>{tr('overview.completionTitle')}</h2>
-            <p className="muted">{tr('overview.completionDesc', { seconds: COMPLETION_STATS_POLL_MS / 1000 })}</p>
-            {completionStatsError && (
-              <div className="alert alert-error" onClick={() => setCompletionStatsError('')}>{completionStatsError}</div>
-            )}
-            {completionStats && completionStats.completed_count === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon" aria-hidden="true"><Icon name="hourglass" /></span>
-                <p className="muted">{tr('overview.noCompletedIssues')}</p>
-              </div>
-            ) : completionStats ? (
-              <>
-                <div className="completion-stats-summary">
-                  <span className="completion-stats-value"
-                        title={tr('overview.avgCompletionTitle')}>
-                    {fmtSeconds(completionStats.avg_seconds) || <span className="muted">—</span>}
-                  </span>
-                  <span className="muted">{tr('overview.avgCompletion', { n: completionStats.completed_count })}</span>
-                </div>
-                <CompletionTrendChart trend={completionStats.trend} />
-                {/* issue #288：每个开启仓库的平均耗时与走势拆分——接口
-                    repos 数组（仅已启用仓库，按配置优先级升序，无已完成
-                    任务仓库 avg_seconds=null/trend=[]），逐仓库渲染平均
-                    耗时 + 紧凑迷你走势图 */}
-                {Array.isArray(completionStats.repos) && completionStats.repos.length > 0 && (
-                  <div className="completion-repo-list">
-                    <h3 className="completion-repo-title">{tr('overview.completionPerRepoTitle')}</h3>
-                    {completionStats.repos.map((r) => (
-                      <div className="completion-repo-row" key={r.repo_id}>
-                        <div className="completion-repo-info">
-                          <span className="completion-repo-name"
-                                title={r.repo_name}>{r.repo_name}</span>
-                          <span className="completion-repo-value"
-                                title={r.completed_count > 0 ? tr('overview.avgCompletionTitle') : undefined}>
-                            {r.completed_count > 0
-                              ? (fmtSeconds(r.avg_seconds) || <span className="muted">—</span>)
-                              : <span className="muted">{tr('overview.repoNoData')}</span>}
-                          </span>
-                          <span className="muted">{tr('overview.avgCompletion', { n: r.completed_count })}</span>
-                        </div>
-                        {r.completed_count > 0 ? (
-                          <div className="completion-repo-chart">
-                            <CompletionTrendChart trend={r.trend} compact />
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : null}
-          </section>
-
-          {/* issue #235：Token 用量统计——按仓库/引擎/时间段聚合（本地
-              task_usage 表，GET /api/usage/stats），无 GitLab 请求压力；
-              展示合计 token 数与估算费用（未配置单价只展示 token 数）；
-              过滤器变化立即重拉，沿用 60 秒低频轮询 */}
-          <section className="usage-stats-section">
-            <h2>{tr('overview.usageTitle')}</h2>
-            <p className="muted">{tr('overview.usageDesc', { seconds: USAGE_STATS_POLL_MS / 1000 })}</p>
-            <div className="form-row wrap">
-              <select className="input usage-stats-filter" value={usageRepoId}
-                      onChange={(e) => setUsageRepoId(e.target.value)}
-                      title={tr('overview.filterByRepo')}>
-                <option value="">{tr('overview.allRepos')}</option>
-                {(repoIssues || []).map((r) => (
-                  <option key={r.repo_id} value={r.repo_id}>{r.repo_name}</option>
-                ))}
-              </select>
-              <select className="input usage-stats-filter" value={usageEngine}
-                      onChange={(e) => setUsageEngine(e.target.value)}
-                      title={tr('overview.filterByEngine')}>
-                <option value="">{tr('overview.allEngines')}</option>
-                <option value="claude">claude</option>
-                <option value="hermes">hermes</option>
-                <option value="dsh">dsh</option>
-              </select>
-              <select className="input usage-stats-filter" value={usageRange}
-                      onChange={(e) => setUsageRange(e.target.value)}
-                      title={tr('overview.filterByRange')}>
-                <option value="7">{tr('overview.last7Days')}</option>
-                <option value="30">{tr('overview.last30Days')}</option>
-                <option value="0">{tr('overview.all')}</option>
-              </select>
-            </div>
-            {usageStatsError && (
-              <div className="alert alert-error" onClick={() => setUsageStatsError('')}>{usageStatsError}</div>
-            )}
-            {usageStats && (usageStats.summary?.task_count || 0) === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon" aria-hidden="true"><Icon name="coins" /></span>
-                <p className="muted">{tr('overview.noUsage')}</p>
-              </div>
-            ) : usageStats ? (
-              <>
-                <div className="usage-stats-summary">
-                  <span className="usage-stats-value">
-                    {fmtTokens(usageStats.summary?.total_tokens || 0)} tokens
-                  </span>
-                  <span className="muted">
-                    {tr('overview.usageTaskCount', { n: usageStats.summary?.task_count || 0 })}{' '}
-                    {fmtCost(usageStats.summary?.estimated_cost, usageStats.currency)
-                      ? <>{tr('overview.estimatedCost')} <b>{fmtCost(usageStats.summary?.estimated_cost, usageStats.currency)}</b></>
-                      : tr('overview.noUnitPrice')}
-                  </span>
-                </div>
-                <div className="usage-stats-grid">
-                  <table className="table usage-stats-table">
-                    <thead>
-                      <tr><th>{tr('overview.engine')}</th><th>{tr('overview.taskCount')}</th><th>{tr('overview.totalTokens')}</th><th>{tr('overview.estimatedCost')}</th></tr>
-                    </thead>
-                    <tbody>
-                      {(usageStats.by_engine || []).map((e) => (
-                        <tr key={e.engine}>
-                          <td>{e.engine || '—'}</td>
-                          <td>{e.task_count}</td>
-                          <td>{fmtTokens(e.total_tokens)}</td>
-                          <td>{fmtCost(e.estimated_cost, usageStats.currency) || <span className="muted">—</span>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  <table className="table usage-stats-table">
-                    <thead>
-                      <tr><th>{tr('overview.repo')}</th><th>{tr('overview.taskCount')}</th><th>{tr('overview.totalTokens')}</th><th>{tr('overview.estimatedCost')}</th></tr>
-                    </thead>
-                    <tbody>
-                      {(usageStats.by_repo || []).map((r) => (
-                        <tr key={r.repo_id}>
-                          <td className="ellipsis" title={r.repo_name}>{r.repo_name || tr('common.deleted')}</td>
-                          <td>{r.task_count}</td>
-                          <td>{fmtTokens(r.total_tokens)}</td>
-                          <td>{fmtCost(r.estimated_cost, usageStats.currency) || <span className="muted">—</span>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            ) : null}
-          </section>
-
+          
       {/* issue #166/#184：灵感 AI 对话——与 AI agent 探讨当前灵感。
           右侧边栏抽屉形式（issue #184），复用 .drawer 右侧抽屉体系
           （与 issue 详情右边栏 issue #85 一致）：遮罩点击 / × / Esc
@@ -2183,61 +1968,5 @@ function DiscoverResult({ result }) {
         ))}
       </div>
     </div>
-  )
-}
-
-// 走势图（issue #180）：轻量 SVG 折线图，无第三方图表库依赖——
-// 横轴为完成日（数据本身是逐日序列，等距排布即可），纵轴为当日平均
-// 完成耗时（秒），范围 0 → 最大值留 10% 余量；折线 + 数据点，每个点
-// 带 <title> 悬浮提示（日期 / 平均耗时 / 当日完成数）。trend 非数组
-// 或为空时返回 null（不渲染）。
-// issue #288：compact 紧凑模式——各仓库明细行的迷你走势图（更小画布、
-// 更小数据点，隐藏日期/刻度文字避免缩小后不可读，仍保留 <title> 提示）。
-export function CompletionTrendChart({ trend, compact = false }) {
-  const { tr } = useI18n()
-  if (!Array.isArray(trend) || trend.length === 0) return null
-  const W = compact ? 240 : 640
-  const H = compact ? 48 : 180
-  const PAD_L = compact ? 2 : 8
-  const PAD_R = compact ? 2 : 8
-  const PAD_T = compact ? 4 : 14
-  const PAD_B = compact ? 4 : 24
-  const n = trend.length
-  const maxSec = Math.max(...trend.map((t) => Number(t.avg_seconds) || 0))
-  const yMax = maxSec > 0 ? maxSec * 1.1 : 1
-  const innerW = W - PAD_L - PAD_R
-  const innerH = H - PAD_T - PAD_B
-  const px = (i) => (n === 1 ? PAD_L + innerW / 2 : PAD_L + (innerW * i) / (n - 1))
-  const py = (v) => H - PAD_B - (innerH * (Number(v) || 0)) / yMax
-  const points = trend
-    .map((t, i) => `${px(i).toFixed(2)},${py(t.avg_seconds).toFixed(2)}`)
-    .join(' ')
-  const first = trend[0]
-  const last = trend[n - 1]
-  return (
-    <svg className={compact ? 'completion-trend-chart compact' : 'completion-trend-chart'}
-         viewBox={`0 0 ${W} ${H}`}
-         role="img" aria-label={compact
-           ? tr('overview.repoTrendAria')
-           : tr('overview.trendAria')}>
-      <line className="completion-trend-axis" x1={PAD_L} y1={H - PAD_B}
-            x2={W - PAD_R} y2={H - PAD_B} />
-      <polyline className="completion-trend-line" points={points} fill="none" />
-      {trend.map((t, i) => (
-        <circle key={t.date || i} className="completion-trend-dot"
-                cx={px(i).toFixed(2)} cy={py(t.avg_seconds).toFixed(2)}
-                r={compact ? '2' : '3'}>
-          <title>{tr('overview.trendPoint', { date: t.date, avg: fmtSeconds(t.avg_seconds) || '—', n: t.count })}</title>
-        </circle>
-      ))}
-      {!compact && (
-        <>
-          <text className="completion-trend-label" x={PAD_L} y={H - PAD_B + 16}>{first.date}</text>
-          <text className="completion-trend-label" x={W - PAD_R} y={H - PAD_B + 16}
-                textAnchor="end">{last.date}</text>
-          <text className="completion-trend-label" x={PAD_L} y={PAD_T - 4}>{fmtSeconds(yMax) || ''}</text>
-        </>
-      )}
-    </svg>
   )
 }

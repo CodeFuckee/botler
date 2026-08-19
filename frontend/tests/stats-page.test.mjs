@@ -1,4 +1,4 @@
-// 统计看板页测试（issue #264）。
+// 统计看板页测试（issue #264 + #322）。
 //
 // 需求：新增独立「统计」页（导航入口），数据来自本地任务表聚合接口
 // GET /api/stats/dashboard（后端 10s TTL 缓存，与任务列表同表同口径）：
@@ -13,6 +13,9 @@
 // 4. 无数据时渲染空状态（页面不崩溃）；
 // 5. 接口失败显示错误提示、不崩溃；
 // 6. App.jsx 提供导航入口与路由；styles.css 提供统计页样式类。
+// issue #322：概览页「Issue 完成耗时」与「Token 用量统计」板块迁入——
+// 请求 /api/issues/completion-stats 与 /api/usage/stats 并 60 秒低频轮询；
+// dashboard 无数据（空态）时两个板块仍各自渲染（独立空态不互相干扰）。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -65,7 +68,7 @@ test('源码：时间段选择（7 天/30 天/全部）并持久化 localStorage
   assert.match(statsSrc, /getItem/, '应恢复时间段偏好')
 })
 
-test('源码：页面包含五个板块', () => {
+test('源码：页面包含统计看板各板块', () => {
   assert.match(statsSrc, /任务总数/, '应有任务总数卡片')
   assert.match(statsSrc, /成功率/, '应有成功率卡片')
   assert.match(statsSrc, /平均耗时/, '应有平均耗时卡片')
@@ -74,6 +77,25 @@ test('源码：页面包含五个板块', () => {
   assert.match(statsSrc, /仓库排行/, '应有仓库排行板块')
   assert.match(statsSrc, /来源分布/, '应有来源分布板块')
   assert.match(statsSrc, /失败原因 Top 分布/, '应有失败原因 Top 板块')
+})
+
+test('源码：迁入「Issue 完成耗时」与「Token 用量统计」板块（issue #322）', () => {
+  assert.match(statsSrc, /completion-stats-section/, '应有完成耗时板块容器')
+  assert.match(statsSrc, /usage-stats-section/, '应用量统计板块容器')
+  assert.match(statsSrc, /\/api\/issues\/completion-stats/,
+               '应请求完成耗时接口')
+  assert.match(statsSrc, /COMPLETION_STATS_POLL_MS\s*=\s*60000/,
+               '完成耗时轮询间隔应为 60 秒')
+  assert.match(statsSrc, /\/api\/usage\/stats/,
+               '应请求用量统计接口')
+  assert.match(statsSrc, /USAGE_STATS_POLL_MS\s*=\s*60000/,
+               '用量统计轮询间隔应为 60 秒')
+  assert.match(statsSrc, /stats\.completionTitle/, '完成耗时标题应经 t() 国际化')
+  assert.equal(zhCN['stats.completionTitle'], 'Issue 完成耗时', '中文标题应为「Issue 完成耗时」')
+  assert.match(statsSrc, /stats\.usageTitle/, '用量标题应经 t() 国际化')
+  assert.equal(zhCN['stats.usageTitle'], 'Token 用量统计', '中文标题应为「Token 用量统计」')
+  // dashboard 空态（empty）分支外仍渲染两个迁入板块——独立空态互不干扰
+  assert.match(statsSrc, /empty \? \(/, '应保留 dashboard 空态分支')
 })
 
 test('源码：纯 CSS 条形图（不引入 recharts 等重依赖）', () => {
@@ -146,6 +168,13 @@ function mockStatsApi(dashboard = null, error = null) {
       if (error) throw new Error(error)
       return dashboard
     }
+    if (pathname === '/api/repos') return { repos: [] }
+    if (pathname === '/api/issues/completion-stats') {
+      return { completed_count: 0, avg_seconds: null, trend: [] }
+    }
+    if (pathname.startsWith('/api/usage/stats')) {
+      return { summary: { task_count: 0 }, by_engine: [], by_repo: [], by_date: [] }
+    }
     return {}
   })
   return calls
@@ -207,6 +236,11 @@ test('渲染：无数据时显示空状态不崩溃', async () => {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
     const text = textOf(renderer.root)
     assert.match(text, /暂无任务数据/, '应有空状态文案')
+    // issue #322：dashboard 空态时迁入板块仍渲染各自空态（互不干扰）
+    assert.match(text, /Issue 完成耗时/, '空态下完成耗时板块标题仍应渲染')
+    assert.match(text, /暂无已完成 issue/, '空态下完成耗时板块应显示独立空态')
+    assert.match(text, /Token 用量统计/, '空态下用量统计板块标题仍应渲染')
+    assert.match(text, /暂无用量数据/, '空态下用量统计板块应显示独立空态')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
   }
@@ -229,8 +263,9 @@ test('渲染：切换时间段触发重拉（days 参数变化）', async () => 
   const { renderer, renderError } = await renderStats()
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-    // 找到时间段 select 并模拟切换为 30 天
-    const select = renderer.root.find((n) => n.type === 'select')
+    // 找到 dashboard 时间段 select（stats-range）并模拟切换为 30 天
+    const select = renderer.root.find((n) => n.type === 'select'
+      && String(n.props.className || '').includes('stats-range'))
     await TestRenderer.act(() => select.props.onChange({ target: { value: '30' } }))
     assert.ok(calls.some((p) => p.includes('/api/stats/dashboard?days=30')),
               `切换后应请求 days=30，实际调用：${calls.join(', ')}`)
