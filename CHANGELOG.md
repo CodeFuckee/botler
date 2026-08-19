@@ -1185,6 +1185,23 @@
   头部而非内容行）；修复前 2 例均失败（gap=16），修复后全部通过；
   `overview-drawer-actions-sticky.test.mjs` 源码断言随修复更新
   （`top: calc(-1 * var(--space-4))`）；前端全量测试无 regression。
+- **竖屏下左侧边栏全局搜索框被挤成竖线（issue #346）**：
+  竖屏（≤860px）侧边栏收成抽屉后，抽屉内强制展开态视觉（品牌文字/导航文字/
+  底部工具区均显示，折叠偏好仅作用于桌面端——issue #324），但遗漏
+  `.sidebar.collapsed .sidebar-search` 的覆盖规则：桌面端折叠过侧边栏
+  （localStorage 持久化 `botler.navCollapsed`）的用户在竖屏打开抽屉时，
+  搜索框仍命中折叠态 `width:36px` 居中样式，被挤成一条竖线、两侧各留出
+  约 100px 空白。修复：在侧边栏 860px 断点块内新增 `.sidebar.collapsed
+  .sidebar-search` 覆盖规则（`width: calc(100% - 24px)` 与展开态同宽 +
+  `justify-content: flex-start` 文字靠左），桌面端折叠态 36px 图标窄条
+  保持不变。测试：新增 `frontend/tests/responsive-sidebar-search.test.mjs`
+  3 例源码断言（全宽覆盖规则存在且文字靠左 / 层叠顺序在折叠态基础规则之后
+  且位于 860px 断点内 / 桌面折叠态基础规则仍为 36px 图标窄条），修复前
+  断言失败（无覆盖规则 / 层叠顺序错误）；`frontend/e2e/tests/
+  responsive-mobile.spec.js` 新增 1 例真实浏览器回归（375×667 竖屏 +
+  localStorage 预置折叠偏好 → 打开抽屉断言搜索入口 ≥ 抽屉宽 70% 且文字
+  可见），修复前实测宽度 36px 失败、修复后通过；前端全量测试 1448 例 +
+  Playwright E2E 全量无 regression。
 
 ## [1.4.3] - 2026-08-19
 ### Added

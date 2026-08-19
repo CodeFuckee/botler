@@ -84,6 +84,40 @@ test.describe('移动端响应式（issue #270）', () => {
     await expect(drawer).not.toBeVisible()
   })
 
+  test('竖屏侧边栏抽屉：折叠偏好下搜索入口仍为全宽搜索框（issue #346）', async ({ page }) => {
+    // 桌面端折叠过侧边栏（localStorage 持久化 botler.navCollapsed）的用户在
+    // 竖屏打开抽屉时，搜索入口不应再命中折叠态 36px 图标竖条（被挤成竖线、
+    // 两侧留白），而应与导航项同宽全宽显示、文字可见（issue #346）
+    await mockGitLabApis(page)
+    await page.goto('/overview')
+    await page.evaluate(() => localStorage.setItem('botler.navCollapsed', '1'))
+    await page.reload()
+
+    // 打开左侧抽屉（顶栏汉堡按钮，仅 ≤860px 可见）
+    const menu = page.locator('.topbar-menu')
+    await expect(menu).toBeVisible()
+    await menu.click()
+    const drawer = page.locator('.sidebar.open')
+    await expect(drawer).toBeVisible()
+    // 等待抽屉滑入动画（transform 归位）再测量几何
+    await page.waitForFunction(() => {
+      const s = document.querySelector('.sidebar.open')
+      if (!s) return false
+      const t = getComputedStyle(s).transform
+      return t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)'
+    })
+
+    // 搜索入口：全宽（≥ 抽屉宽 70%，不再 36px 竖条）+ 文字可见
+    const searchBtn = drawer.locator('.sidebar-search')
+    await expect(searchBtn).toBeVisible()
+    await expect(searchBtn.locator('.nav-label')).toBeVisible()
+    const db = await drawer.boundingBox()
+    const sb = await searchBtn.boundingBox()
+    expect(sb.width).toBeGreaterThan(db.width * 0.7)
+    // 搜索按钮左右两侧不再留大块空白：两侧留白合计 < 抽屉宽 30%
+    expect(db.width - sb.width).toBeLessThan(db.width * 0.3)
+  })
+
   test('任务页：窄视口渲染卡片式列表，无 12 列表格', async ({ page }) => {
     await page.goto('/tasks')
     await expect(page.locator('.tasks-card-list')).toBeVisible()

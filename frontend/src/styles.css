@@ -4803,7 +4803,15 @@ code {
 }
 .sidebar-search:hover { border-color: var(--border-strong); color: var(--text); background: var(--bg-hover-soft); }
 .sidebar-search:focus-visible { box-shadow: var(--focus-ring); }
-.sidebar.collapsed .sidebar-search { width: 36px; margin: 12px auto 4px; padding: 8px; justify-content: center; }
+/* 折叠态 36px 图标竖条仅作用于桌面端（issue #346）：竖屏（≤860px）侧边栏
+   收成抽屉且抽屉内强制展开态视觉（折叠偏好仅作用于桌面端，issue #324），
+   若此规则在 ≤860px 仍生效，桌面折叠过侧边栏（localStorage 持久化
+   botler.navCollapsed）的用户在竖屏打开抽屉时搜索框被挤成一条竖线、
+   两侧留出约 100px 空白——限制在 min-width:861px 后，竖屏搜索入口
+   自然继承 .sidebar-search 全宽基础规则（calc(100% - 24px)） */
+@media (min-width: 861px) {
+  .sidebar.collapsed .sidebar-search { width: 36px; margin: 12px auto 4px; padding: 8px; justify-content: center; }
+}
 .sidebar.collapsed .sidebar-search .lucide { width: 16px; height: 16px; }
 .sidebar-search .lucide { width: 16px; height: 16px; flex-shrink: 0; }
 
