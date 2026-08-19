@@ -7,7 +7,8 @@
 
 接口设计：
 - POST /api/repos/{repo_id}/generate-logo（同步执行）：
-  1. 校验仓库存在、未软删除、已启用；
+  1. 校验仓库存在、未软删除（issue #323 起不再校验 enabled——未启用仓库
+     同样允许生成图标，停用只影响任务调度不限制设置页操作）；
   2. 收集项目上下文（尽力而为，复用自省 API issue #187 的收集链路）：
      本地项目文件夹（local_path 优先，executor 工作区 clone 兜底）读
      README，无本地文件夹时回退 GitLab 仓库 API 读 README；README 缺失
@@ -40,7 +41,7 @@
   格式（含透明 → PNG，无透明 → PNG/JPEG，禁止 WebP）。本地 logo 文件
   保持原始质量，仅为上传生成压缩/转码副本；mime 与文件名同步调整。
 
-错误映射：仓库不存在 → 404；仓库已删除/未启用 → 400；未配置 AI 对话
+错误映射：仓库不存在 → 404；仓库已删除 → 400；未配置 AI 对话
 模型 → 400（引导设置页配置）；未配置生图模型 → 400（引导设置页配置）；
 AI 生成 prompt 失败/为空 → 502；生图模型调用失败/未返回图片 → 502。
 README 收集失败不阻塞：仅基于仓库元信息生成（提示模型如实说明）。
@@ -326,6 +327,7 @@ def generate_repo_logo(request: Request, repo_id: int):
 
     同步执行（AI 生成提示词 + 生图一次请求完成，超时 180s）；返回
     ok=true + logo 元信息 + 生成提示词，前端刷新仓库列表展示 logo。
+    issue #323：未启用仓库同样允许生成图标（仅校验存在与未软删除）。
     """
     c = request.app.state.ctx
     row = c.db.get_repo(repo_id)
@@ -334,8 +336,8 @@ def generate_repo_logo(request: Request, repo_id: int):
     row = dict(row)  # sqlite3.Row → dict，统一按 dict 访问（issue #187）
     if row["deleted_at"] is not None:
         raise HTTPException(400, "仓库已删除")
-    if not row["enabled"]:
-        raise HTTPException(400, "仓库未启用")
+    # issue #323：未启用仓库同样允许「生成图标」——停用只影响任务调度，
+    # 不限制仓库设置页的 logo 生成/同步操作（sync-logo 本就未校验 enabled）
 
     # 1. AI 对话模型：复用设置页「AI API 供应商」第一个启用且 Key 非空的
     #    项（与自省 issue #187 / 灵感 issue #166 同一链路）

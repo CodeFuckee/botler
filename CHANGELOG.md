@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 ### Added
+- **仓库设置页未启用仓库也能使用「生成图标」功能（issue #323）**：
+  仓库管理（设置）页面的「生成图标」按钮此前要求仓库必须启用——后端
+  `POST /api/repos/{id}/generate-logo` 校验 `enabled`，未启用仓库返回 400
+  「仓库未启用」，用户停用仓库后无法再为其生成/更新 logo；而「同步到
+  GitLab」「从 GitLab 同步」两个 logo 操作本就未校验 enabled（未启用仓库
+  可正常同步），行为不一致。修复：`generate_repo_logo` 移除 enabled 校验
+  （仅校验仓库存在与未软删除），未启用仓库同样走完整生成链路（README
+  收集 → AI 提示词 → 生图模型 → 落盘写 repos 表）；停用只影响任务调度，
+  不限制仓库设置页的 logo 生成/同步操作：
+  - 后端 `botler/api/repo_logo.py`：删除 `if not row["enabled"]` 检查，
+    同步更新模块/接口 docstring 的错误映射说明；
+  - 测试：`test_api_repo_logo.py` 原 `test_repo_disabled`（断言未启用返回
+    400）改为 `test_repo_disabled_can_generate_logo`（断言未启用仓库同样
+    生成成功：201 + logo 落盘 + repos 表写入元信息 + AI 提示词/生图链路
+    照常执行），实现前可复现失败（400 → 期望 201）；
+  - 前端无需改动：「生成图标」按钮本就未按 enabled 禁用（仅请求中 loading
+    禁用），未启用仓库按钮始终可点击。
+
 - **工具管理页面（issue #172）**：新增「工具」导航页，管理给 agent 使用的
   MCP 工具（全局生效，任务执行时注入仓库工作区 `.mcp.json`，agent 通过
   MCP 协议直接调用）：

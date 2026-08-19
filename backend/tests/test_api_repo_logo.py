@@ -14,7 +14,7 @@ logo（简约美观大方）；生成的 logo 显示在仓库页面每个仓库�
   没有时仅基于仓库元信息继续生成（提示词内容含「未能读取到 README」）；
 - 读取接口 GET /api/repos/{repo_id}/logo：正常返回图片字节与正确
   Content-Type；?download=1 附加 Content-Disposition attachment；
-- 边界：仓库不存在 404 / 软删除 400 / 未启用 400 / 未配置 AI 对话模型
+- 边界：仓库不存在 404 / 软删除 400 / 未配置 AI 对话模型
   400 / 未配置生图模型 400 / AI 生成提示词失败与空回复 502 / 生图模型
   调用失败与未返回图片 502 / 未生成 logo 404 / logo 文件缺失 404；
 - 重复生成覆盖同名文件；生成后 GET /api/repos 仓库列表带 logo 字段。
@@ -268,12 +268,29 @@ class TestValidation:
         assert r.status_code == 400
         assert "已删除" in r.json()["detail"]
 
-    def test_repo_disabled(self, logo_env):
+    def test_repo_disabled_can_generate_logo(self, logo_env):
+        """未启用仓库也能使用「生成图标」功能（issue #323）：生成链路
+        不再校验 enabled，未启用仓库同样走完整生成流程（README 收集 →
+        AI 提示词 → 生图 → 落盘写 repos 表），返回 201 与 logo 元信息。"""
         tc, stub, db, logo_dir = logo_env
         repo_id = _add_repo(db, 42, "botler", enabled=False)
         r = tc.post(f"/api/repos/{repo_id}/generate-logo")
-        assert r.status_code == 400
-        assert "未启用" in r.json()["detail"]
+        assert r.status_code == 201, r.text
+        data = r.json()
+        assert data["ok"] is True
+        assert data["logo_path"] == f"{repo_id}.png"
+        assert data["logo_mime"] == "image/png"
+        assert data["logo_updated_at"]
+        assert data["size"] == len(b"fake-logo-png-bytes")
+        # AI 提示词 + 生图链路照常执行
+        assert StubChatClient.instances[0].chat_calls
+        assert StubImageModelClient.instances[0].generate_calls
+        # logo 落盘 + repos 表写入元信息
+        assert (logo_dir / f"{repo_id}.png").read_bytes() == b"fake-logo-png-bytes"
+        row = db.get_repo(repo_id)
+        assert row["logo_path"] == f"{repo_id}.png"
+        assert row["logo_mime"] == "image/png"
+        assert row["logo_updated_at"]
 
     def test_without_ai_provider(self, client):
         """未配置 AI 对话模型：400 引导设置页（生图模型已配置也先拦）。"""
