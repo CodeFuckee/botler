@@ -818,6 +818,7 @@
     通过，无 regression。
 
 ### Changed
+- **全局搜索默认文案缩短为「搜索」两字（issue #345）**：侧边栏搜索入口与搜索浮层输入框的默认显示由「搜索任务、issue、灵感、仓库…」改为仅显示「搜索」两个字（英文环境 "Search"），不再显示过长提示文案，避免挤占布局；搜索浮层空态提示等辅助文案保持不变；新增前端测试 `tests/search-placeholder.test.mjs` 6 例（中英文渲染 / 文案长度边界 / 其它提示文案完整性），全量测试无 regression。
 - **后端依赖改为「顶层约束 + 锁定文件」双文件模式（issue #209）**：`backend/requirements.txt`
   保留为顶层约束声明（宽松版本范围），新增 `backend/requirements.lock.txt` 锁定文件
   （`uv pip compile` 把顶层约束解析为全量钉死版本，直接依赖 + 全部传递依赖 `==`
