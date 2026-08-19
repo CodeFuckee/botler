@@ -60,6 +60,28 @@
     4 次尝试；gitlab_client 全量 81 例通过，后端全量测试 + 覆盖率门禁（≥70%）
     通过，无 regression。
 
+### Fixed
+
+- **仓库设置页「生成图标」生成的 logo 在其他设备上看不到（issue #309）**：
+  `repo_logo.LOGO_DIR` 此前固定解析为 `<backend>/data/logos`——pm2 部署形态
+  （`deploy/botler.config.cjs`）运行在 gitlab-runner **构建目录**（如
+  `/home/ckd/builds/<hash>/chenkaidi/botler`），`backend/data` 随构建目录
+  轮换被清理，而 repos 表的 `logo_path` 元信息在持久数据库
+  （`BOTLER_DATA_DIR/backend/botler.db`）中仍保留 → 部署后仓库设置页按
+  `logo_path` 展示 `<img>`，但 `GET /api/repos/{id}/logo` 读取不到文件返回
+  404，生成图标在其他设备/新部署上看不到。修复：
+  - `backend/botler/api/repo_logo.py`：`LOGO_DIR` 改为按 `_resolve_logo_dir()`
+    解析——`BOTLER_LOGO_DIR`（显式覆盖，测试注入用）→
+    `BOTLER_DATA_DIR/backend/data/logos`（pm2/systemd 注入的持久数据目录，
+    与 botler.db 同根，备份/迁移一并处理）→ 兜底 `<backend>/data/logos`
+    （docker-compose 形态由 data 卷挂载，天然持久）；
+  - `deploy/botler.config.cjs` 与 `deploy/botler.service`：botler 进程环境
+    显式注入 `BOTLER_DATA_DIR`，保证 logo 恒落持久目录；
+  - **测试**：`backend/tests/test_api_repo_logo.py` 新增 `TestLogoDirPersistence`
+    4 例（显式覆盖优先 / pm2 形态解析到持久目录 / docker 形态兜底 /
+    生成落盘持久目录并模拟部署轮换后仍可读取），实现前全部可复现失败；
+    `test_api_repo_logo.py` 全量通过，后端全量测试无 regression。
+
 ## [1.4.3] - 2026-08-19
 ### Added
 

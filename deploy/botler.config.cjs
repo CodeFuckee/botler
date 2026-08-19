@@ -46,6 +46,11 @@ module.exports = {
       args: 'botler.main:app --host 0.0.0.0 --port 8000',
       cwd: ROOT,
       env: {
+        // 持久数据目录（issue #309）：repo_logo.LOGO_DIR 按它解析
+        // backend/data/logos——pm2 运行在 gitlab-runner 构建目录，
+        // 不注入则 logo 落构建目录随轮换丢失（DB 有 logo_path 但文件
+        // 丢失，其他设备/新部署看不到生成的图标）
+        BOTLER_DATA_DIR: DATA_DIR,
         BOTLER_CONFIG: path.join(DATA_DIR, 'backend/config.yaml'),
         BOTLER_DB: path.join(DATA_DIR, 'backend/botler.db'),
         BOTLER_BACKUP_DIR: path.join(DATA_DIR, 'backups'),

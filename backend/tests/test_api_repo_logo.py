@@ -21,6 +21,7 @@ logo（简约美观大方）；生成的 logo 显示在仓库页面每个仓库�
 """
 
 import base64
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -565,3 +566,69 @@ class TestSyncLogo:
         r = tc.post(f"/api/repos/{repo_id}/sync-logo")
         assert r.status_code == 500
         assert "读取 logo 文件失败" in r.json()["detail"]
+
+
+class TestLogoDirPersistence:
+    """logo 落盘目录解析（issue #309 回归）。
+
+    背景：生产 pm2 部署运行在 gitlab-runner 构建目录（backend/data 随
+    构建目录轮换被清理），而数据库（持久 data/backend/botler.db）仍
+    保留 logo_path 元信息 → 部署后 GET /api/repos/{id}/logo 返回 404，
+    仓库设置页「生成图标」生成的 logo 在其他设备/新部署上看不到。
+    修复：LOGO_DIR 在未显式指定 BOTLER_LOGO_DIR 时，优先解析到持久
+    数据目录 BOTLER_DATA_DIR/backend/data/logos（pm2 部署已注入
+    BOTLER_DATA_DIR），而不是构建目录 backend/data/logos。
+    """
+
+    def test_resolve_prefers_explicit_logo_dir(self, monkeypatch):
+        """显式 BOTLER_LOGO_DIR 优先级最高（测试注入 / 手动覆盖入口）。"""
+        from botler.api import repo_logo
+        monkeypatch.setenv("BOTLER_LOGO_DIR", str(Path("/tmp/explicit-logos")))
+        monkeypatch.setenv("BOTLER_DATA_DIR", str(Path("/tmp/persist-data")))
+        assert repo_logo._resolve_logo_dir() == Path("/tmp/explicit-logos")
+
+    def test_resolve_uses_persistent_data_dir(self, monkeypatch):
+        """未显式指定时（pm2 部署形态）：LOGO_DIR = BOTLER_DATA_DIR/
+        backend/data/logos——持久数据目录，不随构建目录轮换丢失。"""
+        from botler.api import repo_logo
+        monkeypatch.delenv("BOTLER_LOGO_DIR", raising=False)
+        monkeypatch.setenv("BOTLER_DATA_DIR", str(Path("/tmp/persist-data")))
+        assert (repo_logo._resolve_logo_dir()
+                == Path("/tmp/persist-data") / "backend" / "data" / "logos")
+
+    def test_resolve_fallback_backend_data(self, monkeypatch):
+        """无任何环境变量（docker-compose 形态 backend/data 由 data 卷
+        挂载）：回退 <backend>/data/logos。"""
+        from botler.api import repo_logo
+        monkeypatch.delenv("BOTLER_LOGO_DIR", raising=False)
+        monkeypatch.delenv("BOTLER_DATA_DIR", raising=False)
+        assert repo_logo._resolve_logo_dir() == repo_logo._BACKEND_DIR / "data" / "logos"
+
+    def test_generate_writes_to_persistent_dir_and_survives_rotation(
+            self, logo_env, tmp_path, monkeypatch):
+        """集成回归：BOTLER_DATA_DIR 已注入、未显式指定 LOGO_DIR 时，
+        generate-logo 落盘持久数据目录；模拟部署轮换（新进程同环境重新
+        解析 LOGO_DIR，仍指向同一持久目录）后 get-logo 仍能读到图片。"""
+        tc, stub, db, _ = logo_env
+        from botler.api import repo_logo
+        data_dir = tmp_path / "persistent-data"
+        monkeypatch.delenv("BOTLER_LOGO_DIR", raising=False)
+        monkeypatch.setenv("BOTLER_DATA_DIR", str(data_dir))
+        # 模拟 pm2 进程启动：按当前环境解析 LOGO_DIR
+        monkeypatch.setattr(repo_logo, "LOGO_DIR", repo_logo._resolve_logo_dir())
+        root = _write_project(tmp_path)
+        repo_id = _add_repo(db, 42, "botler", local_path=str(root))
+        r = tc.post(f"/api/repos/{repo_id}/generate-logo")
+        assert r.status_code == 201, r.text
+        # logo 必须落在持久数据目录（而非构建目录 backend/data/logos）
+        persistent_file = data_dir / "backend" / "data" / "logos" / f"{repo_id}.png"
+        assert persistent_file.is_file()
+        # 模拟部署轮换：新进程同环境重新解析（仍指向同一持久目录，文件还在）
+        rotated_dir = repo_logo._resolve_logo_dir()
+        assert rotated_dir == data_dir / "backend" / "data" / "logos"
+        assert (rotated_dir / f"{repo_id}.png").is_file()
+        # get-logo 读取正常（图片不随构建目录轮换丢失）
+        monkeypatch.setattr(repo_logo, "LOGO_DIR", rotated_dir)
+        r2 = tc.get(f"/api/repos/{repo_id}/logo")
+        assert r2.status_code == 200
+        assert r2.content == b"fake-logo-png-bytes"

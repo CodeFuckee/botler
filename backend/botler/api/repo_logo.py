@@ -16,9 +16,11 @@
      的项，与自省 issue #187 同一链路）生成 logo 生成提示词（prompt）；
   4. 用该 prompt 调用生图模型（复用设置页「生图模型」第一个启用且 Key
      非空的项，issue #135/#137 的 ImageModelClient 统一封装）生成 logo；
-  5. 首张图片落盘 <backend>/data/logos/<repo_id>.<ext>（data 目录随
-     docker-compose 挂载持久化，与 session_secret.key 同目录），并把
-     logo_path / logo_updated_at / logo_mime 写入 repos 表；
+  5. 首张图片落盘 LOGO_DIR/<repo_id>.<ext>（LOGO_DIR 按持久数据目录
+     解析：BOTLER_LOGO_DIR 显式覆盖 → BOTLER_DATA_DIR/backend/data/
+     logos（pm2 部署持久目录，issue #309）→ 兜底 <backend>/data/logos
+     （docker-compose 挂载持久化），并把 logo_path / logo_updated_at /
+     logo_mime 写入 repos 表；
   6. 返回 ok=true + logo 元信息 + 生成提示词（前端刷新列表即可展示）。
   重复点击重新生成：同名文件覆盖，logo_updated_at 更新（前端按此参数
   击穿缓存刷新展示）。
@@ -56,11 +58,35 @@ logger = logging.getLogger(__name__)
 # api/introspection.py issue #187 同约定）
 router = APIRouter(prefix="/repos", tags=["repos-logo"])
 
-# logo 图片目录：默认 <backend>/data/logos（backend/data 由 docker-compose
-# 挂载持久化，与 session_secret.key 同目录）；支持环境变量 BOTLER_LOGO_DIR
-# 覆盖（测试注入临时目录用）。目录不存在自动创建。
+# logo 图片目录：见 _resolve_logo_dir（issue #309 起优先解析到持久数据
+# 目录，避免 pm2 构建目录轮换导致 logo 文件丢失）。目录不存在自动创建。
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
-LOGO_DIR = Path(os.environ.get("BOTLER_LOGO_DIR") or _BACKEND_DIR / "data" / "logos")
+
+
+def _resolve_logo_dir() -> Path:
+    """logo 图片目录解析（issue #309）：保证 logo 落在持久数据目录。
+
+    pm2 部署形态（deploy/botler.config.cjs）运行在 gitlab-runner 构建
+    目录（如 /home/ckd/builds/<hash>/chenkaidi/botler），backend/data
+    随构建目录轮换被清理——若 logo 落 <backend>/data/logos，部署后
+    repos 表仍有 logo_path 元信息但图片文件丢失，仓库设置页「生成图标」
+    生成的 logo 在其他设备/新部署上看不到。优先级：
+    1. BOTLER_LOGO_DIR（显式覆盖；测试注入临时目录用）；
+    2. BOTLER_DATA_DIR/backend/data/logos（pm2/systemd 部署注入的
+       持久数据目录，与 botler.db 同根，备份/迁移一并处理）；
+    3. 兜底 <backend>/data/logos（docker-compose 形态 backend/data
+       由 data 卷挂载，天然持久）。
+    """
+    explicit = os.environ.get("BOTLER_LOGO_DIR")
+    if explicit:
+        return Path(explicit)
+    data_dir = os.environ.get("BOTLER_DATA_DIR")
+    if data_dir:
+        return Path(data_dir) / "backend" / "data" / "logos"
+    return _BACKEND_DIR / "data" / "logos"
+
+
+LOGO_DIR = _resolve_logo_dir()
 
 # AI 生成提示词 + 生图请求超时（秒）：比自省 120s 再放宽——生图模型接口
 # 本身耗时较长（Gemini/OpenAI 图片生成通常 10~60s）

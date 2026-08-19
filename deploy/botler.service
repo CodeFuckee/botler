@@ -17,6 +17,9 @@ WorkingDirectory=/home/ckd/codes/botler
 EnvironmentFile=/home/ckd/codes/botler/backend/.env
 Environment=BOTLER_CONFIG=/home/ckd/codes/botler/backend/config.yaml
 Environment=BOTLER_DB=/home/ckd/codes/botler/backend/botler.db
+# 持久数据目录（issue #309）：repo_logo.LOGO_DIR 按它解析 backend/data/logos，
+# 保证生成的仓库图标不随构建目录轮换丢失（与 pm2 部署形态一致）
+Environment=BOTLER_DATA_DIR=/home/ckd/codes/botler/data
 ExecStart=/home/ckd/codes/botler/backend/.venv/bin/uvicorn botler.main:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=3
