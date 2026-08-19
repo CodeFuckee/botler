@@ -613,6 +613,27 @@
 
 ### Fixed
 
+- **概览页「其他」分组拖动手柄图标与 issue 标题不在同一高度、图标偏上（issue #343）**：
+  概览页开放 issue 列表「其他」分组（支持拖动排序，issue #287）的拖动手柄图标
+  （gripVertical）与 issue 标题行不在同一垂直高度——图标偏上。根因：
+  `.issue-row` 为 flex 布局（`align-items: flex-start`），拖动手柄
+  （`.issue-drag-handle`，inline-flex，仅图标 1em=14px 高）顶部对齐；而 issue
+  标题行（`.issue-link`）继承 body 的 `line-height: 1.6`（14px 字号 → 行高
+  22.4px），文本垂直中心在行盒中心（0.8em）。图标中心仅位于顶部 + 0.5em 处，
+  比标题行中心高半个行高差（0.3em ≈ 3.2px，Chromium 实测图标中心 y=410.8、
+  标题行中心 y=414.0，偏差 3.2px）。修复：
+  - **样式**：`styles.css` `.issue-drag-handle` 的 `margin-top: 1px` 改为
+    `margin-top: calc((1.6em - 1em) / 2)`——图标下移半个行高差使中心与标题行
+    中心重合，按 em 计算随字号/行高自适应、不写死像素；手柄保持
+    `align-self: flex-start`，issue 带标签/里程碑副行时图标仍锚定标题首行，
+    不会漂移到整行居中；
+  - **新增测试**：e2e `issue-drag-align.spec.js` 新增真实浏览器用例——mock
+    开放 issue 数据（「其他」分组 ≥2 条触发拖动排序）渲染概览页后，测量手柄
+    图标中心与标题行中心的垂直偏差，断言 ≤2px；`tests/overview-issue-drag-align.test.mjs`
+    新增 3 例源码级断言（margin-top 对齐公式 / align-self 保持顶部锚定 /
+    图标在手柄内居中）。修复前新 e2e 用例稳定失败（偏差 3.2px），修复后通过；
+    全量前端单元测试（1370 例）+ backend pytest（2617 例）+ 全量 E2E（18 例）
+    无 regression。
 - **竖屏下概览页 DeepSeek 余额卡片「刷新」与「充值」按钮文字不在同一高度、
   按钮文案「去充值」改为「充值」（issue #336）**：竖屏界面（含手机触屏
   竖屏，`.btn-small` 在 `@media (pointer: coarse)` 下 `min-height: 44px`）

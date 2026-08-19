@@ -3019,7 +3019,10 @@ code {
   justify-content: center;
   flex: none;
   align-self: flex-start;
-  margin-top: 1px;
+  /* issue #343：手柄图标与 issue 标题行垂直居中对齐——图标 1em 高、
+     标题行 line-height 1.6em，图标下移半个行高差（0.3em）使其中心
+     与标题行中心重合（按 em 计算，随字号/行高自适应，不写死像素） */
+  margin-top: calc((1.6em - 1em) / 2);
   color: var(--muted);
   cursor: grab;
   opacity: 0.45;
