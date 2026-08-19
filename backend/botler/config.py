@@ -140,6 +140,18 @@ def _issue_priority_labels(worker: dict) -> list[str]:
     return list(DEFAULT_ISSUE_PRIORITY)
 
 
+def _alert_threshold(alerts: dict) -> float:
+    """聚合告警失败率阈值解析（issue #229）：百分比 0~100，钳制在合法区间。
+
+    支持 0~100 的百分比写法（如 50 = 50%）；缺失/非法值回退默认 50。
+    """
+    try:
+        val = float(alerts.get("failure_rate_threshold", 50.0))
+    except (TypeError, ValueError):
+        return 50.0
+    return min(100.0, max(0.0, val))
+
+
 def _failure_classify_rules(cfg: dict) -> dict | None:
     """读取 config failure_classify.rules（issue #274）。
 
@@ -365,6 +377,34 @@ class Settings:
     # 空表 = 未配置单价，任务详情只展示 token 数不估算费用。
     usage_currency: str = "USD"
     usage_pricing: list[dict] = field(default_factory=list)
+    # 聚合告警（issue #229）：平台异常主动通知（网页通知 in_app + webhook
+    # 推送），替代「用户打开页面才发现」。检测并入对账循环（reconciler
+    # 定时扫描），阈值在设置页「聚合告警」卡片可配置：
+    #   enabled               聚合告警总开关（关闭 = 全部告警不检测不通知）
+    #   notify_failure_rate   近 failure_rate_window 秒任务失败率 >
+    #                         failure_rate_threshold → 通知
+    #   failure_rate_threshold 失败率阈值（百分比 0~100，默认 50 = 50%）
+    #   failure_rate_window   失败率统计窗口（秒，默认 3600 = 近 1 小时）
+    #   notify_queue_backlog  队列堆积告警：活跃任务数 >
+    #                         queue_backlog_threshold 且窗口内无任务收尾
+    #                         （queue_stall_minutes 内无进度）→ 通知
+    #   queue_backlog_threshold 队列积压条数阈值（活跃任务数）
+    #   queue_stall_minutes   无进度判定窗口（分钟）
+    #   notify_token_invalid  GitLab token 失效（401/403）→ 立即通知
+    #   notify_disk_low       数据目录磁盘剩余 < disk_min_free_mb → 通知
+    #   disk_min_free_mb      磁盘剩余阈值（MiB，默认 512，与 health 一致）
+    #   throttle_seconds      同类告警节流窗口（秒，默认 3600）
+    alerts_enabled: bool = True
+    alert_failure_rate: bool = True
+    alert_failure_rate_threshold: float = 50.0
+    alert_failure_rate_window: int = 3600
+    alert_queue_backlog: bool = True
+    alert_queue_backlog_threshold: int = 5
+    alert_queue_stall_minutes: int = 30
+    alert_token_invalid: bool = True
+    alert_disk_low: bool = True
+    alert_disk_min_free_mb: int = 512
+    alert_throttle_seconds: int = 3600
 
 
 
@@ -399,6 +439,11 @@ KNOWN_FIELDS = {
     # 任务 token 用量（issue #235）：currency 为费用货币；pricing 为模型
     # 单价表（每项 model / input_per_million / output_per_million）。
     "usage": {"currency", "pricing"},
+    "alerts": {"enabled", "notify_failure_rate", "failure_rate_threshold",
+               "failure_rate_window", "notify_queue_backlog",
+               "queue_backlog_threshold", "queue_stall_minutes",
+               "notify_token_invalid", "notify_disk_low",
+               "disk_min_free_mb", "throttle_seconds"},
 }
 # 配置段写回 schema（issue #193 泛化 update_*）：settings API 写回 config.yaml
 # 的唯一入口 update_section(section, patch) 按此描述执行，替代原先 15+ 个
@@ -449,6 +494,7 @@ SECTION_SCHEMAS: dict[str, SectionSchema] = {
                            masked=("access_key", "secret_key"),
                            trim=("endpoint", "public_base_url")),
     "usage": SectionSchema(fields=tuple(KNOWN_FIELDS["usage"])),
+    "alerts": SectionSchema(fields=tuple(KNOWN_FIELDS["alerts"])),
     "labels": SectionSchema(fields=("custom",)),
     "repos": SectionSchema(fields=(), replace_list=True),
     "ai_providers": SectionSchema(fields=(), replace_list=True),
@@ -594,6 +640,7 @@ class ConfigManager:
         vision_models_raw = data.get("vision_models", []) or []
         minio = data.get("minio", {}) or {}
         usage = data.get("usage", {}) or {}
+        alerts = data.get("alerts", {}) or {}
         failure_classify = data.get("failure_classify", {}) or {}
 
         repos = []
@@ -739,6 +786,17 @@ class ConfigManager:
             usage_currency=(str(usage.get("currency") or "USD").strip() or "USD"),
             usage_pricing=[
                 p for p in (usage.get("pricing") or []) if isinstance(p, dict)],
+            alerts_enabled=bool(alerts.get("enabled", True)),
+            alert_failure_rate=bool(alerts.get("notify_failure_rate", True)),
+            alert_failure_rate_threshold=_alert_threshold(alerts),
+            alert_failure_rate_window=max(60, int(alerts.get("failure_rate_window", 3600))),
+            alert_queue_backlog=bool(alerts.get("notify_queue_backlog", True)),
+            alert_queue_backlog_threshold=max(1, int(alerts.get("queue_backlog_threshold", 5))),
+            alert_queue_stall_minutes=max(1, int(alerts.get("queue_stall_minutes", 30))),
+            alert_token_invalid=bool(alerts.get("notify_token_invalid", True)),
+            alert_disk_low=bool(alerts.get("notify_disk_low", True)),
+            alert_disk_min_free_mb=max(1, int(alerts.get("disk_min_free_mb", 512))),
+            alert_throttle_seconds=max(60, int(alerts.get("throttle_seconds", 3600))),
             webhook_enabled=bool(webhook.get("enabled", False)),
             webhook_url=str(webhook.get("url", "")).strip(),
             webhook_content_type=str(webhook.get("content_type", "")).strip()

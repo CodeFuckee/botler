@@ -18,6 +18,7 @@ import MinioCard from '../components/settings/MinioCard.jsx'
 import TasksCard from '../components/settings/TasksCard.jsx'
 import UiCard from '../components/settings/UiCard.jsx'
 import NotificationsCard from '../components/settings/NotificationsCard.jsx'
+import AlertsCard from '../components/settings/AlertsCard.jsx'
 import WebhookCard from '../components/settings/WebhookCard.jsx'
 import ClaudeCard from '../components/settings/ClaudeCard.jsx'
 import DshCard from '../components/settings/DshCard.jsx'
@@ -86,6 +87,9 @@ export default function Settings() {
         </section>
         <section id="settings-notifications" className="settings-section">
           <NotificationsCard {...data} />
+        </section>
+        <section id="settings-alerts" className="settings-section" data-nav-label="聚合告警">
+          <AlertsCard {...data} />
         </section>
         <section id="settings-webhook" className="settings-section">
           <WebhookCard {...data} />

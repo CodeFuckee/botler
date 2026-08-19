@@ -231,6 +231,21 @@ def get_settings(request: Request):
             "authorization_masked": _mask(s.webhook_authorization),
             "body_template": s.webhook_body_template,
         },
+        "alerts": {
+            # 聚合告警（issue #229）：阈值设置页可配置（检测并入对账循环，
+            # 告警经现有 notifier 通知——网页通知 in_app + webhook 推送）
+            "enabled": s.alerts_enabled,
+            "notify_failure_rate": s.alert_failure_rate,
+            "failure_rate_threshold": s.alert_failure_rate_threshold,
+            "failure_rate_window": s.alert_failure_rate_window,
+            "notify_queue_backlog": s.alert_queue_backlog,
+            "queue_backlog_threshold": s.alert_queue_backlog_threshold,
+            "queue_stall_minutes": s.alert_queue_stall_minutes,
+            "notify_token_invalid": s.alert_token_invalid,
+            "notify_disk_low": s.alert_disk_low,
+            "disk_min_free_mb": s.alert_disk_min_free_mb,
+            "throttle_seconds": s.alert_throttle_seconds,
+        },
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -337,6 +352,11 @@ def update_settings(request: Request, body: dict):
     if notify is not None:
         _validate_notifications(notify)
         c.config.update_section("notifications", notify)
+
+    alerts = body.get("alerts")
+    if alerts is not None:
+        _validate_alerts(alerts)
+        c.config.update_section("alerts", alerts)
 
     sso = body.get("sso")
     if sso is not None:
@@ -845,6 +865,32 @@ def _validate_notifications(patch: dict) -> None:
                 "queue_empty", "queue_no_work"):
         if key in patch and not isinstance(patch[key], bool):
             raise HTTPException(400, f"notifications.{key} 必须是布尔值")
+
+
+def _validate_alerts(patch: dict) -> None:
+    """校验 alerts 段（issue #229）：开关必须布尔，阈值必须合法数值。
+
+    - 失败率阈值 0~100（百分比，默认 50）；非法/越界 400 不落盘；
+    - 窗口/条数/分钟/节流秒数为正整数（布尔不算数值）。
+    """
+    for key in ("enabled", "notify_failure_rate", "notify_queue_backlog",
+                "notify_token_invalid", "notify_disk_low"):
+        if key in patch and not isinstance(patch[key], bool):
+            raise HTTPException(400, f"alerts.{key} 必须是布尔值")
+    if "failure_rate_threshold" in patch:
+        val = patch["failure_rate_threshold"]
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise HTTPException(400, "alerts.failure_rate_threshold 必须是数值（0~100，如 50 = 50%）")
+        if not (0 <= float(val) <= 100):
+            raise HTTPException(400, "alerts.failure_rate_threshold 必须在 0~100 之间")
+        patch["failure_rate_threshold"] = float(val)
+    for key in ("failure_rate_window", "queue_backlog_threshold",
+                "queue_stall_minutes", "disk_min_free_mb", "throttle_seconds"):
+        if key in patch:
+            val = patch[key]
+            if isinstance(val, bool) or not isinstance(val, (int, float)) or float(val) <= 0:
+                raise HTTPException(400, f"alerts.{key} 必须是正整数")
+            patch[key] = int(val)
 
 
 def _validate_owner_token_scope(cfg, token: str) -> None:

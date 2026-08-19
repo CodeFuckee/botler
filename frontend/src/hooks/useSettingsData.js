@@ -119,6 +119,9 @@ export function useSettingsData() {
   // issue #27 / Webhook 卡片 issue #141 / 界面显示卡片 issue #142 同模式）
   const [notifySaveBusy, setNotifySaveBusy] = useState(false)
   const [notifySaved, setNotifySaved] = useState(false)
+  // 「聚合告警」卡片保存状态（issue #229）：独立保存按钮 busy / 保存成功提示
+  const [alertSaveBusy, setAlertSaveBusy] = useState(false)
+  const [alertSaved, setAlertSaved] = useState(false)
   // 定时暂停窗口（issue #169）：textarea 每行一个窗口串 ↔ 数组存储；
   // 初始值在 settings 加载后回填（与 issue_priority 同模式）
   const [pauseWindowsInput, setPauseWindowsInput] = useState('')
@@ -207,6 +210,10 @@ export function useSettingsData() {
 
   const setNotifyField = (key, val) =>
     setSettings((s) => ({ ...s, notifications: { ...s.notifications, [key]: val } }))
+  // 「聚合告警」卡片字段更新（issue #229）：alerts 段局部更新，随卡片内
+  // 保存（saveAlerts）一次性提交，不影响其他设置
+  const setAlertField = (key, val) =>
+    setSettings((s) => ({ ...s, alerts: { ...s.alerts, [key]: val } }))
 
   const setSsoField = (key, val) =>
     setSettings((s) => ({ ...s, sso: { ...s.sso, [key]: val } }))
@@ -308,6 +315,18 @@ export function useSettingsData() {
       setNotifySaved(true)
       setTimeout(() => setNotifySaved(false), 2000)
     } catch (e) { setError(e.message) } finally { setNotifySaveBusy(false) }
+  }
+
+  // 「聚合告警」卡片内独立保存（issue #229）：只提交 alerts 段（部分更新），
+  // 后端 PUT /api/settings 支持部分更新，不影响其他设置；阈值写回
+  // config.yaml 后对账循环下次检测即按新阈值生效
+  const saveAlerts = async () => {
+    setAlertSaveBusy(true); setError(''); setAlertSaved(false)
+    try {
+      await api.put('/api/settings', { alerts: { ...settings.alerts } })
+      setAlertSaved(true)
+      setTimeout(() => setAlertSaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setAlertSaveBusy(false) }
   }
 
   // SSO 卡片内独立保存（issue #27 第四轮）：只提交 sso 段，
@@ -429,6 +448,8 @@ export function useSettingsData() {
     uiSaveBusy, setUiSaveBusy, uiSaved, setUiSaved, buildUiPatch, saveUi,
     notifySaveBusy, setNotifySaveBusy, notifySaved, setNotifySaved,
     setNotifyField, handleTestNotify, saveNotify,
+    setAlertField, alertSaveBusy, setAlertSaveBusy,
+    alertSaved, setAlertSaved, saveAlerts,
     minioAccessInput, setMinioAccessInput, minioSecretInput, setMinioSecretInput,
     minioSaveBusy, setMinioSaveBusy, minioSaved, setMinioSaved, setMinioField,
     buildMinioPatch, saveMinio,

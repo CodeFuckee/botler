@@ -42,6 +42,11 @@ class Reconciler:
         # 网页通知事件（issue #21）：对账扫描后产生队列状态通知
         from .notifier import Notifier
         self.notifier = Notifier(db)
+        # 聚合告警检测（issue #229）：对账循环内执行异常检测（失败率/
+        # 队列堆积/token 失效/磁盘空间），告警经现有 notifier 通知，
+        # 阈值设置页可配置（config.yaml alerts 段）
+        from .alerts import AlertChecker
+        self.alerts = AlertChecker(config, db, self.notifier, gitlab=gitlab)
 
     def start(self) -> None:
         cfg = self.config.get()
@@ -93,6 +98,14 @@ class Reconciler:
         result: dict = {"scanned": scanned, "enqueued": enqueued}
         if errors:
             result["errors"] = errors
+        # 聚合告警检测（issue #229）：启动/对账时检测异常（近 1 小时失败率
+        # > 阈值、队列堆积且无进度、GitLab token 失效 401、磁盘空间不足），
+        # 经现有 notifier（网页通知 in_app + webhook 推送）主动通知；阈值
+        # 设置页可配置。检测失败仅记日志，不影响对账结果（告警内部容错）。
+        try:
+            self.alerts.check()
+        except Exception:  # noqa: BLE001
+            logger.exception("聚合告警检测失败")
         return result
 
     def _call_with_fallback(self, repo: dict, verify_ssl: bool, client, call):

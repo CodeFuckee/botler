@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 ### Added
+- **聚合告警：任务失败率 / 队列堆积 / token 失效 / 磁盘空间主动通知（issue #229）**：
+  平台有通知通道（网页通知 + webhook 推送，issue #21/#136）与 bot-failed 标签，
+  但异常（连续 N 个任务失败、队列长时间堆积、GitLab token 失效、磁盘满）没有
+  主动告警——无人值守场景只能用户打开页面发现。本次新增聚合告警检测，异常信号
+  主动经现有 notifier 通知：
+  - **检测并入对账循环**：新增 `botler/alerts.py`（`AlertChecker`），
+    `reconciler.reconcile_once` 末尾自动执行一轮检测（启动首个对账线程立即跑一次，
+    之后随对账周期，默认 5 分钟）；四类检测：
+    - **失败率**：近 `failure_rate_window` 秒（默认 3600 = 1 小时）终态任务
+      失败率 > `failure_rate_threshold`%（默认 50）→ `alert_failure_rate`；
+    - **队列堆积**：活跃任务（queued/running/retrying）超过
+      `queue_backlog_threshold` 条（默认 5）且 `queue_stall_minutes` 分钟
+      （默认 30）内无任何任务收尾（无进度，疑似卡死）→ `alert_queue_backlog`；
+    - **token 失效**：启动/对账时探测 GitLab（GET /user 返回 401/403）→
+      `alert_token_invalid`；传输层故障不算 token 失效，不误报；
+    - **磁盘空间**：数据目录剩余空间 < `disk_min_free_mb` MiB（默认 512，
+      与 /api/health 探测同口径）→ `alert_disk_low`；
+  - **告警走现有 notifier**：in_app 经 `Notifier.record_alert` 落库网页通知
+    事件（前端轮询弹系统通知，`notify.js` 新增 alert_* 事件类型映射），webhook
+    经 `WebhookPusher.send_alert` 推送结构化 payload（type=alert + alert_type/
+    title/body/detail/time，复用 webhook 地址/请求头配置）；任一通道失败仅记
+    日志，不阻塞对账循环；
+  - **阈值可配置**：config.yaml 新增 `alerts` 段（总开关 + 四类告警开关与阈值
+    + 节流窗口），设置页新增「聚合告警」卡片（独立「保存告警配置」按钮，只提交
+    alerts 段）；settings API `_validate_alerts` 校验（开关布尔、阈值合法区间，
+    非法 400 不落盘）；同类告警按 `throttle_seconds`（默认 1 小时）节流，避免
+    对账周期反复提醒；
+  - **数据源**：`database.py` 新增 `task_failure_stats`（近窗口失败率）、
+    `count_terminal_since`（窗口内终态任务数，队列无进度判定）、
+    `last_alert_notification`（全局告警节流查询）；
+  - **新增测试**：`backend/tests/test_alerts.py` 33 例（失败率触发/不触发/恰好
+    等于阈值不触发/无终态任务/窗口外不计入/阈值可配置、队列堆积触发/有进度不
+    触发/低于阈值不触发/过期收尾仍触发/阈值可配置、token 401/403 触发/网络故障
+    不误报/注入状态/开关关闭、磁盘低触发/正常不触发/阈值可配置、同类节流/异类
+    独立/总开关关闭、webhook 告警推送 payload 与未启用跳过、settings API 默认值
+    与写回与非法阈值 400、Reconciler 对账集成触发 token 失效与失败率告警）；
+    `frontend/tests/settings-alerts-card.test.mjs` 10 例（卡片字段/hook 保存/
+    页面挂载/通知映射/后端 API/config/alerts 模块/notifier/webhook/数据库）；
+    全量前后端测试无 regression。
+
 - **执行引擎健康探测与自动降级重试（issue #236）**：worker.engine 配置一个执行
   引擎，任务失败后最多重试 max_retries 次且重试仍用同一引擎——引擎本身坏了
   （claude CLI 未安装、DeepSeek API Key 失效、dsh 运行时损坏）时重试多少次都

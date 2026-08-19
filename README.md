@@ -642,7 +642,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 
 `backend/config.yaml` 是唯一事实来源，Web UI 是编辑它的外壳。直接编辑 config.yaml 的修改会被运行中的进程自动感知（检测文件变化后重载，无需重启；issue #25），且后续 Web UI 保存设置不会覆盖手动编辑的内容。凭据一律用 `${ENV_VAR}` 引用环境变量（`backend/.env`），不入库、不进日志、不进提示词。
 
-设置页设置项较多时，左侧导航栏按功能分组整理全部设置项（issue #139）——分组：外部服务接入（Synology SSO 登录 / AI API 供应商 / 生图模型 / 识图模型 / MinIO 对象存储）、系统设置（任务调度 / 界面显示 / 网页通知 / 消息推送 Webhook）、执行引擎（Claude Code / dsh 引擎）、运维与数据（本地环境检测 / 数据备份）、账号与安全（Owner GitLab Token / GitLab 凭据）、关于（版本信息）。导航栏支持**关键词搜索设置项**（名称与关键字命中，含中英文别名）与**分组折叠/展开**（可「全部收起 / 全部展开」），点击子项平滑滚动到页面相应设置区块并高亮；导航面板可**整体折叠**成 44px 窄栏（仅保留「展开侧边栏」入口，issue #168），折叠后内容区占满全宽、最大化编辑空间，折叠偏好本地持久化（刷新保持）；窄视口（≤860px）平板/窄窗口竖屏（641~860px）下保持左右布局——左侧导航栏收窄为 200px 并吸顶、设置面板在右并排展示，类似手机/平板设置页面「左侧列表 + 右侧详情」的主从式感觉（issue #339，≤640px 手机竖屏内容列装不下两栏仍为单栏）；横屏窄视口回落单栏，导航置于页面顶部。
+设置页设置项较多时，左侧导航栏按功能分组整理全部设置项（issue #139）——分组：外部服务接入（Synology SSO 登录 / AI API 供应商 / 生图模型 / 识图模型 / MinIO 对象存储）、系统设置（任务调度 / 界面显示 / 网页通知 / 聚合告警 / 消息推送 Webhook）、执行引擎（Claude Code / dsh 引擎）、运维与数据（本地环境检测 / 数据备份）、账号与安全（Owner GitLab Token / GitLab 凭据）、关于（版本信息）。导航栏支持**关键词搜索设置项**（名称与关键字命中，含中英文别名）与**分组折叠/展开**（可「全部收起 / 全部展开」），点击子项平滑滚动到页面相应设置区块并高亮；导航面板可**整体折叠**成 44px 窄栏（仅保留「展开侧边栏」入口，issue #168），折叠后内容区占满全宽、最大化编辑空间，折叠偏好本地持久化（刷新保持）；窄视口（≤860px）平板/窄窗口竖屏（641~860px）下保持左右布局——左侧导航栏收窄为 200px 并吸顶、设置面板在右并排展示，类似手机/平板设置页面「左侧列表 + 右侧详情」的主从式感觉（issue #339，≤640px 手机竖屏内容列装不下两栏仍为单栏）；横屏窄视口回落单栏，导航置于页面顶部。
 
 关键配置（`config.example.yaml` 中有完整示例与注释）：
 
@@ -680,6 +680,12 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `webhook.enabled` | false | Webhook 消息推送总开关（issue #136）：任务完成（成功收尾）时调用 webhook 推送消息；设置页「消息推送 Webhook」卡片可配置，卡片内提供独立「保存 Webhook 配置」按钮（issue #141），也可用上方「任务调度」卡片全局「保存」 |
 | `webhook.url` / `content_type` / `authorization` | — | webhook 地址（POST 目标，须 http(s):// 开头）/ Content-Type 请求头（默认 `application/json`）/ Authorization 请求头（可选，支持 `${ENV}` 引用） |
 | `webhook.body_template` | 内置默认 JSON 模板 | POST 结构体模板，可使用全局模板占位符（`{repo_name}` `{issue_title}` `{issue_body}` `{issue_title_urlenc}` `{issue_body_urlenc}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}` `{project_path}` `{project_path_encoded}` `{gitlab_host}`），请求时自动填充；留空 = 内置默认模板 |
+| `alerts.enabled` | true | 聚合告警总开关（issue #229）：平台异常主动通知（网页通知 in_app + webhook 推送），替代「用户打开页面才发现」；关闭 = 全部告警不检测不通知。检测并入对账循环（reconciler 定时扫描），设置页「聚合告警」卡片可配置阈值，独立「保存告警配置」按钮（issue #229） |
+| `alerts.notify_failure_rate` / `failure_rate_threshold` / `failure_rate_window` | true / 50 / 3600 | 任务失败率告警：近 `failure_rate_window` 秒（默认 1 小时）终态任务失败率超过 `failure_rate_threshold`%（默认 50）→ 通知（`alert_failure_rate` 事件） |
+| `alerts.notify_queue_backlog` / `queue_backlog_threshold` / `queue_stall_minutes` | true / 5 / 30 | 队列堆积告警：活跃任务（排队中 + 运行中）超过 `queue_backlog_threshold` 条且 `queue_stall_minutes` 分钟内无任何任务收尾（无进度）→ 通知（`alert_queue_backlog` 事件） |
+| `alerts.notify_token_invalid` | true | GitLab token 失效告警：启动/对账时探测到 GitLab 返回 401/403（token 过期/被吊销）→ 立即通知（`alert_token_invalid` 事件）；传输层故障不算 token 失效，不误报 |
+| `alerts.notify_disk_low` / `disk_min_free_mb` | true / 512 | 磁盘空间告警：数据目录剩余空间低于 `disk_min_free_mb` MiB → 通知（`alert_disk_low` 事件，与 /api/health 磁盘探测同阈值口径） |
+| `alerts.throttle_seconds` | 3600 | 同类告警节流窗口（秒）：窗口内不重复通知，避免对账周期反复提醒（默认 1 小时） |
 | `sso.enabled` | false | Synology SSO 登录总开关：启用后访问 Web UI 需用群晖账号登录（issue #27） |
 | `sso.well_known_url` / `client_id` / `client_secret` | — | 群晖 SSO Server 的 OIDC 接入参数（Well-known URL / Application ID / Secret） |
 | `sso.session_days` | 7 | 登录有效期（天，1~365） |

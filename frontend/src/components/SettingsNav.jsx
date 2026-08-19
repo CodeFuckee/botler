@@ -35,6 +35,7 @@ export const SETTING_KEYWORDS = {
   'settings-tasks': ['worker', '并行', '重试', '超时', '对账', 'priority'],
   'settings-ui': ['ui', '时区', 'timezone', '显示'],
   'settings-notifications': ['notification', '通知', '浏览器'],
+  'settings-alerts': ['alert', '告警', '失败率', '队列', 'token', '磁盘', '阈值'],
   'settings-webhook': ['webhook', '推送', '消息'],
   'settings-claude': ['claude', '命令', '参数', 'anthropic', 'command'],
   'settings-dsh': ['dsh', 'deepseek', 'reasoning', '推理', 'effort'],

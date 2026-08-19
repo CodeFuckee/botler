@@ -17,6 +17,12 @@ export const NOTIFY_TYPE_MAP = {
   task_failed: 'task_needs_interaction',
   queue_empty: 'queue_empty',
   queue_no_work: 'queue_no_work',
+  // 聚合告警（issue #229）：无对应设置开关键（缺省视为开启），弹窗与否
+  // 由「网页通知」总开关控制——告警生成开关在「聚合告警」卡片独立配置
+  alert_failure_rate: 'alert_failure_rate',
+  alert_queue_backlog: 'alert_queue_backlog',
+  alert_token_invalid: 'alert_token_invalid',
+  alert_disk_low: 'alert_disk_low',
 }
 
 // 按设置过滤可弹通知的事件（纯函数，可测）

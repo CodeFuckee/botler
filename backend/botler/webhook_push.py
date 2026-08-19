@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import httpx
 
@@ -187,6 +188,43 @@ class WebhookPusher:
             return None
         variables = self.build_variables(task, repo_name, repo_url, issue)
         return self.send(variables)
+
+    def send_alert(self, alert_type: str, title: str, body: str = "",
+                   detail: str = "") -> dict | None:
+        """聚合告警推送（issue #229）：告警走现有 webhook 通道。
+
+        与任务完成推送共用 send()（同样的地址/请求头/超时与容错），
+        payload 为告警专用结构（type=alert + alert_type/title/body/
+        detail/time），不套用 issue 模板占位符（告警无 issue 上下文）。
+        未启用（webhook.enabled=false）或未配置地址返回 None（不发送）；
+        发送成功返回响应摘要；失败抛 WebhookPushError。
+        """
+        cfg = self.config.get()
+        if not cfg.webhook_enabled or not (cfg.webhook_url or "").strip():
+            return None
+        payload = json.dumps({
+            "type": "alert",
+            "alert_type": alert_type,
+            "title": title,
+            "body": body,
+            "detail": detail,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+        }, ensure_ascii=False, indent=2)
+        headers = {"Content-Type": cfg.webhook_content_type or "application/json"}
+        if cfg.webhook_authorization:
+            headers["Authorization"] = cfg.webhook_authorization
+        try:
+            with httpx.Client(timeout=PUSH_TIMEOUT_SECONDS,
+                              verify=cfg.verify_ssl) as client:
+                resp = client.post((cfg.webhook_url or "").strip(),
+                                   content=payload.encode("utf-8"),
+                                   headers=headers)
+        except httpx.HTTPError as e:
+            raise WebhookPushError(f"webhook 请求失败: {e}") from e
+        if resp.status_code >= 400:
+            raise WebhookPushError(
+                f"webhook 目标返回 HTTP {resp.status_code}: {resp.text[:200]}")
+        return {"status_code": resp.status_code, "text": resp.text[:200]}
 
     def send_test(self, repo_name: str = "测试仓库") -> dict:
         """设置页「测试推送」：发送一条测试消息验证配置可用性。

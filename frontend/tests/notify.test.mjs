@@ -27,13 +27,36 @@ const EVENTS = [
   { id: 4, type: 'queue_no_work', title: 'g', body: 'h' },
 ]
 
-test('NOTIFY_TYPE_MAP 覆盖全部四种事件类型', () => {
+test('NOTIFY_TYPE_MAP 覆盖全部事件类型（任务/队列 + 聚合告警）', () => {
+  // issue #229：聚合告警事件（alert_*）无对应设置开关键（缺省视为开启），
+  // 弹窗与否由「网页通知」总开关控制——告警生成开关在「聚合告警」卡片独立配置
   assert.deepEqual(NOTIFY_TYPE_MAP, {
     task_succeeded: 'issue_completed',
     task_failed: 'task_needs_interaction',
     queue_empty: 'queue_empty',
     queue_no_work: 'queue_no_work',
+    alert_failure_rate: 'alert_failure_rate',
+    alert_queue_backlog: 'alert_queue_backlog',
+    alert_token_invalid: 'alert_token_invalid',
+    alert_disk_low: 'alert_disk_low',
   })
+})
+
+test('filterNotifyEvents：告警事件在总开关开启时弹出（缺省视为开启）', () => {
+  const alerts = [
+    { id: 9, type: 'alert_failure_rate', title: '⚠️ 任务失败率过高', body: 'b' },
+    { id: 10, type: 'alert_disk_low', title: '⚠️ 磁盘空间不足', body: 'c' },
+  ]
+  assert.deepEqual(filterNotifyEvents(alerts, DEFAULT_SETTINGS), alerts)
+})
+
+test('filterNotifyEvents：告警事件在总开关关闭时全部过滤', () => {
+  const alerts = [
+    { id: 9, type: 'alert_failure_rate', title: 't', body: 'b' },
+    { id: 10, type: 'alert_queue_backlog', title: 't', body: 'b' },
+  ]
+  const settings = { notifications: { ...DEFAULT_SETTINGS.notifications, enabled: false } }
+  assert.deepEqual(filterNotifyEvents(alerts, settings), [])
 })
 
 test('filterNotifyEvents：总开关关闭 → 全部过滤', () => {

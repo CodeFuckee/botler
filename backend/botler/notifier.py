@@ -25,6 +25,13 @@ QUEUE_THROTTLE_SECONDS = 3600
 # 事件正文里失败原因的最大长度（正文只展示摘要，详情在任务页）
 _BODY_MAX = 200
 
+# 聚合告警事件类型（issue #229）：平台级异常（无 repo_name），节流按类型
+# 全局判定（record_alert），与队列类事件的「同仓库同类型」节流维度不同
+ALERT_FAILURE_RATE = "alert_failure_rate"
+ALERT_QUEUE_BACKLOG = "alert_queue_backlog"
+ALERT_TOKEN_INVALID = "alert_token_invalid"
+ALERT_DISK_LOW = "alert_disk_low"
+
 
 class Notifier:
     def __init__(self, db: Database):
@@ -59,6 +66,26 @@ class Notifier:
                 if time.time() - prev_ts < window_seconds:
                     return None
         return self.record(type_, title, body, repo_name=repo_name)
+
+    def record_alert(self, type_: str, title: str, body: str = "",
+                     data: dict | None = None,
+                     window_seconds: int = QUEUE_THROTTLE_SECONDS) -> int | None:
+        """节流记录全局聚合告警事件（issue #229）：同类型窗口期内跳过。
+
+        与 record_throttled 的差异：告警无 repo_name（平台级），节流按
+        类型全局判定（last_alert_notification 不带仓库过滤），窗口默认
+        1 小时，避免对账周期反复提醒骚扰用户。返回事件 id 或 None（节流）。
+        """
+        last = self.db.last_alert_notification(type_)
+        if last is not None:
+            created = last["created_at"]
+            try:
+                prev_ts = calendar.timegm(time.strptime(created, "%Y-%m-%d %H:%M:%S"))
+            except (TypeError, ValueError):
+                prev_ts = 0
+            if time.time() - prev_ts < window_seconds:
+                return None
+        return self.record(type_, title, body, data=data)
 
     # ---- 任务类事件 ----
 

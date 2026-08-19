@@ -1871,6 +1871,56 @@ class Database:
             return row
 
 
+    # ---- 聚合告警数据源（issue #229）----
+
+    def task_failure_stats(self, since_ts: str) -> dict:
+        """近窗口内终态任务失败统计（失败率告警数据源）。
+
+        统计 finished_at >= since_ts 的终态任务（succeeded + failed）：
+        {"total": 总数, "failed": 失败数, "rate": 失败率（0.0~1.0，
+        total=0 时 rate=0.0）}。失败率 = failed / (succeeded + failed)。
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM tasks "
+                "WHERE finished_at IS NOT NULL AND finished_at >= ? "
+                "AND status IN (?, ?) GROUP BY status",
+                (since_ts, STATUS_SUCCEEDED, STATUS_FAILED)).fetchall()
+        total = failed = 0
+        for r in rows:
+            n = int(r["n"])
+            total += n
+            if r["status"] == STATUS_FAILED:
+                failed = n
+        rate = failed / total if total else 0.0
+        return {"total": total, "failed": failed, "rate": rate}
+
+    def count_terminal_since(self, since_ts: str) -> int:
+        """统计 since_ts 之后进入终态（succeeded/failed/interrupted/
+        canceled_by_user）的任务数（队列「无进度」判定，issue #229）：
+
+        窗口内有任务收尾 = 有进度，不触发队列堆积告警。interrupted/
+        canceled 也计入进度（平台在推进，只是任务未成功）。
+        """
+        with self._conn() as conn:
+            return int(conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE finished_at IS NOT NULL "
+                "AND finished_at >= ? AND status IN (?, ?, ?, ?)",
+                (since_ts, STATUS_SUCCEEDED, STATUS_FAILED,
+                 STATUS_INTERRUPTED, STATUS_CANCELED)).fetchone()[0])
+
+    def last_alert_notification(self, type_: str) -> sqlite3.Row | None:
+        """最近一条指定类型的告警通知（全局节流判定，issue #229）。
+
+        告警事件无 repo_name（平台级，跨仓库/跨配置），按 type 取最近
+        一条；无则返回 None。
+        """
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM notification_events WHERE type = ? "
+                "ORDER BY id DESC LIMIT 1", (type_,)).fetchone()
+
+
     # ---- tools（issue #172：MCP 工具管理）----
 
     def list_tools(self) -> list[sqlite3.Row]:

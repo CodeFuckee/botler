@@ -298,6 +298,25 @@ webhook:
                                     #   {project_path_encoded}/{gitlab_host}），
                                     #   请求时自动填充；留空 = 内置默认 JSON 模板
 
+alerts:
+  # 聚合告警（issue #229）：平台无人值守时主动通知异常——任务失败率过高 /
+  # 队列堆积无进度 / GitLab token 失效 / 磁盘空间不足，替代「用户打开页面
+  # 才发现」。检测并入对账循环（reconciler 定时扫描，默认 5 分钟一轮），
+  # 告警经现有通知通道分发：网页通知 in_app 事件（前端轮询弹系统通知，
+  # 受 notifications.enabled 总开关控制）+ webhook 推送（受 webhook.enabled
+  # 控制）。设置页「聚合告警」卡片可配置全部阈值。本段全部可缺省。
+  enabled: true                     # 聚合告警总开关（关闭 = 全部告警不检测不通知）
+  notify_failure_rate: true         # 近 1 小时任务失败率告警开关
+  failure_rate_threshold: 50        # 失败率阈值（百分比 0~100，如 50 = 50%）
+  failure_rate_window: 3600         # 失败率统计窗口（秒，默认 1 小时）
+  notify_queue_backlog: true        # 队列堆积告警开关
+  queue_backlog_threshold: 5        # 队列积压条数阈值（活跃任务数）
+  queue_stall_minutes: 30           # 无进度判定窗口（分钟，窗口内无任务收尾 = 无进度）
+  notify_token_invalid: true        # GitLab token 失效（401/403）告警开关
+  notify_disk_low: true             # 磁盘空间告警开关
+  disk_min_free_mb: 512             # 磁盘剩余阈值（MiB，与 /api/health 探测同口径）
+  throttle_seconds: 3600            # 同类告警节流窗口（秒，默认 1 小时）
+
 usage:
   # 任务 token 用量与费用（issue #235）：任务执行时采集三引擎（claude /
   # hermes / dsh）的模型调用 token 用量，任务详情页展示用量卡片、概览页
