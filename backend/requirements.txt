@@ -20,3 +20,6 @@ terminado>=0.18
 # dsh 会话根目录压缩编码归一化（issue #302）：runtime 默认 zstd 压缩，
 # 遗留明文 session.jsonl 需转成 zstd 分帧格式（zstandard 提供压缩）
 zstandard>=0.22
+# 图片压缩（issue #310）：sync-logo 上传 GitLab 项目头像前，用 Pillow 把
+# 超过 200KB 上限的 logo 压缩到 200KB 以内（JPEG/WebP 降质 + 转码 + 降分辨率）
+Pillow>=10.0

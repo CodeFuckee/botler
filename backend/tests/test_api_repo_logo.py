@@ -18,6 +18,9 @@ logo（简约美观大方）；生成的 logo 显示在仓库页面每个仓库�
   400 / 未配置生图模型 400 / AI 生成提示词失败与空回复 502 / 生图模型
   调用失败与未返回图片 502 / 未生成 logo 404 / logo 文件缺失 404；
 - 重复生成覆盖同名文件；生成后 GET /api/repos 仓库列表带 logo 字段。
+- 同步上传前压缩（issue #310）：logo 超过 GitLab 项目头像 200KB 上限时，
+  sync-logo 上传前用 Pillow 压缩到 200KB 以内（本地文件保持原始质量）；阈值内
+  直通不转码；Pillow 缺失/图片无法解码回退原始字节。
 """
 
 import base64
@@ -566,6 +569,220 @@ class TestSyncLogo:
         r = tc.post(f"/api/repos/{repo_id}/sync-logo")
         assert r.status_code == 500
         assert "读取 logo 文件失败" in r.json()["detail"]
+
+
+class TestSyncLogoCompression:
+    """同步 logo 上传前压缩（issue #310）。
+
+    背景：GitLab 项目头像上传上限 200KB（PUT /projects/{id} 的 avatar
+    参数），生图模型产出的 logo（尤其 PNG）经常超过该阈值，超限上传被
+    GitLab 拒绝 → 仓库设置页「同步到 GitLab」失败。修复：sync-logo
+    上传前用 Pillow 把图片压缩到 200KB 以内（本地 logo 文件保持原始
+    质量不变）。
+
+    覆盖：
+    - 超限 PNG logo → 上传到 GitLab 的字节被压缩进 200KB 阈值内且仍是
+      可解码图片，mime 与上传文件名扩展名一致；
+    - 阈值内 logo → 不压缩不转码，字节与 mime 原样直通；
+    - Pillow 不可用 → 回退上传原始字节（交由 GitLab 报错兜底）；
+    - 图片无法解码 → 回退上传原始字节，不崩溃。
+    """
+
+    GITLAB_AVATAR_LIMIT = 200 * 1024
+
+    @staticmethod
+    def _make_large_png(width=800, height=800, seed=42) -> bytes:
+        """构造确定性高熵 PNG（随机像素，PNG 压缩率差），保证文件大小
+        显著超过 GitLab 200KB 头像上限，作为压缩复现输入。"""
+        from PIL import Image
+        import io
+        import random as _random
+        rng = _random.Random(seed)
+        img = Image.new("RGB", (width, height))
+        img.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                     for _ in range(width * height)])
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _add_large_logo_repo(self, db, logo_dir, data, project_id=42,
+                             name="botler"):
+        """便捷：插入仓库 + logo 元信息 + 落盘指定 logo 文件（超限用）。"""
+        repo_id = _add_repo(db, project_id, name)
+        db.update_repo(repo_id, logo_path="42.png",
+                       logo_updated_at="2026-08-18 10:00:00",
+                       logo_mime="image/png")
+        logo_dir.mkdir(parents=True, exist_ok=True)
+        (logo_dir / "42.png").write_bytes(data)
+        return repo_id
+
+    def test_large_logo_compressed_below_gitlab_limit(self, logo_env):
+        """超限 logo：上传字节 ≤ 200KB 且仍是可解码图片；mime 与上传
+        文件名扩展名一致（格式可能从 PNG 转为 JPEG/WebP）。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_result = {
+            "path_with_namespace": "chenkaidi/botler",
+            "avatar_url": "https://gitlab.example.com/uploads/-/system/project/avatar/42/42.png",
+        }
+        large = self._make_large_png()
+        # 复现前提：构造的输入确实超过 GitLab 头像上限
+        assert len(large) > self.GITLAB_AVATAR_LIMIT
+        repo_id = self._add_large_logo_repo(db, logo_dir, large)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] is True
+        pid, filename, data, mime = stub.avatar_calls[0]
+        assert pid == 42
+        assert len(data) <= self.GITLAB_AVATAR_LIMIT
+        # 压缩结果仍是合法图片
+        from PIL import Image
+        import io
+        im = Image.open(io.BytesIO(data))
+        im.load()
+        # mime 与上传文件名扩展名一致（压缩可能转换格式）
+        if mime == "image/jpeg":
+            assert filename.endswith(".jpg"), filename
+        elif mime == "image/webp":
+            assert filename.endswith(".webp"), filename
+        else:
+            assert filename.endswith(".png"), filename
+
+    def test_within_limit_logo_unchanged(self, logo_env):
+        """阈值内 logo：不压缩不转码，字节与 mime 原样直通。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_result = {"path_with_namespace": "chenkaidi/botler"}
+        small = self._make_large_png(64, 64)
+        assert len(small) <= self.GITLAB_AVATAR_LIMIT
+        repo_id = self._add_large_logo_repo(db, logo_dir, small)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 200, r.text
+        assert stub.avatar_calls == [(42, "42.png", small, "image/png")]
+
+    def test_pillow_missing_falls_back_to_original(self, logo_env, monkeypatch):
+        """Pillow 不可用：回退上传原始字节，不崩溃（GitLab 报错兜底）。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_result = {"path_with_namespace": "chenkaidi/botler"}
+        large = self._make_large_png()
+        repo_id = self._add_large_logo_repo(db, logo_dir, large)
+        # 模拟 Pillow 缺失：import PIL 抛 ImportError
+        import builtins
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "PIL":
+                raise ImportError("No module named 'PIL'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 200, r.text
+        assert stub.avatar_calls == [(42, "42.png", large, "image/png")]
+
+    def test_corrupt_image_falls_back_to_original(self, logo_env):
+        """logo 文件无法解码（损坏/非图片）：回退上传原始字节，不崩溃。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_result = {"path_with_namespace": "chenkaidi/botler"}
+        corrupt = b"not-an-image" * 30000  # ~330KB 垃圾字节，超过 200KB 阈值
+        repo_id = self._add_large_logo_repo(db, logo_dir, corrupt)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 200, r.text
+        assert stub.avatar_calls == [(42, "42.png", corrupt, "image/png")]
+
+
+class TestCompressImageForGitlab:
+    """_compress_image_for_gitlab 单元测试（issue #310）。
+
+    与集成测试互补：直接验证压缩函数本身的边界行为（阈值直通、超限
+    压缩、格式转换保留透明、解码失败回退）。
+    """
+
+    GITLAB_AVATAR_LIMIT = 200 * 1024
+
+    @staticmethod
+    def _make_large_png(width=800, height=800, seed=42) -> bytes:
+        from PIL import Image
+        import io
+        import random as _random
+        rng = _random.Random(seed)
+        img = Image.new("RGB", (width, height))
+        img.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                     for _ in range(width * height)])
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def test_within_limit_passthrough(self):
+        """阈值内：字节与 mime 原样返回（不转码不压缩）。"""
+        from botler.api.repo_logo import _compress_image_for_gitlab
+        data = b"tiny-png"
+        out, mime = _compress_image_for_gitlab(data, "image/png")
+        assert out == data
+        assert mime == "image/png"
+
+    def test_large_png_compressed_within_limit(self):
+        """超限 PNG：输出 ≤ 目标大小且仍是可解码图片，mime 合法。"""
+        from botler.api.repo_logo import (
+            GITLAB_AVATAR_LIMIT, _compress_image_for_gitlab,
+        )
+        import io
+        from PIL import Image
+        large = self._make_large_png()
+        assert len(large) > GITLAB_AVATAR_LIMIT
+        out, mime = _compress_image_for_gitlab(large, "image/png")
+        assert len(out) <= GITLAB_AVATAR_LIMIT
+        assert mime in ("image/png", "image/jpeg", "image/webp")
+        im = Image.open(io.BytesIO(out))
+        im.load()
+
+    def test_rgba_preserves_transparency_via_webp(self):
+        """含透明通道的 PNG：压缩输出 WebP（保留 alpha），不转 JPEG。"""
+        from botler.api.repo_logo import (
+            GITLAB_AVATAR_LIMIT, _compress_image_for_gitlab,
+        )
+        import io
+        import random as _random
+        from PIL import Image
+        rng = _random.Random(7)
+        img = Image.new("RGBA", (500, 500), (0, 0, 0, 0))
+        for x in range(0, 500, 2):
+            for y in range(0, 500, 2):
+                img.putpixel((x, y), (rng.randrange(256), rng.randrange(256),
+                                      rng.randrange(256), rng.randrange(256)))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        rgba = buf.getvalue()
+        assert len(rgba) > GITLAB_AVATAR_LIMIT
+        out, mime = _compress_image_for_gitlab(rgba, "image/png")
+        assert mime == "image/webp"
+        assert len(out) <= GITLAB_AVATAR_LIMIT
+        im = Image.open(io.BytesIO(out))
+        im.load()
+        assert im.mode == "RGBA"
+
+    def test_corrupt_image_falls_back(self):
+        """无法解码：原样返回，不抛异常。"""
+        from botler.api.repo_logo import _compress_image_for_gitlab
+        bad = b"x" * (300 * 1024)
+        out, mime = _compress_image_for_gitlab(bad, "image/png")
+        assert out == bad
+        assert mime == "image/png"
+
+    def test_pillow_missing_falls_back(self, monkeypatch):
+        """Pillow 缺失：原样返回，不抛异常。"""
+        from botler.api.repo_logo import _compress_image_for_gitlab
+        import builtins
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "PIL":
+                raise ImportError("No module named 'PIL'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        data = b"y" * (300 * 1024)
+        out, mime = _compress_image_for_gitlab(data, "image/png")
+        assert out == data
+        assert mime == "image/png"
 
 
 class TestLogoDirPersistence:

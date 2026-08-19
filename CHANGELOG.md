@@ -62,6 +62,26 @@
 
 ### Fixed
 
+- **仓库设置页「同步到 GitLab」上传超限 logo 被 GitLab 拒绝（issue #310）**：
+  `sync-logo` 把生图模型产出的 logo 原始字节直接经 GitLab API
+  `PUT /projects/{id}` 的 avatar 参数上传为项目头像——GitLab 项目头像上限
+  200KB，AI 生成的 logo（尤其 PNG）经常超限 → 上传被 GitLab 拒绝，仓库设置
+  页「同步到 GitLab」失败。修复：
+  - `backend/botler/api/repo_logo.py`：`sync_repo_logo` 上传前调用新增
+    `_compress_image_for_gitlab`，用 Pillow 把图片压缩进 200KB 以内（目标
+    预留 5% 余量）：阈值内原样直通 → 原格式逐级降质量（JPEG/WebP 降
+    quality、PNG 无损优化）→ 转 WebP（保留透明）/ JPEG（无透明）→ 等比降
+    分辨率阶梯；Pillow 缺失或图片无法解码时回退原始字节交由 GitLab 报错；
+    压缩转码后 mime 与上传文件名扩展名同步调整，本地 logo 文件保持原始
+    质量不变；
+  - `backend/requirements.txt`：新增依赖 `Pillow>=10.0`（CI 经 uv 按此安装）；
+  - **测试**：`backend/tests/test_api_repo_logo.py` 新增
+    `TestSyncLogoCompression` 4 例（超限 logo 压缩进 200KB / 阈值内直通 /
+    Pillow 缺失回退 / 损坏图片回退）与 `TestCompressImageForGitlab` 5 例
+    （阈值直通 / 超限 PNG 压缩 / RGBA 保留透明转 WebP / 损坏回退 / Pillow
+    缺失回退），实现前全部可复现失败；test_api_repo_logo.py 全量 40 例通过，
+    后端全量测试 + 覆盖率门禁（≥70%）无 regression。
+
 - **仓库设置页「生成图标」生成的 logo 在其他设备上看不到（issue #309）**：
   `repo_logo.LOGO_DIR` 此前固定解析为 `<backend>/data/logos`——pm2 部署形态
   （`deploy/botler.config.cjs`）运行在 gitlab-runner **构建目录**（如
