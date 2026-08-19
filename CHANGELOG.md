@@ -62,6 +62,36 @@
 
 ### Fixed
 
+- **识图模型点击测试报错——图片 URL 经 :448 站点返回 HTML，外部模型网关报 url error（issue #319）**：
+  识图模型（阿里云百炼 qwen3.6-flash 等 OpenAI 兼容网关）调用时图片以 http URL
+  传入（issue #163/#164），URL 形如 `https://<站点>/minio-public/<bucket>/<sha256 哈希>`；
+  此前 `/minio-public/` 在 FastAPI 没有对应路由，请求被 SPA 兜底（`/{full_path:path}`
+  → index.html）当成前端路由吞掉返回 text/html——设置页「识图模型」测试按钮上传图片后，
+  网关匿名取图拿到的是平台 HTML 而非图片，报 `InvalidParameter: url error, please check
+  url！`（HTTP 400）。issue #311 只修复了 `deploy/nginx-minio-public.conf` 的路径映射，
+  但该方案要求把 location 合并进站点 server 块（Synology DSM 等可视化反向代理无法配置），
+  实际部署未生效，图片 URL 仍被 SPA 兜底吞掉。修复：
+  - **后端新增 `GET /minio-public/{bucket}/{object_name:path}` 端点**
+    （`backend/botler/minio_public.py`）：按当前配置流式返回 MinIO 图片桶对象
+    （minio SDK stat_object + get_object），不再依赖外部 nginx location——图片 URL
+    经站点反向代理直通后端即可取图；支持 Range 透传（206 + Content-Range）、
+    Content-Type / ETag / Content-Length 透传、`Cache-Control: public` 公开缓存；
+  - **安全约束**：仅允许访问配置的图片桶（`minio.bucket`，不暴露 MinIO 其他私有桶）、
+    对象名拒绝空段 / `..` 段 / 反斜杠（防路径穿越）、对象不存在 / 桶未启用 / 桶不匹配
+    → 404、MinIO 服务异常 → 502（统一 JSON，不裸抛 500）；
+  - **main.py**：`minio_public_router` 在 SPA 兜底（`/{full_path:path}`）之前注册，
+    图片 URL 不再被前端路由吞掉；
+  - **文档同步**：README / `backend/config.example.yaml` / `backend/.env.example` /
+    `frontend/src/pages/Settings.jsx` / `deploy/nginx-minio-public.conf` 统一说明
+    「后端已内置 /minio-public/ 端点，public_base_url 填 `https://<站点>/minio-public`
+    即可；nginx location 降级为可选分流方案」；
+  - **测试**：`backend/tests/test_minio_public.py` 新增 19 例（200 图片字节 /
+    206 Range / 404 缺失对象 / 404 非配置桶 / 400 非法对象名 / 未启用 404 /
+    502 服务异常 / SPA 兜底回归 2 例——不挂路由的对照 app 固化修复前返回 HTML 的
+    失败模式 / main.py 注册顺序静态校验），实现前可复现失败；真实 MinIO 集成验证：
+    同一 URL 修复前返回 index.html（text/html）、修复后返回 image/jpeg 200
+    （86,105 字节）。后端全量测试 + 前端全量测试无 regression，覆盖率门禁（≥70%）通过。
+
 - **仓库设置页「同步到 GitLab」图标上传报 400「file format is not supported」（issue #318）**：
   GitLab 项目头像仅支持 `png / jpeg / gif / bmp / tiff / vnd.microsoft.icon`，
   **不支持 WebP/AVIF/SVG**——issue #310 的压缩逻辑把超限含透明 logo 转成

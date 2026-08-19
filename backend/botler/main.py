@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import router as api_router
+from .minio_public import router as minio_public_router
 from .auth import CsrfGuardMiddleware, SsoAuth, SsoGuardMiddleware
 from .backup import BotlerBackup
 from .config import ConfigManager
@@ -174,6 +175,10 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app.add_middleware(SsoGuardMiddleware)
     app.state.ctx = build_context(config_path)
     app.include_router(api_router)
+    # issue #319：识图图片公网 URL（/minio-public/...）由后端直接流式返回
+    # MinIO 图片桶对象，必须在 SPA 兜底（/{full_path:path}）之前注册，
+    # 否则图片 URL 会被兜底成 index.html（模型取图拿到 HTML 报 url error）
+    app.include_router(minio_public_router)
 
     # ---- webhook 接收器 ----
     @app.post("/webhook/gitlab")

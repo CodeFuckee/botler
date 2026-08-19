@@ -509,7 +509,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 | `minio.endpoint` / `secure` / `verify_ssl` | `127.0.0.1:9000` / false / true | MinIO API 地址（host:port）/ 是否 https / 证书校验（自签证书设 false） |
 | `minio.access_key` / `secret_key` | 回退环境变量 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | MinIO 访问凭据（与部署写入 `data/backend/.env` 的凭据同源；支持 `${ENV}` 引用） |
 | `minio.bucket` | `public` | 识图图片对象桶（默认 `public`，不存在自动创建，并自动设为公开只读——匿名 `s3:GetObject`，识图模型可匿名取图） |
-| `minio.public_base_url` | 空 | 识图模型取图的 http(s) 前缀，对象 URL = `public_base_url/bucket/<sha256 哈希>`；**识图模型必须能访问该地址**（建议用 nginx 代理 MinIO 桶，配置见 `deploy/nginx-minio-public.conf`，填 nginx 代理地址如 `https://home.chenkaidi.top:448/minio-public`（示例为 botler 平台所在 :448 站点；务必把 `deploy/nginx-minio-public.conf` 的 location 合并进该站点的 server 块，否则图片 URL 会被 SPA 兜底跳转到平台），无需暴露 9000 端口；自建网关走内网地址；外部模型供应商需公网可达） |
+| `minio.public_base_url` | 空 | 识图模型取图的 http(s) 前缀，对象 URL = `public_base_url/bucket/<sha256 哈希>`；**识图模型必须能访问该地址**（**后端已内置 `/minio-public/` 访问端点（issue #319）**：图片 URL 由 FastAPI 直接流式返回 MinIO 图片桶对象（含 Range/Content-Type/ETag），`public_base_url` 填 `https://<站点>/minio-public` 即可，无需再配置 nginx location；如需 nginx 直连 MinIO 分流（大流量场景）可另配 `deploy/nginx-minio-public.conf`，`public_base_url` 示例为 botler 平台所在 :448 站点；无需暴露 9000 端口；自建网关走内网地址；外部模型供应商需公网可达） |
 
 提示词模版支持变量占位符：`{repo_name}` `{issue_title}` `{issue_body}` `{issue_title_urlenc}` `{issue_body_urlenc}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}`。
 全局默认模版 + 仓库级覆盖可在 Web UI「模版」页编辑。

@@ -217,9 +217,11 @@ browse:
 # 部署要求（issue #164）：
 #   - 桶默认名 public，不存在自动创建；桶权限自动设为「公开只读」
 #     （匿名 s3:GetObject），识图模型（含外部公网网关）可匿名取图；
-#   - 建议用 nginx 代理 MinIO 桶（见 deploy/nginx-minio-public.conf），
-#     public_base_url 填 nginx 代理地址（如
-#     https://<站点>/minio-public），无需暴露 9000 端口。
+#   - public_base_url 填 https://<站点>/minio-public 即可——后端已内置
+#     /minio-public/ 访问端点（issue #319，FastAPI 直接流式返回 MinIO
+#     图片桶对象，见 botler/minio_public.py），无需再配 nginx location；
+#     大流量分流场景可另配 nginx 代理（deploy/nginx-minio-public.conf），
+#     无需暴露 9000 端口。
 # endpoint / 凭据可经 ${ENV} 引用（与部署写入 data/backend/.env 的
 # MINIO_ROOT_USER / MINIO_ROOT_PASSWORD 同源），识图模型必须能访问
 # public_base_url（自建网关走内网地址；外部模型供应商需公网可达）。

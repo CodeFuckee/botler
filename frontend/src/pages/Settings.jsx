@@ -576,9 +576,11 @@ export default function Settings() {
       {/* MinIO 对象存储（issue #170）：识图图片上传配置——启用后用户上传的
           图片先计算 SHA-256 哈希、以哈希值为对象名上传 MinIO public 桶
           （桶不存在自动创建并设为公开只读），识图请求传 http URL 而非
-          base64（OpenAI 兼容网关拒绝 data: URL）；public_base_url 建议填
-          nginx 代理地址（deploy/nginx-minio-public.conf），无需暴露 9000
-          端口 */}
+          base64（OpenAI 兼容网关拒绝 data: URL）；public_base_url 填
+          https://<站点>/minio-public 即可——后端已内置 /minio-public/
+          访问端点（issue #319，FastAPI 直接返回 MinIO 图片桶），无需
+          再配 nginx location（nginx 分流见 deploy/nginx-minio-public.conf），
+          无需暴露 9000 端口 */}
       <section id="settings-minio" className="settings-section">
       <div className="card">
         <h2>MinIO 对象存储</h2>
