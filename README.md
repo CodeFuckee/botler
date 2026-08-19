@@ -508,7 +508,13 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 **四种来源**（`backend/botler/tools.py`）：
 
 - **内置市场**（builtin）：平台预置 MCP 官方参考服务器模板（web-fetch /
-  filesystem / everything / http 示例），一键安装入库，安装后可编辑；
+  filesystem / everything / http 示例）与第三方 Git 工具（image-parse：
+  多模态图片分析，自动克隆
+  https://github.com/1617110693/Image-Parse-MCP 后按 uv 模板安装），
+  一键安装入库，安装后可编辑；Git 类市场工具（模板含 `git_url`）安装时
+  自动浅克隆仓库到本地数据目录（`BOTLER_DATA_DIR/tools`，Docker 部署落在
+  持久化挂载卷 `backend/data`），并把启动命令中的 `{repo_dir}` 占位符
+  替换为实际克隆路径，克隆失败不落库、可重试；
 - **URL 导入**（url）：粘贴 Git 仓库地址（浅克隆后自动读取仓库内
   `.mcp.json` / `mcp.json` / `tool.json` 定义文件）或 JSON 定义文件地址
   （`mcpServers` 多工具格式 / 单工具定义格式，≤1MB、15s 超时）；

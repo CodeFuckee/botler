@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 ### Added
+- **工具页面新增 Image-Parse-MCP 安装方式（issue #327）**：内置市场新增
+  `image-parse` 多模态图片分析 MCP 工具（GitHub
+  1617110693/Image-Parse-MCP，可接入任意 OpenAI 兼容视觉大模型：
+  GPT-4o / Gemini / Qwen-VL / Ollama 等，分析图片 URL / 本地路径 /
+  Base64）：
+  - **Git 市场工具一键安装**：市场工具模板新增 `git_url` 来源字段——安装
+    时自动浅克隆仓库到本地工具目录（`default_tools_dir()`：优先
+    `BOTLER_DATA_DIR/tools`，否则 `BOTLER_CONFIG` 所在目录下
+    `data/tools`；Docker 部署落在 compose 持久化挂载卷
+    `${BOTLER_DATA_DIR}/backend/data`），并把启动命令
+    `uv run --directory {repo_dir} image-parse-mcp` 的 `{repo_dir}`
+    占位符替换为实际克隆路径，实现真正的一键安装；克隆目录已存在时复用
+    （重装不重复拉取），克隆失败清理半成品、不落库、可重试；
+  - **工具页安装方式说明**：内置市场 Git 来源工具展示「安装方式：自动克隆
+    <仓库地址>…」引导文案（需环境已安装 git 与 uv），安装后可在编辑表单
+    补充 `IMAGE_PARSE_API_KEY`（必填）等环境变量；
+  - **测试**：后端新增 `default_tools_dir` 解析、市场清单含 image-parse
+    （command/args/env/git_url）、Git 工具安装（克隆落位 + 占位符替换 +
+    复用克隆 + 克隆失败清理）、API 层安装/清单断言（`test_tools.py` +
+    `test_api_tools.py` 共 8 例）；前端新增市场渲染与安装方式说明断言
+    （tools-page.test.mjs 3 处）；后端 pytest 与前端 node --test 全量通过。
 - **顶部导航改为可折叠左侧边栏（issue #324）**：顶部导航选项卡过多（11 个
   横向排布放不下、需横向滚动）改为左侧边栏纵向排布，并支持整体折叠/展开：
   - **左侧边栏**：品牌 + 11 个导航项（概览/仓库/任务/统计/模版/标记库/插件/

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -374,6 +375,26 @@ DEFAULT_MARKET_TOOLS: list[dict] = [
         "url": "",
     },
     {
+        "name": "image-parse",
+        "description": "多模态图片分析工具（Image-Parse-MCP，GitHub "
+                       "1617110693/Image-Parse-MCP）：可接入任意 OpenAI 兼容"
+                       "视觉大模型（GPT-4o / Gemini / Qwen-VL / Ollama 等），"
+                       "分析图片 URL / 本地路径 / Base64。安装时自动浅克隆"
+                       "仓库到本地，需环境已安装 git 与 uv；安装后请在编辑"
+                       "表单填写 IMAGE_PARSE_API_KEY（必填），可按需修改 "
+                       "IMAGE_PARSE_BASE_URL / IMAGE_PARSE_MODEL。",
+        "kind": KIND_STDIO,
+        "command": "uv",
+        "args": ["run", "--directory", "{repo_dir}", "image-parse-mcp"],
+        "env": {
+            "IMAGE_PARSE_API_KEY": "",
+            "IMAGE_PARSE_BASE_URL": "https://api.openai.com/v1",
+            "IMAGE_PARSE_MODEL": "gpt-4o",
+        },
+        "url": "",
+        "git_url": "https://github.com/1617110693/Image-Parse-MCP.git",
+    },
+    {
         "name": "http-bridge-demo",
         "description": "远程 HTTP MCP 端点示例（占位地址，安装后请编辑为实际"
                        "MCP 服务地址，如 SSE/HTTP 流式端点）",
@@ -391,14 +412,85 @@ def market_tools() -> list[dict]:
     return [dict(t) for t in DEFAULT_MARKET_TOOLS]
 
 
-def install_builtin(db: Database, name: str) -> dict:
-    """安装内置市场工具到库（source=builtin）；未知名称/重名抛 ValueError。"""
+def default_tools_dir() -> Path:
+    """内置市场 Git 工具（git_url 来源）的本地存储目录。
+
+    - 部署（Docker）：compose 把 ``${BOTLER_DATA_DIR}/backend/data`` 挂载为
+      ``/app/backend/data``（持久化卷），容器内 ``BOTLER_CONFIG`` 指向
+      ``/app/backend/config.yaml``，故默认落在 ``backend/data/tools``；
+    - 本地开发：与部署同规则（``BOTLER_CONFIG`` 所在目录下 ``data/tools``，
+      ``backend/data`` 已 gitignore）；显式设置 ``BOTLER_DATA_DIR`` 时
+      优先使用 ``$BOTLER_DATA_DIR/tools``（宿主侧部署集中数据目录）。
+    """
+    env_dir = os.environ.get("BOTLER_DATA_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir) / "tools"
+    config_path = Path(os.environ.get("BOTLER_CONFIG", "config.yaml"))
+    return config_path.resolve().parent / "data" / "tools"
+
+
+def _materialize_git_tool(definition: dict, git_url: str, name: str,
+                          tools_dir: str | Path | None) -> dict:
+    """浅克隆 ``git_url`` 到本地工具目录，args 中 ``{repo_dir}`` 替换为实际路径。
+
+    - 目标目录（``<tools_dir>/<name>``）已含 ``.git`` → 复用已有克隆
+      （重装不重复拉取，仓库内容以用户侧为准）；
+    - 克隆失败 → 清理半成品目录并抛 ValueError（安装不落库，可重试）。
+    """
+    target = (Path(tools_dir) if tools_dir is not None
+              else default_tools_dir()) / name
+    try:
+        if not (target / ".git").is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            try:
+                result = subprocess.run(
+                    ["git", "clone", "--depth", "1", "--quiet", git_url,
+                     str(target)],
+                    capture_output=True, text=True,
+                    timeout=DOWNLOAD_TIMEOUT * 4)
+            except subprocess.TimeoutExpired:
+                shutil.rmtree(target, ignore_errors=True)
+                raise ValueError(
+                    f"Git 仓库克隆超时: {git_url}") from None
+            if result.returncode != 0:
+                shutil.rmtree(target, ignore_errors=True)
+                raise ValueError(
+                    f"Git 仓库克隆失败: "
+                    f"{(result.stderr or result.stdout).strip()[-300:]}")
+        materialized = dict(definition)
+        materialized["args"] = [
+            (arg.replace("{repo_dir}", str(target))
+             if "{repo_dir}" in arg else arg)
+            for arg in materialized.get("args", [])
+        ]
+        return materialized
+    except OSError as exc:
+        shutil.rmtree(target, ignore_errors=True)
+        raise ValueError(f"Git 仓库克隆失败: {exc}") from None
+
+
+def install_builtin(db: Database, name: str,
+                    tools_dir: str | Path | None = None) -> dict:
+    """安装内置市场工具到库（source=builtin）；未知名称/重名抛 ValueError。
+
+    Git 类市场工具（模板含 ``git_url``，如 image-parse）安装时自动浅克隆
+    仓库到本地工具目录（缺省 ``default_tools_dir()``），并把 args 中
+    ``{repo_dir}`` 占位符替换为实际克隆路径，实现一键安装（issue #327）；
+    克隆失败抛 ValueError（不落库，可重试）。``tools_dir`` 仅供测试注入。
+    """
     market = {t["name"]: t for t in DEFAULT_MARKET_TOOLS}
     if name not in market:
         raise ValueError(f"内置市场不存在该工具: {name}")
     if db.get_tool_by_name(name) is not None:
         raise ValueError(f"工具已安装: {name}")
-    return create_tool(db, market[name], source=SOURCE_BUILTIN)
+    template = dict(market[name])
+    definition = {k: v for k, v in template.items() if k != "git_url"}
+    git_url = template.get("git_url", "")
+    if git_url:
+        definition = _materialize_git_tool(
+            definition, git_url, name, tools_dir)
+    return create_tool(db, definition, source=SOURCE_BUILTIN,
+                       source_url=git_url)
 
 
 # ---- URL 下载（JSON 文件 / Git 仓库）----

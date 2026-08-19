@@ -442,6 +442,13 @@ export default function Tools() {
                   <span className="tools-name">{m.name}</span>
                   <span className="badge badge-muted">{KIND_META[m.kind]?.label || m.kind}</span>
                   <p className="muted small">{m.description}</p>
+                  {m.git_url && (
+                    <p className="muted small tools-git-install">
+                      安装方式：自动克隆 <code>{m.git_url}</code> 到本地工具
+                      目录后按模板命令启动（需环境已安装 git 与 uv），安装后
+                      可在编辑表单补充环境变量（如 API Key）。
+                    </p>
+                  )}
                 </div>
                 {installedNames.has(m.name) ? (
                   <span className="badge badge-ok">已安装</span>

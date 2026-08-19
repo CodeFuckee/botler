@@ -12,6 +12,7 @@
 """
 
 import json
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from botler import tools as botler_tools
 from botler.api import router as api_router
 from botler.config import ConfigManager
 from botler.database import Database
@@ -72,6 +74,16 @@ class TestListTools:
         assert data["tools"] == []
         assert data["market_index_url"] == ""
         assert len(data["market"]) >= 3
+
+    def test_market_contains_image_parse(self, client):
+        """内置市场清单应含 image-parse（issue #327），携带 git_url 来源。"""
+        tc, _ = client
+        market = tc.get("/api/tools").json()["market"]
+        entry = next(m for m in market if m["name"] == "image-parse")
+        assert entry["kind"] == "stdio"
+        assert entry["command"] == "uv"
+        assert entry["git_url"] == "https://github.com/1617110693/Image-Parse-MCP.git"
+        assert "IMAGE_PARSE_API_KEY" in entry["env"]
 
     def test_with_tools_and_index_url(self, client):
         tc, tmp = client
@@ -184,6 +196,35 @@ class TestInstallBuiltin:
         resp = tc.post("/api/tools/install", json={"name": "web-fetch"})
         assert resp.status_code == 400
         assert "已安装" in resp.json()["detail"]
+
+    def test_install_git_market_tool(self, client, monkeypatch):
+        """内置市场 Git 工具安装（issue #327）：POST install 自动克隆到
+        本地工具目录并替换 {repo_dir} 占位符。"""
+        tc, tmp = client
+        repo = tmp / "image-parse-src"
+        repo.mkdir()
+        (repo / "pyproject.toml").write_text(
+            '[project]\nname = "image-parse-mcp"\n', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t",
+                        "-c", "user.name=t", "commit", "-q", "-m", "init"],
+                       check=True)
+        entry = next(t for t in botler_tools.DEFAULT_MARKET_TOOLS
+                     if t["name"] == "image-parse")
+        monkeypatch.setitem(entry, "git_url", f"file://{repo}")
+        monkeypatch.setattr(botler_tools, "default_tools_dir",
+                            lambda: tmp / "tools")
+        resp = tc.post("/api/tools/install", json={"name": "image-parse"})
+        assert resp.status_code == 200
+        tool = resp.json()
+        assert tool["name"] == "image-parse"
+        assert tool["source"] == "builtin"
+        assert tool["source_url"] == f"file://{repo}"
+        assert tool["args"] == [
+            "run", "--directory", str(tmp / "tools" / "image-parse"),
+            "image-parse-mcp"]
+        assert (tmp / "tools" / "image-parse" / ".git").is_dir()
 
 
 # ---- URL 导入 / 市场索引（本地 HTTP server）----

@@ -188,6 +188,98 @@ class TestMarket:
         tools.install_builtin(db, "web-fetch")
         with pytest.raises(ValueError, match="已安装"):
             tools.install_builtin(db, "web-fetch")
+    def test_market_image_parse_entry(self):
+        """内置市场应含 Image-Parse-MCP（issue #327）：stdio + uv 启动 +
+        环境变量模板 + git_url 来源。"""
+        entry = next(t for t in tools.market_tools() if t["name"] == "image-parse")
+        assert entry["kind"] == "stdio"
+        assert entry["command"] == "uv"
+        assert entry["args"][0] == "run"
+        assert "image-parse-mcp" in entry["args"]
+        assert set(entry["env"]) >= {"IMAGE_PARSE_API_KEY",
+                                     "IMAGE_PARSE_BASE_URL", "IMAGE_PARSE_MODEL"}
+        assert entry["git_url"] == "https://github.com/1617110693/Image-Parse-MCP.git"
+
+    def test_install_builtin_git_tool_clones(self, db, tmp_path):
+        """Git 市场工具安装（issue #327）：自动浅克隆仓库到 tools_dir，
+        args 中 {repo_dir} 占位符替换为实际克隆路径。"""
+        repo = make_git_repo(tmp_path, "image-parse-src", {
+            "pyproject.toml": '[project]\nname = "image-parse-mcp"\n',
+            "src/image_parse/server.py": 'print("ok")\n',
+        })
+        market = {t["name"]: t for t in tools.DEFAULT_MARKET_TOOLS}
+        orig = market["image-parse"]["git_url"]
+        try:
+            market["image-parse"]["git_url"] = f"file://{repo}"
+            tools_dir = tmp_path / "tools"
+            installed = tools.install_builtin(db, "image-parse",
+                                              tools_dir=tools_dir)
+            clone_dir = tools_dir / "image-parse"
+            assert (clone_dir / ".git").is_dir(), "应浅克隆仓库到本地工具目录"
+            assert (clone_dir / "pyproject.toml").is_file()
+            assert installed["source"] == "builtin"
+            assert installed["source_url"] == f"file://{repo}"
+            assert installed["args"] == [
+                "run", "--directory", str(clone_dir), "image-parse-mcp"]
+        finally:
+            market["image-parse"]["git_url"] = orig
+
+    def test_install_builtin_git_tool_reuses_clone(self, db, tmp_path):
+        """Git 工具重装：克隆目录已存在时复用，不重复拉取。"""
+        repo = make_git_repo(tmp_path, "img-src", {"README.md": "# t"})
+        market = {t["name"]: t for t in tools.DEFAULT_MARKET_TOOLS}
+        orig = market["image-parse"]["git_url"]
+        try:
+            market["image-parse"]["git_url"] = f"file://{repo}"
+            tools_dir = tmp_path / "tools"
+            tools.install_builtin(db, "image-parse", tools_dir=tools_dir)
+            clone_dir = tools_dir / "image-parse"
+            tools.delete_tool(db, tools.list_tools(db)[0]["id"])
+            tools.install_builtin(db, "image-parse", tools_dir=tools_dir)
+            assert (clone_dir / ".git").is_dir(), "重装应复用已有克隆"
+            assert (clone_dir / "README.md").is_file()
+        finally:
+            market["image-parse"]["git_url"] = orig
+
+    def test_install_builtin_git_tool_clone_failure(self, db, tmp_path):
+        """Git 工具克隆失败：抛错、不落库、清理半成品目录。"""
+        market = {t["name"]: t for t in tools.DEFAULT_MARKET_TOOLS}
+        orig = market["image-parse"]["git_url"]
+        try:
+            market["image-parse"]["git_url"] = "file:///nonexistent/image-parse-mcp.git"
+            tools_dir = tmp_path / "tools"
+            with pytest.raises(ValueError, match="克隆失败"):
+                tools.install_builtin(db, "image-parse", tools_dir=tools_dir)
+            assert tools.list_tools(db) == [], "克隆失败不应落库"
+            assert not (tools_dir / "image-parse").exists(), "失败应清理半成品"
+        finally:
+            market["image-parse"]["git_url"] = orig
+
+    def test_default_tools_dir_from_env(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("BOTLER_DATA_DIR", str(tmp_path / "data"))
+        assert tools.default_tools_dir() == tmp_path / "data" / "tools"
+
+    def test_default_tools_dir_from_config(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("BOTLER_DATA_DIR", raising=False)
+        monkeypatch.setenv("BOTLER_CONFIG", str(tmp_path / "backend" / "config.yaml"))
+        assert tools.default_tools_dir() == tmp_path / "backend" / "data" / "tools"
+
+
+
+def make_git_repo(tmp_path, name, files):
+    """构造本地 Git 仓库（issue #327 Git 市场工具安装测试复用）。"""
+    repo = tmp_path / name
+    repo.mkdir()
+    for rel, content in files.items():
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=t@t",
+         "-c", "user.name=t", "commit", "-q", "-m", "init"], check=True)
+    return repo
 
 
 # ---- URL 下载辅助（本地 HTTP server）----
@@ -314,18 +406,7 @@ class TestImportFromUrl:
     @staticmethod
     def _make_git_repo(tmp_path, name, files):
         """构造本地 Git 仓库（目录名带 .git 后缀触发 git 分支）。"""
-        repo = tmp_path / name
-        repo.mkdir()
-        for rel, content in files.items():
-            f = repo / rel
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(content, encoding="utf-8")
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-        subprocess.run(
-            ["git", "-C", str(repo), "-c", "user.email=t@t",
-             "-c", "user.name=t", "commit", "-q", "-m", "init"], check=True)
-        return repo
+        return make_git_repo(tmp_path, name, files)
 
     def test_import_git_repo_without_definition_lists_all_files(self, db, tmp_path):
         """无定义文件时，报错应列出全部候选文件（含 .mcp/mcp.json / tools.json）。"""

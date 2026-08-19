@@ -64,6 +64,8 @@ test('页面结构：工具列表 / 搜索 / 新建 / 启停 / 市场 / 导入 /
   assert.match(tools, /工具市场/, '应有工具市场板块')
   assert.match(tools, /新建自定义工具/, '应有新建按钮')
   assert.match(tools, /搜索工具/, '应有搜索框')
+  assert.match(tools, /git_url/, '市场工具应支持 git_url（自动克隆安装）')
+  assert.match(tools, /自动克隆/, '应展示 Git 工具安装方式说明')
 })
 
 test('styles.css 提供工具页样式（列表 / 表单 / 市场 / 启停开关）', () => {
@@ -115,6 +117,7 @@ function mockFetch() {
     market: [
       { name: 'web-fetch', description: '网页抓取', kind: 'stdio', command: 'npx', args: ['-y', 'server-fetch'], env: {}, url: '' },
       { name: 'filesystem', description: '文件系统', kind: 'stdio', command: 'npx', args: ['-y', 'server-filesystem', '/tmp'], env: {}, url: '' },
+      { name: 'image-parse', description: '多模态图片分析（Image-Parse-MCP）', kind: 'stdio', command: 'uv', args: ['run', '--directory', '{repo_dir}', 'image-parse-mcp'], env: { IMAGE_PARSE_API_KEY: '', IMAGE_PARSE_BASE_URL: 'https://api.openai.com/v1', IMAGE_PARSE_MODEL: 'gpt-4o' }, url: '', git_url: 'https://github.com/1617110693/Image-Parse-MCP.git' },
     ],
     market_index_url: '',
   }
@@ -197,6 +200,9 @@ test('渲染：展示已安装工具列表与市场', async () => {
     assert.match(text, /已停用/, '停用工具应显示已停用')
     assert.match(text, /内置市场/, '应渲染内置市场板块')
     assert.match(text, /filesystem/, '应渲染市场工具')
+    assert.match(text, /image-parse/, '应渲染 Git 来源市场工具')
+    assert.match(text, /自动克隆/, '应渲染 Git 工具安装方式说明')
+    assert.match(text, /Image-Parse-MCP\.git/, '应展示克隆来源地址')
     assert.match(text, /从 URL 导入/, '应渲染导入板块')
     assert.match(text, /远端市场索引/, '应渲染索引板块')
   } finally {
