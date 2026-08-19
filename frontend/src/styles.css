@@ -2137,6 +2137,17 @@ code {
   display: block;
   color: inherit;
   text-decoration: none;
+  /* issue #317：主体由 <a> 改为 <button>（点击打开详情右边栏，
+     不再直接跳转 GitLab）——重置按钮默认样式，保留文本外观
+     （与 issue #85 的 .issue-link 同款处理） */
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 .pipeline-link:hover .pipeline-stage-dot {
   border-color: var(--border-hover);
@@ -2199,6 +2210,124 @@ code {
   from { opacity: 1; }
   to { opacity: 0.35; }
 }
+/* ---- issue #317：流水线详情右边栏（点击流水线卡片打开）----
+   复用 .drawer 右侧抽屉体系；比 issue 详情抽屉稍窄，信息密度适中 */
+.pipeline-drawer {
+  width: 560px;
+}
+/* 基本信息区：状态徽章 + 分支/提交 */
+.pipeline-detail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.pipeline-detail-head .pipeline-ref {
+  margin: 0;
+}
+/* KV 信息网格：状态 / 分支 / 提交 / 时间 / 时长 */
+.pipeline-detail-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.pipeline-detail-kv-row {
+  display: contents;
+}
+.pipeline-detail-kv-row dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pipeline-detail-kv-row dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-detail-kv-row dd.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+/* 阶段与任务明细 */
+.pipeline-detail-stages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.pipeline-detail-stages h3 {
+  font-size: 14px;
+  margin: 0;
+}
+.pipeline-detail-stage {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+.pipeline-detail-stage-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.pipeline-detail-stage-name {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 阶段/任务状态点：复用卡片 stage 节点的状态色（.st-* 作用于
+   .pipeline-stage-dot） */
+.pipeline-detail-stage-dot,
+.pipeline-detail-job-dot {
+  flex-shrink: 0;
+}
+.pipeline-detail-no-jobs {
+  margin: 0;
+  font-size: 12px;
+}
+/* job 列表 */
+.pipeline-detail-jobs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.pipeline-detail-job {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  min-width: 0;
+}
+.pipeline-detail-job-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-detail-job-status {
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pipeline-detail-job-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--primary);
+  text-decoration: none;
+}
+.pipeline-detail-job-link:hover {
+  text-decoration: underline;
+}
+
 
 /* ---- 概览页开放 issue 聚合（issue #64）：每仓库一张卡，
    组内按最后更新时间降序列出开放 issue ---- */

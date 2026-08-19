@@ -290,5 +290,6 @@
   "overview.repoTrendAria": "该仓库平均完成耗时走势图",
   "overview.discoverNoIssue": "未找到用户需求 issue，已列出相似仓库",
   "overview.discoverRepos": "相似仓库",
-  "overview.openSimilarRepo": "在 GitHub 中打开相似仓库"
+  "overview.openSimilarRepo": "在 GitHub 中打开相似仓库",
+  "overview.viewPipelineDetail": "查看流水线详情"
 }

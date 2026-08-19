@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, STATUS_META, shortSha, fmtTime, fmtAgo, fmtSeconds, summarizeToolInput } from '../api.js'
 import IssueDrawer, { ENGINE_META } from '../components/IssueDrawer.jsx'
+import PipelineDrawer, { PIPELINE_STATUS_META, stageClass } from '../components/PipelineDrawer.jsx'
 import { useI18n } from '../i18n.jsx'
 import { Icon } from '../components/Icon.jsx'
 import { fmtTokens, fmtCost } from '../components/UsageCard.jsx'
@@ -53,30 +54,9 @@ export const COMPLETION_STATS_POLL_MS = 60000
 // （GET /api/usage/stats），无 GitLab 请求压力，沿用 60 秒低频轮询
 export const USAGE_STATS_POLL_MS = 60000
 
-// 流水线整体状态 → 徽章映射（issue #39）。样式类复用任务状态徽章
-// status-*（视觉语义一致：成功绿 / 失败红 / 运行蓝 / 其余灰）
-export const PIPELINE_STATUS_META = {
-  success: { label: '成功', cls: 'status-succeeded' },
-  failed: { label: '失败', cls: 'status-failed' },
-  running: { label: '运行中', cls: 'status-running' },
-  pending: { label: '等待中', cls: 'status-queued' },
-  created: { label: '已创建', cls: 'status-queued' },
-  canceled: { label: '已取消', cls: 'status-interrupted' },
-  skipped: { label: '已跳过', cls: 'status-interrupted' },
-  manual: { label: '手动', cls: 'status-queued' },
-}
-
-// stage 状态 → 节点样式类（参考 GitLab CI/CD 阶段图颜色语义）
-export function stageClass(status) {
-  switch (status) {
-    case 'success': return 'st-success'
-    case 'failed': return 'st-failed'
-    case 'running': return 'st-running'
-    case 'canceled': return 'st-canceled'
-    case 'skipped': return 'st-skipped'
-    default: return 'st-pending' // pending/created/未知统一按待运行展示
-  }
-}
+// 流水线整体状态 → 徽章映射（issue #39，#317 起随详情抽屉组件维护，
+// 概览页卡片复用；样式类复用任务状态徽章 status-*）
+export { PIPELINE_STATUS_META, stageClass } from '../components/PipelineDrawer.jsx'
 
 // ---- issue #80：开放 issue 按 bot 终态标签分组 + 状态徽章 ----
 // bot-done = bot 已完成开发待用户确认；bot-failed = bot 处理失败待人工
@@ -540,6 +520,8 @@ export default function Overview() {
   const [error, setError] = useState('')
   // 流水线状态（issue #39）：所有配置仓库（含未启用，第二轮）的最新 CI/CD 流水线
   const [pipelines, setPipelines] = useState([])
+  // issue #317：当前选中查看详情的流水线条目（点击流水线卡片打开右边栏）
+  const [selectedPipeline, setSelectedPipeline] = useState(null)
   const [pipeErrors, setPipeErrors] = useState([])
   const [pipeError, setPipeError] = useState('')
   // 开放 issue 聚合（issue #64）：已启用仓库的开放 issue，按仓库优先级排序
@@ -1842,8 +1824,13 @@ export default function Overview() {
                         )}
                       </div>
                       {pl && (
-                        <a className="pipeline-link" href={pl.web_url} target="_blank"
-                           rel="noreferrer" title={tr('overview.openPipelineInGitlab')}>
+                        /* issue #317：卡片主体由 <a> 改为按钮——点击打开
+                           流水线详情右边栏，跳转 GitLab 统一走抽屉右上角
+                           「在 GitLab 中打开」按钮（与 issue 详情右边栏
+                           issue #85 交互约定一致） */
+                        <button type="button" className="pipeline-link"
+                                onClick={() => setSelectedPipeline(p)}
+                                title={tr('overview.viewPipelineDetail')}>
                           <span className="pipeline-ref" title={tr('overview.pipelineRefTitle', { ref: pl.ref, sha: pl.sha })}>
                             {pl.ref} · {shortSha(pl.sha)}
                           </span>
@@ -1863,7 +1850,7 @@ export default function Overview() {
                               </span>
                             ))}
                           </div>
-                        </a>
+                        </button>
                       )}
                     </div>
                   )
@@ -2095,6 +2082,15 @@ export default function Overview() {
                      onLabelsUpdated={() => loadIssues()}
                      onRetried={() => loadIssues()}
                      onAssigneeUpdated={() => loadIssues()} />
+      )}
+
+      {/* issue #317：流水线详情右边栏——点击流水线卡片打开，展示该仓库
+          最新流水线运行详情（状态 / 分支 / 提交 / 时间 / 阶段与任务）；
+          右上角「在 GitLab 中打开」按钮跳转 GitLab，交互与 issue 详情
+          右边栏一致（× / 遮罩 / Esc 关闭） */}
+      {selectedPipeline && (
+        <PipelineDrawer entry={selectedPipeline}
+                        onClose={() => setSelectedPipeline(null)} />
       )}
 
       {/* issue #92：添加 issue 弹窗——创建成功后关闭并立即刷新列表 */}

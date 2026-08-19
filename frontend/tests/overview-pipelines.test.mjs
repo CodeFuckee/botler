@@ -55,7 +55,8 @@ test('卡片渲染仓库名、状态徽章、stage 节点与 pipeline 链接', (
   assert.match(overview, /tr\('overview\.noPipelines'\)/, '「暂无流水线」应经 t() 国际化')
   assert.equal(zhCN['overview.noPipelines'], '暂无流水线', '中文「暂无流水线」文案应保留')
   assert.match(overview, /stageClass/, 'stage 节点应使用 stageClass 映射样式类')
-  assert.match(overview, /pl\.web_url/, '卡片应链接到 pipeline web_url')
+  assert.match(overview, /setSelectedPipeline/, '卡片点击应打开详情右边栏（issue #317）')
+  assert.match(overview, /PipelineDrawer/, '应渲染流水线详情抽屉组件（issue #317）')
 })
 
 // ---- 纯函数映射 ----
@@ -147,10 +148,19 @@ test('渲染流水线卡片：仓库名、状态徽章、stage 节点与 GitLab 
     assert.ok(stages[0].props.className.includes('st-success'), 'build 节点应为成功样式')
     assert.ok(stages[1].props.className.includes('st-running'), 'test 节点应为运行中样式')
     assert.ok(stages[2].props.className.includes('st-pending'), 'deploy 节点应为待运行样式')
-    assert.ok(
-      root.findAllByType('a').some((a) => a.props.href?.includes('/pipelines/731')),
-      '卡片应链接到 GitLab pipeline 页面',
-    )
+    // issue #317：卡片主体是按钮（点击打开详情抽屉），不再直接跳转 GitLab
+    const cardButtons = root.findAll(
+      (n) => n.type === 'button' && String(n.props.className || '').includes('pipeline-link'))
+    assert.equal(cardButtons.length, 1, '卡片主体应渲染为按钮')
+    const cardLinks = root.findAll(
+      (n) => n.type === 'a' && String(n.props.className || '').includes('pipeline-link'))
+    assert.equal(cardLinks.length, 0, '卡片不应再直接链接到 GitLab')
+    // 点击卡片打开详情抽屉：抽屉右上角「在 GitLab 中打开」跳转按钮
+    await TestRenderer.act(async () => { cardButtons[0].props.onClick() })
+    const drawerLinks = root.findAll(
+      (n) => n.type === 'a' && String(n.props.href || '').includes('/pipelines/731'))
+    assert.ok(drawerLinks.length >= 1, '抽屉应提供指向 GitLab pipeline 页面的跳转按钮')
+    assert.equal(drawerLinks[0].props.target, '_blank', '跳转按钮应新窗口打开')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

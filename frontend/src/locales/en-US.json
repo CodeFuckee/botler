@@ -290,5 +290,6 @@
   "overview.repoTrendAria": "Average completion time trend for this repo",
   "overview.discoverNoIssue": "No user request issues found, similar repositories listed",
   "overview.discoverRepos": "Similar repositories",
-  "overview.openSimilarRepo": "Open similar repository on GitHub"
+  "overview.openSimilarRepo": "Open similar repository on GitHub",
+  "overview.viewPipelineDetail": "View pipeline details"
 }

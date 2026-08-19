@@ -5,6 +5,28 @@
 ## [Unreleased]
 ### Added
 
+- **概览页 CI/CD 流水线组件支持点击查看运行详情（issue #317）**：此前流水线
+  卡片点击直接跳转 GitLab，无法在站内查看运行细节。本次为流水线组件增加右侧
+  详情抽屉（交互与 issue 详情右边栏 issue #85 一致）：
+  - **卡片点击打开详情右边栏**：卡片主体由 `<a>` 改为按钮，点击弹出右侧抽屉
+    展示该仓库最新流水线的运行详情——整体状态徽章、分支/提交（sha）、创建/
+    更新时间、时长，以及按阶段分组的任务（job）明细（job 名 + 状态 + job 的
+    GitLab 链接），无流水线/无阶段/无任务/job 缺链接等边界均有空态兜底；
+  - **抽屉右上角「在 GitLab 中打开」按钮**：跳转统一收敛到抽屉右上角按钮
+    （pipeline.web_url 新窗口），与 issue 详情右边栏的跳转约定一致；关闭方式
+    同为 × / 点击遮罩 / Esc 键；
+  - **零后端改动**：数据复用 `GET /api/pipelines/overview` 已返回的 stages +
+    jobs 精简明细（后端聚合时已携带 job 级 name/status/web_url），未新增接口；
+  - **代码组织**：`PIPELINE_STATUS_META` / `stageClass` 随详情组件迁移至新组件
+    `frontend/src/components/PipelineDrawer.jsx`（概览页 re-export 兼容，避免
+    页面与组件循环依赖）；
+  - **测试**：新增 `frontend/tests/overview-pipeline-drawer.test.mjs` 12 例
+    （卡片按钮化、点击打开抽屉、右上角跳转按钮、job 链接、×/遮罩/Esc 关闭、
+    无流水线/无任务/缺链接边界、重复点击幂等、异常数据兜底），实现前全部可
+    复现失败；`overview-pipelines.test.mjs` 同步更新卡片交互断言；PipelineDrawer
+    行覆盖率 97.5%、分支 81%，前端全量 1275 例 + 覆盖率门禁通过，后端全量
+    2371 例无 regression。
+
 - **写操作 API 增加 CSRF 防护（issue #263）**：平台写操作 API（保存设置、删
   仓库、创建 issue 等）此前仅依赖 SSO 会话 cookie 鉴权，缺少 CSRF token 校验
   ——用户登录状态下访问恶意页面，恶意页面可跨站发起写请求（同源策略下 fetch
