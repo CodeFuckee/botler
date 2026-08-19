@@ -200,7 +200,11 @@ def parse_junit_xml(content: str) -> dict:
     if not content or not content.strip():
         raise ValueError("JUnit 报告为空")
     try:
-        root = ET.fromstring(content)
+        # nosec B314：JUnit 报告来自自家 CI 上传的产物（pytest/node:test/
+        # playwright 生成），非外部不可信输入；ET.fromstring 不解析外部实体
+        # （不联网，无 XXE 外带风险），内部实体膨胀风险由 GitLab 产物大小
+        # 限制兜底。与项目既有 B608/B310 的 nosec 模式一致（issue #337）
+        root = ET.fromstring(content)  # nosec B314
     except ET.ParseError:
         raise ValueError("JUnit 报告不是有效 XML")
     if root.tag not in ("testsuites", "testsuite"):
