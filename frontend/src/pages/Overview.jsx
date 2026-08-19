@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePolling } from '../hooks/usePolling.js'
 import { api, STATUS_META, shortSha, fmtTime, fmtAgo, fmtSeconds, summarizeToolInput } from '../api.js'
 import IssueDrawer, { ENGINE_META } from '../components/IssueDrawer.jsx'
 import PipelineDrawer, { PIPELINE_STATUS_META, stageClass } from '../components/PipelineDrawer.jsx'
@@ -768,17 +769,11 @@ export default function Overview() {
     }
   }, [])
 
-  useEffect(() => {
-    load()
-    const t = setInterval(load, OVERVIEW_POLL_MS)
-    return () => clearInterval(t)
-  }, [load])
+  // 任务列表轮询（issue #200：页面隐藏时暂停、恢复可见立即拉一次，
+  // 由 usePolling 统一处理可见性）
+  usePolling(load, OVERVIEW_POLL_MS)
 
-  useEffect(() => {
-    loadPipelines()
-    const t = setInterval(loadPipelines, PIPELINE_POLL_MS)
-    return () => clearInterval(t)
-  }, [loadPipelines])
+  usePolling(loadPipelines, PIPELINE_POLL_MS)
 
   // 已启用仓库的开放 issue 聚合（issue #64，独立慢轮询）
   const loadIssues = useCallback(async () => {
@@ -811,11 +806,7 @@ export default function Overview() {
     }
   }, [])
 
-  useEffect(() => {
-    loadIssues()
-    const t = setInterval(loadIssues, ISSUE_POLL_MS)
-    return () => clearInterval(t)
-  }, [loadIssues])
+  usePolling(loadIssues, ISSUE_POLL_MS)
 
   // issue #132：owner token 配置状态（启动时检测一次；配置变化由设置页
   // 保存后手动刷新页面生效）
@@ -843,11 +834,7 @@ export default function Overview() {
     }
   }, [])
 
-  useEffect(() => {
-    loadInspirations()
-    const t = setInterval(loadInspirations, INSPIRATION_POLL_MS)
-    return () => clearInterval(t)
-  }, [loadInspirations])
+  usePolling(loadInspirations, INSPIRATION_POLL_MS)
 
   // DeepSeek 账户余额（issue #138）：后端代调 deepseek user/balance，
   // API Key 明文不流转到前端（与 ai_providers 掩码同安全策略）；
@@ -878,11 +865,7 @@ export default function Overview() {
     }
   }, [])
 
-  useEffect(() => {
-    loadDeepSeekBalance()
-    const t = setInterval(loadDeepSeekBalance, DEEPSEEK_BALANCE_POLL_MS)
-    return () => clearInterval(t)
-  }, [loadDeepSeekBalance])
+  usePolling(loadDeepSeekBalance, DEEPSEEK_BALANCE_POLL_MS)
 
   // ---- 灵感增删改（issue #131）：仅写 Botler 本地数据库 ----
 

@@ -19,6 +19,7 @@
 // 空态，不随 dashboard 一起隐藏。
 
 import { useCallback, useEffect, useState } from 'react'
+import { usePolling } from '../hooks/usePolling.js'
 import { api, fmtSeconds } from '../api.js'
 import { Icon } from '../components/Icon.jsx'
 import { fmtTokens, fmtCost } from '../components/UsageCard.jsx'
@@ -201,11 +202,7 @@ export default function Stats() {
     }
   }, [])
 
-  useEffect(() => {
-    loadCompletionStats()
-    const t = setInterval(loadCompletionStats, COMPLETION_STATS_POLL_MS)
-    return () => clearInterval(t)
-  }, [loadCompletionStats])
+  usePolling(loadCompletionStats, COMPLETION_STATS_POLL_MS)
 
   // Token 用量统计（issue #235）：按仓库/引擎/时间段聚合，数据来自本地
   // task_usage 表（GET /api/usage/stats），无 GitLab 请求压力，沿用 60 秒
@@ -227,11 +224,7 @@ export default function Stats() {
     }
   }, [usageRepoId, usageEngine, usageRange])
 
-  useEffect(() => {
-    loadUsageStats()
-    const t = setInterval(loadUsageStats, USAGE_STATS_POLL_MS)
-    return () => clearInterval(t)
-  }, [loadUsageStats])
+  usePolling(loadUsageStats, USAGE_STATS_POLL_MS)
 
   const o = data?.overview || {}
   const maxEngine = Math.max(1, ...((data?.by_engine) || []).map((e) => e.task_count))

@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 ### Added
+- **前端轮询定时器支持页面可见性暂停（issue #200）**：概览页 5 个轮询（任务
+  3s / 流水线 15s / 开放 issue 15s / 灵感 15s / 余额 60s）、App 通知轮询（10s）、
+  任务列表（5s）、任务详情页（详情 5s + 实时执行 3s）、任务详情抽屉（执行续读
+  3s）、统计页（完成耗时 / 用量各 60s）与版本检查轮询（60s）统一接入页面可见性
+  感知——页面切到后台标签页（`document.visibilitychange`）时暂停全部轮询（后台
+  0 请求），恢复可见立即拉取一次最新数据再恢复定时器，减少多标签页场景的无效
+  请求、服务器压力与笔记本电池/流量消耗：
+  - **新增 `frontend/src/hooks/usePolling.js`**：统一管理各页手写 setInterval 的
+    轮询 hook——`usePolling(fn, interval, { enabled, immediate })`，内部监听
+    `visibilitychange`（隐藏暂停 / 恢复可见立即拉一次 + 恢复定时器），页面初始
+    即隐藏不启动；`enabled` 支持条件轮询（登录态未就绪、无活跃任务、任务终态
+    等场景），`immediate` 控制启动时是否立即拉取，卸载自动清理定时器与监听；
+    SSR / 无 document 环境保持既有行为；
+  - **各页接入**：Overview 5 个轮询、App 通知轮询（轮询器 ref 懒创建保持游标）、
+    Tasks 5s（仅存在活跃任务时轮询）、TaskDetail 详情 5s + 实时面板 3s、
+    TaskDetailDrawer 执行续读 3s、Stats 完成耗时/用量各 60s 全部改为 usePolling；
+    `version-update.js` 版本检查器同步支持隐藏暂停 / 恢复可见立即检查；手动刷新
+    按钮全部保留兜底；
+  - **测试**：新增 `use-polling.test.mjs` 11 例（挂载立即执行 / 定时轮询 / 卸载
+    清理 / 隐藏暂停 0 请求 / 恢复可见立即拉一次并恢复 / 初始隐藏不启动 / enabled
+    与 immediate 边界 / fn 变化即时生效 / interval 无效 / SSR 无 document）；
+    `version-update.test.mjs` 新增 2 例可见性暂停恢复；e2e `overview.spec.js` 新增
+    「切后台 0 请求、切回立即刷新」浏览器级验收；既有 setInterval 源码断言同步
+    更新为 usePolling 断言；实现前新增测试可复现失败，全量前端测试 + 覆盖率门禁
+    通过。
+
 
 - **issue完成耗时和token用量统计从概览页移动到统计页（issue #322）**：概览页
   最下方的「Issue 完成耗时」（issue #180/#288）与「Token 用量统计」（issue

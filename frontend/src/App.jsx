@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 // 路由级代码分割（issue #202）：页面组件全部经 pages/lazy.jsx 的
 // React.lazy 包装按路由懒加载——首屏只加载当前页面 chunk，其余页面
@@ -15,6 +15,7 @@ import { useShortcuts } from './keymap.js'
 import { api, setDisplayTz, setSsoEnabled, shortSha } from './api.js'
 import { applyTheme, loadThemePreference, saveThemePreference, watchSystemTheme } from './theme.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
+import { usePolling } from './hooks/usePolling.js'
 import { createVersionChecker } from './version-update.js'
 import { Icon } from './components/Icon.jsx'
 import { useI18n, LANG_LABELS } from './i18n.jsx'
@@ -108,19 +109,24 @@ export default function App() {
   // 网页通知轮询（issue #21）：每 10s 拉取新事件弹系统通知。
   // 设置开关在每次轮询时实时读取 → 设置页修改立即生效，无需刷新。
   // 首次拉取只记录游标不弹，避免历史事件轰炸。
-  // 注意：本 effect 必须声明在所有条件 return 之前（React Hooks 规则，
+  // 注意：本 hook 必须声明在所有条件 return 之前（React Hooks 规则，
   // 否则 auth 加载前后 hook 数量不一致会触发 error #310 整树崩溃白屏）；
-  // auth 未就绪或 SSO 启用未登录时跳过启动（避免登录页轮询 401 反复刷新）。
-  useEffect(() => {
-    if (!auth || (auth.enabled && !auth.user)) return
-    const poller = createNotifyPoller({
+  // auth 未就绪或 SSO 启用未登录时 enabled=false 跳过启动（避免登录页
+  // 轮询 401 反复刷新）。issue #200 起经 usePolling 统一管理可见性：页面
+  // 隐藏时暂停通知轮询（后台标签页 0 请求），恢复可见立即拉一次再恢复。
+  // 轮询器用 ref 懒创建（仅一次）：游标在 poller 内持久，不随重渲染重置。
+  const notifyEnabled = !!(auth && (!auth.enabled || auth.user))
+  const notifyPollerRef = useRef(null)
+  if (notifyEnabled && notifyPollerRef.current === null) {
+    notifyPollerRef.current = createNotifyPoller({
       getEvents: (after) => api.get(`/api/notifications/events?after=${after}`, { silent: true }),
       getSettings: () => api.get('/api/settings', { silent: true }),
     })
-    poller.poll()
-    const timer = setInterval(poller.poll, POLL_INTERVAL_MS)
-    return () => clearInterval(timer)
-  }, [auth])
+  }
+  const notifyPoll = useCallback(() => {
+    if (notifyPollerRef.current) notifyPollerRef.current.poll()
+  }, [])
+  usePolling(notifyPoll, POLL_INTERVAL_MS, { enabled: notifyEnabled })
 
   // 键盘快捷键（issue #269）：全站级绑定——t 跳转任务列表、
   // g o / g s 组合前往概览/设置页；n / r / / 为页面级绑定，由

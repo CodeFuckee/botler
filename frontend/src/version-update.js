@@ -54,16 +54,54 @@ export function createVersionChecker({
     }
   }
 
+  // issue #200：页面可见性感知——页面隐藏（后台标签页）时暂停版本检查
+  // 轮询（0 请求），恢复可见时立即检查一次再恢复定时器，检测后台部署的
+  // 新版本不延迟到下一个周期
+  function startTimer() {
+    if (timer !== null) return
+    timer = setInterval(check, intervalMs)
+  }
+
+  function stopTimer() {
+    if (timer !== null) {
+      clearInterval(timer)
+      timer = null
+    }
+  }
+
+  function onVisibilityChange() {
+    if (document.visibilityState === 'hidden') {
+      stopTimer() // 页面隐藏：暂停轮询
+    } else {
+      check() // 恢复可见：立即检查一次
+      startTimer()
+    }
+  }
+
+  // 页面当前可见（SSR/测试环境无 document 时视为可见，保持既有行为）
+  function isDocumentVisible() {
+    return typeof document === 'undefined' ||
+      typeof document.visibilityState !== 'string' ||
+      document.visibilityState !== 'hidden'
+  }
+
   return {
     start() {
       if (timer !== null) return
-      check()
-      timer = setInterval(check, intervalMs)
+      if (isDocumentVisible()) {
+        check()
+        startTimer()
+      }
+      if (typeof document !== 'undefined' &&
+          typeof document.addEventListener === 'function') {
+        document.addEventListener('visibilitychange', onVisibilityChange)
+      }
     },
     stop() {
-      if (timer !== null) {
-        clearInterval(timer)
-        timer = null
+      stopTimer()
+      if (typeof document !== 'undefined' &&
+          typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', onVisibilityChange)
       }
     },
     // 测试辅助：手动触发一次检查（不依赖定时器）

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { usePolling } from '../hooks/usePolling.js'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { Icon } from '../components/Icon.jsx'
@@ -186,7 +187,6 @@ export default function Tasks() {
   // issue #235：任务列表可选展示 token 用量列（默认关闭，勾选后带
   // include_usage=1 重新拉取，后端批量返回避免逐任务 N+1 查询）
   const [showUsage, setShowUsage] = useState(false)
-  const timer = useRef(null)
   // 搜索框 ref（issue #269）：/ 快捷键聚焦搜索框用
   const searchRef = useRef(null)
 
@@ -209,19 +209,6 @@ export default function Tasks() {
 
   // 总页数（issue #50）：total 为 0 时也保持 ≥1，组件渲染条件另由 totalPages > 1 控制
   const totalPages = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
-
-  // 有活跃任务时每 5s 自动刷新
-  useEffect(() => {
-    load()
-    const active = data.stats?.queued + data.stats?.running + data.stats?.retrying
-    if (active > 0 && !timer.current) {
-      timer.current = setInterval(load, 5000)
-    } else if (active === 0 && timer.current) {
-      clearInterval(timer.current)
-      timer.current = null
-    }
-    return () => { if (timer.current) { clearInterval(timer.current); timer.current = null } }
-  }, [load, data.stats?.queued, data.stats?.running, data.stats?.retrying])
 
   useEffect(() => {
     api.get('/api/repos').then((d) => setRepos(d.repos)).catch(() => {})
@@ -263,6 +250,12 @@ export default function Tasks() {
   // 活跃任务数（issue #35）：排队 + 执行 + 重试
   const activeCount =
     (data.stats?.queued || 0) + (data.stats?.running || 0) + (data.stats?.retrying || 0)
+
+  // 有活跃任务时每 5s 自动刷新（issue #59，issue #200 起经 usePolling 统一
+  // 管理可见性）：页面隐藏时暂停轮询（后台标签页 0 请求），恢复可见立即
+  // 拉一次再恢复；immediate=true 保证挂载 / 过滤条件变化时即使无活跃任务
+  // 也会先拉一次列表（与原 useEffect 行为一致）
+  usePolling(load, 5000, { enabled: activeCount > 0, immediate: true })
 
   // 一键停止所有任务（issue #35）：确认后调后端批量停止，刷新列表
   const stopAll = async () => {

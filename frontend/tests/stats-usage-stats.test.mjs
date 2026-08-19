@@ -56,8 +56,8 @@ test('源码：请求用量统计接口并低频轮询（60 秒）', () => {
                '应请求 GET /api/usage/stats')
   assert.match(statsSrc, /USAGE_STATS_POLL_MS\s*=\s*60000/,
                '用量统计轮询间隔应为 60 秒')
-  assert.match(statsSrc, /setInterval\(loadUsageStats/,
-               '应独立定时轮询用量统计接口')
+  assert.match(statsSrc, /usePolling\(loadUsageStats, USAGE_STATS_POLL_MS\)/,
+               '应经 usePolling 独立定时轮询用量统计接口（issue #200 统一管理）')
 })
 
 test('源码：板块含仓库/引擎/时间范围过滤器', () => {

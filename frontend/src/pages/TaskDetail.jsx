@@ -1,5 +1,6 @@
 import { failureCategoryClass, failureCategoryLabel } from '../failure-categories.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePolling } from '../hooks/usePolling.js'
 import { Icon } from '../components/Icon.jsx'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { api, openTaskEventStream, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
@@ -182,17 +183,15 @@ export default function TaskDetail() {
   const [eventDone, setEventDone] = useState(false)
   const lastSeqRef = useRef(0)
 
-  const load = async () => {
+  // 任务详情拉取（useCallback 稳定引用供 usePolling 使用；issue #200 起
+  // 由 usePolling 统一管理 5s 轮询与页面可见性——隐藏暂停、恢复可见即刷）
+  const load = useCallback(async () => {
     try {
       setTask(await api.get(`/api/tasks/${id}`, { silent: true }))
     } catch (e) { setError(e.message) }
-  }
-
-  useEffect(() => {
-    load()
-    const t = setInterval(load, 5000) // 执行中自动刷新
-    return () => clearInterval(t)
   }, [id])
+
+  usePolling(load, 5000)
 
   // 单任务停止（issue #214）：仅执行中（running）任务可停止；确认后调
   // 后端 POST /api/tasks/{id}/stop——状态落库 interrupted 并强制终止执行
@@ -262,12 +261,9 @@ export default function TaskDetail() {
     }
   }, [id])
 
-  useEffect(() => {
-    if (liveDone) return
-    pollLive()
-    const t = setInterval(pollLive, 3000)
-    return () => clearInterval(t)
-  }, [id, liveDone, pollLive])
+  // 实时执行面板 3s 轮询（issue #200 起经 usePolling 统一管理可见性）：
+  // liveDone 为 true（任务终态/拉取失败）时停止轮询
+  usePolling(pollLive, 3000, { enabled: !liveDone })
 
   // 事件流 SSE 订阅：挂载即连接（终态任务由后端回放历史后 done 收尾）。
   // EventSource 断线自动重连，后端重新回放，seq 去重保证不重复渲染

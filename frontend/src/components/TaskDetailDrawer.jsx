@@ -16,6 +16,7 @@
 //   下层 issue 抽屉——IssueDrawer 检测到本层打开时不再响应 Esc）；
 // - 底部「查看完整任务页」跳转既有任务详情路由（/tasks/{id}）。
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePolling } from '../hooks/usePolling.js'
 import { Icon } from './Icon.jsx'
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
@@ -182,13 +183,13 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
   }, [taskId, loadTask, pollExecution])
 
   // 按任务状态起轮询：活跃任务每 3 秒续读执行数据，终态/加载失败即停
-  useEffect(() => {
-    if (taskId == null) return
-    const status = task && task.status
-    if (!status || !LIVE_STATUSES.includes(status)) return
-    const t = setInterval(pollExecution, 3000)
-    return () => clearInterval(t)
-  }, [taskId, task && task.status, pollExecution])
+  // （issue #200 起经 usePolling 统一管理可见性——页面隐藏暂停、恢复可见
+  // 立即续读一次；immediate=false：初始/切换任务时的立即拉取已由上方
+  // effect 完成，避免重复请求）
+  usePolling(pollExecution, 3000, {
+    enabled: taskId != null && task?.status != null && LIVE_STATUSES.includes(task.status),
+    immediate: false,
+  })
 
   // 事件流 SSE：切换任务重连；终态任务由后端回放历史后 done 收尾，
   // 前端按 seq 去重（断线重连回放重叠不重复渲染）

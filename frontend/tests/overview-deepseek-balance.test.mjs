@@ -49,8 +49,8 @@ test('概览页请求余额接口并低频轮询（60 秒）', () => {
                '应请求 GET /api/settings/deepseek-balance')
   assert.match(overview, /DEEPSEEK_BALANCE_POLL_MS\s*=\s*60000/,
                '余额轮询间隔应为 60 秒')
-  assert.match(overview, /setInterval\(loadDeepSeekBalance/,
-               '余额应独立定时轮询')
+  assert.match(overview, /usePolling\(loadDeepSeekBalance, DEEPSEEK_BALANCE_POLL_MS\)/,
+               '余额应经 usePolling 独立定时轮询（issue #200 统一管理）')
 })
 
 test('未配置（configured=false）时卡片不渲染，已配置才展示', () => {

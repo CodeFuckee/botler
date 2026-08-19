@@ -47,7 +47,8 @@ after(() => vite.close())
 test('概览页独立轮询流水线状态接口（15 秒间隔）', () => {
   assert.match(overview, /\/api\/pipelines\/overview/, '应请求 GET /api/pipelines/overview')
   assert.match(overview, /PIPELINE_POLL_MS\s*=\s*15000/, '流水线轮询间隔应为 15 秒')
-  assert.match(overview, /setInterval\(loadPipelines/, '流水线应独立定时轮询')
+  assert.match(overview, /usePolling\(loadPipelines, PIPELINE_POLL_MS\)/,
+               '流水线应经 usePolling 独立定时轮询（issue #200 统一管理）')
 })
 
 test('卡片渲染仓库名、状态徽章、stage 节点与 pipeline 链接', () => {

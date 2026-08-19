@@ -122,3 +122,69 @@ test('createVersionChecker：start 启动轮询（立即检查 + 定时），sto
   await new Promise((resolve) => setTimeout(resolve, 30))
   assert.equal(calls, callsAfterStop, 'stop 后不应再轮询')
 })
+
+import { installFakeDocument } from './helpers/fake-document.mjs'
+
+// ---- 页面可见性（issue #200）----
+// 页面隐藏（后台标签页）时暂停版本检查轮询（0 请求），恢复可见立即检查
+// 一次再恢复定时器；初始即隐藏不启动轮询。版本变化只提示一次（notified
+// 置位，既有语义），故用 getVersion 调用次数观测「检查」行为本身。
+
+test('createVersionChecker：页面隐藏暂停轮询，恢复可见立即检查并恢复（issue #200）', async () => {
+  const doc = installFakeDocument('visible')
+  let checker = null
+  try {
+    let current = { version: '1.0.0' }
+    let getCalls = 0
+    checker = createVersionChecker({
+      getVersion: async () => { getCalls += 1; return current },
+      onUpdate: () => {},
+      intervalMs: 5,
+    })
+    checker.start() // 可见：立即检查一次（记录基线）+ 定时轮询
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const callsAtHide = getCalls
+    assert.ok(callsAtHide >= 2, '页面可见时定时轮询应持续检查版本')
+
+    // 切后台：暂停轮询 → 0 请求
+    doc.setVisibility('hidden')
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    assert.equal(getCalls, callsAtHide, '页面隐藏后不应再检查版本（0 请求）')
+
+    // 切回：立即检查一次（同步断言，不等待——等待期间定时器已恢复会继续 tick）
+    doc.setVisibility('visible')
+    assert.equal(getCalls, callsAtHide + 1, '恢复可见应立即检查一次')
+    const afterVisible = getCalls
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.ok(getCalls >= afterVisible + 3, '恢复可见后应恢复定时轮询')
+  } finally {
+    if (checker) checker.stop()
+    doc.restore()
+  }
+})
+
+test('createVersionChecker：初始即隐藏不轮询，恢复可见后开始检查（issue #200）', async () => {
+  const doc = installFakeDocument('hidden')
+  let checker = null
+  try {
+    let current = { version: '1.0.0' }
+    let getCalls = 0
+    checker = createVersionChecker({
+      getVersion: async () => { getCalls += 1; return current },
+      onUpdate: () => {},
+      intervalMs: 5,
+    })
+    checker.start() // 初始隐藏：不检查不轮询
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(getCalls, 0, '初始隐藏不应检查版本')
+
+    doc.setVisibility('visible') // 恢复可见：立即检查一次（记录基线，同步断言）
+    assert.equal(getCalls, 1, '恢复可见应立即检查一次')
+    const afterVisible = getCalls
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.ok(getCalls >= afterVisible + 3, '恢复可见后应恢复定时轮询')
+  } finally {
+    if (checker) checker.stop()
+    doc.restore()
+  }
+})
