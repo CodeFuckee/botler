@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 ### Added
+- **概览页右边栏头部操作区固定在顶部（issue #331）**：概览页的 issue 详情
+  右边栏（IssueDrawer）与流水线详情右边栏（PipelineDrawer）的操作按钮——
+  「关闭 issue」「查看执行的详情」「在 GitLab 中打开」「关闭右边栏（×）」——
+  固定在右边栏顶部，不再随右边栏内容滚动而滚动：
+  - **样式**：`.issue-drawer .modal-header` 与 `.pipeline-drawer .modal-header`
+    改为 `position: sticky; top: 0`（带 z-index 与抽屉同色不透明背景，负
+    margin 抵消抽屉 padding 使头部背景铺满顶部边缘）；限定两个抽屉，不波及
+    任务执行详情第二层右边栏（.task-detail-drawer）与其他 `.modal-header`
+    使用者；移动端（≤860px）issue 抽屉底部 sticky 操作栏（issue #270）
+    保持不动，流水线抽屉头部随 sticky 固定顶部；
+  - **测试**：新增 `overview-drawer-actions-sticky.test.mjs`（7 例）——
+    两个抽屉头部 sticky 规则源码断言（position/top/z-index/背景）、固定
+    规则限定不误伤第二层与裸 `.modal-header`、IssueDrawer 四个按钮均渲染
+    于头部操作区、PipelineDrawer 按钮渲染于头部、pipeline 为 null 时头部
+    操作区仍渲染（× 可用）、移动端底部操作栏 sticky bottom 不回归；前端
+    全量测试无 regression。
 - **排队任务人工调优：优先级调整 / 插队 / 移出队列（issue #242）**：任务表
   新增人工优先级字段 `manual_priority`（可选，NULL = 按系统规则排序），
   调度器派发时人工优先级优先于仓库/标签规则，排队中的任务可人工插队、

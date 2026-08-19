@@ -1428,6 +1428,29 @@ code {
   gap: 8px;
   flex-shrink: 0;
 }
+/* issue #331：issue 详情 / 流水线详情右边栏头部操作区固定在顶部——
+   「关闭 issue / 查看执行的详情 / 在 GitLab 中打开 / 关闭右边栏」按钮
+   放在右边栏顶部，并且固定在顶部，不随右边栏内容滚动而滚动（与移动端
+   底部操作栏 sticky 常驻对称）。负 margin 抵消 .drawer 的 padding，
+   头部背景铺满抽屉顶部边缘，滚动内容从头部下方经过时被不透明背景遮住；
+   限定两个抽屉（.issue-drawer / .pipeline-drawer），不波及第二层
+   任务执行详情抽屉与其他 .modal-header 使用者 */
+.issue-drawer .modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-card);
+  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;
+  padding: var(--space-4);
+}
+.pipeline-drawer .modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-card);
+  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;
+  padding: var(--space-4);
+}
 .issue-drawer-desc {
   border-top: 1px solid var(--border);
   padding-top: var(--space-3);
