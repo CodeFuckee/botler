@@ -926,6 +926,38 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
     max-height: none;
   }
 }
+/* issue #339：竖屏（orientation: portrait）下设置页保持左右布局——设置左侧
+   导航栏与设置面板左右并排（覆盖上方 860px 断点的单栏回落），呈现手机/平板
+   设置页面「左侧列表 + 右侧详情」的主从式感觉：
+   1) .settings-layout 恢复两栏网格（auto + minmax(0,1fr)），间距收紧为
+      --space-4（16px，比桌面 24px 紧凑，窄屏下给内容区多留空间）；
+   2) .settings-sidebar 恢复 sticky 吸顶（覆盖 860px 断点的 static）并把宽度
+      收窄为 200px（比桌面 240px 紧凑，接近手机设置列表的密度）；
+   3) .settings-nav 恢复内部滚动（max-height + overflow-y:auto，覆盖 860px
+      断点的 max-height:none）——导航内容超出视口高度时左栏独立滚动，右侧
+      面板滚动时左栏列表常驻可见；
+   适用范围（641~860px 竖屏）：内容区最宽元素（AI 供应商表格，实测
+   min-content ≈335px）+ 侧栏 200px + 间距 16px 至少需要约 551px 视口；
+   ≤640px（手机竖屏）内容列装不下两栏，保持上方 860px 断点单栏（issue #270
+   移动端适配，375px 无横向滚动）；
+   横屏窄视口（orientation: landscape）保持上方 860px 断点单栏（导航置顶），
+   桌面端（>860px）不受影响。 */
+@media (min-width: 641px) and (max-width: 860px) and (orientation: portrait) {
+  .settings-layout {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+  .settings-sidebar {
+    position: sticky;
+    top: 68px;
+    width: 200px;
+  }
+  .settings-nav {
+    max-height: calc(100vh - 92px);
+    overflow-y: auto;
+  }
+}
+
 
 /* ---- 表单 ---- */
 .form-row {

@@ -4,7 +4,9 @@
 //     × 关闭按钮置于顶部并固定在顶部，关闭 issue / 查看执行的详情 /
 //     在 GitLab 中打开 置于底部操作栏并固定在底部（issue #334）；
 //   任务页：渲染卡片式列表（无 12 列表格）、卡片含关键操作；
-//   设置页：两栏回落单栏（设置导航置顶）。
+//   设置页：手机竖屏保持单栏（导航置顶）；平板/窄窗口竖屏（641~860px）
+//     保持左右布局——设置左侧导航栏（sticky 紧凑 200px）在左、设置面板在
+//     右，类似手机/平板设置页面主从式（issue #339）。
 // 桌面端回归由其余 spec（Desktop Chrome 视口）覆盖。
 import { test, expect } from '@playwright/test'
 import { mockGitLabApis } from '../support/mock-api.js'
@@ -98,10 +100,11 @@ test.describe('移动端响应式（issue #270）', () => {
     expect(overflow).toBeLessThanOrEqual(1)
   })
 
-  test('设置页：两栏回落单栏（导航置顶、页面正常滚动）', async ({ page }) => {
+  test('设置页：手机竖屏保持单栏（导航置顶、页面正常滚动）', async ({ page }) => {
     await page.goto('/settings')
     await expect(page.locator('.settings-layout')).toBeVisible()
-    // issue #139 断点：窄视口下导航不再 sticky（页面整体滚动）
+    // issue #339：≤640px 手机竖屏内容列装不下两栏（AI 供应商表格
+    // min-content≈335px），保持 issue #139 单栏——导航不再 sticky（页面整体滚动）
     const pos = await page.locator('.settings-sidebar').evaluate(
       (el) => getComputedStyle(el).position,
     )
@@ -109,6 +112,38 @@ test.describe('移动端响应式（issue #270）', () => {
     // 设置导航（搜索入口）可见可操作
     await expect(page.locator('.settings-nav')).toBeVisible()
     // 无横向滚动溢出
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    )
+    expect(overflow).toBeLessThanOrEqual(1)
+  })
+})
+
+// 平板/窄窗口竖屏（issue #339）：641~860px 竖屏下设置页保持左右布局——设置
+// 左侧导航栏（sticky 紧凑 200px）在左、设置面板在右，类似手机/平板设置页面
+// 「左侧列表 + 右侧详情」的主从式感觉；≤640px 手机竖屏仍为单栏（上方用例）
+test.describe('设置页竖屏左右布局（issue #339）', () => {
+  test.use({ viewport: { width: 768, height: 1024 } })
+
+  test('平板竖屏：导航在左、面板在右，无横向滚动', async ({ page }) => {
+    await page.goto('/settings')
+    await expect(page.locator('.settings-layout')).toBeVisible()
+    // 左侧导航栏 sticky 吸顶（覆盖 issue #139 860px 断点的 static），
+    // 宽度收窄为紧凑 200px（手机设置列表密度）
+    const pos = await page.locator('.settings-sidebar').evaluate(
+      (el) => getComputedStyle(el).position,
+    )
+    expect(pos).toBe('sticky')
+    const sb = await page.locator('.settings-sidebar').boundingBox()
+    expect(sb.width).toBeGreaterThanOrEqual(190)
+    expect(sb.width).toBeLessThanOrEqual(210)
+    // 左右并排：侧栏整列位于面板左侧（右边界不越过面板左边界）
+    const cb = await page.locator('.settings-content').boundingBox()
+    expect(sb.x).toBeLessThan(cb.x)
+    expect(sb.x + sb.width).toBeLessThanOrEqual(cb.x + 1)
+    // 设置导航（搜索入口）可见可操作
+    await expect(page.locator('.settings-nav')).toBeVisible()
+    // 无横向滚动溢出（641px 起内容列 ≥425px，AI 供应商表格等最宽元素装得下）
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
     )
