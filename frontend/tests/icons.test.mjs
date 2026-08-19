@@ -35,12 +35,14 @@ function renderIcon(name, props) {
 // issue #269：新增 keyboard（导航栏「快捷键帮助」按钮）语义名，同步补入清单
 // issue #287：新增 gripVertical（概览页「其他」分组拖动排序手柄）语义名，同步补入清单
 // issue #297：新增 upload（仓库页「同步到 GitLab」按钮）语义名，同步补入清单
+// issue #324：新增 chevronLeft（左侧边栏「折叠/展开」开关）与 menu（移动端
+//   汉堡按钮）两个语义名，同步补入清单
 const EXPECTED_NAMES = [
   'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle',
-  'chevronDown', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
+  'chevronDown', 'chevronLeft', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
   'externalLink', 'eye', 'fileText', 'flag', 'folder', 'folderOpen', 'gripVertical',
   'hourglass', 'image',
-  'lightbulb', 'lock', 'message', 'mic', 'package', 'pencil', 'pin',
+  'lightbulb', 'lock', 'menu', 'message', 'mic', 'package', 'pencil', 'pin',
   'keyboard', 'plus', 'refresh', 'rocket', 'search', 'settings', 'sparkles', 'square',
   'tag', 'terminal', 'trash', 'upload', 'user', 'wallet', 'warning', 'wrench',
   'x', 'xCircle',

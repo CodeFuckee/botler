@@ -26,6 +26,9 @@
     源码结构断言、默认展开/折叠切换/持久化渲染断言、CSS 布局断言，10 例），
     同步更新 hig-layout / apple-design 设计系统验收断言为侧边栏语义；前端全量
     测试 + 覆盖率通过，vite build / eslint 通过。
+  - **测试同步**：`chevronLeft`（折叠/展开开关）与 `menu`（移动端汉堡按钮）
+    两个新增语义名同步补入 `icons.test.mjs` 的 ICONS 语义清单断言
+    （EXPECTED_NAMES），全量测试 1320 例全绿。
 - **Docker compose botler 服务健康检查（healthcheck），容器假死可感知（issue #207）**：
   此前 botler 主服务只有 `restart: unless-stopped`，uvicorn 进程活着但事件循环
   卡死 / 依赖失效时容器仍显示 running，`docker compose ps` 看不出异常。本次
