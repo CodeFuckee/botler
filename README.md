@@ -249,6 +249,13 @@ cd backend && .venv/bin/python -m pytest tests/ -q -n auto
 # --test-concurrency=8 显式并行，issue #211）
 cd frontend && npm test
 
+# JUnit 测试报告（issue #337）：pytest 以 --junitxml=junit.xml、前端 node --test
+# 以 junit reporter 输出 junit.xml、Playwright 以 junit reporter 输出 junit.xml，
+# CI 统一上传 artifacts:reports:junit——概览页流水线详情抽屉「查看报告」可直接
+# 在页面内查看解析后的测试用例明细（不离开页面）
+cd backend && .venv/bin/python -m pytest tests/ -q --junitxml=junit.xml
+cd frontend && npm run test:coverage   # 自动输出 frontend/junit.xml
+
 # 覆盖率（issue #210）：pytest-cov 统计后端、c8（v8 原生）统计前端
 cd backend && .venv/bin/python -m pytest tests/ -q --cov=botler --cov-report=term-missing
 cd frontend && npm run test:coverage
@@ -749,6 +756,7 @@ PUT    /api/skills/{engine}/file       保存技能 md 文件内容（body: {ski
 POST   /api/settings/reconcile-now    手动触发对账
 GET    /api/pipelines/overview       概览页 CI/CD 流水线聚合（所有配置仓库最新一次流水线整体状态 + 按 jobs 聚合的 stage 进度；job 明细含 id/name/status/allow_failure/web_url 与精简产物列表 artifacts——保留 archive 与报告类型、过滤 trace/metadata 噪音，issue #39/#329；10 秒 TTL 缓存，单仓库失败进 errors 不中断整体）
 GET    /api/pipelines/{repo_id}/artifacts 下载指定 job 的流水线产物（?job_id=；后端代理 GitLab jobs artifacts zip 归档，per-repo token 优先回退全局 bot token，流式透传 + Content-Disposition attachment；无产物 404、GitLab 故障 502，issue #329）
+GET    /api/pipelines/{repo_id}/report 查看指定 job 的报告（?job_id=&file=&file_type=，issue #337）：后端代理 GitLab 单文件产物并解析为统一 JSON——file_type=sast 解析 SARIF 问题列表（bandit/semgrep/gitleaks）、dependency_scanning 解析依赖漏洞（deps-python/deps-frontend）、junit 解析测试用例明细（backend:test/frontend:build/e2e:playwright）；文件路径仅允许归档内相对路径（拒绝绝对路径/路径穿越），报告解析失败 502、文件不存在 404
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138；「每小时余额变化速率」由前端基于历史观测样本计算，issue #304）
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment；?include_usage=1 可选附带 token 用量字段，issue #235）
 GET    /api/tasks/export              任务数据导出（issue #228）：?format=csv|json（默认 csv），可按 status（支持逗号分隔多值）/repo_id/search 过滤（与任务列表一致）与创建时间范围 date_from/date_to（'YYYY-MM-DD' 或 'YYYY-MM-DD HH:MM:SS'）过滤；CSV 带 UTF-8 BOM（Excel 打开中文不乱码），字段含 id/仓库/issue/状态/引擎/用时/错误/时间等，JSON 为同字段英文 key 扁平对象数组；响应 attachment 下载

@@ -853,10 +853,14 @@ frontend:build:
   artifacts:
     paths:
       - frontend/dist
+      # JUnit 测试报告（issue #337）：流水线详情抽屉「查看报告」读取
+      - frontend/junit.xml
     reports:
       coverage_report:
         coverage_format: cobertura
         path: frontend/coverage/cobertura-coverage.xml
+      # node --test 的 junit reporter 输出（package.json test:coverage）
+      junit: frontend/junit.xml
     expire_in: 1 day
 
 # --- 鸿蒙端：编译（hvigorw 真实 ArkTS 编译，issue #173）---
@@ -1000,7 +1004,8 @@ backend:test:
         echo "→ pytest-xdist 并行 worker 数: ${PYTEST_WORKERS}（CPU 核数: $(nproc)）"
         $PYTHON -m pytest tests/ -v --tb=short -n "${PYTEST_WORKERS}" \
           --cov=botler --cov-report=term-missing --cov-report=xml \
-          --cov-fail-under=70
+          --cov-fail-under=70 \
+          --junitxml=junit.xml
       else
         echo "⚠️  未发现 tests/ 目录，执行语法与导入冒烟检查"
         $PYTHON -m compileall botler -q && echo "✓ 语法检查通过"
@@ -1034,10 +1039,14 @@ backend:test:
     when: always
     paths:
       - backend/coverage.xml
+      # JUnit 测试报告（issue #337）：流水线详情抽屉「查看报告」读取
+      - backend/junit.xml
     reports:
       coverage_report:
         coverage_format: cobertura
         path: backend/coverage.xml
+      # 测试报告上传 GitLab Tests 标签页 + 供抽屉按 job 单文件读取
+      junit: backend/junit.xml
     expire_in: 1 week
 
 # ----------------------------------------------------------
@@ -1196,6 +1205,10 @@ e2e:playwright:
     paths:
       - frontend/playwright-report/
       - frontend/test-results/
+      # JUnit 测试报告（issue #337）：playwright junit reporter 输出
+      - frontend/junit.xml
+    reports:
+      junit: frontend/junit.xml
     expire_in: 7 days
 
 # ================================================================

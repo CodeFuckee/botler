@@ -13,10 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'vite'
-import { fileURLToPath } from 'node:url'
-import path from 'node:path'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const vite = await createServer({
   server: { middlewareMode: true },
   appType: 'custom',

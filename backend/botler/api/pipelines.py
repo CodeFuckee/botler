@@ -30,6 +30,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..gitlab_client import GitLabClient, GitLabError
+from ..report_parsers import parse_report
 from ..git_remote import build_repo_client
 
 logger = logging.getLogger(__name__)
@@ -256,6 +257,63 @@ def pipelines_overview(request: Request):
         _CACHE["expires_at"] = time.monotonic() + CACHE_TTL_SECONDS
         _CACHE["data"] = result
     return result
+
+
+# 支持的报告产物 file_type（issue #337）：sast / dependency_scanning /
+# junit 对应「查看报告」按钮与解析器分派；扩展名推导兜底（前端未传
+# file_type 时按 .sarif/.json/.xml 判断）
+_REPORT_TYPES = {"sast", "dependency_scanning", "junit"}
+_REPORT_EXT_TYPES = {".sarif": "sast", ".json": "dependency_scanning",
+                     ".xml": "junit"}
+
+
+def _report_file_type(file: str, file_type: str) -> str | None:
+    """确定报告类型：显式 file_type 优先，其次按扩展名推导；都不支持返回 None。"""
+    if file_type:
+        return file_type if file_type in _REPORT_TYPES else None
+    ext = file.rsplit(".", 1)[-1].lower() if "." in file else ""
+    return _REPORT_EXT_TYPES.get("." + ext)
+
+
+@router.get("/{repo_id}/report")
+def pipeline_report(repo_id: int, job_id: int, request: Request,
+                    file: str = "", file_type: str = ""):
+    """查看指定 job 的报告（解析后 JSON，issue #337）。
+
+    概览页流水线详情抽屉「查看报告」经此代理 GitLab 单文件产物并解析：
+    - file_type=sast → SARIF 问题列表（bandit/semgrep/gitleaks）
+    - file_type=dependency_scanning → 依赖漏洞列表（deps-python/deps-frontend）
+    - file_type=junit → 测试用例明细（backend:test / frontend:build）
+
+    前端浏览器不持有 GitLab token，报告读取与解析统一在后端完成；
+    文件路径必须是产物归档内相对路径（拒绝绝对路径与路径穿越）。
+    """
+    # 路径校验：非空、非绝对路径、任一路径段不得为 ..
+    if not file or file.startswith("/") or ".." in file.split("/"):
+        raise HTTPException(422, "报告文件路径不合法")
+    ftype = _report_file_type(file, file_type)
+    if ftype is None:
+        raise HTTPException(422, "不支持的报告类型")
+    c = request.app.state.ctx
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        resp = client.download_job_artifact_file(
+            row["gitlab_project_id"], job_id, file)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "报告文件不存在或任务无该产物") from e
+        raise HTTPException(502, f"GitLab 报告下载失败: {e}") from e
+    try:
+        text = resp.content.decode("utf-8", errors="replace")
+        resp.close()
+        report = parse_report(ftype, text)
+    except ValueError as e:
+        raise HTTPException(502, f"报告解析失败: {e}") from e
+    return {"job_id": job_id, "filename": file, "file_type": ftype,
+            "report": report}
 
 
 @router.get("/{repo_id}/artifacts")

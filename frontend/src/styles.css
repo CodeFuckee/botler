@@ -2732,6 +2732,184 @@ code {
   white-space: nowrap;
 }
 
+/* ---- 流水线详情报告查看（issue #337）：任务行「查看报告」按钮
+   + 抽屉内直接渲染解析后的报告内容（交互 A，issue 评论确认）---- */
+.pipeline-detail-report {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0 var(--space-5);
+}
+.pipeline-detail-report-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease-out), color var(--dur) var(--ease-out);
+}
+.pipeline-detail-report-btn:hover {
+  background: var(--primary);
+  color: #fff;
+}
+/* 报告视图容器（替换阶段明细区） */
+.pipeline-report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.pipeline-report-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.pipeline-report-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.pipeline-report-title {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-report-file {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-report-empty {
+  font-size: 13px;
+  margin: 0;
+}
+/* 摘要行：总数 + 分级徽章 / 用例统计 */
+.pipeline-report-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+.pipeline-report-sev {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.report-sev-critical,
+.report-sev-high,
+.report-test-failed,
+.report-test-error {
+  background: #fde8e8;
+  color: #c0392b;
+}
+.report-sev-medium {
+  background: #fef3e2;
+  color: #b9770e;
+}
+.report-sev-low,
+.report-sev-info {
+  background: #eaf2fd;
+  color: #2c6fbb;
+}
+.report-sev-unknown,
+.report-test-skipped {
+  background: var(--border);
+  color: var(--muted);
+}
+.report-test-passed {
+  background: #e6f6ec;
+  color: #1e8e3e;
+}
+.pipeline-report-stat {
+  font-weight: 600;
+}
+.stat-pass {
+  color: #1e8e3e;
+}
+.stat-fail {
+  color: #c0392b;
+}
+.stat-skip {
+  color: var(--muted);
+}
+/* 报告明细列表 */
+.pipeline-report-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 55vh;
+  overflow-y: auto;
+}
+.pipeline-report-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  min-width: 0;
+}
+.pipeline-report-item-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.pipeline-report-rule {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-report-loc {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-report-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: 12px;
+}
+.pipeline-report-msg {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+.pipeline-report-error {
+  margin: 0;
+}
+.pipeline-report .mono {
+  font-family: var(--mono, monospace);
+}
+
 
 /* ---- 概览页开放 issue 聚合（issue #64）：每仓库一张卡，
    组内按最后更新时间降序列出开放 issue ---- */

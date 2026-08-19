@@ -14,7 +14,7 @@ import random
 import re
 import time
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import quote, urlparse, unquote
 
 import httpx
 from .log_redact import redact
@@ -531,6 +531,29 @@ class GitLabClient:
             resp.close()
             raise GitLabError(
                 f"GitLab 产物下载失败 {resp.status_code}: {resp.text[:300]}",
+                resp.status_code)
+        return resp
+
+    def download_job_artifact_file(self, project_id: int, job_id: int,
+                                   path: str) -> httpx.Response:
+        """下载 job 单个报告产物文件（issue #337）。
+
+        概览页流水线详情抽屉「查看报告」经此代理 GitLab
+        GET /projects/{id}/jobs/{job_id}/artifacts/{path}（单文件下载，
+        artifact_path 支持子目录）：前端浏览器不持有 GitLab token，
+        报告原始文件统一由后端读取并解析。path 为产物归档内相对路径
+        （如 backend/bandit-report.sarif），逐段 URL 编码防止路径注入；
+        非 2xx（404 文件不存在 / 403 权限不足等）转 GitLabError
+        （响应已关闭，避免连接泄漏）。
+        """
+        encoded = "/".join(quote(seg, safe="") for seg in path.split("/"))
+        resp = self._http_request_with_retry(
+            "GET", f"/projects/{project_id}/jobs/{job_id}/artifacts/{encoded}")
+        if resp.status_code >= 400:
+            inc_gitlab_api_error("GET")  # 指标（issue #208）：调用失败计数
+            resp.close()
+            raise GitLabError(
+                f"GitLab 报告文件下载失败 {resp.status_code}: {resp.text[:300]}",
                 resp.status_code)
         return resp
 

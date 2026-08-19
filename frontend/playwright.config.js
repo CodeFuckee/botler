@@ -27,6 +27,9 @@ export default defineConfig({
   reporter: [
     ['list'],
     ['html', { open: 'never', outputFolder: 'playwright-report' }],
+    // issue #337：JUnit 测试报告（流水线详情抽屉「查看报告」读取，
+    // 输出到 frontend/junit.xml，CI e2e:playwright 上传）
+    ['junit', { outputFile: 'junit.xml' }],
   ],
 
   use: {

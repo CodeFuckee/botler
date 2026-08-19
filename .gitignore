@@ -44,3 +44,6 @@ frontend/test-results/
 coverage.xml
 htmlcov/
 frontend/coverage/
+# JUnit 测试报告（issue #337，CI 产物，不入库）
+backend/junit.xml
+frontend/junit.xml

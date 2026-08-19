@@ -39,7 +39,7 @@ const vite = await createServer({
 })
 after(() => vite.close())
 const { default: Overview } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
-const { default: PipelineDrawer, isEscapeKey, PIPELINE_STATUS_META, stageClass } =
+const { default: PipelineDrawer, ReportView, isEscapeKey, PIPELINE_STATUS_META, stageClass } =
   await vite.ssrLoadModule('/src/components/PipelineDrawer.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 
@@ -86,12 +86,16 @@ test('PIPELINE_STATUS_META / stageClass 随组件导出且映射完整', () => {
 
 // ---- 组件渲染（api.get 通过 vite 模块实例 mock）----
 
-async function renderOverview(pipelinesPayload, issues = []) {
+async function renderOverview(pipelinesPayload, issues = [], reportFn = null) {
   mock.method(api, 'get', async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) return { tasks: [], total: 0, stats: {} }
     if (pathname === '/api/pipelines/overview') return pipelinesPayload
     if (pathname === '/api/issues/overview') {
       return { repos: [{ repo_id: 1, repo_name: 'botler', priority: 10, issues }], errors: [], total: 0 }
+    }
+    // issue #337：报告解析接口
+    if (reportFn && /^\/api\/pipelines\/\d+\/report\?/.test(pathname)) {
+      return reportFn(pathname)
     }
     throw new Error('unexpected ' + pathname)
   })
@@ -451,4 +455,317 @@ test('PipelineDrawer 直接渲染：空 entry / 异常数据兜底不崩溃', as
     assert.equal(renderError, null, `entry=${JSON.stringify(entry)} 不应崩溃`)
     if (renderer) await TestRenderer.act(() => renderer.unmount())
   }
+})
+
+// =====================================================================
+// issue #337：流水线详情查看代码静态分析报告与测试报告
+// 用户确认的交互（issue 评论）：抽屉内直接渲染解析后报告内容；范围含
+// 依赖扫描；展示展开明细；job 失败时不提供查看入口；验收 = security:
+// bandit 任务行出现「查看报告」→ 展示问题列表（严重级别/文件/行号）。
+// =====================================================================
+
+// 后端 /api/pipelines/{repo_id}/report 返回的报告样本（解析后结构）
+const SAST_REPORT = {
+  job_id: 33, filename: 'backend/bandit-report.sarif', file_type: 'sast',
+  report: {
+    kind: 'sast', tool: 'Bandit',
+    summary: { total: 2, by_severity: { high: 1, medium: 1, low: 0, info: 0, unknown: 0 } },
+    results: [
+      { rule: 'B101', severity: 'high', message: 'Use of assert detected.',
+        file: 'botler/api/pipelines.py', line: 42, column: 8 },
+      { rule: 'B608', severity: 'medium', message: 'Possible SQL injection.',
+        file: 'botler/db.py', line: 7, column: null },
+    ],
+  },
+}
+
+const DEPS_REPORT = {
+  job_id: 44, filename: 'backend/deps-python-report.json',
+  file_type: 'dependency_scanning',
+  report: {
+    kind: 'deps',
+    summary: { total: 1, by_severity: { Critical: 0, High: 1, Medium: 0, Low: 0, Info: 0, Unknown: 0 } },
+    results: [
+      { id: 'CVE-2023-1234', name: 'requests', severity: 'High',
+        package: 'requests', version: '2.28.1',
+        file: 'backend/requirements.txt',
+        solution: '升级到修复版本 [\'2.31.0\']',
+        identifiers: [{ type: 'cve', name: 'CVE-2023-1234', url: '' }] },
+    ],
+  },
+}
+
+const JUNIT_REPORT = {
+  job_id: 55, filename: 'backend/junit.xml', file_type: 'junit',
+  report: {
+    kind: 'test',
+    summary: { tests: 3, failures: 1, errors: 0, skipped: 1, time: 1.23 },
+    results: [
+      { name: 'test_ok', classname: 'tests.test_a', status: 'passed', time: 0.1, message: '' },
+      { name: 'test_fail', classname: 'tests.test_a', status: 'failed', time: 0.2,
+        message: 'assert 1 == 2' },
+      { name: 'test_skip', classname: 'tests.test_a', status: 'skipped', time: 0.0, message: '' },
+    ],
+  },
+}
+
+// 带 security 阶段（sast 报告产物）的流水线条目
+const PIPELINE_WITH_REPORTS = {
+  ...PIPELINE_ENTRY,
+  stages: [
+    {
+      name: 'security', status: 'success',
+      jobs: [
+        { id: 33, name: 'security:bandit', status: 'success',
+          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/33',
+          artifacts: [
+            { file_type: 'sast', filename: 'backend/bandit-report.sarif',
+              size: 1234, file_format: 'sarif' },
+          ] },
+        { id: 44, name: 'security:deps-python', status: 'success',
+          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/44',
+          artifacts: [
+            { file_type: 'dependency_scanning',
+              filename: 'backend/deps-python-report.json',
+              size: 5678, file_format: 'json' },
+          ] },
+      ],
+    },
+    {
+      name: 'build', status: 'success',
+      jobs: [
+        { id: 55, name: 'backend:test', status: 'success',
+          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/55',
+          artifacts: [
+            { file_type: 'junit', filename: 'backend/junit.xml',
+              size: 4321, file_format: 'gzip' },
+          ] },
+      ],
+    },
+  ],
+}
+
+// 报告接口 mock 分派：按 file_type 返回对应样本
+function reportResponder(pathname) {
+  const m = pathname.match(/^\/api\/pipelines\/\d+\/report\?job_id=(\d+)/)
+  const jobId = m ? Number(m[1]) : 0
+  if (jobId === 33) return SAST_REPORT
+  if (jobId === 44) return DEPS_REPORT
+  if (jobId === 55) return JUNIT_REPORT
+  throw new Error('unexpected report job ' + pathname)
+}
+
+// 数据流源码断言（issue #337）
+test('报告查看：源码含「查看报告」按钮、ReportView 与后端报告接口', () => {
+  assert.match(drawerSrc, /查看报告/, '任务行应有「查看报告」按钮文案')
+  assert.match(drawerSrc, /ReportView/, '应导出/渲染 ReportView 报告视图组件')
+  assert.match(drawerSrc, /REPORT_FILE_TYPES|sast.*dependency_scanning.*junit/s,
+    '应有报告类型白名单（sast/dependency_scanning/junit）')
+  assert.match(drawerSrc, /\/api\/pipelines\/\$\{repoId\}\/report/,
+    '报告加载应走后端解析接口 /api/pipelines/{repo_id}/report')
+  assert.match(drawerSrc, /j\.status === 'success'|status === 'success'/,
+    '仅成功 job 提供查看报告入口（失败时不能查看，issue 评论确认）')
+  // 报告视图内应直接渲染解析后的明细（严重级别/文件/行号、测试用例）
+  assert.match(drawerSrc, /severity/, '报告明细应展示严重级别')
+  assert.match(drawerSrc, /file.*line|line.*file/s, '静态分析明细应展示文件与行号')
+})
+
+// 集成：成功 job 带 sast 产物 → 任务行出现「查看报告」，点击后抽屉内
+// 直接渲染问题列表（严重级别/文件/行号），符合验收标准
+test('security:bandit 任务行「查看报告」→ 抽屉内渲染问题列表（issue #337 验收）', async () => {
+  const { renderer, renderError } = await renderOverview({
+    pipelines: [PIPELINE_WITH_REPORTS], errors: [],
+  }, [], reportResponder)
+  assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
+  const root = renderer.root
+  try {
+    const cardBtn = root.findAll(
+      (n) => n.type === 'button' && String(n.props.className || '').includes('pipeline-link'))
+    await TestRenderer.act(async () => { cardBtn[0].props.onClick() })
+
+    // 三个报告型 job 均应出现「查看报告」按钮
+    const btns = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-report-btn'))
+    assert.equal(btns.length, 3, 'sast/deps/junit 三个报告 job 应各有一个查看按钮')
+
+    // 点击 security:bandit 的查看按钮
+    await TestRenderer.act(async () => { btns[0].props.onClick() })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const text = drawerText(root)
+    assert.ok(text.includes('security:bandit'), '报告视图头应显示 job 名')
+    assert.ok(text.includes('bandit-report.sarif'), '报告视图头应显示报告文件名')
+    assert.ok(text.includes('B101'), '应展示规则编号 B101')
+    assert.ok(text.includes('botler/api/pipelines.py'), '应展示问题所在文件')
+    assert.ok(text.includes('42'), '应展示问题行号')
+    assert.ok(text.includes('Use of assert detected.'), '应展示问题描述')
+    assert.ok(text.includes('返回'), '报告视图应有返回按钮')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// 失败 job 不提供查看报告入口（issue 评论确认「失败时不能查看报告」）
+test('失败 job 即使有报告产物也不渲染「查看报告」按钮', async () => {
+  const entry = {
+    ...PIPELINE_ENTRY,
+    stages: [
+      { name: 'security', status: 'failed', jobs: [
+        { id: 66, name: 'security:bandit', status: 'failed',
+          web_url: 'https://x/-/jobs/66',
+          artifacts: [{ file_type: 'sast', filename: 'backend/bandit-report.sarif',
+                        size: 1 }] },
+      ] },
+    ],
+  }
+  const { renderer, root } = await openPipelineDrawer({ pipelines: [entry], errors: [] })
+  try {
+    const btns = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-report-btn'))
+    assert.equal(btns.length, 0, '失败 job 不应有查看报告按钮')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// ReportView 直接渲染：sast 报告（严重级别/文件/行号明细）
+test('ReportView 直接渲染 sast 报告：严重级别/文件/行号', async () => {
+  mock.method(api, 'get', async (pathname) => {
+    assert.match(pathname, /^\/api\/pipelines\/1\/report\?/, '应请求报告解析接口')
+    assert.match(pathname, /file_type=sast/, '应携带报告类型参数')
+    return SAST_REPORT
+  })
+  let renderer = null
+  await TestRenderer.act(async () => {
+    renderer = TestRenderer.create(React.createElement(ReportView, {
+      repoId: 1, jobId: 33, jobName: 'security:bandit',
+      file: 'backend/bandit-report.sarif', fileType: 'sast', onBack: () => {},
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  try {
+    const text = toText(renderer.toJSON())
+    assert.ok(text.includes('共 2 个问题'), '应显示问题总数摘要')
+    assert.ok(text.includes('高'), '应显示高严重级别')
+    assert.ok(text.includes('中'), '应显示中严重级别')
+    assert.ok(text.includes('B101'), '应显示规则编号')
+    assert.ok(text.includes('botler/api/pipelines.py'), '应显示文件')
+    assert.ok(text.includes('42'), '应显示行号')
+    assert.ok(text.includes('返回'), '应有返回按钮')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// ReportView 直接渲染：依赖扫描报告
+test('ReportView 直接渲染依赖扫描报告：包/版本/CVE/解决方案', async () => {
+  mock.method(api, 'get', async () => DEPS_REPORT)
+  let renderer = null
+  await TestRenderer.act(async () => {
+    renderer = TestRenderer.create(React.createElement(ReportView, {
+      repoId: 1, jobId: 44, jobName: 'security:deps-python',
+      file: 'backend/deps-python-report.json', fileType: 'dependency_scanning',
+      onBack: () => {},
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  try {
+    const text = toText(renderer.toJSON())
+    assert.ok(text.includes('requests'), '应显示包名')
+    assert.ok(text.includes('2.28.1'), '应显示受影响版本')
+    assert.ok(text.includes('CVE-2023-1234'), '应显示漏洞编号')
+    assert.ok(text.includes('backend/requirements.txt'), '应显示依赖文件')
+    assert.ok(text.includes('升级到修复版本'), '应显示解决方案')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// ReportView 直接渲染：JUnit 测试报告（汇总 + 用例明细）
+test('ReportView 直接渲染测试报告：通过/失败/跳过汇总与用例明细', async () => {
+  mock.method(api, 'get', async () => JUNIT_REPORT)
+  let renderer = null
+  await TestRenderer.act(async () => {
+    renderer = TestRenderer.create(React.createElement(ReportView, {
+      repoId: 1, jobId: 55, jobName: 'backend:test',
+      file: 'backend/junit.xml', fileType: 'junit', onBack: () => {},
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  try {
+    const text = toText(renderer.toJSON())
+    assert.ok(text.includes('3'), '应显示用例总数')
+    assert.ok(text.includes('失败'), '应显示失败数')
+    assert.ok(text.includes('跳过'), '应显示跳过数')
+    assert.ok(text.includes('test_ok'), '应显示用例名')
+    assert.ok(text.includes('test_fail'), '应显示失败用例名')
+    assert.ok(text.includes('通过'), '应显示通过状态')
+    assert.ok(text.includes('assert 1 == 2'), '应显示失败原因')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// ReportView 错误态：接口失败展示错误信息与返回入口
+test('ReportView 接口失败：展示错误信息且不崩溃', async () => {
+  mock.method(api, 'get', async () => {
+    throw new Error('报告解析失败: SARIF 报告不是有效 JSON')
+  })
+  let renderer = null
+  await TestRenderer.act(async () => {
+    renderer = TestRenderer.create(React.createElement(ReportView, {
+      repoId: 1, jobId: 33, jobName: 'security:bandit',
+      file: 'bad.sarif', fileType: 'sast', onBack: () => {},
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  try {
+    const text = toText(renderer.toJSON())
+    assert.ok(text.includes('报告解析失败'), '应展示后端错误信息')
+    assert.ok(text.includes('返回'), '错误态应有返回按钮')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// 边界：job 产物缺 id / 缺 file_type / 非报告类型 → 不渲染查看按钮且不崩溃
+test('边界：非报告产物 / 缺 id 的 job 不渲染「查看报告」', async () => {
+  const entry = {
+    ...PIPELINE_ENTRY,
+    stages: [
+      { name: 'build', status: 'success', jobs: [
+        { name: 'no-id', status: 'success',
+          artifacts: [{ file_type: 'sast', filename: 'a.sarif', size: 1 }] },
+        { id: 77, name: 'archive-only', status: 'success',
+          artifacts: [{ file_type: 'archive', filename: 'a.zip', size: 1 }] },
+        { id: 78, name: 'no-artifacts', status: 'success', artifacts: [] },
+        { id: 79, name: 'bad-art', status: 'success', artifacts: 'oops' },
+      ] },
+    ],
+  }
+  const { renderer, root } = await openPipelineDrawer({ pipelines: [entry], errors: [] })
+  try {
+    const btns = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-report-btn'))
+    assert.equal(btns.length, 0, '缺 id / 非报告产物 / 空产物均不应有查看按钮')
+    assert.equal(findDrawer(root).length, 1, '抽屉应正常打开不崩溃')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// 样式：styles.css 提供报告视图样式
+test('styles.css 提供报告视图样式（.pipeline-detail-report-btn / .pipeline-report-*）', () => {
+  assert.match(styles, /\.pipeline-detail-report-btn\s*\{/, '应有「查看报告」按钮样式')
+  assert.match(styles, /\.pipeline-report\s*\{/, '应有报告视图容器样式')
+  assert.match(styles, /\.pipeline-report-item\s*\{/, '应有报告明细条目样式')
 })

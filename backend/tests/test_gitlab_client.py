@@ -984,3 +984,52 @@ class TestRetryConfigurable:
         assert client.retry_max_attempts == RETRY_MAX_ATTEMPTS
         assert client.retry_base_delay == RETRY_BASE_DELAY
         assert client.retry_max_delay == RETRY_MAX_DELAY
+
+
+class TestDownloadJobArtifactFile:
+    """download_job_artifact_file：路径逐段编码 + 非 2xx 转 GitLabError。"""
+
+    class _FakeHttp:
+        def __init__(self, status: int, content: bytes):
+            self.status = status
+            self.content = content
+            self.calls: list[tuple[str, str]] = []
+
+        def request(self, method: str, path: str, **kwargs) -> httpx.Response:
+            self.calls.append((method, path))
+            return httpx.Response(self.status, content=self.content)
+
+    def test_path_segments_encoded(self):
+        client = make_client()
+        fake = self._FakeHttp(200, b"{}")
+        client._http = fake
+        resp = client.download_job_artifact_file(42, 7, "backend/bandit-report.sarif")
+        assert resp.status_code == 200
+        assert fake.calls == [
+            ("GET", "/projects/42/jobs/7/artifacts/backend/bandit-report.sarif")]
+
+    def test_path_special_chars_encoded(self):
+        client = make_client()
+        fake = self._FakeHttp(200, b"{}")
+        client._http = fake
+        client.download_job_artifact_file(42, 7, "a b/报告.json")
+        path = fake.calls[0][1]
+        assert "/a%20b/" in path
+        assert "%E6%8A%A5%E5%91%8A.json" in path, "中文文件名应 URL 编码"
+
+    def test_404_raises_gitlab_error(self):
+        client = make_client()
+        fake = self._FakeHttp(404, b"Not Found")
+        client._http = fake
+        with pytest.raises(GitLabError) as ei:
+            client.download_job_artifact_file(42, 7, "nope.sarif")
+        assert ei.value.status_code == 404
+        assert "报告文件下载失败" in str(ei.value)
+
+    def test_500_raises_gitlab_error(self):
+        client = make_client()
+        fake = self._FakeHttp(500, b"boom")
+        client._http = fake
+        with pytest.raises(GitLabError) as ei:
+            client.download_job_artifact_file(42, 7, "a.sarif")
+        assert ei.value.status_code == 500

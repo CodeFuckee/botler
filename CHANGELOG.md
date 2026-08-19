@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 ### Added
+- **概览页流水线详情查看代码静态分析报告与测试报告（issue #337）**：
+  概览页流水线详情右边栏（PipelineDrawer）此前仅展示阶段/任务与产物清单，
+  报告内容需跳转 GitLab 页面查看。本次在抽屉内直接渲染解析后的报告内容
+  （issue 评论确认交互 A，不离开页面）：
+  - **静态分析报告**：security 阶段产物类型为 `sast`（bandit/semgrep/
+    gitleaks，SARIF）与 `dependency_scanning`（deps-python/deps-frontend，
+    GitLab JSON）的 job，成功时任务行出现「查看报告」按钮，点击后抽屉内
+    直接渲染问题/漏洞明细——严重级别徽章（高/中/低/信息）、规则编号、
+    文件与行号、漏洞包名/版本/CVE/解决方案；job 失败不提供查看入口
+    （issue 评论确认「失败时不能查看报告」）；
+  - **测试报告**：CI 三个测试产出源（backend:test 的 pytest、frontend:build
+    的 node --test、e2e:playwright）新增 JUnit 报告生成与上传
+    （`artifacts:reports:junit` + `paths`），抽屉内展示测试汇总（总数/通过/
+    失败/跳过/耗时）与用例明细（状态/名称/耗时/失败原因）；
+  - **后端**：新增 `botler/report_parsers.py`（SARIF / 依赖扫描 JSON /
+    JUnit XML 纯函数解析，异常输入抛 ValueError、字段缺失逐项兜底），
+    GitLabClient 新增 `download_job_artifact_file`（单文件产物代理，路径
+    逐段 URL 编码），新接口 `GET /api/pipelines/{repo_id}/report`
+    （?job_id=&file=&file_type=，文件路径拒绝绝对路径与路径穿越，
+    解析失败 502、文件不存在 404）；
+  - **前端**：PipelineDrawer 任务行报告类型白名单（sast/dependency_scanning/
+    junit）+「查看报告」按钮，新增 ReportView 报告视图（sast 问题列表 /
+    依赖漏洞列表 / 测试用例明细，加载中与错误态兜底），styles.css 配套
+    报告徽章与明细样式；
+  - **测试**：`backend/tests/test_report_parsers.py` 27 例（三类报告正常/
+    空/缺字段/畸形输入）、test_api_pipelines.py 报告接口 11 例（成功/404/
+    502/422 路径校验/类型推导）、test_gitlab_client.py 单文件下载 4 例
+    （路径编码/404/500）、前端 overview-pipeline-drawer 报告查看 8 例
+    （源码断言/验收集成/三类报告渲染/错误态/失败 job 无入口/边界），
+    全量测试无 regression。
 - **仓库级任务参数覆盖：超时 / 重试 / 引擎按仓库差异化（issue #237）**：
   任务超时（task_timeout_seconds）、重试次数（max_retries）、执行引擎
   （worker.engine）原先都是全局配置，所有仓库共用一套参数——小工具仓库

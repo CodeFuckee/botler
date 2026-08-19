@@ -55,6 +55,9 @@ class StubGitLab:
         # 产物下载桩（issue #329）
         self.artifact_bytes: dict[tuple[int, int], bytes] = {}
         self.fail_artifacts: dict[int, GitLabError] = {}
+        # 单文件报告下载桩（issue #337）：(project_id, job_id, path) → 字节
+        self.artifact_files: dict[tuple[int, int, str], bytes] = {}
+        self.fail_artifact_files: dict[int, GitLabError] = {}
         self.calls: list[str] = []
 
     def get_latest_pipeline(self, project_id):
@@ -87,6 +90,18 @@ class StubGitLab:
             content=self.artifact_bytes.get((project_id, job_id),
                                             b"PK\x03\x04test-artifacts"),
             headers={"content-type": "application/zip"})
+
+    # 单文件报告下载桩（issue #337）：按 (project_id, job_id, path) 返回
+    # 字节；fail_artifact_files 按 job_id 注入 GitLabError
+    def download_job_artifact_file(self, project_id, job_id, path):
+        self.calls.append(f"artifact-file:{project_id}:{job_id}:{path}")
+        err = self.fail_artifact_files.get(job_id)
+        if err:
+            raise err
+        content = self.artifact_files.get((project_id, job_id, path))
+        if content is None:
+            raise GitLabError("报告文件不存在（404）", 404)
+        return httpx.Response(200, content=content)
 
 
 def make_pipeline(pid: int, status: str = "success", ref: str = "main",
@@ -873,3 +888,182 @@ class TestArtifactsDownload:
         resp = tc.get(f"/api/pipelines/{repo_id}/artifacts")
 
         assert resp.status_code == 422
+
+
+# ---- 报告查看（issue #337） ----
+
+# 报告样本（与 test_report_parsers.py 同构，保持自包含）
+SARIF_SAMPLE = """{
+  "version": "2.1.0",
+  "runs": [{
+    "tool": {"driver": {"name": "Bandit"}},
+    "results": [{
+      "ruleId": "B101",
+      "level": "error",
+      "message": {"text": "Use of assert detected."},
+      "locations": [{"physicalLocation": {
+        "artifactLocation": {"uri": "botler/api/pipelines.py"},
+        "region": {"startLine": 42, "startColumn": 8}}}]
+    }]
+  }]
+}"""
+
+DEPS_SAMPLE = """{
+  "version": "15.0.0",
+  "vulnerabilities": [{
+    "id": "CVE-2023-1234",
+    "name": "requests",
+    "severity": "High",
+    "solution": "升级到修复版本 ['2.31.0']",
+    "identifiers": [{"type": "cve", "name": "CVE-2023-1234", "url": ""}],
+    "location": {
+      "file": "backend/requirements.txt",
+      "dependency": {"package": {"name": "requests"}, "version": "2.28.1"},
+      "operating_system": "unknown"
+    }
+  }]
+}"""
+
+JUNIT_SAMPLE = """<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="0" failures="1" skipped="1" tests="3" time="1.23">
+    <testcase classname="tests.test_a" name="test_ok" time="0.1"/>
+    <testcase classname="tests.test_a" name="test_fail" time="0.2">
+      <failure message="assert 1 == 2">assert 1 == 2</failure>
+    </testcase>
+  </testsuite>
+</testsuites>"""
+
+
+class TestReportView:
+    """GET /api/pipelines/{repo_id}/report?job_id=&file=&file_type= 报告查看。"""
+
+    def _setup(self, tc, stub, db, file_type, content, filename="backend/report.sarif"):
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_files = {(42, 5, filename): content.encode("utf-8")}
+        return repo_id
+
+    def test_sast_report_ok(self, client):
+        tc, stub, db, tmp_path = client
+        repo_id = self._setup(tc, stub, db, "sast", SARIF_SAMPLE,
+                              filename="backend/bandit-report.sarif")
+        resp = tc.get(
+            f"/api/pipelines/{repo_id}/report",
+            params={"job_id": 5, "file": "backend/bandit-report.sarif",
+                    "file_type": "sast"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["job_id"] == 5
+        assert data["filename"] == "backend/bandit-report.sarif"
+        assert data["file_type"] == "sast"
+        report = data["report"]
+        assert report["kind"] == "sast"
+        assert report["tool"] == "Bandit"
+        assert report["summary"]["total"] == 1
+        r = report["results"][0]
+        assert r["rule"] == "B101"
+        assert r["severity"] == "high"
+        assert r["file"] == "botler/api/pipelines.py"
+        assert r["line"] == 42
+        assert "artifact-file:42:5:backend/bandit-report.sarif" in stub.calls
+
+    def test_dependency_scanning_report_ok(self, client):
+        tc, stub, db, tmp_path = client
+        repo_id = self._setup(tc, stub, db, "dependency_scanning", DEPS_SAMPLE,
+                              filename="backend/deps-python-report.json")
+        resp = tc.get(
+            f"/api/pipelines/{repo_id}/report",
+            params={"job_id": 5, "file": "backend/deps-python-report.json",
+                    "file_type": "dependency_scanning"})
+        assert resp.status_code == 200
+        report = resp.json()["report"]
+        assert report["kind"] == "deps"
+        assert report["results"][0]["severity"] == "High"
+        assert report["results"][0]["package"] == "requests"
+
+    def test_junit_report_ok(self, client):
+        tc, stub, db, tmp_path = client
+        repo_id = self._setup(tc, stub, db, "junit", JUNIT_SAMPLE,
+                              filename="backend/junit.xml")
+        resp = tc.get(
+            f"/api/pipelines/{repo_id}/report",
+            params={"job_id": 5, "file": "backend/junit.xml", "file_type": "junit"})
+        assert resp.status_code == 200
+        report = resp.json()["report"]
+        assert report["kind"] == "test"
+        assert report["summary"]["tests"] == 3
+        assert report["summary"]["failures"] == 1
+        statuses = [r["status"] for r in report["results"]]
+        assert statuses == ["passed", "failed"]
+
+    def test_file_type_derived_from_extension(self, client):
+        """未传 file_type 时按扩展名推导：.sarif→sast / .json→dependency_scanning。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_files = {(42, 5, "x.sarif"): SARIF_SAMPLE.encode("utf-8")}
+        resp = tc.get(f"/api/pipelines/{repo_id}/report",
+                      params={"job_id": 5, "file": "x.sarif"})
+        assert resp.status_code == 200
+        assert resp.json()["report"]["kind"] == "sast"
+
+    def test_unknown_repo_404(self, client):
+        tc, stub, db, tmp_path = client
+        resp = tc.get("/api/pipelines/9999/report",
+                      params={"job_id": 1, "file": "a.sarif", "file_type": "sast"})
+        assert resp.status_code == 404
+        assert "仓库不存在" in resp.json()["detail"]
+        assert not any(c.startswith("artifact-file:") for c in stub.calls)
+
+    def test_gitlab_404_maps_404(self, client):
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.fail_artifact_files = {5: GitLabError("报告文件不存在（404）", 404)}
+        resp = tc.get(f"/api/pipelines/{repo_id}/report",
+                      params={"job_id": 5, "file": "nope.sarif", "file_type": "sast"})
+        assert resp.status_code == 404
+        assert "报告文件" in resp.json()["detail"]
+
+    def test_gitlab_5xx_maps_502(self, client):
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.fail_artifact_files = {8: GitLabError("GitLab API 错误 500: boom", 500)}
+        resp = tc.get(f"/api/pipelines/{repo_id}/report",
+                      params={"job_id": 8, "file": "a.sarif", "file_type": "sast"})
+        assert resp.status_code == 502
+        assert "GitLab" in resp.json()["detail"]
+
+    def test_parse_failure_502(self, client):
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_files = {(42, 5, "bad.sarif"): b"not json {"}
+        resp = tc.get(f"/api/pipelines/{repo_id}/report",
+                      params={"job_id": 5, "file": "bad.sarif", "file_type": "sast"})
+        assert resp.status_code == 502
+        assert "解析失败" in resp.json()["detail"]
+
+    def test_invalid_file_path_422(self, client):
+        """路径穿越 / 绝对路径 / 空文件名 → 422，不发起 GitLab 调用。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        for bad in ["../secret", "/etc/passwd", ""]:
+            resp = tc.get(f"/api/pipelines/{repo_id}/report",
+                          params={"job_id": 5, "file": bad, "file_type": "sast"})
+            assert resp.status_code == 422, f"file={bad!r} 应 422"
+        assert not any(c.startswith("artifact-file:") for c in stub.calls)
+
+    def test_missing_params_422(self, client):
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        resp = tc.get(f"/api/pipelines/{repo_id}/report", params={"job_id": 5})
+        assert resp.status_code == 422
+        resp = tc.get(f"/api/pipelines/{repo_id}/report", params={"file": "a.sarif"})
+        assert resp.status_code == 422
+
+    def test_unknown_file_type_422(self, client):
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_files = {(42, 5, "a.zip"): b"blob"}
+        resp = tc.get(f"/api/pipelines/{repo_id}/report",
+                      params={"job_id": 5, "file": "a.zip", "file_type": "archive"})
+        assert resp.status_code == 422
+        assert "报告类型" in resp.json()["detail"]

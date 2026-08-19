@@ -14,8 +14,9 @@
 // 展示产物清单（文件名/大小，后端已过滤 trace/metadata 噪音），「下载
 // 全部」经 GET /api/pipelines/{repo_id}/artifacts?job_id= 后端代理下载
 // GitLab zip 归档（浏览器不持有 GitLab token）。
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Icon } from './Icon.jsx'
+import { api } from '../api.js'
 import { shortSha, fmtTime, fmtSeconds, fmtSize } from '../api.js'
 
 // 流水线整体状态 → 徽章映射（issue #39，自 Overview.jsx 移入本组件，
@@ -62,6 +63,45 @@ export function jobStatusLabel(status) {
   return JOB_STATUS_LABEL[status] || status
 }
 
+// ---- 报告查看（issue #337）----
+
+// 可查看报告的产物 file_type：sast=静态分析（bandit/semgrep/gitleaks
+// SARIF）、dependency_scanning=依赖扫描（deps-python/deps-frontend
+// JSON）、junit=测试报告（pytest / node:test JUnit XML）
+export const REPORT_FILE_TYPES = ['sast', 'dependency_scanning', 'junit']
+
+// 报告类型 → 中文标题
+const REPORT_TYPE_LABEL = {
+  sast: '静态分析报告',
+  dependency_scanning: '依赖扫描报告',
+  junit: '测试报告',
+}
+
+// 严重级别 → 中文标签：sast 用归一化枚举（high/medium/low/info/unknown），
+// 依赖扫描用 GitLab 枚举（Critical/High/...）
+const SAST_SEVERITY_LABEL = { high: '高', medium: '中', low: '低', info: '信息', unknown: '未知' }
+const DEPS_SEVERITY_LABEL = {
+  Critical: '严重', High: '高', Medium: '中', Low: '低', Info: '信息', Unknown: '未知',
+}
+export function severityLabel(severity, kind) {
+  const map = kind === 'deps' ? DEPS_SEVERITY_LABEL : SAST_SEVERITY_LABEL
+  return (severity != null && map[severity]) || '未知'
+}
+
+// 测试用例状态 → 中文标签
+const TEST_STATUS_LABEL = { passed: '通过', failed: '失败', error: '错误', skipped: '跳过' }
+export function testStatusLabel(status) {
+  return TEST_STATUS_LABEL[status] || status || '—'
+}
+
+// job 的报告产物列表（按类型白名单过滤；缺字段/非数组兜底）
+export function reportArtifacts(job) {
+  const arts = Array.isArray(job && job.artifacts) ? job.artifacts : []
+  return arts.filter((a) => a && typeof a === 'object'
+                      && REPORT_FILE_TYPES.includes(a.file_type)
+                      && a.filename)
+}
+
 // 流水线详情右边栏：entry 为 /api/pipelines/overview 单条仓库聚合
 // （repo_id / repo_name / enabled / pipeline / stages / commit_time）。
 // 异常数据防御：entry 为 null / 非对象 / pipeline 缺失时展示空态；
@@ -77,6 +117,8 @@ export default function PipelineDrawer({ entry, onClose }) {
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // 选中的报告（issue #337）：{repoId, jobId, jobName, file, fileType} 或 null
+  const [report, setReport] = useState(null)
   const repo = entry && typeof entry === 'object' ? entry : null
   const repoName = repo && repo.repo_name ? repo.repo_name : '—'
   const pl = repo ? repo.pipeline : null
@@ -151,7 +193,11 @@ export default function PipelineDrawer({ entry, onClose }) {
                 </div>
               )}
             </dl>
-            {/* 阶段与任务明细：每个 stage 一个区块，列出其下 job */}
+            {/* 阶段与任务明细：每个 stage 一个区块，列出其下 job；
+                issue #337：点击「查看报告」后切换为报告视图 */}
+            {report ? (
+              <ReportView {...report} onBack={() => setReport(null)} />
+            ) : (
             <div className="pipeline-detail-stages">
               <h3>阶段与任务</h3>
               {stages.length === 0 ? (
@@ -216,6 +262,28 @@ export default function PipelineDrawer({ entry, onClose }) {
                               </ul>
                             </div>
                           )}
+                          {/* issue #337：job 成功且带报告产物时提供「查看报告」，
+                              点击在抽屉内直接渲染解析后的报告内容（issue 评论
+                              确认交互 A；失败 job 不提供入口——评论确认） */}
+                          {j.status === 'success' && j.id != null && repo.repo_id != null
+                           && reportArtifacts(j).length > 0 && (
+                            <div className="pipeline-detail-report">
+                              {reportArtifacts(j).map((a, k) => (
+                                <button key={k} type="button"
+                                        className="pipeline-detail-report-btn"
+                                        onClick={() => setReport({
+                                          repoId: repo.repo_id,
+                                          jobId: j.id,
+                                          jobName: j.name,
+                                          file: a.filename,
+                                          fileType: a.file_type,
+                                        })}
+                                        title={`查看 ${a.filename}`}>
+                                  <Icon name="fileText" /> 查看报告
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -223,9 +291,185 @@ export default function PipelineDrawer({ entry, onClose }) {
                 </div>
               ))}
             </div>
+            )}
           </>
         )}
       </div>
     </div>
+  )
+}
+
+// ---- 报告视图（issue #337）----
+
+// 严重级别/状态徽章（摘要区与明细行共用）
+function SeverityBadge({ label, count, cls }) {
+  return <span className={'pipeline-report-sev ' + cls}>{label} {count}</span>
+}
+
+// 报告视图：从后端 GET /api/pipelines/{repo_id}/report 拉取解析后报告
+// （后端代理 GitLab 单文件产物并解析，浏览器不持有 GitLab token）。
+// 加载中 / 接口失败 / 报告为空均有兜底，不崩溃。
+export function ReportView({ repoId, jobId, jobName, file, fileType, onBack }) {
+  const [state, setState] = useState({ loading: true, error: null, data: null })
+  useEffect(() => {
+    let cancelled = false
+    setState({ loading: true, error: null, data: null })
+    const qs = new URLSearchParams({ job_id: String(jobId), file, file_type: fileType })
+    api.get(`/api/pipelines/${repoId}/report?${qs}`)
+      .then((data) => { if (!cancelled) setState({ loading: false, data }) })
+      .catch((e) => {
+        if (!cancelled) setState({
+          loading: false, error: (e && e.message) || '报告加载失败', data: null })
+      })
+    return () => { cancelled = true }
+  }, [repoId, jobId, file, fileType])
+
+  return (
+    <div className="pipeline-report">
+      <div className="pipeline-report-head">
+        <button type="button" className="btn pipeline-report-back" onClick={onBack}
+                title="返回阶段与任务明细">
+          <Icon name="arrowLeft" /> 返回
+        </button>
+        <span className="pipeline-report-title"
+              title={jobName || ''}>
+          {jobName || '—'} · {REPORT_TYPE_LABEL[fileType] || '报告'}
+        </span>
+      </div>
+      <div className="pipeline-report-file mono" title={file || ''}>{file || '—'}</div>
+      {state.loading && <p className="muted pipeline-report-empty">报告加载中…</p>}
+      {!state.loading && state.error && (
+        <div className="alert alert-error pipeline-report-error">{state.error}</div>
+      )}
+      {!state.loading && !state.error && state.data && (
+        <ReportBody report={state.data.report} />
+      )}
+    </div>
+  )
+}
+
+// 按报告 kind 分派渲染明细；空/未知兜底
+function ReportBody({ report }) {
+  if (!report || typeof report !== 'object') {
+    return <p className="muted pipeline-report-empty">报告内容为空</p>
+  }
+  if (report.kind === 'sast') return <SastReport report={report} />
+  if (report.kind === 'deps') return <DepsReport report={report} />
+  if (report.kind === 'test') return <TestReport report={report} />
+  return <p className="muted pipeline-report-empty">未知的报告类型</p>
+}
+
+// 静态分析（SARIF）：摘要 + 问题列表（严重级别/规则/文件/行号/描述）
+function SastReport({ report }) {
+  const { summary, results } = report
+  const by = summary && summary.by_severity ? summary.by_severity : {}
+  return (
+    <>
+      <div className="pipeline-report-summary">
+        <span>共 {summary ? summary.total : 0} 个问题</span>
+        <SeverityBadge label="高" count={by.high || 0} cls="report-sev-high" />
+        <SeverityBadge label="中" count={by.medium || 0} cls="report-sev-medium" />
+        <SeverityBadge label="低" count={by.low || 0} cls="report-sev-low" />
+        {(by.info || 0) > 0 && <SeverityBadge label="信息" count={by.info} cls="report-sev-info" />}
+      </div>
+      {!Array.isArray(results) || results.length === 0 ? (
+        <p className="muted pipeline-report-empty">未发现静态分析问题</p>
+      ) : (
+        <ul className="pipeline-report-list">
+          {results.map((r, i) => (
+            <li key={i} className="pipeline-report-item">
+              <div className="pipeline-report-item-row">
+                <span className={'pipeline-report-sev report-sev-' + (r.severity || 'unknown')}>
+                  {severityLabel(r.severity, 'sast')}
+                </span>
+                <span className="pipeline-report-rule mono" title={r.rule || ''}>{r.rule || '—'}</span>
+                {r.file != null && (
+                  <span className="pipeline-report-loc mono">
+                    {r.file}{r.line != null ? ':' + r.line : ''}
+                    {r.line != null && r.column != null ? ':' + r.column : ''}
+                  </span>
+                )}
+              </div>
+              {r.message && <div className="pipeline-report-msg">{r.message}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  )
+}
+
+// 依赖扫描：摘要 + 漏洞列表（包/版本/编号/文件/解决方案）
+function DepsReport({ report }) {
+  const { summary, results } = report
+  const by = summary && summary.by_severity ? summary.by_severity : {}
+  return (
+    <>
+      <div className="pipeline-report-summary">
+        <span>共 {summary ? summary.total : 0} 个漏洞</span>
+        <SeverityBadge label="严重" count={by.Critical || 0} cls="report-sev-critical" />
+        <SeverityBadge label="高" count={by.High || 0} cls="report-sev-high" />
+        <SeverityBadge label="中" count={by.Medium || 0} cls="report-sev-medium" />
+      </div>
+      {!Array.isArray(results) || results.length === 0 ? (
+        <p className="muted pipeline-report-empty">未发现依赖漏洞</p>
+      ) : (
+        <ul className="pipeline-report-list">
+          {results.map((r, i) => (
+            <li key={i} className="pipeline-report-item">
+              <div className="pipeline-report-item-row">
+                <span className={'pipeline-report-sev report-sev-' + String(r.severity || 'Unknown').toLowerCase()}>
+                  {severityLabel(r.severity, 'deps')}
+                </span>
+                <span className="pipeline-report-rule">{r.name || r.id || '—'}</span>
+                {r.version != null && <span className="pipeline-report-loc mono">v{r.version}</span>}
+              </div>
+              <div className="pipeline-report-sub">
+                {r.id && <span className="mono">{r.id}</span>}
+                {r.file && <span className="mono">{r.file}</span>}
+              </div>
+              {r.solution && <div className="pipeline-report-msg">{r.solution}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  )
+}
+
+// 测试报告（JUnit）：汇总 + 用例明细（状态/名称/耗时/失败原因）
+function TestReport({ report }) {
+  const { summary, results } = report
+  const s = summary || {}
+  const passed = (s.tests || 0) - (s.failures || 0) - (s.errors || 0) - (s.skipped || 0)
+  return (
+    <>
+      <div className="pipeline-report-summary">
+        <span>共 {s.tests || 0} 个用例</span>
+        <span className="pipeline-report-stat stat-pass">通过 {passed}</span>
+        <span className="pipeline-report-stat stat-fail">失败 {(s.failures || 0) + (s.errors || 0)}</span>
+        <span className="pipeline-report-stat stat-skip">跳过 {s.skipped || 0}</span>
+        {s.time != null && <span className="muted">耗时 {s.time}s</span>}
+      </div>
+      {!Array.isArray(results) || results.length === 0 ? (
+        <p className="muted pipeline-report-empty">无测试用例明细</p>
+      ) : (
+        <ul className="pipeline-report-list">
+          {results.map((r, i) => (
+            <li key={i} className="pipeline-report-item">
+              <div className="pipeline-report-item-row">
+                <span className={'pipeline-report-sev report-test-' + (r.status || 'unknown')}>
+                  {testStatusLabel(r.status)}
+                </span>
+                <span className="pipeline-report-rule">{r.name || '—'}</span>
+                {r.time != null && <span className="pipeline-report-loc">{r.time}s</span>}
+              </div>
+              {r.classname && <div className="pipeline-report-sub mono">{r.classname}</div>}
+              {r.message && <div className="pipeline-report-msg">{r.message}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   )
 }
