@@ -337,6 +337,32 @@
 
 ### Fixed
 
+- **工具页面 URL 导入报错——FastMCP/uv 风格仓库（如 Image-Parse-MCP）无工具定义
+  文件时给出可操作诊断（issue #325）**：用户从工具页 URL 导入
+  `https://github.com/1617110693/Image-Parse-MCP.git` 报
+  `Git 仓库中未找到工具定义文件（.mcp.json / mcp.json / tool.json 等）`。诊断：
+  该仓库是 FastMCP 风格 Python MCP server 源码项目（pyproject.toml +
+  `[project.scripts]` + mcp 依赖，README 指引用户在自己的本地 `.mcp.json` /
+  `~/.claude/claude.json` 手工配置），仓库内**确实没有**任何工具定义文件，导入
+  逻辑行为正确但报错不可操作（未列全候选文件、未说明怎么修）。修复：
+  - **报错列全候选文件并给出场景化引导**：`import_from_url` 找不到定义文件时，
+    报错列出全部 5 个候选（`.mcp.json` / `mcp.json` / `.mcp/mcp.json` /
+    `tool.json` / `tools.json`）；识别到 FastMCP/uv 风格 Python MCP 项目时提示
+    该类仓库不内置定义文件、通常还需 API Key 等环境变量无法自动推断，引导在仓库
+    根目录补 `.mcp.json`（mcpServers 格式）或改用「自定义工具」手动填写启动命令；
+    识别到 `.mcp.json.example` 等模板文件时提示复制改名后重新导入
+    （`_no_definition_error`，原裸 `ValueError` 改为统一入口）；
+  - **识别托管平台仓库页 URL（无 .git 后缀）**：地址栏复制的
+    `https://github.com/<owner>/<repo>` 不再被当作 JSON 下载（此前报
+    「下载内容不是合法 JSON」），而是按 Git 仓库浅克隆处理——新增
+    `_GIT_PLATFORM_HOSTS`（GitHub / GitLab / Gitee / GitCode / Bitbucket /
+    JihuLab 等）与 `_looks_like_git_url` 扩展（路径至少 owner/repo 两段、末段
+    非 .json/.md 等数据文件），与 `.git` 后缀 / git@ / ssh:// / git:// 判定并列；
+  - **测试**：新增 4 例（无定义文件报错列全候选文件、FastMCP 风格仓库引导提示、
+    `.example` 模板提示、`_looks_like_git_url` 仓库页/数据文件/非托管平台变体），
+    先在旧代码上验证 4 例全部失败（确认可复现），修复后通过；后端 pytest 全量
+    2497 例通过，ruff / bandit 无新增告警。
+
 - **识图模型点击测试报错——OpenAI 兼容网关 Base URL 只填 API 前缀时直发根路径被拒，报 `url error`（issue #321）**：
   设置页「识图模型」卡片「测试」按钮报错
   `OpenAI 请求失败: HTTP 400 ... "url error, please check url！"`。定位：图片经 MinIO

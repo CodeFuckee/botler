@@ -311,6 +311,84 @@ class TestImportFromUrl:
         with pytest.raises(ValueError, match="未找到工具定义"):
             tools.import_from_url(db, f"file://{repo}")
 
+    @staticmethod
+    def _make_git_repo(tmp_path, name, files):
+        """构造本地 Git 仓库（目录名带 .git 后缀触发 git 分支）。"""
+        repo = tmp_path / name
+        repo.mkdir()
+        for rel, content in files.items():
+            f = repo / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.email=t@t",
+             "-c", "user.name=t", "commit", "-q", "-m", "init"], check=True)
+        return repo
+
+    def test_import_git_repo_without_definition_lists_all_files(self, db, tmp_path):
+        """无定义文件时，报错应列出全部候选文件（含 .mcp/mcp.json / tools.json）。"""
+        repo = self._make_git_repo(tmp_path, "plain-repo.git",
+                                   {"README.md": "# no tools"})
+        with pytest.raises(ValueError) as exc:
+            tools.import_from_url(db, f"file://{repo}")
+        msg = str(exc.value)
+        for f in (".mcp.json", "mcp.json", ".mcp/mcp.json", "tool.json", "tools.json"):
+            assert f in msg, f"报错应列出候选文件 {f}，实际: {msg}"
+
+    def test_import_git_repo_fastmcp_python_hint(self, db, tmp_path):
+        """FastMCP / uv 风格 Python 项目（issue #325 用户仓库同构）应给出引导。"""
+        repo = self._make_git_repo(tmp_path, "Image-Parse-MCP.git", {
+            "pyproject.toml": (
+                '[project]\nname = "image-parse-mcp"\n'
+                'dependencies = ["mcp>=1.0.0"]\n\n'
+                '[project.scripts]\nimage-parse-mcp = "image_parse.server:main"\n'
+            ),
+            "src/image_parse/server.py": (
+                'from mcp.server.fastmcp import FastMCP\n'
+                'mcp = FastMCP("image-parse")\n'
+                '@mcp.tool()\ndef analyze_image(image_source: str) -> str:\n'
+                '    """分析图片"""\n    return "ok"\n'
+            ),
+            "README.md": "# Image Parse MCP\n",
+        })
+        with pytest.raises(ValueError) as exc:
+            tools.import_from_url(db, f"file://{repo}")
+        msg = str(exc.value)
+        assert "FastMCP" in msg, f"应提示 FastMCP 风格项目，实际: {msg}"
+        assert "自定义工具" in msg, f"应引导使用自定义工具，实际: {msg}"
+
+    def test_import_git_repo_example_template_hint(self, db, tmp_path):
+        """仓库只有 .mcp.json.example 模板时，提示复制改名。"""
+        repo = self._make_git_repo(tmp_path, "template-repo.git", {
+            ".mcp.json.example": json.dumps({
+                "mcpServers": {"demo": {"command": "python3"}},
+            }, ensure_ascii=False),
+        })
+        with pytest.raises(ValueError) as exc:
+            tools.import_from_url(db, f"file://{repo}")
+        msg = str(exc.value)
+        assert ".mcp.json.example" in msg, f"应提示模板文件，实际: {msg}"
+        assert ".mcp.json" in msg, f"应提示复制为 .mcp.json，实际: {msg}"
+
+    def test_looks_like_git_url_variants(self):
+        """Git 仓库 URL 识别：.git 后缀 / 托管平台仓库页 / 数据文件排除。"""
+        # .git 后缀
+        assert tools._looks_like_git_url("https://github.com/a/b.git")
+        # 托管平台仓库页（地址栏复制，无 .git 后缀，issue #325）
+        assert tools._looks_like_git_url("https://github.com/1617110693/Image-Parse-MCP")
+        assert tools._looks_like_git_url("https://gitlab.com/group/sub/repo")
+        assert tools._looks_like_git_url("https://gitee.com/owner/repo")
+        assert tools._looks_like_git_url("https://gitcode.com/owner/repo")
+        assert tools._looks_like_git_url("https://bitbucket.org/owner/repo")
+        # 非仓库 URL：数据文件 / 非托管平台 / 非 http(s)
+        assert not tools._looks_like_git_url("https://github.com/a/b/tool.json")
+        assert not tools._looks_like_git_url("https://github.com/a/b/README.md")
+        assert not tools._looks_like_git_url("https://example.com/a/b")
+        assert not tools._looks_like_git_url("ftp://github.com/a/b")
+        assert not tools._looks_like_git_url("")
+
     def test_import_partial_failure_skips(self, db, http_server):
         """mcpServers 中一个定义非法时跳过，其余导入。"""
         url = route_json(http_server, "/partial.json", {

@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,18 @@ DEFINITION_FILES = (
     "tool.json", "tools.json",
 )
 
+# 常见 Git 托管平台（地址栏复制的仓库页 URL 常无 .git 后缀，仍按 Git 仓库处理）
+_GIT_PLATFORM_HOSTS = (
+    "github.com", "gitlab.com", "gitlab.cn", "gitee.com", "gitcode.com",
+    "bitbucket.org", "jihulab.com", "gitea.com",
+)
+
+# 仓库内可能存在的「模板」定义文件（复制改名即可用，识别后给出引导提示）
+_EXAMPLE_DEFINITION_FILES = (
+    ".mcp.json.example", "mcp.json.example",
+    ".mcp/mcp.json.example", "tool.json.example", "tools.json.example",
+)
+
 
 def _url_scheme(url: str) -> str | None:
     """URL 协议（http/https 才允许）；非法返回 None。"""
@@ -93,13 +106,35 @@ def _url_scheme(url: str) -> str | None:
 
 
 def _looks_like_git_url(url: str) -> bool:
-    """判断 URL 是否为 Git 仓库地址（.git 后缀 / git@ / ssh:// / git://）。"""
+    """判断 URL 是否为 Git 仓库地址。
+
+    - ``.git`` 后缀 / ``git@`` / ``ssh://`` / ``git://``；
+    - 常见 Git 托管平台（GitHub / GitLab / Gitee 等）的仓库页 URL：
+      地址栏复制的仓库地址常不带 ``.git`` 后缀（issue #325），
+      路径形如 ``https://<host>/<owner>/<repo>``，按 Git 仓库浅克隆处理；
+      末尾是常见数据文件后缀（.json / .md 等）的不算仓库页，走 JSON 下载。
+    """
     lowered = url.lower()
     if lowered.endswith(".git"):
         return True
     if lowered.startswith(("git@", "ssh://", "git://")):
         return True
-    return False
+    try:
+        parsed = urllib.parse.urlsplit(lowered)
+    except Exception:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if (parsed.hostname or "").lower() not in _GIT_PLATFORM_HOSTS:
+        return False
+    segments = [s for s in parsed.path.split("/") if s]
+    if len(segments) < 2:  # 至少 owner/repo 两段
+        return False
+    last = segments[-1].lower()
+    if last.endswith((".json", ".yaml", ".yml", ".toml", ".txt",
+                      ".md", ".html", ".htm", ".xml", ".zip")):
+        return False
+    return True
 
 
 def _normalize_args(args: Any) -> list[str]:
@@ -457,6 +492,44 @@ def _find_definition_files(repo_dir: str) -> list[Path]:
     return found
 
 
+def _no_definition_error(repo_dir: str) -> ValueError:
+    """仓库未找到工具定义文件时，构造可操作的诊断报错（issue #325）。
+
+    原报错只列了部分候选文件名，用户无法判断「是仓库没有定义文件，还是
+    识别漏了」；此处补三类可操作信息：
+    - 列出全部已查找的候选文件（含 .mcp/mcp.json / tools.json）；
+    - 仓库内有 .example 模板文件 → 提示复制改名后重新导入；
+    - FastMCP / uv 风格 Python MCP 项目（pyproject.toml + [project.scripts]
+      + mcp 依赖，如 Image-Parse-MCP 这类仓库）→ 说明仓库本身不内置定义
+      文件，引导补 .mcp.json 或改用「自定义工具」手动配置。
+    """
+    searched = "、".join(DEFINITION_FILES)
+    base = f"Git 仓库中未找到工具定义文件（已查找：{searched}）"
+    # 1) 模板文件提示（复制改名即可）
+    for example in _EXAMPLE_DEFINITION_FILES:
+        if (Path(repo_dir) / example).is_file():
+            target = example[:-len(".example")]
+            return ValueError(
+                f"{base}。检测到模板文件 {example}，请先在仓库中复制为 "
+                f"{target} 并补充实际配置，再重新导入。")
+    # 2) FastMCP / uv 风格 Python MCP 项目提示
+    pyproject = Path(repo_dir) / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            text = pyproject.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        if "[project.scripts]" in text and re.search(
+                r'"mcp(?:[>=<~]|")|fastmcp', text.lower()):
+            return ValueError(
+                f"{base}。该仓库是 MCP server 源码项目（FastMCP/uv 风格），"
+                "仓库内未内置工具定义文件，且此类工具通常需要 API Key 等"
+                "环境变量、无法从仓库自动推断：请在仓库根目录添加 .mcp.json"
+                "（mcpServers 格式）后重新导入，或在工具页面使用「自定义工具」"
+                "手动填写启动命令与参数。")
+    return ValueError(f"{base}。请确认该仓库确实包含 MCP 工具定义文件。")
+
+
 def import_from_url(db: Database, url: str) -> list[dict]:
     """从 URL 导入工具（落库），返回导入后的工具视图列表。
 
@@ -477,8 +550,7 @@ def import_from_url(db: Database, url: str) -> list[dict]:
         try:
             files = _find_definition_files(repo_dir)
             if not files:
-                raise ValueError(
-                    "Git 仓库中未找到工具定义文件（.mcp.json / mcp.json / tool.json 等）")
+                raise _no_definition_error(repo_dir)
             for f in files:
                 try:
                     data = json.loads(f.read_text(encoding="utf-8", errors="replace"))
