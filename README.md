@@ -45,6 +45,17 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 > 可以继续执行**，**未开始执行的任务保留在队列中，等到窗口结束后自动开始
 > 执行**；窗口状态实时计算，无需重启服务。
 
+> 💡 **引擎健康探测与自动降级重试**（issue #236）：平台有三个执行引擎
+> （claude / hermes / dsh）互为备份。每次任务开始执行前做一次轻量健康探测
+> （claude 检查 `claude --version`、hermes 检查 runner 可加载、dsh 检查 SDK
+> 导入），主引擎探测不可用或连续 `worker.fallback_after_failures` 次「引擎类」
+> 失败（命令缺失 / API 密钥失效 / SDK 错误）时，自动降级到配置的备用引擎
+> （`worker.fallback_engines`，如 `["dsh","hermes"]`）重试任务，并在任务记录
+> 与 issue 评论注明「引擎 claude 不可用，已降级 dsh 执行」；探测结果展示在
+> 设置页「任务调度」卡片与插件管理页（引擎状态徽章），引擎恢复后自动回到主
+> 引擎。引擎级故障不再只能 bot-failed——换引擎即可解决，且不影响其他正常任务
+> （跨仓库并行不受影响）。
+
 > 💡 **断点续跑**（issue #8）：CI/CD 频繁重新部署时，执行中的任务被进程重启打断后
 > 不会从头重跑——executor 持久化 claude 会话 id，重启恢复时用 `claude --resume`
 > 接续上次会话且保留工作区改动，从上次中断处继续（会话文件丢失时自动降级全新会话）。
@@ -646,6 +657,8 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
 | `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（hermes-agent SDK，进程内调用，issue #171）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84/#171）；设置页「任务调度」卡片可切换（issue #113） |
+| `worker.fallback_engines` | `[]` | 备用引擎降级（issue #236）：主引擎健康探测不可用或连续 `fallback_after_failures` 次「引擎类」失败（命令缺失 / API key 无效 / SDK 错误）时，按此顺序自动降级到备用引擎重试任务，并在任务记录与 issue 评论注明「引擎 X 不可用，已降级 Y 执行」；空列表 = 不降级（保持旧行为）。每次任务开始前做轻量健康探测（claude 检查 `claude --version`、hermes 检查 runner 可加载、dsh 检查 SDK 导入），探测结果展示在设置页「任务调度」卡片与插件管理页（引擎状态徽章）；引擎恢复后下一任务自动回到主引擎。设置页「任务调度」卡片可编辑 |
+| `worker.fallback_after_failures` | `2` | 连续引擎类失败降级阈值（issue #236）：正整数；任务级失败（代码改不对）不累计不降级 |
 | `worker.pause_windows` | `[]` | 定时暂停窗口（issue #169）：窗口串数组（`HH:MM-HH:MM`，24 小时制，支持跨天如 `22:00-02:00`）。窗口内停止开始新任务，已经开始执行的任务可以继续执行，未开始执行的任务等到窗口结束后自动开始执行；空数组 = 不启用（默认）。设置页「任务调度」卡片可编辑；兼容全角字符（issue #284：`09：00—12：00` 等中文输入法格式自动归一化为半角） |
 | `worker.pause_weekdays` | `[]` | 定时暂停窗口生效星期（0=周一 … 6=周日）；空 = 每天都生效（issue #169） |
 | `worker.pause_timezone` | 空 | 定时暂停窗口判断所用时区（IANA 名，如 `Asia/Shanghai`）；空 = 服务器本地时区（issue #169） |

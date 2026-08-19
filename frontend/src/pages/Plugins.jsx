@@ -120,6 +120,11 @@ export default function Plugins() {
   }
 
   const executorItems = data.plugins.executor || []
+  // 引擎健康状态（issue #236）：engine_health 按引擎名索引，执行引擎卡片
+  // 展示状态徽章（正常/异常/未知，数据来自 GET /api/plugins）
+  const healthByEngine = Object.fromEntries(
+    (data.engine_health || []).map((h) => [h.engine, h]),
+  )
 
   return (
     <div>
@@ -204,6 +209,14 @@ export default function Plugins() {
                   <li className="plugin-card" key={`${item.kind}-${item.name}`}>
                     <div className="plugin-head">
                       <span className="plugin-name">{item.display_name || item.name}</span>
+                      {item.kind === 'executor' && healthByEngine[item.name] && (
+                        <span
+                          className={'engine-health-badge engine-health-' + (healthByEngine[item.name].status || 'unknown')}
+                          title={`${healthByEngine[item.name].detail || ''}（探测于 ${healthByEngine[item.name].checked_at || ''}）`}
+                        >
+                          {healthByEngine[item.name].status === 'ok' ? '正常' : healthByEngine[item.name].status === 'fail' ? '异常' : '未知'}
+                        </span>
+                      )}
                       {item.builtin ? (
                         <span className="badge badge-default">内置</span>
                       ) : (

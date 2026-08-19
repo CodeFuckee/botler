@@ -54,13 +54,15 @@ from ..git_remote import (  # noqa: F401 （NoGitRemoteError/list_local_remotes/
 )
 from ..gitlab_client import GitLabClient, GitLabError, is_transient_error
 from ..hermes_sdk_runner import HermesSdkRunner, HermesSdkNotInstalledError
-from ..plugins import PluginKind, get_plugin, list_plugins
+from ..plugins import PluginKind, get_plugin, has_plugin, list_plugins
 from ..templates import TemplateRenderer
 from ..failure_classify import (
+    CATEGORY_ENGINE,
     category_advice,
     category_label,
     classify_failure,
 )
+from .. import engine_health
 from ..report import (
     DEFAULT_COMMENT_TEMPLATE,
     DEFAULT_FAILURE_COMMENT_TEMPLATE,
@@ -203,19 +205,24 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
     # ---- 工作区管理 ----
     def _run_once(self, task_id: int, repo: dict, issue: dict,
                   resume_session: str | None = None,
-                  resume_history: list | None = None) -> tuple[int, str]:
+                  resume_history: list | None = None,
+                  engine: str | None = None) -> tuple[int, str]:
         """执行一次任务引擎（插件体系分发，issue #140）。返回 (exit_code, output)。
 
         按 ``worker.engine`` 配置的引擎名查执行引擎插件（内置 claude /
         hermes / dsh 见 botler.plugins.executors）并委托执行；未知引擎回退
-        claude。断点续跑语义由各引擎插件承担：
+        claude。``engine`` 参数（issue #236）为本次尝试实际使用的引擎——
+        run_task 引擎降级后显式传入，缺省回退全局 worker.engine（兼容
+        测试直接调用与外部插件委托）。断点续跑语义由各引擎插件承担：
         - claude（issue #8）：resume_session 非空时 --resume 接续上次会话；
         - hermes（issue #47）：resume_history 为历史消息（显式传入优先，
           未传入时从任务落库 hermes_history 解析）；
         - dsh（issue #84）：resume_session 为上次会话 id（SDK 持久化会话）。
         """
         cfg = self.config.get()
-        plugin = get_plugin(PluginKind.EXECUTOR, self._engine(cfg))
+        if engine is None:
+            engine = self._engine(cfg)
+        plugin = get_plugin(PluginKind.EXECUTOR, engine)
         return plugin.run(self, task_id, repo, issue,
                           resume_session, resume_history)
     def _log_file(self, task_id: int) -> Path:
@@ -223,11 +230,72 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         base.mkdir(parents=True, exist_ok=True)
         return base / f"task_{task_id}.log"
 
+    # ---- 引擎健康探测与降级（issue #236） ----
+    def _engine_chain(self, cfg) -> list[str]:
+        """引擎降级链：主引擎 + worker.fallback_engines 备用引擎。
+
+        按顺序去重、剔除主引擎名与未注册引擎（未知引擎名回退 claude 由
+        self._engine 处理，此处只过滤 fallback_engines 里的脏值）。
+        """
+        main = self._engine(cfg)
+        chain = [main]
+        for name in (cfg.fallback_engines or []):
+            name = str(name).strip().lower()
+            if name and name != main and name not in chain \
+                    and has_plugin(PluginKind.EXECUTOR, name):
+                chain.append(name)
+        return chain
+
+    def _select_engine_for_attempt(self, cfg, chain: list[str],
+                                   tried_engines: set[str],
+                                   engine: str) -> tuple[str, str | None, bool]:
+        """每次任务尝试开始前的引擎健康探测（issue #236）。
+
+        探测当前引擎：可用 → (当前引擎, None, False)；不可用 → 从降级链上
+        选第一个「未尝试且探测通过」的备用引擎，返回 (新引擎, 降级原因文案,
+        True)；链上全部探测失败时保持当前引擎（探测为建议性，执行仍会暴露
+        真实故障，不因探测失败直接判任务失败），返回 (当前引擎, None, True)。
+        """
+        health = engine_health.probe_engine(engine, cfg)
+        if health["status"] == "ok":
+            return engine, None, False
+        detail = health.get("detail") or "探测失败"
+        for cand in chain:
+            if cand == engine or cand in tried_engines:
+                continue
+            if engine_health.probe_engine(cand, cfg)["status"] == "ok":
+                return (cand,
+                        f"引擎 {engine} 不可用（{detail}），已降级 {cand} 执行",
+                        True)
+        return engine, None, True
+
+    def _note_engine_degradation(self, task_id: int, project_id: int,
+                                 issue_iid: int, repo: dict | None,
+                                 reason: str) -> None:
+        """引擎降级时在 issue 上留一条说明评论（issue #236，每任务最多一次）。
+
+        验收标准：任务记录与 issue 评论均能看出「引擎 X 不可用，已降级 Y
+        执行」。评论发送失败不阻塞任务（与处理中评论同容错策略）。
+        """
+        try:
+            self._transient_retry(
+                "留引擎降级评论",
+                lambda: self._call_with_fallback(
+                    repo, lambda c: c.add_comment(
+                        project_id, issue_iid,
+                        f"🤖 Botler 提示：{reason}")))
+            self.db.add_log(task_id, "info", f"已在 issue 上注明引擎降级: {reason}")
+        except GitLabError as e:
+            self.db.add_log(task_id, "warn", f"留引擎降级评论失败: {e}")
+
     # ---- 重试与结果判定 ----
     def run_task(self, task_id: int) -> None:
         """任务主流程：单次或重试执行，写状态机与收尾评论。"""
         cfg = self.config.get()
-        engine = self._engine(cfg)  # issue #47：claude / hermes 引擎分派
+        # issue #236：引擎降级链——主引擎 + worker.fallback_engines 备用引擎
+        # （去重、剔除主引擎与未注册引擎）；未配置备用引擎时行为与旧版一致
+        engine_chain = self._engine_chain(cfg)
+        engine = engine_chain[0]
         task = self.db.get_task(task_id)
         if task is None:
             logger.warning("任务 %s 不存在，跳过", task_id)
@@ -285,6 +353,11 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         last_output = ""
         last_exit = -1
         attempt_details: list[dict] = []  # 每次失败的详情（退出码 + 提取的 trace/错误），供 error_detail 落库
+        # issue #236 引擎降级状态：本任务已实际执行过的引擎集合（降级不
+        # 重复回到已尝试引擎）、连续引擎类失败计数、是否已在 issue 上注明降级
+        tried_engines: set[str] = set()
+        engine_failures = 0
+        degraded_noted = False
 
         while True:
             # 用户一键停止（issue #35）：重试循环每轮检查停止请求
@@ -293,6 +366,24 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
                 self._finish_stopped(task_id)
                 return
             attempt += 1
+            # issue #236 引擎健康探测：每次尝试开始前实时探测当前引擎，
+            # 不可用立即降级到备用引擎（不消耗尝试次数），并在任务记录与
+            # issue 评论注明「引擎 X 不可用，已降级 Y 执行」
+            engine, degrade_reason, probe_failed = self._select_engine_for_attempt(
+                cfg, engine_chain, tried_engines, engine)
+            tried_engines.add(engine)
+            if degrade_reason:
+                self.db.set_task_status(task_id, None, engine=engine,
+                                        engine_fallback=degrade_reason)
+                self.db.add_log(task_id, "warn", degrade_reason)
+                if not degraded_noted:
+                    self._note_engine_degradation(
+                        task_id, project_id, issue_iid, repo, degrade_reason)
+                    degraded_noted = True
+            elif probe_failed:
+                self.db.add_log(
+                    task_id, "warn",
+                    f"引擎 {engine} 探测不可用且无可用备用引擎，继续尝试执行")
             # issue #8 断点续跑：上次执行留过 claude 会话 → 接续（resume）；
             # 会话文件丢失（如 ~/.claude 未持久化）→ 清除后降级全新会话。
             # hermes 引擎（issue #47）的断点续跑数据在 tasks.hermes_history，
@@ -318,7 +409,7 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
                 attempt_count=attempt,
                 started_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
                 finished_at=None, error_message=None)
-            self.db.add_log(task_id, "info", f"第 {attempt} 次尝试开始")
+            self.db.add_log(task_id, "info", f"第 {attempt} 次尝试开始（引擎 {engine}）")
             logger.info("任务 %s（%s#%s）第 %s 次执行", task_id, project_id, issue_iid, attempt)
 
             # 首次尝试时在 issue 上回复「处理中」，提升体验（不刷屏，重试不再重复）。
@@ -335,7 +426,12 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
                     self.db.add_log(task_id, "warn", f"发送处理中评论失败: {e}")
 
             try:
-                exit_code, output = self._run_once(task_id, repo, issue, resume_session)
+                # engine 以第 6 个位置参数传入（resume_history=None）：
+                # _run_once 的 engine 参数（issue #236）为本次尝试实际引擎，
+                # 缺省回退全局 worker.engine；测试 monkeypatch 的
+                # ``lambda *a`` 兼容位置参数调用
+                exit_code, output = self._run_once(
+                    task_id, repo, issue, resume_session, None, engine)
             except ExecutorError as e:
                 exit_code, output = -1, f"[executor] {e}"
                 self.db.add_log(task_id, "error", output)
@@ -365,7 +461,8 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
                     result = (self._hermes_result(output) if engine == "hermes"
                               else self._dsh_result(output))
                     if result == "unresolvable":
-                        detail = {"attempt": attempt, "exit_code": exit_code,
+                        detail = {"attempt": attempt, "engine": engine,
+                                  "exit_code": exit_code,
                                   "error": self._extract_error(output)}
                         self._finish_failed(task_id, f"{engine} 报告无法解决该 issue", output,
                                             error_detail=self._dump_error_detail(
@@ -383,7 +480,8 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
                 else:
                     # exit 0 但 Claude 自认无法解决 → 失败终态（不重试）
                     if self._is_unresolvable(output):
-                        detail = {"attempt": attempt, "exit_code": exit_code,
+                        detail = {"attempt": attempt, "engine": engine,
+                                  "exit_code": exit_code,
                                   "error": self._extract_error(output)}
                         self._finish_failed(task_id, "Claude Code 报告无法解决该 issue", output,
                                             error_detail=self._dump_error_detail(
@@ -408,6 +506,7 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
             # 记录本次失败详情（含 trace 提取），供界面「查看详细原因」按钮展示
             attempt_details.append({
                 "attempt": attempt,
+                "engine": engine,
                 "exit_code": exit_code,
                 "error": self._extract_error(output),
             })
@@ -415,6 +514,33 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
             # 环境性失败 → 按策略重试
             if attempt > max_retries:
                 break
+            # issue #236 连续引擎类失败降级：失败被分类为「引擎类」（命令
+            # 缺失 / API key 无效 / SDK 错误，见 failure_classify.py）才累计；
+            # 达到 fallback_after_failures 阈值且备用链上还有未尝试引擎时降级，
+            # 任务级失败（代码改不对）不累计不降级（换引擎重试无意义）
+            category = classify_failure(
+                output, rules=cfg.failure_classify_rules)
+            if category == CATEGORY_ENGINE:
+                engine_failures += 1
+            else:
+                engine_failures = 0
+            if engine_failures >= cfg.fallback_after_failures:
+                next_engine = next(
+                    (e for e in engine_chain
+                     if e != engine and e not in tried_engines), None)
+                if next_engine is not None:
+                    reason = (f"引擎 {engine} 连续 {engine_failures} 次引擎类失败，"
+                              f"已降级 {next_engine} 执行")
+                    engine = next_engine
+                    tried_engines.add(engine)
+                    engine_failures = 0
+                    self.db.set_task_status(task_id, None, engine=engine,
+                                            engine_fallback=reason)
+                    self.db.add_log(task_id, "warn", reason)
+                    if not degraded_noted:
+                        self._note_engine_degradation(
+                            task_id, project_id, issue_iid, repo, reason)
+                        degraded_noted = True
             self.db.set_task_status(task_id, STATUS_RETRYING)
             self.db.add_log(task_id, "warn", f"第 {attempt} 次失败（exit {exit_code}），准备重试（剩余 {max_retries - attempt} 次）")
             time.sleep(5)

@@ -295,3 +295,46 @@ class TestPluginSettings:
         tc, _ = client
         resp = tc.put("/api/plugins/settings", json={})
         assert resp.status_code == 400
+
+
+class TestEngineHealthInPlugins:
+    """GET /api/plugins 引擎健康状态（issue #236）。
+
+    插件管理页执行引擎卡片的状态徽章数据源：每项含 engine / status /
+    ok / detail / checked_at，覆盖全部执行引擎插件（含外部引擎）。
+    """
+
+    def test_list_includes_engine_health(self, client):
+        """默认返回三内置引擎的健康状态快照。"""
+        tc, _ = client
+        data = tc.get("/api/plugins").json()
+        health = data["engine_health"]
+        assert [h["engine"] for h in health] == ["claude", "dsh", "hermes"]
+        for h in health:
+            assert h["status"] in ("ok", "fail", "unknown")
+            assert "ok" in h and "detail" in h and "checked_at" in h
+
+    def test_engine_health_covers_external_plugins(self, client, tmp_path):
+        """安装外部执行引擎插件后，健康快照同样覆盖（unknown 不误报）。"""
+        tc, tmp_path = client
+        code = """from botler.plugins import ExecutorPlugin, register_plugin
+
+class MyEnginePlugin(ExecutorPlugin):
+    name = "my_engine"
+    description = "自定义执行引擎（测试外部插件）"
+
+    def run(self, executor, task_id, repo, issue,
+            resume_session=None, resume_history=None):
+        return 0, ""
+
+register_plugin(MyEnginePlugin())
+"""
+        path = write_plugin_module(tmp_path, name="my_engine", code=code)
+        assert tc.post("/api/plugins/install", json={"path": path}).status_code == 200
+        data = tc.get("/api/plugins").json()
+        names = [h["engine"] for h in data["engine_health"]]
+        assert "my_engine" in names, "外部引擎插件应纳入健康快照"
+        # 无探测实现的外部引擎 → unknown（不误报 ok/fail）
+        mine = next(h for h in data["engine_health"]
+                    if h["engine"] == "my_engine")
+        assert mine["status"] == "unknown"

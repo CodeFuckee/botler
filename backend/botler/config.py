@@ -227,6 +227,17 @@ class Settings:
     # 进程内调用）。引擎名对应执行引擎插件（botler.plugins.executors），
     # 未注册的引擎名回退 claude（executor._engine 校验）。
     engine: str = "claude"
+    # 备用引擎降级（issue #236）：主引擎健康探测不可用或连续
+    # fallback_after_failures 次引擎类失败时，按此顺序自动降级到备用引擎
+    # 重试任务（如 ["dsh", "hermes"]）。空列表 = 不降级（保持旧行为）。
+    # 运行时自动剔除主引擎名与未注册引擎；全部备用引擎耗尽后保持当前引擎
+    # 执行（探测为建议性，执行仍会暴露真实故障）。设置页「任务调度」卡片可编辑。
+    fallback_engines: list[str] = field(default_factory=list)
+    # 连续引擎类失败降级阈值（issue #236）：引擎执行失败被分类为「引擎类」
+    # （命令缺失 / API key 无效 / SDK 错误，见 failure_classify.py）的连续次数
+    # 达到该值后，自动降级到 worker.fallback_engines 的下一个备用引擎；任务级
+    # 失败（代码改不对）不累计不降级（换引擎无意义）。正整数，默认 2。
+    fallback_after_failures: int = 2
     # 外部插件加载（issue #140）：Python 模块路径列表，应用启动时逐个加载
     # 并注册进插件体系（新增执行引擎 / 大模型供应商 / 消息发送通道）。
     # 模块内调用 botler.plugins.register_plugin 完成登记；加载失败仅记
@@ -365,7 +376,8 @@ KNOWN_FIELDS = {
                "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
                "engine", "plugin_paths", "issue_priority",
                "pause_windows", "pause_weekdays", "pause_timezone",
-               "pause_priority_threshold"},
+               "pause_priority_threshold",
+               "fallback_engines", "fallback_after_failures"},
     "claude": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
             "session_root", "cordis", "runtime_bin", "base_url", "api_key"},
@@ -622,6 +634,10 @@ class ConfigManager:
             claude_command=claude.get("command", "claude"),
             claude_args=claude.get("args", ["-p", "--output-format", "json"]),
             engine=str(worker.get("engine", "claude")).strip() or "claude",
+            fallback_engines=[str(e).strip().lower() for e in
+                              (worker.get("fallback_engines") or [])
+                              if str(e).strip()],
+            fallback_after_failures=max(1, int(worker.get("fallback_after_failures", 2))),
             plugin_paths=[str(p).strip() for p in (worker.get("plugin_paths") or [])
                           if str(p).strip()],
             dsh_provider=str(dsh.get("provider", "deepseek-official")).strip() or "deepseek-official",

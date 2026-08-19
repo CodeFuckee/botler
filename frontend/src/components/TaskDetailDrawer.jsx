@@ -308,6 +308,11 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
                     <tr><th>仓库</th><td>{task.repo_name || repoName || '—'}</td></tr>
                     <tr><th>Issue</th><td>#{task.issue_iid} — {task.issue_title || '—'}</td></tr>
                     <tr><th>执行引擎</th><td>{task.engine || '—'}</td></tr>
+                    {/* issue #236：引擎降级原因——主引擎不可用自动降级到备用
+                        引擎时的原因文案；未发生降级不显示 */}
+                    {task.engine_fallback && (
+                      <tr><th>降级原因</th><td className="pre-wrap">{task.engine_fallback}</td></tr>
+                    )}
                     <tr><th>来源</th><td>{task.triggered_by === 'reconcile' ? '对账兜底' : task.triggered_by === 'manual' ? '手动' : 'Webhook'}</td></tr>
                     <tr><th>尝试次数</th><td>{task.attempt_count}</td></tr>
                     <tr><th>退出码</th><td>{task.exit_code ?? '—'}</td></tr>

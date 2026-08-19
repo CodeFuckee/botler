@@ -26,6 +26,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ..engine_health import engine_health_snapshot
 from ..plugins import (
     PluginKind,
     PluginRegistry,
@@ -62,6 +63,10 @@ def _view(c) -> dict[str, Any]:
     return {
         "engine": s.engine,
         "plugin_paths": list(s.plugin_paths or []),
+        # issue #236：各执行引擎当前健康状态——插件管理页执行引擎卡片
+        # 状态徽章数据源（探测结果 30s 缓存，见 engine_health.py）
+        "engine_health": engine_health_snapshot(
+            s, engines=[p.name for p in registry.list(PluginKind.EXECUTOR)]),
         "plugins": {
             kind.value: [_plugin_view(p, registry) for p in registry.list(kind)]
             for kind in PluginKind

@@ -677,7 +677,7 @@ class TestRunTaskResume:
                             lambda *a, **kw: None)
 
         def fake_run_once(task_id, repo, issue, resume_session=None,
-                          resume_history=None):
+                          resume_history=None, engine=None):
             captured["resume_session"] = resume_session
             return 0, _RESULT_LINE
 

@@ -1319,6 +1319,19 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .status-interrupted { background: var(--bg-soft); color: var(--muted); }
 .status-canceled { background: var(--bg-soft); color: var(--warn); }
 .badge-muted { background: var(--bg-soft); color: var(--muted); }
+/* 引擎健康状态徽章（issue #236）：设置页「任务调度」卡片与插件管理页
+   展示各执行引擎当前健康状态——正常（绿）/ 异常（红）/ 未知（灰） */
+.engine-health-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.engine-health-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 500; border: 1px solid transparent;
+  cursor: help;
+}
+.engine-health-ok { background: var(--ok-weak); color: var(--ok); border-color: rgba(18, 130, 61, 0.25); }
+.engine-health-fail { background: var(--err-weak); color: var(--err); border-color: rgba(229, 72, 77, 0.3); }
+.engine-health-unknown { background: var(--bg-soft); color: var(--muted); }
+.engine-health-status { font-size: 11px; opacity: 0.85; }
 /* 失败原因分类徽章（issue #274）：env=警示（环境配置问题）、engine=主色
    （引擎层问题）、unsolvable=错误色（任务本身不可解）、unknown=中性灰
    （兜底未命中），与状态徽章配色体系一致 */

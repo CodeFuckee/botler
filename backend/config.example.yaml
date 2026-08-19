@@ -38,6 +38,16 @@ worker:
                                       #   进程内调用，issue #84）。引擎名对应执行
                                       #   引擎插件（botler.plugins.executors），
                                       #   未注册的引擎名回退 claude
+  # 备用引擎降级（issue #236）：主引擎健康探测不可用或连续
+  # fallback_after_failures 次「引擎类」失败（命令缺失 / API key 无效 /
+  # SDK 错误）时，按此顺序自动降级到备用引擎重试任务，并在任务记录与
+  # issue 评论注明「引擎 X 不可用，已降级 Y 执行」；空列表 = 不降级
+  # （保持旧行为）。每次任务开始前做轻量健康探测：claude 检查
+  # `claude --version`、hermes 检查 runner 可加载（run_agent 模块）、
+  # dsh 检查 SDK 导入（deepseek_harness 模块）；引擎恢复后下一任务自动
+  # 回到主引擎。设置页「任务调度」卡片可编辑。
+  # fallback_engines: ["dsh", "hermes"]
+  # fallback_after_failures: 2   # 连续引擎类失败降级阈值（正整数，默认 2）
   # 定时暂停窗口（issue #169）：窗口内停止开始新任务，已经开始执行的任务
   # 可以继续执行，未开始执行的任务等到窗口结束后自动开始执行。设置页
   # 「任务调度」卡片可编辑（空数组 = 不启用，默认关闭）：

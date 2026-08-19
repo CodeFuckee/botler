@@ -324,6 +324,12 @@ export default function TaskDetail() {
             <tr><th>Issue</th><td>#{task.issue_iid} — {task.issue_title || '—'}</td></tr>
             <tr><th>来源</th><td>{task.triggered_by === 'reconcile' ? '对账兜底' : 'Webhook'}</td></tr>
             <tr><th>尝试次数</th><td>{task.attempt_count}</td></tr>
+            {/* issue #236：执行引擎 + 降级原因——任务详情能看出实际使用的引擎
+                与降级原因（主引擎不可用自动降级到备用引擎） */}
+            <tr><th>执行引擎</th><td>{task.engine || '—'}</td></tr>
+            {task.engine_fallback && (
+              <tr><th>降级原因</th><td className="pre-wrap">{task.engine_fallback}</td></tr>
+            )}
             <tr><th>退出码</th><td>{task.exit_code ?? '—'}</td></tr>
             <tr><th>创建时间</th><td>{fmtTime(task.created_at)}</td></tr>
             <tr><th>开始时间</th><td>{fmtTime(task.started_at)}</td></tr>

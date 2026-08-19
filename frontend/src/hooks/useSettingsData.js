@@ -16,6 +16,9 @@ export const FIELD_LABELS = {
   task_timeout_seconds: '单任务超时（秒）',
   max_retries: '失败重试次数',
   reconcile_interval_seconds: '对账扫描间隔（秒）',
+  // 引擎降级阈值（issue #236）：连续 N 次「引擎类」失败（命令缺失 / API key
+  // 无效 / SDK 错误）后自动降级到备用引擎；任务级失败不累计
+  fallback_after_failures: '降级触发失败次数',
 }
 
 // 常用显示时区（issue #14）；支持手动输入任意 IANA 时区名
@@ -168,6 +171,17 @@ export function useSettingsData() {
       worker: {
         ...s.worker,
         issue_priority: text.split(',').map((x) => x.trim()).filter(Boolean),
+      },
+    }))
+
+  // 备用引擎降级（issue #236）：文本框逗号分隔输入 ↔ 数组存储，提交时作为
+  // worker.fallback_engines 数组写回（与 issue_priority 同模式）
+  const setFallbackEngines = (text) =>
+    setSettings((s) => ({
+      ...s,
+      worker: {
+        ...s.worker,
+        fallback_engines: text.split(',').map((x) => x.trim()).filter(Boolean),
       },
     }))
 
@@ -369,6 +383,9 @@ export function useSettingsData() {
       // 暂停窗口豁免优先级阈值（issue #299）：0=关闭；1~999=仓库调度
       // 优先级（数字越小越优先）不差于该值的仓库在窗口内仍可开始新任务
       worker.pause_priority_threshold = Number(settings.worker?.pause_priority_threshold ?? 0)
+      // 备用引擎降级（issue #236）：主引擎探测不可用或连续引擎类失败时
+      // 按此顺序自动降级（空数组 = 不降级）
+      worker.fallback_engines = settings.worker?.fallback_engines || []
       await api.put('/api/settings', {
         worker,
         claude: { command: settings.claude.command, args: settings.claude.args },
@@ -419,7 +436,7 @@ export function useSettingsData() {
     ownerGuide, ownerGuideError, ownerGuideOpen, setOwnerGuideOpen, setOwnerGuideError,
     saveOwnerToken,
     pauseWindowsInput, setPauseWindowsInput, setWorkerField, setIssuePriority,
-    setPauseWindowsText, togglePauseWeekday, save, reconcileNow,
+    setFallbackEngines, setPauseWindowsText, togglePauseWeekday, save, reconcileNow,
     t, lang, setLang, shortcutsEnabled, setShortcutsEnabled,
     timelineEnabled, setTimelineEnabled,  // issue #342：评论/活动合并时间线开关
   }

@@ -7,7 +7,7 @@ import { Icon } from '../Icon.jsx'
 import { FIELD_LABELS, COMMON_TZ, WEEKDAY_LABELS } from '../../hooks/useSettingsData.js'
 
 export default function TasksCard({
-  settings, setWorkerField, setIssuePriority, pauseWindowsInput,
+  settings, setWorkerField, setIssuePriority, setFallbackEngines, pauseWindowsInput,
   setPauseWindowsText, togglePauseWeekday, busy, save, reconcileNow, reconcileNote,
 }) {
   return (
@@ -117,6 +117,55 @@ export default function TasksCard({
                 <option value="hermes">hermes — hermes-agent SDK</option>
                 <option value="dsh">dsh — deepseek-harness SDK</option>
               </select>
+              <span className="muted small">切换后对新领取的任务生效。</span>
+            </td>
+          </tr>
+          <tr>
+            <th>
+              备用引擎
+              <br /><code>worker.fallback_engines</code>
+            </th>
+            <td>
+              <input
+                className="input grow"
+                placeholder="dsh, hermes"
+                value={(settings.worker?.fallback_engines || []).join(', ')}
+                onChange={(e) => setFallbackEngines(e.target.value)}
+              />
+              <span className="muted small">
+                主引擎健康探测不可用或连续
+                <code>fallback_after_failures</code> 次引擎类失败时，按此顺序
+                自动降级到备用引擎重试（空 = 不降级）。任务记录与 issue 评论
+                会注明降级原因。
+              </span>
+            </td>
+          </tr>
+          <tr>
+            <th>引擎健康状态</th>
+            <td>
+              {(settings.worker?.engine_health || []).length === 0 ? (
+                <span className="muted small">暂无探测数据（保存配置后重试）</span>
+              ) : (
+                <div className="engine-health-row">
+                  {settings.worker.engine_health.map((h) => (
+                    <span
+                      key={h.engine}
+                      className={'engine-health-badge engine-health-' + (h.status || 'unknown')}
+                      title={`${h.detail || ''}（探测于 ${h.checked_at || ''}）`}
+                    >
+                      {h.engine}
+                      {' '}
+                      <span className="engine-health-status">
+                        {h.status === 'ok' ? '正常' : h.status === 'fail' ? '异常' : '未知'}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <span className="muted small">
+                每次任务开始前实时探测（claude 执行 <code>claude --version</code>、
+                hermes 检查 runner 可加载、dsh 检查 SDK 导入）；此展示为 30s 缓存结果。
+              </span>
             </td>
           </tr>
         </tbody>

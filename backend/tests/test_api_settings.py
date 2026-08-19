@@ -2581,3 +2581,100 @@ class TestTemplateInjectionSettings:
             "templates": {"raw_body_in_prompt": False}}).status_code == 200
         after = tc.get("/api/settings").json()["templates"]["default"]
         assert after == before
+
+
+class TestFallbackEnginesSettings:
+    """worker.fallback_engines / fallback_after_failures（issue #236）。
+
+    备用引擎降级配置：设置页「任务调度」卡片可编辑，引擎名白名单与
+    worker.engine 一致（claude / hermes / dsh + 外部引擎插件），非法值
+    400 拒绝不落盘；GET 同时返回各引擎健康状态（engine_health）。
+    """
+
+    def test_get_settings_includes_fallback_defaults(self, client):
+        """未配置时 GET 返回空备用列表 + 默认阈值 2 + 引擎健康状态。"""
+        tc, _ = client
+        worker = tc.get("/api/settings").json()["worker"]
+        assert worker["fallback_engines"] == []
+        assert worker["fallback_after_failures"] == 2
+        health = worker["engine_health"]
+        names = {h["engine"] for h in health}
+        assert {"claude", "hermes", "dsh"} <= names
+        for h in health:
+            assert h["status"] in ("ok", "fail", "unknown")
+            assert "ok" in h and "checked_at" in h and "detail" in h
+
+    def test_update_fallback_engines_persists(self, client):
+        """PUT fallback_engines 写回 config.yaml 并重读生效。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={
+            "worker": {"fallback_engines": ["dsh", "hermes"]}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["fallback_engines"] == ["dsh", "hermes"]
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "fallback_engines" in config_text
+        s = ConfigManager(str(tmp_path / "config.yaml")).load()
+        assert s.fallback_engines == ["dsh", "hermes"]
+
+    def test_update_normalizes_case_whitespace_dedupes(self, client):
+        """引擎名 strip + 小写归一 + 去重保序。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={
+            "worker": {"fallback_engines": ["  DSH ", "hermes", "dsh", "hermes"]}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["fallback_engines"] == ["dsh", "hermes"]
+
+    def test_update_empty_list_disables_fallback(self, client):
+        """空数组 = 关闭降级（保持旧行为）。"""
+        tc, _ = client
+        assert tc.put("/api/settings", json={
+            "worker": {"fallback_engines": ["dsh"]}}).status_code == 200
+        resp = tc.put("/api/settings", json={"worker": {"fallback_engines": []}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["fallback_engines"] == []
+
+    def test_update_rejects_unknown_engine(self, client):
+        """白名单外引擎名 400 拒绝，不落盘。"""
+        tc, tmp_path = client
+        for bad in (["gpt"], ["dsh", "cursor"], ["dsh", 3], ["dsh", None]):
+            resp = tc.put("/api/settings", json={
+                "worker": {"fallback_engines": bad}})
+            assert resp.status_code == 400, f"{bad!r} 应拒绝"
+        assert "fallback_engines" not in (tmp_path / "config.yaml").read_text(
+            encoding="utf-8")
+
+    def test_update_rejects_non_list(self, client):
+        """非数组 400 拒绝。"""
+        tc, _ = client
+        for bad in ("dsh", 3, {"a": 1}):
+            resp = tc.put("/api/settings", json={
+                "worker": {"fallback_engines": bad}})
+            assert resp.status_code == 400, f"{bad!r} 应拒绝"
+
+    def test_update_fallback_after_failures(self, client):
+        """fallback_after_failures 正整数写回生效。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={
+            "worker": {"fallback_after_failures": 1}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["fallback_after_failures"] == 1
+
+    def test_update_fallback_after_failures_rejects_invalid(self, client):
+        """非正整数（0 / 负数 / 布尔 / 字符串）400 拒绝。"""
+        tc, _ = client
+        for bad in (0, -1, True, "2", 1.5):
+            resp = tc.put("/api/settings", json={
+                "worker": {"fallback_after_failures": bad}})
+            assert resp.status_code == 400, f"{bad!r} 应拒绝"
+
+    def test_update_keeps_other_worker_fields(self, client):
+        """提交 fallback 配置不影响其他 worker 字段（部分更新）。"""
+        tc, _ = client
+        assert tc.put("/api/settings", json={"worker": {
+            "max_retries": 3, "fallback_engines": ["dsh"]}}).status_code == 200
+        resp = tc.put("/api/settings", json={
+            "worker": {"fallback_after_failures": 1}})
+        worker = resp.json()["worker"]
+        assert worker["fallback_after_failures"] == 1
+        assert worker["fallback_engines"] == ["dsh"]
+        assert worker["max_retries"] == 3

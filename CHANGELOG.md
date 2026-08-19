@@ -4,6 +4,54 @@
 
 ## [Unreleased]
 ### Added
+- **执行引擎健康探测与自动降级重试（issue #236）**：worker.engine 配置一个执行
+  引擎，任务失败后最多重试 max_retries 次且重试仍用同一引擎——引擎本身坏了
+  （claude CLI 未安装、DeepSeek API Key 失效、dsh 运行时损坏）时重试多少次都
+  失败，任务只能 bot-failed。本次为三引擎增加轻量健康探测与自动降级：
+  - **后端探测**：新增 `botler/engine_health.py`——claude 检查
+    `claude --version`（命令缺失/超时/非零退出 = 不可用）、hermes 检查
+    runner 可加载（`run_agent` 模块，与 HermesSdkRunner.start 同语义）、
+    dsh 检查 SDK 导入（`deepseek_harness` 模块，与 DshRunner.start 同语义）、
+    外部插件引擎无探测实现返回 unknown（不误报）；探测结果进程内缓存
+    （TTL 30s）供展示，executor 任务侧每次尝试开始前实时探测（不走缓存）；
+  - **自动降级**：executor.run_task 每次尝试开始前探测当前引擎，不可用立即
+    降级到 `worker.fallback_engines` 配置的备用引擎（如 `["dsh","hermes"]`，
+    不消耗尝试次数）；尝试失败被分类为「引擎类」（命令缺失 / API key 无效 /
+    SDK 错误，复用 failure_classify）连续 `worker.fallback_after_failures`
+    次（默认 2，正整数）也自动降级；任务级失败（代码改不对）不累计不降级
+    （换引擎重试无意义）；备用链耗尽后保持当前引擎（探测为建议性，执行仍
+    暴露真实故障）；引擎恢复后下一任务自动回到主引擎（每任务开始前重新探测）。
+    降级时任务记录（tasks.engine_fallback 新列 + 任务日志）与 issue 评论同步
+    注明「引擎 claude 不可用（…），已降级 dsh 执行」；error_detail 每次尝试
+    记录实际引擎；
+  - **状态展示**：设置页「任务调度」卡片与插件管理页展示各执行引擎健康状态
+    徽章（正常/异常/未知 + 探测时间与详情悬浮提示）——GET /api/settings
+    worker.engine_health 与 GET /api/plugins engine_health（快照函数
+    engine_health_snapshot）；
+  - **配置**：config.yaml 新增 `worker.fallback_engines`（字符串数组，引擎名
+    白名单与 worker.engine 一致，strip + 小写 + 去重保序）与
+    `worker.fallback_after_failures`（正整数，默认 2，配置 0/负数解析归一为
+    1）；设置 API `_validate_worker` 校验两项（非法 400 不落盘）；设置页
+    「任务调度」卡片可编辑（备用引擎逗号分隔输入 + 降级阈值数字字段）；
+  - **任务详情**：任务详情抽屉与完整任务页新增「执行引擎 / 降级原因」行
+    （tasks.engine_fallback，未降级不显示）；
+  - **新增测试**：`backend/tests/test_engine_health.py` 16 例（claude 探测
+    正常/命令缺失/非零退出/空输出/超时、hermes/dsh SDK 可加载与缺失、未知
+    引擎 unknown、探测异常兜底 fail、注册表缓存 TTL/失效/快照结构）；
+    `backend/tests/test_executor_fallback.py` 10 例（探测失败立即降级且结果
+    正确、连续引擎类失败降级、任务级失败不降级、未配置备用保持旧行为、备用
+    链耗尽、探测全失败仍按主引擎执行、引擎恢复下一任务回主引擎、降级评论每
+    任务仅一次、引擎链去重过滤、error_detail 记录实际引擎）；`test_api_settings.py`
+    新增 `TestFallbackEnginesSettings` 10 例（GET 默认值 + engine_health 快照、
+    写回持久化、归一化去重、空数组关闭降级、非法引擎名/类型 400、阈值校验、
+    部分更新互不影响）；`test_api_plugins.py` 新增 `TestEngineHealthInPlugins`
+    2 例（内置三引擎健康快照、外部引擎插件 unknown 不误报）；
+    `test_config_section.py` 新增 `TestFallbackEnginesConfig` 5 例（默认值、
+    yaml 解析、归一化、update_section 写回、阈值下限钳制）；
+    `frontend/tests/settings-engine-fallback.test.mjs` 9 例 + `plugins-page.test.mjs`
+    扩展 1 例（源码断言：卡片/徽章/详情/API/配置/迁移字段齐全）；全量前后端
+    测试无 regression。
+
 - **任务/日志数据导出为 CSV/JSON（issue #228）**：平台积累大量任务记录（状态/
   耗时/错误/日志）但无导出能力，用户无法离线分析（统计各仓库失败率、成本估算）
   或归档。本次新增 `GET /api/tasks/export?format=csv|json` 导出接口与任务列表页

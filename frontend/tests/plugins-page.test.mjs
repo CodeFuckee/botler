@@ -59,6 +59,13 @@ test('页面按分类分组展示插件（分类标题/描述/内置徽章/外�
   assert.match(plugins, /api\.get\('\/api\/plugins'\)/, '列表加载走 GET /api/plugins')
 })
 
+test('执行引擎卡片展示健康状态徽章（issue #236 engine_health）', () => {
+  assert.match(plugins, /data\.engine_health/, '插件页应消费 engine_health 数据')
+  assert.match(plugins, /engine-health-badge/, '引擎状态应使用徽章样式')
+  assert.match(plugins, /healthByEngine\[item\.name\]/, '应按引擎名索引健康状态')
+  assert.match(apiPlugins, /"engine_health": engine_health_snapshot/, '后端 /api/plugins 应返回 engine_health')
+})
+
 test('安装表单：路径输入框 + 安装按钮走 POST /api/plugins/install', () => {
   assert.match(plugins, /安装外部插件/, '应有「安装外部插件」区块')
   assert.match(plugins, /textarea/, '应有路径输入框（每行一个模块路径）')

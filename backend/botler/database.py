@@ -47,7 +47,7 @@ _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
                 "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript",
                 "engine", "environment", "base_sha",
-                "failure_category"}
+                "failure_category", "engine_fallback"}
 
 # ---- 关键行类型化（issue #213）----
 # tasks / repos 表行类型：mypy 下 dict key 拼错（如 row["commit_shaa"]）与
@@ -82,6 +82,9 @@ class TaskRow(TypedDict):
     environment: str | None
     base_sha: str | None
     failure_category: str | None
+    # issue #236：引擎降级原因文案（如「引擎 claude 不可用（...），已降级
+    # dsh 执行」）；未发生降级为空串
+    engine_fallback: str | None
     manual_priority: int | None
     created_at: str | None
 
@@ -172,6 +175,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   environment TEXT,
   base_sha TEXT,
   failure_category TEXT DEFAULT '',
+  engine_fallback TEXT DEFAULT '',
   manual_priority INTEGER,
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -678,6 +682,15 @@ class Database:
             if "manual_priority" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN manual_priority INTEGER")
             conn.execute("PRAGMA user_version = 21")
+        if ver < 22:
+            # issue #236：引擎降级原因落库——任务因主引擎健康探测不可用或
+            # 连续引擎类失败自动降级到备用引擎时，记录原因文案（如「引擎
+            # claude 不可用（...），已降级 dsh 执行」），任务详情页展示。
+            # 新库 _SCHEMA 已含；旧库（user_version=21）补列。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "engine_fallback" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN engine_fallback TEXT DEFAULT ''")
+            conn.execute("PRAGMA user_version = 22")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。

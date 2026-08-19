@@ -126,6 +126,10 @@ def _task_to_dict(row, repo: dict | None = None, usage_row=None) -> dict:
         # issue #120：执行引擎按任务落库——任务页/概览页展示该任务实际
         # 使用的引擎（claude / hermes / dsh；未执行或旧任务可能为空串）
         "engine": row["engine"] or "",
+        # issue #236：引擎降级原因——主引擎不可用自动降级到备用引擎时的
+        # 原因文案（如「引擎 claude 不可用（...），已降级 dsh 执行」）；
+        # 未发生降级为空串，任务详情页展示
+        "engine_fallback": row["engine_fallback"] or "",
         # issue #276：任务执行环境快照（引擎版本/模型/起始提交/平台版本/
         # config hash JSON）；旧任务无快照返回 None
         "environment": parse_snapshot(row["environment"]),

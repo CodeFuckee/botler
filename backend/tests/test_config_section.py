@@ -342,3 +342,63 @@ class TestAtomicWriteInterruption:
         monkeypatch.setattr(config_mod.yaml, "safe_dump", original_dump)
         cm.update_section("worker", {"max_concurrent_repos": 6})
         assert _read(path)["worker"]["max_concurrent_repos"] == 6
+
+
+class TestFallbackEnginesConfig:
+    """worker.fallback_engines / fallback_after_failures 配置读写（issue #236）。"""
+
+    WORKER_BASE = (
+        "gitlab:\n  url: https://gitlab.example.com\n  bot_token: t\n"
+        "worker:\n  max_concurrent_repos: 3\n{worker_extra}"
+        "templates: {{}}\nrepos: []\n"
+    )
+
+    def _cfg(self, tmp_path, worker_extra=""):
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            self.WORKER_BASE.format(worker_extra=worker_extra),
+            encoding="utf-8")
+        return path
+
+    def test_defaults_when_absent(self, tmp_path):
+        """未配置时备用列表为空、阈值默认 2（保持旧行为）。"""
+        s = ConfigManager(str(self._cfg(tmp_path))).load()
+        assert s.fallback_engines == []
+        assert s.fallback_after_failures == 2
+
+    def test_parses_yaml_list(self, tmp_path):
+        """yaml 配置 fallback_engines 解析为列表，fallback_after_failures 生效。"""
+        path = self._cfg(
+            tmp_path,
+            worker_extra="  fallback_engines: [dsh, hermes]\n"
+                         "  fallback_after_failures: 1\n")
+        s = ConfigManager(str(path)).load()
+        assert s.fallback_engines == ["dsh", "hermes"]
+        assert s.fallback_after_failures == 1
+
+    def test_normalizes_case_and_whitespace(self, tmp_path):
+        """yaml 中的引擎名 strip + 小写归一。"""
+        path = self._cfg(
+            tmp_path,
+            worker_extra='  fallback_engines: [" DSH ", "HERMES"]\n')
+        s = ConfigManager(str(path)).load()
+        assert s.fallback_engines == ["dsh", "hermes"]
+
+    def test_update_section_writes_and_refreshes(self, tmp_path):
+        """update_section("worker", {fallback_engines}) 写回磁盘并刷新内存。"""
+        path = self._cfg(tmp_path)
+        cm = ConfigManager(str(path))
+        settings = cm.update_section(
+            "worker", {"fallback_engines": ["dsh"], "fallback_after_failures": 3})
+        assert settings.fallback_engines == ["dsh"]
+        assert settings.fallback_after_failures == 3
+        assert cm.get().fallback_engines == ["dsh"]
+        assert _read(path)["worker"]["fallback_engines"] == ["dsh"]
+        assert _read(path)["worker"]["fallback_after_failures"] == 3
+
+    def test_after_failures_clamped_to_at_least_one(self, tmp_path):
+        """fallback_after_failures 配置 0/负数时解析归一为 1（不静默失效）。"""
+        path = self._cfg(tmp_path, worker_extra="  fallback_after_failures: 0\n")
+        s = ConfigManager(str(path)).load()
+        assert s.fallback_after_failures == 1
+

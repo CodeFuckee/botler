@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from ..config import KNOWN_FIELDS
 from ..plugins import PluginKind, list_plugins
+from ..engine_health import engine_health_snapshot
 from ..gitlab_client import GitLabClient, GitLabError
 from ..labels import validate_label
 from ..pause_window import in_pause_window, normalize_window, parse_window
@@ -81,6 +82,16 @@ def get_settings(request: Request):
             # hermes / dsh（内置执行引擎插件，可外部加载新引擎），设置页
             # 「任务调度」卡片切换，保存后对后续任务生效
             "engine": s.engine,
+            # 备用引擎降级（issue #236）：主引擎健康探测不可用或连续
+            # fallback_after_failures 次引擎类失败时，按此顺序自动降级
+            # 到备用引擎重试；空数组 = 不降级
+            "fallback_engines": list(s.fallback_engines or []),
+            "fallback_after_failures": s.fallback_after_failures,
+            # 各执行引擎当前健康状态（issue #236）：设置页「任务调度」
+            # 卡片引擎状态徽章数据源（claude/hermes/dsh + 外部引擎插件，
+            # 探测结果 30s 缓存，见 engine_health.py）
+            "engine_health": engine_health_snapshot(
+                s, engines=[p.name for p in list_plugins(PluginKind.EXECUTOR)]),
             # 外部插件加载（issue #140）：Python 模块路径列表，启动时加载
             "plugin_paths": s.plugin_paths,
             # 定时暂停窗口（issue #169）：窗口内停止开始新任务，已开始任务
@@ -684,6 +695,38 @@ def _validate_worker(patch: dict) -> None:
                     raise HTTPException(
                         400, f"worker.pause_priority_threshold 取值非法: {val}"
                              "（可选 0~999，0=关闭）")
+                patch[key] = val
+                continue
+            if key == "fallback_engines":
+                # issue #236：备用引擎列表（字符串数组，引擎名 strip + 小写
+                # 归一 + 去重保序，与 worker.engine 同白名单；运行时自动剔除
+                # 主引擎名与未注册引擎）。留空数组 = 不降级。
+                if not isinstance(val, list) or not all(
+                        isinstance(e, str) for e in val):
+                    raise HTTPException(
+                        400, 'worker.fallback_engines 必须是字符串数组'
+                             '（如 ["dsh", "hermes"]）')
+                choices = set(ENGINE_CHOICES)
+                cleaned_fb: list[str] = []
+                for e in val:
+                    e = e.strip().lower()
+                    if not e:
+                        continue
+                    if e not in choices:
+                        raise HTTPException(
+                            400, f"worker.fallback_engines 取值非法: {e}"
+                                 f"（可选 {' / '.join(ENGINE_CHOICES)}）")
+                    if e not in cleaned_fb:
+                        cleaned_fb.append(e)
+                patch[key] = cleaned_fb
+                continue
+            if key == "fallback_after_failures":
+                # issue #236：连续引擎类失败降级阈值（正整数，默认 2）。
+                # 布尔是 int 子类，显式排除（与 pause_weekdays 同思路）
+                if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
+                    raise HTTPException(
+                        400, "worker.fallback_after_failures 必须是正整数"
+                             "（连续引擎类失败次数，默认 2）")
                 patch[key] = val
                 continue
             if not isinstance(val, int) or val <= 0:
