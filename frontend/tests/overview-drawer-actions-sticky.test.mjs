@@ -260,3 +260,55 @@ test('PipelineDrawer 边界：pipeline 为 null 时头部操作区仍渲染（×
     TestRenderer.act(() => renderer.unmount())
   }
 })
+
+// 竖屏（issue #333）：在竖屏显示时，issue 详情右边栏的「关闭 issue /
+// 查看执行的详情 / 在 GitLab 中打开 / 关闭右边栏（×）」四个按钮同样放在
+// 右边栏顶部并固定在顶部。issue #270 移动端响应式把 ≤860px 视口下头部
+// 操作区 .issue-drawer-actions 整体 display:none、按钮下沉到底部操作栏；
+// 竖屏（orientation: portrait）下必须恢复头部操作区显示、隐藏底部操作栏
+// （避免重复），头部 sticky 规则（.issue-drawer .modal-header，issue #331）
+// 不受媒体查询影响天然生效。修复前无此 portrait 断点规则，本用例必失败。
+
+// 提取最后一个「max-width: 860px 且 orientation: portrait」断点块（括号配平）
+function portraitMediaBlock(css) {
+  const re = /@media \(max-width:\s*860px\)\s+and\s+\(orientation:\s*portrait\)\s*\{/g
+  let start = -1
+  let m
+  while ((m = re.exec(css))) start = m.index
+  assert.ok(start >= 0,
+            'styles.css 应存在 @media (max-width: 860px) and (orientation: portrait) 断点')
+  let depth = 0
+  let end = -1
+  for (let i = start; i < css.length; i++) {
+    if (css[i] === '{') depth++
+    else if (css[i] === '}') {
+      depth--
+      if (depth === 0) { end = i; break }
+    }
+  }
+  assert.ok(end > start, 'portrait 断点块应有闭合大括号')
+  return css.slice(start, end + 1)
+}
+
+test('styles.css：竖屏下 issue 抽屉头部操作区恢复显示、底部操作栏隐藏（issue #333）', () => {
+  const block = portraitMediaBlock(styles)
+  // 头部操作区（.issue-drawer-actions）在竖屏下恢复显示（覆盖 860px 断点的
+  // display:none）——限定 issue 抽屉，不波及任务执行详情第二层抽屉
+  const actions = block.match(/\.drawer\.issue-drawer\s+\.issue-drawer-actions\s*\{([^}]*)\}/)
+  assert.ok(actions, 'portrait 断点内应声明 issue 抽屉头部操作区规则')
+  assert.match(actions[1], /display:\s*flex/, '竖屏下头部操作区应恢复显示（flex）')
+  // 375px 竖屏四个按钮单行放不下（实测约 388px > 343px 可用宽）——
+  // 头部操作区必须允许换行，否则按钮溢出 sticky 头部（截断/横向滚动）
+  assert.match(actions[1], /flex-wrap:\s*wrap/, '竖屏下头部操作区应允许按钮换行')
+  assert.match(actions[1], /flex-shrink:\s*1/,
+               '竖屏下头部操作区应可收缩（覆盖基础规则 flex-shrink:0，按钮在头部内换行）')
+  // 头部（.modal-header）整体允许换行：标题一行、操作按钮一行
+  const header = block.match(/\.drawer\.issue-drawer\s+\.modal-header\s*\{([^}]*)\}/)
+  assert.ok(header, 'portrait 断点内应声明 issue 抽屉头部换行规则')
+  assert.match(header[1], /flex-wrap:\s*wrap/, '竖屏下头部应允许换行（标题与按钮分行）')
+  // 底部操作栏（.drawer-bottom-actions）在竖屏下隐藏，避免与顶部按钮重复
+  // （更高优先级限定选择器覆盖 860px 断点的 .drawer-bottom-actions 显示规则）
+  const bottom = block.match(/\.drawer\.issue-drawer\s+\.drawer-bottom-actions\s*\{([^}]*)\}/)
+  assert.ok(bottom, 'portrait 断点内应声明 issue 抽屉底部操作栏隐藏规则')
+  assert.match(bottom[1], /display:\s*none/, '竖屏下底部操作栏应隐藏（避免重复）')
+})

@@ -1,6 +1,8 @@
-// 移动端响应式冒烟 E2E（issue #270）：375×667 手机视口（等效 Chrome
+// 移动端响应式冒烟 E2E（issue #270）：375×667 手机竖屏视口（等效 Chrome
 // DevTools 移动模拟）下验证三个核心页可完成主要操作——
-//   概览页：卡片网格单列、无横向滚动溢出、issue 抽屉全宽；
+//   概览页：卡片网格单列、无横向滚动溢出、issue 抽屉全宽；竖屏下
+//     issue 抽屉四个操作按钮置于顶部并固定在顶部（issue #333），
+//     底部操作栏隐藏（避免与顶部按钮重复）；
 //   任务页：渲染卡片式列表（无 12 列表格）、卡片含关键操作；
 //   设置页：两栏回落单栏（设置导航置顶）。
 // 桌面端回归由其余 spec（Desktop Chrome 视口）覆盖。
@@ -30,7 +32,7 @@ test.describe('移动端响应式（issue #270）', () => {
     )
     expect(overflow).toBeLessThanOrEqual(1)
 
-    // 4. 打开 issue 抽屉：全宽展示（不再 92vw 留缝），底部操作栏可见
+    // 4. 打开 issue 抽屉：全宽展示（不再 92vw 留缝）
     await page.locator('.issue-link').first().click()
     const drawer = page.locator('.drawer.issue-drawer')
     await expect(drawer).toBeVisible()
@@ -51,23 +53,25 @@ test.describe('移动端响应式（issue #270）', () => {
     // 不超出视口，主页面被遮罩完整覆盖
     expect(settled.x).toBeGreaterThanOrEqual(-0.5)
     expect(settled.x + settled.width).toBeLessThanOrEqual(375.5)
-    // 底部操作栏必须是抽屉子项（不参与 overlay 横向 flex 排布）
+    // 底部操作栏必须是抽屉子项（不参与 overlay 横向 flex 排布）——该
+    // 结构断言不受 issue #333 影响（竖屏下底部操作栏 display:none 隐藏，
+    // DOM 仍在抽屉内部）
     const baParentCls = await page.locator('.drawer-bottom-actions').evaluate(
       (el) => el.parentElement.className)
     expect(baParentCls).toContain('issue-drawer')
     expect(baParentCls).not.toContain('drawer-overlay')
-    await expect(page.locator('.drawer-bottom-actions')).toBeVisible()
-    // 头部操作按钮在窄视口下沉到底部（display:none 隐藏，DOM 保留）
-    await expect(page.locator('.drawer.issue-drawer .issue-drawer-actions')).not.toBeVisible()
-    // 底部操作栏含「在 GitLab 中打开」入口（fixture issue 带 web_url）
+    // issue #333：竖屏（375×667 portrait）下四个操作按钮放在右边栏顶部并
+    // 固定在顶部——头部操作区恢复显示（此前 860px 断点 display:none 下沉
+    // 到底部操作栏），底部操作栏隐藏避免与顶部按钮重复
+    await expect(page.locator('.drawer.issue-drawer .issue-drawer-actions')).toBeVisible()
+    await expect(page.locator('.drawer-bottom-actions')).not.toBeVisible()
+    // 头部操作区含「在 GitLab 中打开」入口（fixture issue 带 web_url）
     await expect(
-      page.locator('.drawer-bottom-actions a', { hasText: '在 GitLab 中打开' }),
+      page.locator('.drawer.issue-drawer .issue-drawer-actions a',
+                   { hasText: '在 GitLab 中打开' }),
     ).toBeVisible()
-    // issue #330 回归：窄视口头部操作区（含 × 关闭按钮）被整体隐藏，
-    // 底部操作栏必须提供 × 关闭入口——点击后抽屉关闭（此前底部操作栏
-    // 只有「关闭 issue/重试/查看执行详情/在 GitLab 中打开」，没有任何
-    // 可见关闭按钮，只能 Esc / 点遮罩，用户不可发现）
-    const mobileClose = page.locator('.drawer-bottom-actions .modal-close')
+    // 头部操作区提供 × 关闭入口——点击后抽屉关闭
+    const mobileClose = page.locator('.drawer.issue-drawer .issue-drawer-actions .modal-close')
     await expect(mobileClose).toBeVisible()
     await mobileClose.click()
     await expect(drawer).not.toBeVisible()

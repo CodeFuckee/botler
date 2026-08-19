@@ -97,3 +97,71 @@ test('issue 详情右边栏头部操作区固定在顶部，不随内容滚动�
   expect(after.scrollTop).toBeGreaterThan(100) // 确实发生了滚动
   expect(Math.abs(after.headerTop - topBefore)).toBeLessThan(2) // 头部固定未移动
 })
+
+// 竖屏视口（issue #333）：在竖屏显示时，issue 详情右边栏的「关闭 issue /
+// 查看执行的详情 / 在 GitLab 中打开 / 关闭右边栏（×）」四个按钮同样要放在
+// 右边栏顶部，并且固定在顶部，不随右边栏内容滚动而滚动。
+//
+// 背景：issue #270 移动端响应式把 ≤860px 视口下 issue 抽屉头部操作区
+// （.issue-drawer-actions）整体 display:none、按钮下沉到抽屉底部 sticky
+// 操作栏（.drawer-bottom-actions）——竖屏手机视口（375×667）下四个按钮
+// 不在顶部，与 issue #333 要求不符；本用例在真实 Chromium 竖屏视口打开
+// 抽屉，断言四个按钮渲染于顶部头部操作区且可见、头部 sticky 固定、滚动
+// 后头部坐标不随内容移动、底部操作栏不再重复展示（修复前头部操作区
+// display:none，本用例必失败）。
+test('竖屏视口：issue 详情右边栏四个按钮置于顶部并固定在顶部（issue #333）', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 })
+  await mockGitLabApis(page, { issues: tallIssueFixture() })
+  // 详情接口（评论/活动）：返回空评论，描述文本已足够撑高内容
+  await page.route('**/api/issues/123/332/detail', (route) => {
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notes: [],
+        engine: 'claude',
+        task_id: null,
+        task_duration_seconds: null,
+        task_status: null,
+      }),
+    })
+  })
+
+  await page.goto('/overview')
+  await expect(page.locator('.issue-link').first()).toBeVisible()
+  await page.locator('.issue-link').first().click()
+  const drawer = page.locator('.issue-drawer')
+  await expect(drawer).toBeVisible()
+  const header = drawer.locator('.modal-header')
+
+  // 1. 四个按钮全部渲染在头部操作区（.issue-drawer-actions 位于
+  //    .modal-header 内）且对用户可见（修复前 375px 视口 display:none）
+  const actions = drawer.locator('.issue-drawer-actions')
+  await expect(actions).toBeVisible()
+  for (const name of ['关闭 issue', '查看执行的详情']) {
+    await expect(actions.getByRole('button', { name })).toBeVisible()
+  }
+  await expect(actions.locator('a', { hasText: '在 GitLab 中打开' })).toBeVisible()
+  await expect(actions.getByRole('button', { name: '关闭右边栏' })).toBeVisible()
+
+  // 2. 头部 computed style 为 sticky 且吸附顶部
+  const pos = await header.evaluate((el) => getComputedStyle(el).position)
+  expect(pos).toBe('sticky')
+
+  // 3. 抽屉内容必须可滚动（scrollHeight > clientHeight），否则断言无意义
+  const scrollable = await drawer.evaluate((el) => el.scrollHeight > el.clientHeight)
+  expect(scrollable).toBe(true)
+
+  // 4. 滚动抽屉内容后，头部 top 坐标保持不动（不随内容滚走）
+  const topBefore = await header.evaluate((el) => el.getBoundingClientRect().top)
+  await drawer.evaluate((el) => { el.scrollTop = el.scrollHeight })
+  await page.waitForTimeout(300)
+  const after = await drawer.evaluate((el) => ({
+    scrollTop: el.scrollTop,
+    headerTop: el.querySelector('.modal-header').getBoundingClientRect().top,
+  }))
+  expect(after.scrollTop).toBeGreaterThan(100) // 确实发生了滚动
+  expect(Math.abs(after.headerTop - topBefore)).toBeLessThan(2) // 头部固定未移动
+
+  // 5. 竖屏下底部操作栏不再重复展示（按钮已全部在顶部）
+  await expect(drawer.locator('.drawer-bottom-actions')).not.toBeVisible()
+})

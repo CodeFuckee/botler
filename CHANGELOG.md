@@ -491,6 +491,33 @@
 
 ### Fixed
 
+- **竖屏显示时概览页 issue 详情右边栏四个操作按钮不在顶部（issue #333）**：
+  在竖屏显示时，概览页 issue 详情右边栏的「关闭 issue / 查看执行的详情 /
+  在 GitLab 中打开 / 关闭右边栏（×）」四个按钮应放在右边栏顶部并固定在
+  顶部、不随右边栏内容滚动——issue #331 已通过 `.issue-drawer .modal-header`
+  sticky 规则实现桌面端，但 issue #270 移动端响应式把 ≤860px 视口下头部
+  操作区 `.issue-drawer-actions` 整体 `display: none`、按钮下沉到抽屉底部
+  sticky 操作栏（`.drawer-bottom-actions`），竖屏手机视口（如 375×667）
+  下四个按钮不在顶部，与需求不符。修复：
+  - **样式**：`styles.css` 新增 `@media (max-width: 860px) and
+    (orientation: portrait)` 断点——竖屏下恢复 `.drawer.issue-drawer
+    .issue-drawer-actions` 显示（`display: flex` + `flex-wrap: wrap` +
+    `flex-shrink: 1`，375px 竖屏四个按钮单行放不下（实测约 388px > 343px
+    可用宽）时在 sticky 头部内换行，`.modal-header` 同步 `flex-wrap: wrap`
+    标题与按钮分行），并隐藏 `.drawer-bottom-actions`（避免与顶部按钮
+    重复）；仅作用于 issue 抽屉，任务执行详情第二层（.task-detail-drawer）
+    与流水线抽屉（.pipeline-drawer）不受影响；横屏窄视口（orientation:
+    landscape）保持 issue #270 底部操作栏不变；
+  - **测试**：`overview-drawer-actions-sticky.test.mjs` 新增「竖屏下 issue
+    抽屉头部操作区恢复显示、底部操作栏隐藏」源码级用例（portrait 断点
+    存在、头部/操作区 flex-wrap、底部栏 display:none）；`issue-drawer-sticky.spec.js`
+    新增 375×667 竖屏视口真实浏览器用例（四个按钮渲染于头部操作区且可见、
+    头部 sticky、滚动后头部坐标不动、底部操作栏隐藏——修复前头部操作区
+    display:none 必失败）；`responsive-mobile.spec.js` 竖屏抽屉断言同步
+    更新为「头部操作区可见 + 底部操作栏隐藏 + 头部 × 关闭」；前端全量
+    单元测试 + 后端全量 pytest + 全量 E2E 无 regression。
+
+
 - **概览页 issue 详情右边栏头部操作区真实浏览器回归测试（issue #332）**：
   「关闭 issue / 查看执行的详情 / 在 GitLab 中打开 / 关闭右边栏（×）」四个
   操作按钮固定在右边栏顶部、不随内容滚动——issue #331 已通过 styles.css
