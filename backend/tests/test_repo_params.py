@@ -9,7 +9,6 @@ effective_task_params 按「仓库级 > 全局」解析任务的超时/重试/�
 
 from types import SimpleNamespace
 
-import pytest
 
 from botler.repo_params import (
     SOURCE_GLOBAL, SOURCE_REPO,
