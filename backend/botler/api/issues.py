@@ -442,8 +442,9 @@ def retry_issue(request: Request, project_id: int, iid: int):
     token 优先，回退全局 bot token）。动作语义：
     - 该 issue 已有活跃任务（queued/running/retrying）→ 409（防重复
       执行，与任务页手动重试的冲突判定一致）；
-    - 最近任务为 failed/interrupted → 复用该任务记录重试（重置
-      queued 重新入队，保留 claude 会话断点续跑）；
+    - 最近任务为 failed/interrupted/canceled_by_user → 复用该任务记录
+      重试（重置 queued 重新入队，保留 claude 会话断点续跑；issue #242
+      移出队列的任务可重新入队恢复）；
     - 无任务记录或最近任务已终态成功（如 bot-failed 标签残留但任务
       实际已完成）→ 新建任务入队（triggered_by=manual，记录 issue
       标签/更新时间供调度器按优先级排序）。
@@ -460,9 +461,11 @@ def retry_issue(request: Request, project_id: int, iid: int):
     if active is not None:
         raise HTTPException(409, "该 issue 已有任务在执行中，无法重试")
     latest = c.db.find_latest_task(project_id, iid)
-    # 最近任务为 failed/interrupted → 复用任务记录重试（与任务页手动
-    # 重试一致：清空失败字段、保留断点续跑会话）
-    if latest is not None and latest["status"] in ("failed", "interrupted"):
+    # 最近任务为 failed/interrupted/canceled_by_user → 复用任务记录重试
+    # （与任务页手动重试一致：清空失败字段、保留断点续跑会话；
+    #  canceled_by_user 为 issue #242 移出队列的终态，可重新入队）
+    if latest is not None and latest["status"] in (
+            "failed", "interrupted", "canceled_by_user"):
         result = c.db.retry_task(latest["id"])
         if result == "conflict":
             raise HTTPException(409, "该 issue 已有任务在执行中，无法重试")
@@ -498,6 +501,32 @@ def retry_issue(request: Request, project_id: int, iid: int):
     c.scheduler.enqueue(task_id)
     clear_issue_cache()
     return {"task_id": task_id, "status": "queued", "mode": "created"}
+
+
+@router.post("/{project_id}/{iid}/prioritize")
+def prioritize_issue(request: Request, project_id: int, iid: int):
+    """排队任务优先处理（issue #242：概览页 issue 右边栏「优先处理」按钮）。
+
+    定位仓库：按 GitLab project_id 匹配「已启用」仓库（不存在/未启用
+    → 404，与关闭/详情接口一致）。动作语义：该 issue 存在排队中
+    （queued）任务时，把该任务人工优先级置顶（top，manual_priority=0），
+    调度器派发时优先于仓库/标签规则；无排队任务（无任务/running/终态）
+    → 400（已 running 任务不受影响）。操作写入 task_logs，成功后清空
+    概览缓存，前端刷新即可看到 issue 进入「运行中」组（若被优先派发）。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    active = c.db.find_active_task(project_id, iid)
+    if active is None or active["status"] != "queued":
+        raise HTTPException(400, "仅排队中（queued）的任务可优先处理")
+    result, new_priority = c.db.reorder_manual_priority(active["id"], "top")
+    if result != "ok":
+        raise HTTPException(400, f"优先处理失败（{result}）")
+    clear_issue_cache()
+    return {"task_id": active["id"], "status": "queued",
+            "manual_priority": new_priority}
 
 
 # ---- issue #108：概览页右边栏标记编辑 ----
@@ -852,6 +881,9 @@ def issue_detail(request: Request, project_id: int, iid: int):
                        or str(getattr(c.config.get(), "engine", "")
                               or "claude").strip().lower()),
             "task_id": latest["id"] if latest is not None else None,
+            # issue #242：该 issue 最近任务的状态——概览页右边栏据此对
+            # 排队中（queued）任务展示「优先处理」按钮（置顶人工优先级）
+            "task_status": latest["status"] if latest is not None else None,
             "task_duration_seconds": _task_duration_seconds(latest)}
 
 

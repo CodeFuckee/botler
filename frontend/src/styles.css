@@ -1284,6 +1284,7 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .status-succeeded { background: var(--ok-weak); color: var(--ok); }
 .status-failed { background: var(--err-weak); color: var(--err); }
 .status-interrupted { background: var(--bg-soft); color: var(--muted); }
+.status-canceled { background: var(--bg-soft); color: var(--warn); }
 .badge-muted { background: var(--bg-soft); color: var(--muted); }
 /* 失败原因分类徽章（issue #274）：env=警示（环境配置问题）、engine=主色
    （引擎层问题）、unsolvable=错误色（任务本身不可解）、unknown=中性灰

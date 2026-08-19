@@ -296,5 +296,21 @@
   "stats.repo": "仓库",
   "stats.completionPerRepoTitle": "各仓库平均耗时与走势",
   "stats.repoNoData": "暂无数据",
-  "stats.repoTrendAria": "该仓库平均完成耗时走势图"
+  "stats.repoTrendAria": "该仓库平均完成耗时走势图",
+  "tasks.queuePlaceholder": "队列…",
+  "tasks.queueTop": "置顶",
+  "tasks.queueUp": "上移",
+  "tasks.queueDown": "下移",
+  "tasks.queueBottom": "置底",
+  "tasks.queueSelectTitle": "排队任务人工优先级：置顶/上移/下移/置底（调整 manual_priority）",
+  "tasks.queueBusy": "操作中…",
+  "tasks.dequeue": "移出队列",
+  "tasks.dequeueTitle": "移出队列：取消排队（任务标记 canceled_by_user，可手动重试恢复）",
+  "tasks.confirmDequeue": "确定把任务 #{id}（issue #{iid} {title}）移出队列吗？任务将标记为已取消（canceled_by_user），不再自动执行，之后可手动重试恢复。",
+  "tasks.dequeued": "任务 #{id} 已移出队列（{status}）",
+  "tasks.queueDone": "任务 #{id} 已{action}（人工优先级 {priority}）",
+  "tasks.queueCleared": "任务 #{id} 已恢复按系统规则排序",
+  "tasks.manualPriority": "人工优先级 {p}",
+  "tasks.canceledByUser": "已移出队列",
+  "tasks.canceledByUserTitle": "用户手动移出队列（canceled_by_user），可手动重试重新入队"
 }

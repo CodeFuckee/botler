@@ -185,6 +185,7 @@ export const STATUS_META = {
   succeeded: { label: '成功', cls: 'status-succeeded' },
   failed: { label: '失败', cls: 'status-failed' },
   interrupted: { label: '已中断', cls: 'status-interrupted' },
+  canceled_by_user: { label: '已移出队列', cls: 'status-canceled' },
 }
 
 // 页面时间显示时区（IANA 名，null = 跟随浏览器本机时区）。由 App 启动时从

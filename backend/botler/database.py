@@ -2,7 +2,7 @@
 
 表结构按设计方案 §6：
 - repos：仓库注册信息（config.yaml 里的仓库同步进来）
-- tasks：任务状态机 queued → running → retrying → succeeded / failed / interrupted
+- tasks：任务状态机 queued → running → retrying → succeeded / failed / interrupted / canceled_by_user
 - task_logs：任务日志
 
 去重靠部分唯一索引：同一 (project_id, issue_iid) 只允许一条活跃记录。
@@ -31,6 +31,8 @@ STATUS_RETRYING = "retrying"
 STATUS_SUCCEEDED = "succeeded"
 STATUS_FAILED = "failed"
 STATUS_INTERRUPTED = "interrupted"
+# 用户手动移出队列（issue #242）：排队任务被「移出队列」操作终止的终态
+STATUS_CANCELED = "canceled_by_user"
 
 # 活跃状态（去重索引覆盖范围）
 ACTIVE_STATUSES = (STATUS_QUEUED, STATUS_RUNNING, STATUS_RETRYING)
@@ -89,6 +91,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   environment TEXT,
   base_sha TEXT,
   failure_category TEXT DEFAULT '',
+  manual_priority INTEGER,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -572,6 +575,19 @@ class Database:
                      value TEXT NOT NULL DEFAULT ''
                    )""")
             conn.execute("PRAGMA user_version = 20")
+
+        if ver < 21:
+            # issue #242：任务人工优先级——任务表新增 manual_priority 列
+            # （可选，NULL = 按系统规则排序）。任务列表页/概览页对排队任务
+            # 提供「置顶/上移/下移/置底/移出队列」操作：前四项调整
+            # manual_priority（同仓库排队任务内重排编号 0..n-1），调度器
+            # 派发时 manual_priority 优先于仓库/标签规则；移出队列把任务
+            # 置为终态 canceled_by_user（可手动重试重新入队）。旧库
+            # （user_version=20）补列；新库 _SCHEMA 已含。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "manual_priority" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN manual_priority INTEGER")
+            conn.execute("PRAGMA user_version = 21")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1182,12 +1198,138 @@ class Database:
                 (task_id, "任务已停止：用户手动停止当前任务"))
         return "ok"
 
+    # ---- 人工优先级（issue #242）----
+
+    def set_task_manual_priority(self, task_id: int, priority: int | None) -> str:
+        """设置/清除任务人工优先级（issue #242）。
+
+        priority 为整数或 None（清除 = 恢复按系统规则排序）。仅排队中
+        （queued）任务可设置——执行中（running）任务不受人工干预影响
+        （验收标准：已 running 任务不受影响）。终态任务不可设置。
+        返回结果码：ok / not_found / bad_state。
+        """
+        with self._conn(write=True) as conn:
+            row = conn.execute(
+                "SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                return "not_found"
+            if row["status"] != STATUS_QUEUED:
+                return "bad_state"
+            if priority is None:
+                conn.execute(
+                    "UPDATE tasks SET manual_priority=NULL WHERE id=?", (task_id,))
+                conn.execute(
+                    "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', ?)",
+                    (task_id, "人工优先级已清除：任务恢复按系统规则排序"))
+            else:
+                conn.execute(
+                    "UPDATE tasks SET manual_priority=? WHERE id=?",
+                    (int(priority), task_id))
+                conn.execute(
+                    "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', ?)",
+                    (task_id, f"人工优先级已设置为 {int(priority)}"))
+        return "ok"
+
+    def reorder_manual_priority(self, task_id: int, action: str) -> tuple[str, int | None]:
+        """对排队任务执行人工优先级重排动作（issue #242）。
+
+        action 取值：top（置顶）/ up（上移）/ down（下移）/ bottom（置底）。
+        仅排队中（queued）任务可重排。同仓库排队任务中已设置人工优先级
+        的任务构成「手动序列表」，按 (manual_priority, id) 升序：
+        - top：目标移到手动序列表最前（未在表内则插入最前）；
+        - up：目标在表内则与前一任务交换；不在表内（按系统规则排序中）
+          则追加到表尾（上移到所有手动任务之后、系统任务之前）；
+        - down：目标在表内且非表尾则与后一任务交换；不在表内或已是表尾
+          不动作；
+        - bottom：目标在表内则移到表尾；不在表内不动作。
+        动作完成后手动序列表重排编号 0..n-1 落库（manual_priority 紧凑
+        连续），并写任务日志供审计追溯。返回 (结果码, 目标新优先级)：
+        - ("ok", new_priority)：动作成功（未移动时 new_priority 为当前值）
+        - ("not_found", None)：任务不存在
+        - ("bad_state", None)：任务非排队状态
+        - ("bad_action", None)：非法动作
+        """
+        if action not in ("top", "up", "down", "bottom"):
+            return ("bad_action", None)
+        with self._conn(write=True) as conn:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                return ("not_found", None)
+            if row["status"] != STATUS_QUEUED:
+                return ("bad_state", None)
+            manual = [r["id"] for r in conn.execute(
+                """SELECT id FROM tasks WHERE repo_id=? AND status='queued'
+                   AND manual_priority IS NOT NULL
+                   ORDER BY manual_priority ASC, id ASC""",
+                (row["repo_id"],))]
+            idx = manual.index(task_id) if task_id in manual else None
+            if action == "top":
+                if idx is not None:
+                    manual.pop(idx)
+                manual.insert(0, task_id)
+            elif action == "up":
+                if idx is None:
+                    # 按系统规则排序的任务上移一位 → 追加到手动序列表尾
+                    # （排到所有手动任务之后、系统任务之前）
+                    manual.append(task_id)
+                elif idx > 0:
+                    manual[idx], manual[idx - 1] = manual[idx - 1], manual[idx]
+            elif action == "down":
+                if idx is not None and idx < len(manual) - 1:
+                    manual[idx], manual[idx + 1] = manual[idx + 1], manual[idx]
+            elif action == "bottom":
+                if idx is not None:
+                    manual.pop(idx)
+                    manual.append(task_id)
+            new_priority = manual.index(task_id) if task_id in manual else None
+            if new_priority is not None:
+                conn.executemany(
+                    "UPDATE tasks SET manual_priority=? WHERE id=?",
+                    [(i, tid) for i, tid in enumerate(manual)])
+                conn.execute(
+                    "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', ?)",
+                    (task_id, f"人工优先级操作：{action}，新优先级 {new_priority}"))
+            else:
+                conn.execute(
+                    "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', ?)",
+                    (task_id, f"人工优先级操作：{action}（队列位置未变化）"))
+        return ("ok", new_priority)
+
+    def dequeue_task(self, task_id: int) -> str:
+        """手动移出队列（issue #242）：排队中任务 → canceled_by_user（终态）。
+
+        与手动停止（issue #214）语义区分：移出队列是「取消排队」，状态
+        标记 canceled_by_user 可追溯；任务不会在平台重启后自动恢复（终态，
+        requeue_interrupted 只捞 running/retrying），用户可手动重试重新
+        入队（retry_task 支持 canceled_by_user）。running/retrying 任务
+        不可移出（需先停止）。返回结果码：ok / not_found / bad_state。
+        """
+        with self._conn(write=True) as conn:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                return "not_found"
+            if row["status"] != STATUS_QUEUED:
+                return "bad_state"
+            conn.execute(
+                """UPDATE tasks SET status='canceled_by_user',
+                   error_message='用户手动移出队列（取消排队）',
+                   finished_at=datetime('now')
+                   WHERE id=? AND status='queued'""",
+                (task_id,))
+            conn.execute(
+                "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'warn', ?)",
+                (task_id, "任务已移出队列：用户手动取消排队（canceled_by_user）"))
+        return "ok"
+
     def retry_task(self, task_id: int) -> str:
         """手动重试（issue #36）：终态失败任务重置为 queued，返回结果码。
 
-        - "ok"：重置成功（failed/interrupted → queued）
+        - "ok"：重置成功（failed/interrupted/canceled_by_user → queued）
         - "not_found"：任务不存在
-        - "bad_state"：状态非 failed/interrupted（含已被重试过的情况）
+        - "bad_state"：状态非 failed/interrupted/canceled_by_user
+          （含已被重试过的情况）
         - "conflict"：同一 issue 已有活跃任务（部分唯一索引去重）
 
         重置失败相关字段（attempt_count 归零、清空 exit_code/error_message/
@@ -1200,7 +1342,8 @@ class Database:
             row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if row is None:
                 return "not_found"
-            if row["status"] not in (STATUS_FAILED, STATUS_INTERRUPTED):
+            if row["status"] not in (STATUS_FAILED, STATUS_INTERRUPTED,
+                                    STATUS_CANCELED):
                 return "bad_state"
             dup = conn.execute(
                 """SELECT id FROM tasks WHERE project_id=? AND issue_iid=?
@@ -1213,7 +1356,7 @@ class Database:
                    triggered_by='manual', exit_code=NULL, error_message=NULL,
                    error_detail=NULL, commit_sha=NULL, started_at=NULL,
                    finished_at=NULL
-                   WHERE id=? AND status IN ('failed','interrupted')""",
+                   WHERE id=? AND status IN ('failed','interrupted','canceled_by_user')""",
                 (task_id,))
             if cur.rowcount == 0:
                 return "bad_state"

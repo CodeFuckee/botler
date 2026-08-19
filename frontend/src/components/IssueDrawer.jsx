@@ -143,7 +143,7 @@ export function NoteAvatar({ note }) {
 
 export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                                       onLabelsUpdated, running = false, onRetried,
-                                      onAssigneeUpdated }) {
+                                      onAssigneeUpdated, onPrioritized }) {
   const [closing, setClosing] = useState(false) // 关闭请求进行中（按钮禁用）
   const [closed, setClosed] = useState(false)   // 本次会话关闭成功标记
   const [closeErr, setCloseErr] = useState('')  // 关闭失败的错误信息
@@ -213,6 +213,15 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // null），KV 表「完成耗时」行据此 fmtSeconds 展示；null=加载中/未完成
   // （加载完成后未完成任务显示「—」）
   const [taskDuration, setTaskDuration] = useState(null)
+  // issue #242：最近任务状态——detail 响应返回该 issue 最近任务的状态
+  // （queued/running/终态；null=加载中/从未执行）。「优先处理」按钮仅对
+  // queued 任务展示（已 running 任务不受影响）
+  const [taskStatus, setTaskStatus] = useState(null)
+  // issue #242：优先处理状态——prioritizing 请求中（按钮禁用）、
+  // prioritizeMsg 成功提示、prioritizeErr 失败信息
+  const [prioritizing, setPrioritizing] = useState(false)
+  const [prioritizeMsg, setPrioritizeMsg] = useState('')
+  const [prioritizeErr, setPrioritizeErr] = useState('')
 
   // Esc 关闭抽屉（SSR 测试环境无 document 时跳过）。issue #167：任务
   // 执行详情第二层右边栏打开时不响应 Esc（由第二层自己关闭），避免
@@ -273,6 +282,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     setEngineErr('')
     setTaskId(null)
     setTaskDuration(null)
+    setTaskStatus(null)
     try {
       const d = await api.get(`/api/issues/${i.project_id}/${i.iid}/detail`)
       setNotes(Array.isArray(d && d.notes) ? d.notes : [])
@@ -290,6 +300,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                        && Number.isFinite(d.task_duration_seconds)
                        && d.task_duration_seconds >= 0)
                       ? d.task_duration_seconds : null)
+      // issue #242：最近任务状态——后端无任务返回 null；异常值兜底
+      // null（不展示「优先处理」按钮，不因坏数据崩溃）
+      setTaskStatus((typeof d.task_status === 'string' && d.task_status.trim())
+                    ? d.task_status : null)
     } catch (e) {
       setDetailErr(e.message || '加载失败')
       setEngineErr(e.message || '加载失败')
@@ -347,6 +361,25 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   }
 
   // ---- issue #108：标记编辑 ----
+
+  // issue #242：排队任务优先处理——该 issue 最近任务处于 queued 时展示
+  // 「优先处理」按钮：调 POST /api/issues/{project_id}/{iid}/prioritize 把
+  // 该任务人工优先级置顶（调度器优先于仓库/标签规则派发）。成功后本地
+  // 提示并通知父组件刷新列表；失败展示错误信息（按钮保留可重试）。
+  const handlePrioritize = async () => {
+    setPrioritizing(true)
+    setPrioritizeErr('')
+    try {
+      const r = await api.post(`/api/issues/${i.project_id}/${i.iid}/prioritize`)
+      setPrioritizeMsg(
+        `任务 #${r.task_id} 已置顶（人工优先级 ${r.manual_priority}），将优先执行`)
+      if (typeof onPrioritized === 'function') onPrioritized()
+    } catch (e) {
+      setPrioritizeErr(e.message || '优先处理失败')
+    } finally {
+      setPrioritizing(false)
+    }
+  }
 
   // 当前生效的标记列表：保存成功后的本地覆盖优先（后端返回的更新后
   // 标记；props issue 是点击时的轮询快照，编辑成功前不刷新）
@@ -672,6 +705,16 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
           {retrying ? '重试中…' : '重试'}
         </button>
       )}
+      {/* issue #242：排队任务优先处理——该 issue 最近任务处于排队中
+          （queued）时展示「优先处理」按钮：把任务人工优先级置顶，
+          调度器优先派发（已 running 任务不受影响，不展示） */}
+      {taskStatus === 'queued' && (
+        <button className="btn btn-primary" onClick={handlePrioritize}
+                disabled={prioritizing || taskId == null}
+                title="把该 issue 的排队任务置顶，调度器优先执行">
+          {prioritizing ? '优先处理中…' : '优先处理'}
+        </button>
+      )}
       {/* issue #167：查看执行的详情——点击弹出第二层右边栏，展示
            该 issue 的任务执行详情（任务记录列表 + 事件流/聊天/
            日志）；无任务记录时第二层显示空态引导 */}
@@ -709,6 +752,11 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
         {retryMsg && (
           <div className="alert alert-ok" role="status"
                onClick={() => setRetryMsg('')}>{retryMsg}</div>
+        )}
+        {prioritizeErr && <div className="issue-drawer-error" role="alert">{prioritizeErr}</div>}
+        {prioritizeMsg && (
+          <div className="alert alert-ok" role="status"
+               onClick={() => setPrioritizeMsg('')}>{prioritizeMsg}</div>
         )}
         <table className="table kv">
           <tbody>

@@ -1635,7 +1635,9 @@ class TestIssueDetail:
 
         assert resp.status_code == 200
         assert resp.json() == {"notes": [], "engine": "claude",
-                            "task_id": None, "task_duration_seconds": None}
+                            "task_id": None,
+                            "task_status": None,
+                            "task_duration_seconds": None}
 
     # ---- issue #120：执行引擎按 issue 展示（回退链：任务落库 engine
     # > 断点续跑会话字段推断 > 全局 worker.engine）----

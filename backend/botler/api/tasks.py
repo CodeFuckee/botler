@@ -20,7 +20,7 @@ from botler.failure_classify import category_advice
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
-STATUSES = {"queued", "running", "retrying", "succeeded", "failed", "interrupted"}
+STATUSES = {"queued", "running", "retrying", "succeeded", "failed", "interrupted", "canceled_by_user"}
 # 任务仍可能产出新事件的活跃状态（SSE 实时推送期间订阅总线）
 LIVE_STATUSES = ("queued", "running", "retrying")
 
@@ -108,6 +108,10 @@ def _task_to_dict(row, repo: dict | None = None, usage_row=None) -> dict:
         # tasks.failure_category；failure_advice 为对应处理建议文案
         # （详情页展示分类徽章 + 建议；空分类返回空串，前端不报错）
         "failure_category": row["failure_category"] or "",
+        # issue #242：任务人工优先级——任务列表页/概览页对排队任务
+        # 「置顶/上移/下移/置底」调整的字段（NULL = 按系统规则排序；
+        # 调度器派发时 manual_priority 优先于仓库/标签规则）
+        "manual_priority": row["manual_priority"],
         "failure_advice": (category_advice(row["failure_category"])
                            if row["failure_category"] else ""),
         "resumed": bool(row["claude_session_id"] or row["dsh_session_id"]),
@@ -206,16 +210,18 @@ def reconcile_all(request: Request):
 def retry_task(request: Request, task_id: int):
     """手动重试任务（issue #36）：终态失败任务重新入队执行。
 
-    仅 failed（失败）与 interrupted（已中断）状态可重试；同 issue 已有
-    活跃任务时返回 409（去重索引冲突）。成功后任务回到调度器仓库 FIFO
-    队列由 worker 正常领取执行，保留 claude 会话断点续跑（接续上次进度）。
+    仅 failed（失败）/ interrupted（已中断）/ canceled_by_user（移出队列）
+    状态可重试；同 issue 已有活跃任务时返回 409（去重索引冲突）。成功后
+    任务回到调度器仓库 FIFO 队列由 worker 正常领取执行，保留 claude 会话
+    断点续跑（接续上次进度）。
     """
     c = ctx_of(request)
     result = c.db.retry_task(task_id)
     if result == "not_found":
         raise HTTPException(404, "任务不存在")
     if result == "bad_state":
-        raise HTTPException(400, "仅失败（failed）或已中断（interrupted）的任务可手动重试")
+        raise HTTPException(
+            400, "仅失败（failed）、已中断（interrupted）或已移出队列（canceled_by_user）的任务可手动重试")
     if result == "conflict":
         raise HTTPException(409, "该 issue 已有活跃任务，无法重试")
     # issue #69：清除历史停止请求残留——一键停止过的任务重试后，若旧请求
@@ -246,6 +252,57 @@ def stop_task(request: Request, task_id: int):
     c.executor.request_stop(task_id)
     c.scheduler.remove_queued(task_id)
     return {"task_id": task_id, "status": "interrupted"}
+
+
+@router.post("/{task_id}/priority")
+def set_task_priority(request: Request, task_id: int, action: str = Query(...)):
+    """排队任务人工优先级操作（issue #242）。
+
+    action 取值：
+    - top：置顶——人工优先级设为同仓库排队任务最前（0）
+    - up：上移——与前一任务交换（未设置人工优先级的上移到手动序列尾）
+    - down：下移——与后一任务交换
+    - bottom：置底——移到手动序列末尾
+    - clear：清除人工优先级（NULL）——恢复按系统规则排序
+    仅排队中（queued）任务可操作；已 running 任务不受影响（返回 400）。
+    操作结果写入 task_logs 供审计追溯。
+    """
+    c = ctx_of(request)
+    if action not in ("top", "up", "down", "bottom", "clear"):
+        raise HTTPException(400, f"未知动作: {action}（可选: top/up/down/bottom/clear）")
+    if action == "clear":
+        result = c.db.set_task_manual_priority(task_id, None)
+        if result == "not_found":
+            raise HTTPException(404, "任务不存在")
+        if result == "bad_state":
+            raise HTTPException(400, "仅排队中（queued）的任务可调整人工优先级")
+        return {"task_id": task_id, "manual_priority": None}
+    result, new_priority = c.db.reorder_manual_priority(task_id, action)
+    if result == "not_found":
+        raise HTTPException(404, "任务不存在")
+    if result == "bad_state":
+        raise HTTPException(400, "仅排队中（queued）的任务可调整人工优先级")
+    if result == "bad_action":
+        raise HTTPException(400, f"未知动作: {action}")
+    return {"task_id": task_id, "manual_priority": new_priority}
+
+
+@router.post("/{task_id}/dequeue")
+def dequeue_task(request: Request, task_id: int):
+    """排队任务移出队列（issue #242）。
+
+    把排队中（queued）任务置为终态 canceled_by_user（取消排队），并从
+    调度器内存队列移除；操作写入 task_logs，状态与记录可追溯，用户可
+    手动重试重新入队。已 running 任务不受影响（返回 400，需先停止）。
+    """
+    c = ctx_of(request)
+    result = c.db.dequeue_task(task_id)
+    if result == "not_found":
+        raise HTTPException(404, "任务不存在")
+    if result == "bad_state":
+        raise HTTPException(400, "仅排队中（queued）的任务可移出队列（running 任务请先停止）")
+    c.scheduler.remove_queued(task_id)
+    return {"task_id": task_id, "status": "canceled_by_user"}
 
 
 @router.get("/{task_id}")

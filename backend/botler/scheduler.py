@@ -180,9 +180,16 @@ class TaskScheduler:
         except (ValueError, TypeError):
             return []
 
-    def _task_sort_key(self, task_id: int, cfg) -> tuple[int, int, int, str, int]:
-        """任务排序键（issue #76 + #234 + #287）：
-        (手动标记, 手动位置, 标签权重, issue 创建时间, task_id)。
+    def _task_sort_key(self, task_id: int, cfg) -> tuple[int, int, int, int, int, str, int]:
+        """任务排序键（issue #76 + #234 + #287 + #242）：
+        (人工优先级标记, 人工优先级值, 手动标记, 手动位置, 标签权重,
+         issue 创建时间, task_id)。
+
+        人工优先级（issue #242）：任务表 manual_priority 字段——任务列表
+        页/概览页对排队任务「置顶/上移/下移/置底」调整的人工优先级。
+        设置了 manual_priority 的任务（标记 0）先于未设置的任务（标记 1，
+        值恒 0）派发，值小者先派发（置顶=0）；NULL = 按系统规则排序。
+        仅排队任务可被设置，已 running 任务不在队列不受影响。
 
         手动标记/位置（issue #287）：概览页「其他」分组拖动调整的手动调度
         顺序——设置过手动顺序的 issue 优先派发（标记 0），按用户拖动后的
@@ -199,7 +206,7 @@ class TaskScheduler:
         unlisted = len(priority)
         task = self.db.get_task(task_id)
         if task is None:
-            return (1, 0, unlisted, "", task_id)
+            return (1, 0, 1, 0, unlisted, "", task_id)
         labels = self._decode_labels(task["issue_labels"])
         weight = unlisted
         for i, name in enumerate(priority):
@@ -210,9 +217,19 @@ class TaskScheduler:
                    or task["created_at"] or "")
         pos = self.db.get_manual_order_position(
             task["repo_id"], task["issue_iid"])
+        manual = task["manual_priority"]
+        try:
+            manual_value = int(manual)
+        except (TypeError, ValueError):
+            manual_value = 0
+        if manual is not None:
+            # 设置了人工优先级：优先派发，值小者先
+            return (0, manual_value, 0, pos if pos is not None else 0,
+                    weight, created, task_id)
         if pos is not None:
-            return (0, pos, weight, created, task_id)
-        return (1, 0, weight, created, task_id)
+            # 未设人工优先级但设置了 #287 手动顺序：紧随人工优先级之后
+            return (1, 0, 0, pos, weight, created, task_id)
+        return (1, 0, 1, 0, weight, created, task_id)
 
     def _pick_task(self, q: deque[int], cfg) -> int:
         """从仓库队列中选择最优任务并移除（issue #76）。

@@ -30,6 +30,15 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 （默认 `bug` > `test` > `feature`，设置页可自定义），同优先级按 issue 创建时间升序
 （创建时间越早的 issue 越先处理）。
 
+> 💡 **排队任务人工调优**（issue #242）：排队中的任务支持人工调整优先级
+> （`tasks.manual_priority` 字段，NULL = 按系统规则）——任务列表页排队任务
+> 行的「队列操作」下拉提供**置顶 / 上移 / 下移 / 置底**（同仓库排队任务内
+> 重排编号 0..n-1，置顶=0 最优先）与**移出队列**按钮（二次确认后任务置为
+> 终态 `canceled_by_user`，可手动重试重新入队）；概览页 issue 右边栏对排队
+> 任务提供「优先处理」按钮一键置顶。调度器派发时 **manual_priority 优先于
+> 仓库/标签规则**（先于 issue #287 手动顺序），已 running 任务不受影响；
+> 所有操作写入任务日志供审计追溯。
+
 > 💡 **定时暂停窗口**（issue #169）：可在设置页「任务调度」卡片配置暂停窗口
 >（如 `09:00-12:00`、`14:00-18:00`，支持多窗口、跨天、星期与时区）。窗口内
 > 调度器**停止开始新任务**（webhook / 对账仍照常入队），**已经开始执行的任务
@@ -687,6 +696,9 @@ GET    /api/issues/{project_id}/labels      项目标记池（概览页右边栏
 PUT    /api/issues/{project_id}/{iid}/labels  更新 issue 标记（add/remove 一次提交加删标记；成功后清缓存并返回更新后标记列表，issue #108）
 GET    /api/issues/{project_id}/manual-orders 读取仓库手动调度顺序（iid 按 position 升序，issue #287；overview 聚合结果同样携带 manual_order 字段）
 PUT    /api/issues/{project_id}/manual-orders 全量保存仓库手动调度顺序（拖动 issue 后整组 iid 列表；非正整数/重复剔除、空列表清空、超长截断；成功后清 overview 缓存，issue #287）
+POST   /api/tasks/{id}/priority?action=top|up|down|bottom|clear 排队任务人工优先级操作（置顶/上移/下移/置底调整 manual_priority，clear 恢复系统规则；仅 queued 任务，写任务日志，issue #242）
+POST   /api/tasks/{id}/dequeue 排队任务移出队列（置为终态 canceled_by_user，可从调度器队列移除，可手动重试恢复；issue #242）
+POST   /api/issues/{project_id}/{iid}/prioritize 排队任务一键置顶（概览页右边栏「优先处理」按钮；仅 queued 任务，issue #242）
 GET    /api/issues/{project_id}/members      项目成员清单（概览页右边栏负责人下拉数据源：GitLab members/all + user_id 补齐，issue #303）
 PUT    /api/issues/{project_id}/{iid}/assignee  更新 issue 负责人（assignee_id 为 GitLab 用户 id，null 清除负责人；同步 GitLab，成功后清缓存并返回更新后负责人列表，issue #303）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120；含 task_id 字段——该 issue 最近一条任务记录 id，已执行过才有值，从未执行/尚未派发为 null，概览页右边栏「任务」行展示，issue #290；含 task_duration_seconds 字段——该 issue 最近任务完成耗时秒数（finished_at - created_at），仅成功终态任务有值，其余为 null，概览页右边栏「完成耗时」行展示，issue #300）

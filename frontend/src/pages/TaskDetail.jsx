@@ -390,7 +390,8 @@ export default function TaskDetail() {
                     {stopping ? '停止中…' : '停止'}
                   </button>
                 )}
-                {(task.status === 'failed' || task.status === 'interrupted') && (
+                {(task.status === 'failed' || task.status === 'interrupted'
+                  || task.status === 'canceled_by_user') && (
                   <button
                     className="btn btn-mini"
                     onClick={retryTask}
@@ -401,7 +402,8 @@ export default function TaskDetail() {
                   </button>
                 )}
                 {task.status !== 'running' &&
-                 task.status !== 'failed' && task.status !== 'interrupted' && (
+                 task.status !== 'failed' && task.status !== 'interrupted'
+                 && task.status !== 'canceled_by_user' && (
                   <span className="muted">—</span>
                 )}
               </td>

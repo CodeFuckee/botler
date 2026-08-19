@@ -108,7 +108,8 @@ export default function Overview() {
                      onIssueClosed={() => loadIssues()}
                      onLabelsUpdated={() => loadIssues()}
                      onRetried={() => loadIssues()}
-                     onAssigneeUpdated={() => loadIssues()} />
+                     onAssigneeUpdated={() => loadIssues()}
+                     onPrioritized={() => loadIssues()} />
       )}
 
       {/* issue #317：流水线详情右边栏——点击流水线卡片打开，展示该仓库

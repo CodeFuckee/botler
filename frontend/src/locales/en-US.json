@@ -296,5 +296,21 @@
   "stats.repo": "Repo",
   "stats.completionPerRepoTitle": "Per-repo average & trend",
   "stats.repoNoData": "No data",
-  "stats.repoTrendAria": "Average completion time trend for this repo"
+  "stats.repoTrendAria": "Average completion time trend for this repo",
+  "tasks.queuePlaceholder": "Queue…",
+  "tasks.queueTop": "Pin to top",
+  "tasks.queueUp": "Move up",
+  "tasks.queueDown": "Move down",
+  "tasks.queueBottom": "Move to bottom",
+  "tasks.queueSelectTitle": "Queued task manual priority: pin top / move up / move down / move to bottom (adjust manual_priority)",
+  "tasks.queueBusy": "Working…",
+  "tasks.dequeue": "Remove from queue",
+  "tasks.dequeueTitle": "Remove from queue: cancel queuing (task marked canceled_by_user, can be retried manually later)",
+  "tasks.confirmDequeue": "Remove task #{id} (issue #{iid} {title}) from the queue? The task will be marked canceled_by_user and will not run automatically. You can retry it manually later.",
+  "tasks.dequeued": "Task #{id} removed from queue ({status})",
+  "tasks.queueDone": "Task #{id} {action} (manual priority {priority})",
+  "tasks.queueCleared": "Task #{id} restored to system rules",
+  "tasks.manualPriority": "manual priority {p}",
+  "tasks.canceledByUser": "Removed from queue",
+  "tasks.canceledByUserTitle": "Removed from queue by user (canceled_by_user); can be retried manually"
 }

@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 ### Added
+- **排队任务人工调优：优先级调整 / 插队 / 移出队列（issue #242）**：任务表
+  新增人工优先级字段 `manual_priority`（可选，NULL = 按系统规则排序），
+  调度器派发时人工优先级优先于仓库/标签规则，排队中的任务可人工插队、
+  挪后或移出队列：
+  - **后端**：任务表新增 `manual_priority` 列（迁移 v21，旧库自动补列）；
+    `POST /api/tasks/{id}/priority?action=top|up|down|bottom|clear` 调整
+    人工优先级（同仓库排队任务内重排编号 0..n-1，置顶=0 最优先；clear
+    清除恢复系统规则）；`POST /api/tasks/{id}/dequeue` 把排队任务置为
+    终态 `canceled_by_user`（可手动重试重新入队，重启不自动恢复）；所有
+    操作写入 task_logs 供审计追溯；已 running 任务不受影响（返回 400）；
+    调度器 `_task_sort_key` 增加人工优先级维度（先于 #287 手动顺序与
+    标签权重）；issue 详情接口返回 `task_status`，新增
+    `POST /api/issues/{project_id}/{iid}/prioritize` 一键置顶；
+  - **前端**：任务列表页排队任务行提供「队列操作」下拉（置顶/上移/下移/
+    置底）与「移出队列」按钮（二次确认，标记 canceled_by_user）；概览页
+    issue 右边栏对排队任务展示「优先处理」按钮；新增 `canceled_by_user`
+    状态徽章（「已移出队列」），该状态任务可手动重试重新入队；
+  - **测试**：后端新增 `test_manual_priority.py`（数据库重排/移出队列/
+    状态机、调度器排序、优先级/移出队列/优先处理 API，共 30 例）；前端
+    新增任务页队列操作与概览页优先处理测试（13 例）；前后端全量测试无
+    regression。
 - **概览页流水线详情右边栏增加产物显示与下载（issue #329）**：概览页
   右侧边栏的流水线详情页面（PipelineDrawer，issue #317）现在展示该次
   流水线各任务的产物清单，并支持一键下载：

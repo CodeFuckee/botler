@@ -177,6 +177,10 @@ export default function Tasks() {
   const [stopTaskMsg, setStopTaskMsg] = useState('') // 单任务停止成功提示（issue #214）
   const [retryMsg, setRetryMsg] = useState('') // 手动重试成功提示（issue #36）
   const [retryId, setRetryId] = useState(null) // 正在重试的任务 id（请求中禁用）
+  // issue #242：排队任务人工优先级操作——queueMsg 成功提示、queueBusy
+  // 正在操作的排队任务 id（请求中禁用防重复点击）
+  const [queueMsg, setQueueMsg] = useState('')
+  const [queueBusy, setQueueBusy] = useState(null)
   const [reconcileMsg, setReconcileMsg] = useState('') // 一键对账成功提示（issue #38）
   const [reconciling, setReconciling] = useState(false) // 对账请求进行中
   const [refreshing, setRefreshing] = useState(false) // 手动刷新请求进行中（issue #59）
@@ -321,6 +325,82 @@ export default function Tasks() {
     }
   }
 
+  // 排队任务人工优先级（issue #242）：仅排队中（queued）任务可操作——
+  // 「置顶/上移/下移/置底」调整 manual_priority（同仓库排队任务内重排，
+  // 置顶=0 最优先派发；clear 清除恢复系统规则），「移出队列」把任务置为
+  // 终态 canceled_by_user（可手动重试恢复）。操作均写入任务日志可追溯，
+  // 已 running 任务不受影响（后端拒绝）。请求中禁用防重复点击。
+  const QUEUE_ACTIONS = [
+    { key: 'top', label: tr('tasks.queueTop'), title: tr('tasks.queueSelectTitle') },
+    { key: 'up', label: tr('tasks.queueUp'), title: tr('tasks.queueSelectTitle') },
+    { key: 'down', label: tr('tasks.queueDown'), title: tr('tasks.queueSelectTitle') },
+    { key: 'bottom', label: tr('tasks.queueBottom'), title: tr('tasks.queueSelectTitle') },
+  ]
+  const queueAction = async (t, action) => {
+    if (queueBusy) return
+    setQueueBusy(t.id)
+    setQueueMsg('')
+    try {
+      const r = await api.post(`/api/tasks/${t.id}/priority?action=${action}`)
+      const name = QUEUE_ACTIONS.find((a) => a.key === action)?.label || action
+      setQueueMsg(
+        r.manual_priority === null || r.manual_priority === undefined
+          ? tr('tasks.queueCleared', { id: t.id })
+          : tr('tasks.queueDone', { id: t.id, action: name, priority: r.manual_priority }))
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setQueueBusy(null)
+    }
+  }
+  const dequeueTask = async (t) => {
+    if (queueBusy) return
+    if (!(await confirmDialog({
+      message: tr('tasks.confirmDequeue', { id: t.id, iid: t.issue_iid, title: t.issue_title || '' }),
+      danger: true,
+    }))) {
+      return
+    }
+    setQueueBusy(t.id)
+    setQueueMsg('')
+    try {
+      const r = await api.post(`/api/tasks/${t.id}/dequeue`)
+      setQueueMsg(tr('tasks.dequeued', { id: t.id, status: r.status }))
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setQueueBusy(null)
+    }
+  }
+  // 排队任务操作控件（表格与卡片共用）：队列操作下拉 + 移出队列按钮
+  const queueControls = (t) => (
+    <span className="queue-controls">
+      <select
+        className="btn btn-mini queue-select"
+        value=""
+        disabled={queueBusy === t.id}
+        onChange={(e) => { if (e.target.value) queueAction(t, e.target.value) }}
+        title={tr('tasks.queueSelectTitle')}
+        aria-label={tr('tasks.queueSelectTitle')}
+      >
+        <option value="" disabled>{tr('tasks.queuePlaceholder')}</option>
+        {QUEUE_ACTIONS.map((a) => (
+          <option key={a.key} value={a.key}>{a.label}</option>
+        ))}
+      </select>
+      <button
+        className="btn btn-mini btn-danger btn-gap-left"
+        onClick={() => dequeueTask(t)}
+        disabled={queueBusy === t.id}
+        title={tr('tasks.dequeueTitle')}
+      >
+        {queueBusy === t.id ? tr('tasks.queueBusy') : tr('tasks.dequeue')}
+      </button>
+    </span>
+  )
+
   // 一键对账所有启用仓库（issue #38）：同步扫描全部启用仓库把漏单补入队列。
   // 与仓库页对账按钮一致为低危操作（无需确认）；部分仓库失败时展示失败明细。
   const reconcileAll = async () => {
@@ -358,6 +438,7 @@ export default function Tasks() {
       {stopMsg && <div className="alert alert-ok" onClick={() => setStopMsg('')}>{stopMsg}</div>}
       {retryMsg && <div className="alert alert-ok" onClick={() => setRetryMsg('')}>{retryMsg}</div>}
       {stopTaskMsg && <div className="alert alert-ok" onClick={() => setStopTaskMsg('')}>{stopTaskMsg}</div>}
+      {queueMsg && <div className="alert alert-ok" onClick={() => setQueueMsg('')}>{queueMsg}</div>}
       {reconcileMsg && <div className="alert alert-ok" onClick={() => setReconcileMsg('')}>{reconcileMsg}</div>}
 
       <div className="stats-row">
@@ -485,6 +566,7 @@ export default function Tasks() {
                   <div className="tasks-card-actions">
                     <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
                           title={tr('tasks.runTitle')}>{tr('tasks.run')}</Link>
+                    {t.status === 'queued' && queueControls(t)}
                     {t.status === 'running' && (
                       <button
                         className="btn btn-mini btn-danger"
@@ -495,7 +577,7 @@ export default function Tasks() {
                         {stopId === t.id ? tr('tasks.stopping') : tr('tasks.stop')}
                       </button>
                     )}
-                    {(t.status === 'failed' || t.status === 'interrupted') && (
+                    {(t.status === 'failed' || t.status === 'interrupted' || t.status === 'canceled_by_user') && (
                       <button
                         className="btn btn-mini"
                         onClick={() => retryTask(t)}
@@ -591,6 +673,9 @@ export default function Tasks() {
                   <td>
                     <Link to={`/tasks/${t.id}?live=1`} className="btn btn-mini"
                           title={tr('tasks.runTitle')}>{tr('tasks.run')}</Link>
+                    {/* 排队任务人工优先级（issue #242）：仅排队中（queued）任务
+                        展示置顶/上移/下移/置底/移出队列操作 */}
+                    {t.status === 'queued' && queueControls(t)}
                     {/* 单任务停止（issue #214）：仅执行中（running）任务可停止，
                         确认后标记 interrupted 并强制终止引擎进程（不可逆），
                         请求中禁用防重复点击 */}
@@ -605,7 +690,7 @@ export default function Tasks() {
                       </button>
                     )}
                     {/* 手动重试（issue #36）：仅失败/中断任务可重试，请求中禁用防重复点击 */}
-                    {(t.status === 'failed' || t.status === 'interrupted') && (
+                    {(t.status === 'failed' || t.status === 'interrupted' || t.status === 'canceled_by_user') && (
                       <button
                         className="btn btn-mini btn-gap-left"
                         onClick={() => retryTask(t)}
