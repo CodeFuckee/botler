@@ -6,12 +6,9 @@
 """
 
 import json
-import sqlite3
 import subprocess
-from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 
 from botler import env_snapshot
 from botler.env_snapshot import (

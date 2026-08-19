@@ -47,16 +47,6 @@ function textOf(node) {
   return textOf(node.props?.children)
 }
 
-function makeStorage(initial = {}) {
-  const map = new Map(Object.entries(initial))
-  return {
-    getItem: (k) => (map.has(k) ? map.get(k) : null),
-    setItem: (k, v) => map.set(k, String(v)),
-    removeItem: (k) => map.delete(k),
-    _map: map,
-  }
-}
-
 // ---- 数据流源码断言 ----
 
 test('Overview.jsx 导出拖动排序纯函数，渲染使用手动顺序逻辑', () => {
@@ -359,7 +349,7 @@ test('渲染：仓库无 project_id 时（issue 有 project_id）仍可拖，两
   const p2 = PAYLOAD()
   delete p2.repos[0].project_id
   p2.repos[0].issues = p2.repos[0].issues.map((i) => {
-    const { project_id, ...rest } = i
+    const { project_id: _project_id, ...rest } = i
     return rest
   })
   const r2 = await renderOverview({ issuesPayload: p2 })

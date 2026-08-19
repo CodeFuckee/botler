@@ -312,7 +312,6 @@ class TestRunHermesOnce:
 
     def test_dsh_engine_untouched(self, monkeypatch, tmp_path, fake_runner):
         """engine=dsh 时 hermes runner 不被调用（回归保护）。"""
-        from botler.executor import DshRunner
 
         class _FakeDsh:
             def __init__(self, **kwargs):

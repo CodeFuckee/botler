@@ -34,9 +34,7 @@ const vite = await createServer({
   },
 })
 const { default: Settings } = await vite.ssrLoadModule('/src/pages/Settings.jsx')
-const { api } = await vite.ssrLoadModule('/src/api.js')
 const { SHORTCUTS_STORAGE_KEY } = await vite.ssrLoadModule('/src/keymap.js')
-const { mock } = await import('node:test')
 
 after(() => vite.close())
 

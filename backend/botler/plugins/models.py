@@ -25,7 +25,7 @@ from typing import Any
 
 import httpx
 
-from .base import ImageProviderPlugin, PluginKind, register_plugin
+from .base import ImageProviderPlugin, register_plugin
 
 logger = logging.getLogger("botler.plugins.models")
 

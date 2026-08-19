@@ -102,7 +102,7 @@ def _add_repo(db, project_id=PROJECT_ID, name="demo", enabled=True) -> int:
 class TestWebhookSkipsTerminalLabeledIssues:
     def test_rejects_bot_done_issue(self, ctx):
         """已打 bot-done：webhook 事件拒绝入队（完成待用户确认，勿重复处理）。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         ctx.gitlab.current_issue = make_api_issue(labels=["bug", "bot-done"])
 
         result = ctx.handler.handle(make_event(), "test-secret")
@@ -113,7 +113,7 @@ class TestWebhookSkipsTerminalLabeledIssues:
 
     def test_rejects_bot_failed_issue(self, ctx):
         """已打 bot-failed：webhook 事件拒绝入队（失败待人工介入，避免无限重试）。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         ctx.gitlab.current_issue = make_api_issue(labels=["bug", "bot-failed"])
 
         result = ctx.handler.handle(make_event(), "test-secret")
@@ -124,7 +124,7 @@ class TestWebhookSkipsTerminalLabeledIssues:
 
     def test_accepts_clean_issue(self, ctx):
         """回归：不带终态标签的 issue 照常入队（原有行为不变）。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
 
         result = ctx.handler.handle(make_event(), "test-secret")
@@ -138,7 +138,7 @@ class TestWebhookSkipsTerminalLabeledIssues:
 
     def test_snapshot_labels_ignored_api_wins(self, ctx):
         """事件快照无标签但 API 带 bot-done：以 API 为准拒绝（快照不可靠）。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         # 快照里是干净标签，API 最新状态已打 bot-done
         ctx.gitlab.current_issue = make_api_issue(labels=["bot-done"])
 
@@ -158,7 +158,7 @@ class TestWebhookSkipsNeedVerifyIssues:
 
     def test_rejects_need_verify_issue(self, ctx):
         """已打 need-verify：webhook 事件拒绝入队（需人工验证，bot 不领取）。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         ctx.gitlab.current_issue = make_api_issue(labels=["bug", "need-verify"])
 
         result = ctx.handler.handle(make_event(), "test-secret")
@@ -169,7 +169,7 @@ class TestWebhookSkipsNeedVerifyIssues:
 
     def test_snapshot_clean_but_api_need_verify(self, ctx):
         """事件快照无 need-verify 但 API 已带：以 API 为准拒绝（快照不可靠）。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         ctx.gitlab.current_issue = make_api_issue(labels=["need-verify"])
 
         result = ctx.handler.handle(make_event(labels=["bug"]), "test-secret")
@@ -187,7 +187,7 @@ class TestWebhookSkipsWhenBotLastSpoke:
 
     def test_rejects_when_bot_last_spoke(self, ctx):
         """最后一条非系统评论是 bot：拒绝入队（等用户回复）。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
         ctx.gitlab.last_note_author = BOT_ID
 
@@ -199,7 +199,7 @@ class TestWebhookSkipsWhenBotLastSpoke:
 
     def test_accepts_when_user_last_spoke(self, ctx):
         """最后一条非系统评论是用户（有新指示）：照常入队。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
         ctx.gitlab.last_note_author = 1  # 用户 id，非 bot
 
@@ -210,7 +210,7 @@ class TestWebhookSkipsWhenBotLastSpoke:
 
     def test_accepts_when_no_notes(self, ctx):
         """无任何非系统评论（新任务，仅系统事件）：照常入队。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
         ctx.gitlab.last_note_author = None
 
@@ -363,7 +363,7 @@ class TestWebhookGlobalTokenFallback:
 
     def test_global_401_falls_back_and_enqueues(self, ctx, monkeypatch):
         """全局 401：issue 查询与发言人查询经 remote token 兜底，正常入队。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         fallback = self.RemoteStub(make_api_issue(labels=["bug"]))
         monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
                             lambda repo, verify_ssl: (fallback, "agent"),
@@ -381,7 +381,7 @@ class TestWebhookGlobalTokenFallback:
 
     def test_global_401_without_remote_token_rejects(self, ctx, monkeypatch):
         """全局 401 且 remote 无 token：维持「查询 issue 失败，拒绝入队」。"""
-        repo_id = _add_repo(ctx.db)
+        _add_repo(ctx.db)
         monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
                             lambda repo, verify_ssl: (None, None),
                             raising=False)

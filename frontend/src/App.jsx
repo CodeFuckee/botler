@@ -74,7 +74,7 @@ export default function App() {
         setTzLoaded(true)
       })
       .catch(() => {})
-  }, [auth])
+  }, [auth, themeStorage])
 
   // 系统深色偏好变化自动适配（issue #217）：仅当当前选择为「跟随系统」
   // 时重新应用——OS 切换深浅色，页面无需刷新即时跟随；手动浅色/深色
@@ -91,7 +91,7 @@ export default function App() {
       },
       () => applyTheme(),
     )
-  }, [auth])
+  }, [auth, themeStorage])
 
   // 版本更新提示（issue #233）：页面加载后轮询 /version.json，检测到
   // 与基线版本不一致（新版部署完成）→ 显示刷新横幅。首次成功只记录基线

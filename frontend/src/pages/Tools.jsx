@@ -118,7 +118,12 @@ export default function Tools() {
     if (!indexUrl && d.market_index_url) setIndexUrl(d.market_index_url)
   }
 
-  useEffect(() => { load().catch((e) => setError(e.message)) }, [])
+  useEffect(() => {
+    // 挂载时仅加载一次：load 只使用模块级 api 与稳定 setter，每次渲染
+    // 重建引用，加入 deps 会形成「加载→setState→重渲染→再加载」死循环
+    load().catch((e) => setError(e.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 搜索过滤（名称 / 描述 / 来源 / 类型）
   const filtered = useMemo(() => {

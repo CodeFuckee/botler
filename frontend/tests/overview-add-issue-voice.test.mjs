@@ -25,13 +25,10 @@ function textOf(node) {
 }
 
 import assert from 'node:assert/strict'
-import { fileURLToPath } from 'node:url'
-import path from 'node:path'
 import { createServer } from 'vite'
 import React from 'react'
 import TestRenderer from 'react-test-renderer'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-add-issue.test.mjs 一致）。
 const vite = await createServer({

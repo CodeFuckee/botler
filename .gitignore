@@ -9,6 +9,7 @@ backend/.venv/
 # 避免并发写同一 venv 竞态；issue #86）
 backend/.venv-audit/
 backend/.venv-semgrep/
+backend/.venv-lint/
 backend/botler.db*
 backend/config.yaml
 backend/.env

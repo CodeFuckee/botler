@@ -32,8 +32,6 @@ const vite = await createServer({
   logLevel: 'error',
 })
 const { default: Overview } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
-const { default: IssueDrawer } =
-  await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 
 const drawerSrc = readFileSync(path.join(ROOT, 'src/components/IssueDrawer.jsx'), 'utf8')

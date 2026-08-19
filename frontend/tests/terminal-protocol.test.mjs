@@ -4,11 +4,8 @@
 // - attach.js：等价 AttachAddon 的直连适配层（stdin/resize 编码 + 状态回调）。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fileURLToPath } from 'node:url'
-import path from 'node:path'
 import { createServer } from 'vite'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const vite = await createServer({
   server: { middlewareMode: true },
   appType: 'custom',

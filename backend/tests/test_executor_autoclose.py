@@ -11,8 +11,6 @@ reopen + 补说明评论；人工关闭（closed_by 为真实用户）不干预�
 """
 
 import json
-import sqlite3
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -189,7 +187,7 @@ class TestRestoreAutoclosedIssue:
         db = executor.db
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id)
-        calls = _mock_gitlab(executor, monkeypatch, tmp_path, {
+        _mock_gitlab(executor, monkeypatch, tmp_path, {
             "state": "closed",
             "closed_by": {"username": _AUTOCLOSE_BOT},
         })

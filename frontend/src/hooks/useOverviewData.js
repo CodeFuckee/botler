@@ -8,15 +8,12 @@ import { api } from '../api.js'
 import { useI18n } from '../i18n.jsx'
 import { useShortcuts } from '../keymap.js'
 import {
-  LIVE_STATUSES,
   MAX_CARD_LINES,
   OVERVIEW_POLL_MS,
   PIPELINE_POLL_MS,
   ISSUE_POLL_MS,
   INSPIRATION_POLL_MS,
   DEEPSEEK_BALANCE_POLL_MS,
-  BOT_STATUS_NAMES,
-  ISSUE_GROUPS,
   runningIssueKeys,
   DEFAULT_ISSUE_PRIORITY,
   loadIssueFilter,
@@ -293,6 +290,10 @@ export function useOverviewData() {
       return es
     })
     return () => streams.forEach((es) => es.close())
+    // tasksKey 是 tasks 的稳定签名（id:status 拼接）：轮询返回相同内容时
+    // tasks 引用变化但签名不变，依赖 tasksKey 避免无谓重建 SSE 连接
+    // （依赖 tasks 会每次轮询断开重连，产生可见闪烁/抖动）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasksKey])
 
   // 所有配置仓库的最新流水线状态（issue #39，独立慢轮询）

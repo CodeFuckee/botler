@@ -45,8 +45,6 @@ const vite = await createServer({
   },
 })
 const { default: Overview } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
-const { default: IssueDrawer } =
-  await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
 const { default: TaskDetailDrawer, taskStatusMeta, renderEvent, renderChatMessage } =
   await vite.ssrLoadModule('/src/components/TaskDetailDrawer.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
@@ -292,7 +290,7 @@ test('渲染：切换任务重新拉详情并展示对应任务', async () => {
 })
 
 test('边界：无任务记录时显示空态', async () => {
-  const { renderer, root } = await openDetailDrawer({ tasks: [], total: 0 }, null)
+  const { renderer } = await openDetailDrawer({ tasks: [], total: 0 }, null)
   try {
     assert.ok(hasText(renderer, '该 issue 暂无任务执行记录'), '应显示空态文案')
     assert.ok(!hasText(renderer, '查看完整任务页'), '无任务不应渲染任务详情区')

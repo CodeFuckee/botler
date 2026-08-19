@@ -35,7 +35,6 @@ import httpx
 from .plugins import (
     VISION_DEFAULT_TIMEOUT,
     VisionModelError,
-    VisionProviderPlugin,
     PluginKind,
     PluginNotFoundError,
     format_request_info,

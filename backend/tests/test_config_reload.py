@@ -13,7 +13,6 @@ docs 约定 config.yaml 是唯一事实来源、Web UI 是编辑它的外壳，�
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 from botler.config import ConfigManager

@@ -68,7 +68,7 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
   useEffect(() => () => {
     const rec = recognitionRef.current
     if (rec) {
-      try { rec.abort() } catch (e) { /* 忽略：识别已结束 */ }
+      try { rec.abort() } catch (_e) { /* 忽略：识别已结束 */ }
     }
   }, [])
 
@@ -132,7 +132,7 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
     setListening(true)
     try {
       rec.start()
-    } catch (err) {
+    } catch (_err) {
       setListening(false)
       recognitionRef.current = null
       setSpeechError('语音识别启动失败，请重试')
@@ -145,7 +145,7 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
     const rec = recognitionRef.current
     recognitionRef.current = null
     if (rec) {
-      try { rec.stop() } catch (e) { /* 忽略：识别已结束 */ }
+      try { rec.stop() } catch (_e) { /* 忽略：识别已结束 */ }
     }
     setListening(false)
   }

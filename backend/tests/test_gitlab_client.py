@@ -626,7 +626,7 @@ class TestReplyToNote:
     def test_reply_response_without_notes_returns_discussion(self):
         """响应缺 notes（异常结构）时原样返回，由调用方容错。"""
         client = make_client()
-        captured = self._stub(client,
+        self._stub(client,
                               [{"id": "d1", "notes": [{"id": 1}]}],
                               post={"id": "odd-response"})
 
@@ -637,7 +637,7 @@ class TestReplyToNote:
     def test_gitlab_error_propagates(self):
         """上游报错原样上抛（由 API 层映射 HTTP 状态）。"""
         client = make_client()
-        captured = self._stub(
+        self._stub(
             client,
             [{"id": "d1", "notes": [{"id": 1}]}],
             post_error=GitLabError("GitLab API 错误 500: boom", 500))

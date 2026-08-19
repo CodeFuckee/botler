@@ -248,7 +248,7 @@ test('边界：成员不含 agent 时分配人不默认选择（提交时必填�
 // ---- 表单校验（不触发 POST）----
 
 test('校验：标题为空提交 → 显示错误且不调 POST', async () => {
-  const { renderer, renderError } = await renderOverview()
+  const { renderer } = await renderOverview()
   try {
     await openAddIssueModal(renderer, 0)
     let postCalled = false
@@ -266,7 +266,7 @@ test('校验：标题为空提交 → 显示错误且不调 POST', async () => {
 })
 
 test('校验：未选择标签提交 → 显示错误且不调 POST', async () => {
-  const { renderer, renderError } = await renderOverview()
+  const { renderer } = await renderOverview()
   try {
     await openAddIssueModal(renderer, 0)
     let postCalled = false
@@ -284,7 +284,7 @@ test('校验：未选择标签提交 → 显示错误且不调 POST', async () =
 })
 
 test('校验：成员不含 agent 且未手动选择 → 提示分配人必填', async () => {
-  const { renderer, renderError } = await renderOverview({
+  const { renderer } = await renderOverview({
     formMeta: {
       members: [{ id: 21, username: 'dev', name: 'Dev' }],
       labels: FORM_META.labels,
@@ -344,7 +344,7 @@ test('提交成功：POST 参数正确、弹窗关闭、立即重新拉取 overv
 })
 
 test('提交失败：弹窗保持打开并显示错误', async () => {
-  const { renderer, renderError } = await renderOverview()
+  const { renderer } = await renderOverview()
   try {
     await openAddIssueModal(renderer, 0)
     mock.method(api, 'post', async () => {

@@ -48,16 +48,6 @@ function textOf(node) {
   return textOf(node.props?.children)
 }
 
-function makeStorage(initial = {}) {
-  const map = new Map(Object.entries(initial))
-  return {
-    getItem: (k) => (map.has(k) ? map.get(k) : null),
-    setItem: (k, v) => map.set(k, String(v)),
-    removeItem: (k) => map.delete(k),
-    _map: map,
-  }
-}
-
 // ---- 数据流源码断言 ----
 
 test('Overview.jsx 导出置顶纯函数，渲染使用手动顺序与 PUT 保存', () => {
@@ -279,7 +269,7 @@ test('渲染：仓库与 issue 均无 project_id 时不展示置顶按钮', asyn
   const payload = PAYLOAD()
   delete payload.repos[0].project_id
   payload.repos[0].issues = payload.repos[0].issues.map((i) => {
-    const { project_id, ...rest } = i
+    const { project_id: _project_id, ...rest } = i
     return rest
   })
   const { renderer, renderError, restore } = await renderOverview({ issuesPayload: payload })

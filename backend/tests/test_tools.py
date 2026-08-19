@@ -20,7 +20,6 @@ import json
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 
 import pytest
 

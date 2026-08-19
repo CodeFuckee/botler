@@ -12,7 +12,6 @@ sched._now 固定当前时间（调度器以 _now() 作为时间来源）。
 
 from __future__ import annotations
 
-import json
 import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo

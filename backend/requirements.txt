@@ -12,6 +12,8 @@ pytest-cov>=6.0
 # 加速 CI backend:test 与本地全量测试（各用例使用独立 tmp_path SQLite 临时库，
 # 无共享状态，可安全并行）
 pytest-xdist>=3.0
+# 代码质量门禁（issue #203）：ruff check botler tests（规则见 ruff.toml，仅 F 组）
+ruff>=0.9
 minio>=7.2
 # Web 终端（issue #183）：terminado 提供标准 WebSocket 终端服务，Tornado 承载
 tornado>=6.4

@@ -14,7 +14,6 @@
 - resolve_skill_dir：合法技能解析、非法名（/ \\ ..）/ 不存在返回 None。
 """
 
-import os
 from pathlib import Path
 
 import pytest

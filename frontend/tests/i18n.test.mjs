@@ -31,7 +31,7 @@ const vite = await createServer({
 after(() => vite.close())
 const i18nMod = await vite.ssrLoadModule('/src/i18n.jsx')
 const {
-  LANGS, FALLBACK_LANG, LANG_STORAGE_KEY, LANG_LABELS,
+  LANGS, FALLBACK_LANG, LANG_LABELS,
   isValidLang, loadLangPreference, saveLangPreference,
   translate, applyHtmlLang, I18nProvider, useI18n, I18N_DICTS,
 } = i18nMod

@@ -88,12 +88,11 @@ test('i18n：shortcuts.* 文案中英字典齐全', () => {
 
 test('渲染：六项键位全部展示，开关默认勾选', () => {
   const storage = memStorage()
-  let onCloseCalls = 0
   let renderer = null
   TestRenderer.act(() => {
     renderer = TestRenderer.create(React.createElement(
       ShortcutHelpModal,
-      { onClose: () => { onCloseCalls++ }, storage },
+      { onClose: () => {}, storage },
     ))
   })
   try {

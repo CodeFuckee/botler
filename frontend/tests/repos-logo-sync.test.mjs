@@ -69,10 +69,6 @@ async function renderRepos({ repos = REPOS } = {}) {
   return { renderer, renderError }
 }
 
-function hasClass(node, cls) {
-  return String(node.props.className || '').split(/\s+/).includes(cls)
-}
-
 function syncBtns(renderer) {
   return renderer.root.findAll((n) => n.type === 'button'
     && String(n.props.title || '').includes('GitLab 仓库图标'))

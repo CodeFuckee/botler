@@ -31,7 +31,7 @@ const vite = await createServer({
   logLevel: 'error',
 })
 const { default: Overview } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
-const { default: IssueDrawer, ENGINE_META, engineDisplay } =
+const { ENGINE_META, engineDisplay } =
   await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 

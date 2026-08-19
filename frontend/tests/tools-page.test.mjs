@@ -176,7 +176,7 @@ function mockFetch() {
   return { calls, store, restore: () => { global.fetch = originalFetch } }
 }
 
-async function mountTools(m) {
+async function mountTools(_m) {
   return TestRenderer.act(async () => {
     const renderer = TestRenderer.create(React.createElement(Tools))
     await new Promise((resolve) => setTimeout(resolve, 80))
@@ -217,13 +217,6 @@ test('交互：新建自定义工具（表单 → POST /api/tools）', async () 
       createBtn.props.onClick()
       await new Promise((resolve) => setTimeout(resolve, 10))
     })
-    const inputs = renderer.root.findAllByType('input')
-    const setName = (value) => {
-      const nameInput = renderer.root.findAll((n) => n.type === 'input'
-        && n.props.value === '' && n.props.placeholder && /^如 my-tool/.test(n.props.placeholder))
-      assert.ok(nameInput.length, '应有名称输入框')
-      nameInput[0].props.onChange({ target: { value } })
-    }
     // 填名称（placeholder 含「my-tool」）
     const nameField = renderer.root.findAll((n) => n.type === 'input'
       && /my-tool/.test(String(n.props.placeholder || '')))

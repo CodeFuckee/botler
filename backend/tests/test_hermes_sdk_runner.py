@@ -18,7 +18,6 @@ import sys
 import threading
 import time
 import types
-from dataclasses import dataclass, field
 
 import pytest
 

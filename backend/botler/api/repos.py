@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -190,7 +189,7 @@ def browse_directories(request: Request, path: str | None = None):
 @router.post("/discover")
 def discover_remote(request: Request, body: LocalPathBody):
     """读取本地 git 仓库的 remote 列表（前端展示，供用户选择）。"""
-    c = ctx_of(request)
+    ctx_of(request)
     from ..git_remote import NoGitRemoteError, list_local_remotes
 
     try:

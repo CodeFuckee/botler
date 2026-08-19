@@ -291,7 +291,6 @@ class TestServeMinioPublicObject:
         MinioImageStore 不建连，无 MinIO 依赖）。
         """
         from botler.minio_client import MinioImageStore, MinioConfig
-        from fastapi import Request
         # ctx 缺失
         req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(ctx=None)))
         assert botler.minio_public._image_store(req) is None

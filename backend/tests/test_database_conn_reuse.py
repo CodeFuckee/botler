@@ -128,7 +128,7 @@ def test_write_transaction_rolls_back_and_connection_reusable(tmp_path):
     assert db.get_repo_by_project_id(9001) is None  # 已回滚
 
     # 回滚后连接复用正常
-    repo_id = db.upsert_repo(9002, "ok", "https://example.com/y.git")
+    db.upsert_repo(9002, "ok", "https://example.com/y.git")
     assert db.get_repo_by_project_id(9002) is not None
     db.close()
 
@@ -137,7 +137,7 @@ def test_nested_write_inside_read_context(tmp_path):
     """兼容既有调用模式：外层 _conn() 内再调用写方法（复用同一连接不冲突）。"""
     db = Database(str(tmp_path / "nested.db"))
     with db._conn() as conn:
-        repo_id = db.upsert_repo(1, "repo1", "https://example.com/r1.git")
+        db.upsert_repo(1, "repo1", "https://example.com/r1.git")
         conn.execute("PRAGMA user_version = 1")
     assert db.get_repo_by_project_id(1) is not None
     db.close()

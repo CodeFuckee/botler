@@ -233,7 +233,7 @@ test('确认后调用重试接口，成功显示提示、按钮消失并通知�
     return { task_id: 7, status: 'queued', mode: 'retried' }
   })
   let onRetriedCalls = 0
-  const { renderer, root, onRetried } = await renderDrawer(mkIssue(), {
+  const { renderer, root } = await renderDrawer(mkIssue(), {
     onRetried: () => { onRetriedCalls += 1 },
   })
   try {
@@ -255,7 +255,7 @@ test('确认后调用重试接口，成功显示提示、按钮消失并通知�
 test('重试失败显示错误信息，按钮保留可重试且不通知父组件', async () => {
   mock.method(api, 'post', async () => { throw new Error('该 issue 已有任务在执行中') })
   let onRetriedCalls = 0
-  const { renderer, root, onRetried } = await renderDrawer(mkIssue(), {
+  const { renderer, root } = await renderDrawer(mkIssue(), {
     onRetried: () => { onRetriedCalls += 1 },
   })
   try {

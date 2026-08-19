@@ -100,9 +100,9 @@ class TestOverview:
 
     def test_repos_sorted_by_priority_then_id(self, client):
         tc, db = client
-        b = _add_repo(db, 1, "beta", priority=200)
-        a = _add_repo(db, 2, "alpha", priority=100)
-        c = _add_repo(db, 3, "gamma", priority=100)
+        _add_repo(db, 1, "beta", priority=200)
+        _add_repo(db, 2, "alpha", priority=100)
+        _add_repo(db, 3, "gamma", priority=100)
         r = tc.get("/api/inspirations/overview")
         repos = r.json()["repos"]
         assert [x["repo_name"] for x in repos] == ["alpha", "gamma", "beta"]

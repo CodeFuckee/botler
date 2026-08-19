@@ -155,7 +155,7 @@ class StubGitLab:
         if self.create_result is not None:
             return self.create_result
         return {"iid": 99, "title": title, "state": "opened",
-                "web_url": f"https://gitlab.example.com/x/-/issues/99",
+                "web_url": "https://gitlab.example.com/x/-/issues/99",
                 "labels": labels or [], "updated_at": None,
                 "created_at": "2026-08-15T10:00:00.000+08:00",
                 "description": description, "author": None,

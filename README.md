@@ -200,6 +200,25 @@ bash frontend/e2e/scripts/start-servers.sh                 # 跑全部 E2E
 bash frontend/e2e/scripts/start-servers.sh tests/overview.spec.js   # 跑单个文件
 ```
 
+## 代码质量门禁（Lint，issue #203）
+
+前后端 lint 门禁：规则先宽松，error 级仅放高价值规则（未定义名 / 未用变量 /
+React Hooks deps），避免存量代码爆红；后续可逐步收紧风格类规则。
+
+```bash
+# 后端 ruff（仅 pyflakes F 组：F821 未定义名 / F401 未用导入 / F841 未用变量 等，
+# 规则见 backend/ruff.toml）
+cd backend && uv pip install ruff          # 首次安装（已加入 requirements.txt）
+ruff check botler tests                    # 检查全部后端代码与测试
+
+# 前端 ESLint（flat config，frontend/eslint.config.js：
+# no-undef / no-unused-vars / react-hooks/rules-of-hooks + exhaustive-deps）
+cd frontend && npm install                 # 首次安装（eslint + eslint-plugin-react-hooks + globals）
+npm run lint                               # 检查全部前端代码（src + tests + e2e）
+```
+CI 对应 job：`lint:backend`（ruff）与 `lint:frontend`（eslint）位于 security
+阶段，lint 失败即阻断流水线（`allow_failure: false`）。
+
 ### E2E 架构（issue #212）
 
 - **链路**：真实浏览器（Chromium）→ vite preview（前端构建产物，SPA 路由，`/api`

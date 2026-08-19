@@ -37,7 +37,7 @@ from typing import Any
 
 import httpx
 
-from .base import PluginKind, VisionProviderPlugin, register_plugin
+from .base import VisionProviderPlugin, register_plugin
 
 logger = logging.getLogger("botler.plugins.vision_models")
 

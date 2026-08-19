@@ -24,7 +24,6 @@ config.yaml、API 只返回掩码，与 ai_providers（issue #46）同模式。
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import httpx
 

@@ -707,6 +707,99 @@ security:secrets:
       echo "⏱️  [security:secrets] 总用时: ${DURATION} 秒"
       echo "========================================="
 
+# ----------------------------------------------------------
+# --- 后端：Ruff 代码质量门禁（issue #203）---
+# 规则先宽松：仅启用 pyflakes（F）高价值规则——未定义名（F821）/
+# 未用导入（F401）/ 未用变量（F841）等（见 backend/ruff.toml），
+# 风格类规则后续逐步收紧。与 security:bandit 同 stage 并行，为
+# 避免并发写同一 .venv 的安装竞态（与 .venv-semgrep 同模式），
+# 使用独立 .venv-lint。
+# ----------------------------------------------------------
+lint:backend:
+  extends: [.backend_setup, .docs_only_skip]
+  stage: security
+  tags:
+    - linux
+    - code01
+  timeout: 10m
+  allow_failure: false
+  cache:
+    key: uv-cache-${CI_COMMIT_REF_SLUG}
+    paths:
+      - backend/.uv-cache/
+    policy: pull-push
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      # uv 缓存目录（与 backend:test / security:bandit 共享 CI 缓存）
+      export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
+
+      echo "=== 1. 确保 uv 可用 ==="
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+      echo "=== 2. 独立 lint 虚拟环境（shell executor 工作目录跨 job 保留）==="
+      if [ ! -x .venv-lint/bin/python ]; then
+        rm -rf .venv-lint
+        uv venv .venv-lint
+      fi
+
+      echo "=== 3. 安装 ruff ==="
+      uv pip install --python .venv-lint/bin/python ruff -i ${PIP_INDEX_URL}
+
+      echo "=== 4. ruff check（botler 生产代码 + tests，F 组规则）==="
+      .venv-lint/bin/ruff check botler tests
+      echo "✓ ruff 检查通过（未定义名 / 未用变量 / 未用导入等）"
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [lint:backend] 总用时: ${DURATION} 秒"
+      echo "========================================="
+
+# ----------------------------------------------------------
+# --- 前端：ESLint 代码质量门禁（issue #203）---
+# flat config（frontend/eslint.config.js），error 级仅高价值规则：
+# no-undef（未定义名）/ no-unused-vars（未用变量）/
+# react-hooks/rules-of-hooks + exhaustive-deps（hooks 调用顺序与
+# deps 完整性），风格类规则后续逐步收紧。node_modules 缓存与
+# frontend:build / security:deps-frontend 共享（package-lock.json
+# 哈希 key）。
+# ----------------------------------------------------------
+lint:frontend:
+  extends: [.frontend_setup, .docs_only_skip]
+  stage: security
+  tags:
+    - linux
+    - code01
+  timeout: 20m
+  allow_failure: false
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+      prefix: frontend-npm
+    paths:
+      - frontend/node_modules/
+    policy: pull-push
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - echo "=== 1. 安装依赖（npm ci）==="
+    - npm ci --registry=${NPM_REGISTRY_URL}
+    - echo "=== 2. ESLint 检查（npm run lint）==="
+    - npm run lint
+    - |
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [lint:frontend] 总用时: ${DURATION} 秒"
+      echo "========================================="
+
 # ================================================================
 # Stage: build —— 第一阶段：前端构建 + 后端测试（并行）
 # ================================================================

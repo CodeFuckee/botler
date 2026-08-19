@@ -17,8 +17,6 @@
   清空 overview 缓存。
 """
 
-import json
-import sqlite3
 import threading
 from types import SimpleNamespace
 

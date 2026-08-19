@@ -25,7 +25,6 @@ import TestRenderer from 'react-test-renderer'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 界面国际化（issue #268）：中文文案以 locales/zh-CN.json 为稳定来源，
 // 源码断言改为「i18n key + 字典中文值」双重校验
-const zhCN = JSON.parse(readFileSync(path.join(ROOT, 'src/locales/zh-CN.json'), 'utf8'))
 const overview = readFileSync(path.join(ROOT, 'src/components/overview/IssueListSection.jsx'), 'utf8')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载组件（与 overview-issues.test.mjs 一致）。

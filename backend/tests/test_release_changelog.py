@@ -10,7 +10,6 @@
 修复前该模块不存在（ImportError），测试失败即复现「CHANGELOG 无法重置」缺陷。
 """
 
-import sys
 from pathlib import Path
 
 import pytest

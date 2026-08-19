@@ -20,7 +20,6 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const settings = readFileSync(path.join(ROOT, 'src/pages/Settings.jsx'), 'utf8')
 const card = readFileSync(path.join(ROOT, 'src/components/VisionModelsCard.jsx'), 'utf8')
 const providers = readFileSync(path.join(ROOT, 'src/providers.jsx'), 'utf8')
-const api = readFileSync(path.join(ROOT, 'src/api.js'), 'utf8')
 
 test('设置页挂载「识图模型」卡片组件', () => {
   assert.match(settings, /import VisionModelsCard from '\.\.\/components\/VisionModelsCard\.jsx'/, '应导入卡片组件')

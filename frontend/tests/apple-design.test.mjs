@@ -234,7 +234,7 @@ test('路由：8 个页面全部可用（概览/仓库/任务/任务详情/模�
     ['/tasks/:id', 'TaskDetail'], ['/templates', 'Templates'], ['/labels', 'Labels'],
     ['/settings', 'Settings'],
   ]
-  for (const [route, comp] of routes) {
+  for (const [route] of routes) {
     assert.ok(appSrc.includes(`path="${route}"`), `App 路由应包含 ${route}`)
   }
   // 登录页非路由：SSO 启用且未登录时条件渲染（issue #27），断言导入与渲染分支

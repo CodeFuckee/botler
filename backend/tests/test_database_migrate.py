@@ -621,9 +621,9 @@ class TestMigrateInspirationMessages:
         db = Database(str(tmp_path / "m.db"))
         repo_id = db.upsert_repo(42, "botler", "https://x/botler.git")
         insp_id = db.create_inspiration(repo_id, "灵感")
-        m1 = db.add_inspiration_message(insp_id, "user", "第一问")
+        db.add_inspiration_message(insp_id, "user", "第一问")
         m2 = db.add_inspiration_message(insp_id, "assistant", "第一答")
-        m3 = db.add_inspiration_message(insp_id, "user", "第二问")
+        db.add_inspiration_message(insp_id, "user", "第二问")
         rows = db.list_inspiration_messages(insp_id)
         assert [r["content"] for r in rows] == ["第一问", "第一答", "第二问"]
         assert [r["role"] for r in rows] == ["user", "assistant", "user"]

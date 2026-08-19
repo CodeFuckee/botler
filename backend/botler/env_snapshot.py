@@ -21,9 +21,7 @@ import hashlib
 import json
 import logging
 import os
-import socket
 import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 

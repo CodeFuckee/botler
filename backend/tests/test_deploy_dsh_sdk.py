@@ -19,7 +19,6 @@ issue #112 首轮仅覆盖 Docker 镜像内置 SDK（test_dockerfile_dsh.py 校�
 import re
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]  # botler/ 仓库根
 INSTALL_SH = ROOT / "deploy" / "install-dsh-sdk.sh"

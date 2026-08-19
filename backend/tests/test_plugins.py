@@ -8,7 +8,6 @@
 - 全局注册表内置插件完整性（导入 botler.plugins 自动注册）
 """
 
-import sys
 import textwrap
 
 import pytest
@@ -25,9 +24,7 @@ from botler.plugins import (
     get_plugin,
     get_registry,
     has_plugin,
-    list_plugins,
     plugin_names,
-    register_plugin,
 )
 
 

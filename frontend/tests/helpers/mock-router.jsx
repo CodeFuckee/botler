@@ -57,5 +57,5 @@ export function useSearchParams() {
 // 导航（issue #269 App 全局快捷键）：测试环境为记录型导航——返回的
 // navigate 函数把目标路径推入数组并渲染 <a>，便于断言跳转发生
 export function useNavigate() {
-  return (to) => {}
+  return (_to) => {}
 }

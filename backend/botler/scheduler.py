@@ -25,7 +25,7 @@ from datetime import datetime
 
 from .config import ConfigManager
 from .pause_window import in_pause_window
-from .database import Database, DEFAULT_PRIORITY, STATUS_QUEUED, STATUS_RUNNING
+from .database import Database, DEFAULT_PRIORITY, STATUS_QUEUED
 from .executor import ClaudeExecutor
 
 logger = logging.getLogger(__name__)

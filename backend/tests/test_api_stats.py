@@ -11,8 +11,6 @@
    正确、days 非法参数返回 422。
 """
 
-import json
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -27,7 +25,6 @@ from botler.database import (
     STATUS_FAILED,
     STATUS_INTERRUPTED,
     STATUS_QUEUED,
-    STATUS_RUNNING,
     STATUS_SUCCEEDED,
     _normalize_failure_reason,
     _task_duration_seconds,

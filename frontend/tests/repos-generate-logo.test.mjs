@@ -214,9 +214,6 @@ test('点击 logo 打开放大弹窗并提供下载链接', async () => {
     typeof n.props?.className === 'string'
     && n.props.className.includes('modal-overlay'))
   assert.equal(overlay.length, 1, '应打开放大弹窗')
-  const big = renderer.root.findAll((n) => n.type === 'img'
-    && String(n.props.alt || '').includes('logo')
-    && String(n.props.className || '').includes('repo-logo-view'))
   // 弹窗内大图
   const large = renderer.root.findAll((n) =>
     n.type === 'img' && String(n.props.src || '').includes('/api/repos/1/logo?'))

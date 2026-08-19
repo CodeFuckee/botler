@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import calendar
 import json
-import os  # noqa: F401（对外再导出，测试 monkeypatch botler.executor.os）
+import os  # noqa: F401 （对外再导出，测试 monkeypatch botler.executor.os）
 import subprocess
 import threading
 import time
@@ -41,13 +41,13 @@ from ..database import (
     STATUS_INTERRUPTED,
 )
 from ..dsh_runner import DshRunner, DshSdkNotInstalledError
-from ..env_snapshot import (  # noqa: F401（对外再导出，测试 monkeypatch 目标）
+from ..env_snapshot import (  # noqa: F401 （对外再导出，测试 monkeypatch 目标）
     collect_env_snapshot,
     error_snapshot,
     serialize_snapshot,
 )
 from ..events import EventBus
-from ..git_remote import (  # noqa: F401（NoGitRemoteError/list_local_remotes/parse_remote_url 对外再导出）
+from ..git_remote import (  # noqa: F401 （NoGitRemoteError/list_local_remotes/parse_remote_url 对外再导出）
     NoGitRemoteError, build_repo_client_with_username,
     list_local_remotes, parse_remote_url,
 )

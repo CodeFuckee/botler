@@ -285,7 +285,6 @@ test('分发：空事件 / 无 key 不抛错', () => {
 
 test('hook：挂载注册监听 / 按键触发 / 卸载移除', async () => {
   // 复用 dialog.test.mjs 的 document mock 模式捕获 keydown 监听
-  let keyHandler = null
   const listeners = { keydown: [] }
   globalThis.document = {
     addEventListener: (ev, fn) => { listeners[ev].push(fn) },

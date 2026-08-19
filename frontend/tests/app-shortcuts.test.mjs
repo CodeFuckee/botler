@@ -11,15 +11,11 @@
 //    禁用生效，验收标准 3）。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import path from 'node:path'
 import { createServer } from 'vite'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import TestRenderer from 'react-test-renderer'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const vite = await createServer({
   server: { middlewareMode: true },
   appType: 'custom',

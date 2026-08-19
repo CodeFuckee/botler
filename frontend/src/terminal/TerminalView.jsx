@@ -62,7 +62,7 @@ export default function TerminalView({ tab, token, onStatus }) {
       if (cleanup) cleanup()
       if (socket) { try { socket.close() } catch { /* 忽略 */ } }
     }
-  }, [tab.name, token])
+  }, [tab.id, tab.name, token])
 
   return <div className="terminal-host" ref={hostRef} data-tab={tab.name} />
 }

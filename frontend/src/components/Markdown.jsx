@@ -15,7 +15,6 @@
 // 天然转义），剩余注入面是 [label](href) 的 href 直通 <a href>：
 // javascript:/data:/vbscript: 等危险协议链接可点击执行脚本。新增
 // isSafeUrl 协议白名单，危险协议链接降级为纯文本展示（不渲染可点击 <a>）。
-import React from 'react'
 
 // Git 提交 SHA 匹配（issue #181）：7-40 位十六进制且两侧为词边界。
 // git 短 SHA 常用 7 位（bot 完成评论「提交Commit：d6adbde」），
@@ -127,7 +126,6 @@ function renderList(lines, keyPrefix = '', projectUrl = '') {
     const m = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/)
     if (!m) { i++; continue }
     const indent = m[1].length
-    const ordered = /^\d+\.$/.test(m[2])
     const content = m[3]
     // 收集该列表项的嵌套子行（缩进更深）
     const sub = []

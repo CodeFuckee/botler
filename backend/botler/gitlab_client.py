@@ -465,7 +465,6 @@ class GitLabClient:
         hook = next((h for h in hooks if h.get("url") == url), None)
         if not hook:
             return False, "平台 webhook 未注册"
-        hook_id = hook["id"]
         last = hook.get("last_response") or {}
         if last.get("http_status") in (200, 201, 202, 204):
             return True, f"最近一次触发 HTTP {last.get('http_status')}"

@@ -58,7 +58,12 @@ export default function Skills() {
     }
   }
 
-  useEffect(() => { load().catch((e) => setError(e.message)) }, [])
+  useEffect(() => {
+    // 挂载时仅加载一次：load 只使用模块级 api 与稳定 setter，每次渲染
+    // 重建引用，加入 deps 会形成「加载→setState→重渲染→再加载」死循环
+    load().catch((e) => setError(e.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 打开技能：拉取 md 文件列表，默认选中 SKILL.md（无则第一个文件）
   const openSkill = async (engineName, skillObj) => {

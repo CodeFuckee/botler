@@ -235,7 +235,6 @@ test('issue 字段缺失兜底：无标题显示占位、无更新时间不崩',
   try {
     assert.equal(renderError, null, '字段缺失时渲染不应崩溃')
     const root = renderer.root
-    const text = JSON.stringify(renderer.toJSON())
     // JSX 中 `#{i.iid} — {title}` 是分离的文本节点，拼接 span/button 文本断言
     const issueText = root
       .findAll((n) => n.type === 'span' || n.type === 'button')

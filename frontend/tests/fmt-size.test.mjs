@@ -5,11 +5,8 @@
 // ≥1MB 显示 MB（2 位小数）；空值返回占位符。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fileURLToPath } from 'node:url'
-import path from 'node:path'
 import { createServer } from 'vite'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // node --test 原生不支持 jsx，用 vite SSR 转译加载模块（与其他测试一致）
 const vite = await createServer({

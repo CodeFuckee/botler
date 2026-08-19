@@ -5,7 +5,6 @@ issue #4 新增「查看详细原因」按钮依赖 executor 在失败时把每�
 issue #8 会话断点续跑：claude --resume 恢复上次会话 + 保留工作区。
 """
 
-import io
 import itertools
 import json
 import sqlite3
@@ -217,7 +216,7 @@ class TestRunTaskErrorDetail:
         def boom(*_a):
             raise RuntimeError("claude 命令崩溃")
 
-        calls = self._install_mocks(executor, monkeypatch, tmp_path, run_once=boom)
+        self._install_mocks(executor, monkeypatch, tmp_path, run_once=boom)
         executor.run_task(task_id)
 
         task = db.get_task(task_id)
@@ -479,7 +478,7 @@ class TestSessionResume:
         db = executor.db
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id)
-        captured = self._session_toolkit(
+        self._session_toolkit(
             executor, monkeypatch, tmp_path,
             json.dumps({"result": "ok", "session_id": "sid-persist"}))
 
@@ -1408,7 +1407,6 @@ class TestGitlabFallbackOnGlobalTokenFailure:
         """全局 get_issue 401：用 remote token 兜底领取，任务照常执行成功。"""
         db = executor.db
         repo_id = _mk_repo(db)
-        repo = db.get_repo_by_project_id(42)
         task_id = _mk_task(db, repo_id)
         output = json.dumps({"result": "开发完成，已推送代码"},
                             ensure_ascii=False)

@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 ### Added
+- **前端 ESLint / 后端 Ruff 代码质量门禁（issue #203）**：此前前端只有
+  vite build/test、后端只有 bandit/semgrep 安全扫描，无风格/lint 检查，多
+  agent 协作产出代码风格容易漂移、低级 bug（未定义名/未用变量/hooks deps
+  缺失）要等到测试才暴露。本次补上 lint 层（规则先宽松——error 级仅放高
+  价值规则，存量代码不爆红）：
+  - **前端**：新增 `eslint` + `eslint-plugin-react-hooks` + `globals`
+    开发依赖，flat config（`frontend/eslint.config.js`），`npm run lint`
+    脚本（`eslint .`）；error 级规则仅 `no-undef`（未定义名）/
+    `no-unused-vars`（未用变量，`_` 前缀豁免）/ `react-hooks/rules-of-hooks` +
+    `exhaustive-deps`（hooks 调用顺序与 deps 完整性）；
+  - **后端**：新增 `backend/ruff.toml`（`[lint] select = ["F"]`，pyflakes 组：
+    F821 未定义名 / F401 未用导入 / F841 未用变量 等），`ruff` 加入
+    `backend/requirements.txt`；
+  - **存量清理**：后端 `ruff --fix` 自动修复 52 处（未用导入/冗余 f-string）+
+    手工清理 30 处 F841（保留有副作用的调用、删除纯提取未用行）+ 修正
+    `botler/executor/__init__.py` 3 处失效的 `# noqa: F401`（代码后紧跟全角
+    括号导致 ruff 无法解析，再导出导入实际未被豁免）；前端清理 68 处
+    `no-unused-vars`（删除未用导入/变量、catch 参数改 `_` 前缀）与
+    exhaustive-deps 缺失依赖；
+  - **顺带修复真实 bug**：`useSettingsData` 定义了 `handleTestNotify` 但返回
+    对象遗漏该字段，「弹出测试通知」按钮收到 undefined 静默失效（issue #201
+    拆分时引入），补回返回值；`Markdown.jsx` 内层列表循环计算 `ordered` 从未
+    使用（死代码）删除；`App.jsx`/`i18n.jsx`/`TerminalView.jsx` 补齐
+    exhaustive-deps 缺失依赖（`themeStorage`/`setLang`（useCallback 化）/
+    `tab.id`）；Skills/Templates/Tools 挂载加载 effect 与 useOverviewData SSE
+    重建 effect 为有意设计（分别用注释 + 定向 eslint-disable 说明）；
+  - **CI**：security 阶段新增 `lint:backend`（`ruff check botler tests`，独立
+    `.venv-lint` 避免与 bandit 并发安装竞态）与 `lint:frontend`（`npm run
+    lint`，node_modules 缓存与 frontend:build 共享）两个 job，
+    `allow_failure: false` 失败阻断流水线；
+  - **文档**：README「测试」章节新增「代码质量门禁（Lint）」小节记录本地
+    lint 命令；
+  - **测试**：后端 `ruff check botler tests` 与前端 `npm run lint` 全量通过；
+    后端 pytest 2455 例、前端 node --test 1308 例全部通过无回归。
+
 - **仓库设置页未启用仓库也能使用「生成图标」功能（issue #323）**：
   仓库管理（设置）页面的「生成图标」按钮此前要求仓库必须启用——后端
   `POST /api/repos/{id}/generate-logo` 校验 `enabled`，未启用仓库返回 400

@@ -21,7 +21,6 @@ deploy_to_code01 在主依赖安装后自动调用；Docker 部署由 docker-ent
 import re
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]  # botler/ 仓库根
 INSTALL_SH = ROOT / "deploy" / "install-hermes-agent.sh"

@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { api, setDisplayTz } from '../api.js'
 import { sendTestNotification } from '../notify.js'
 import { applyTheme, saveThemePreference } from '../theme.js'
-import { loadShortcutsEnabled, saveShortcutsEnabled } from '../keymap.js'
+import { loadShortcutsEnabled } from '../keymap.js'
 import { useI18n } from '../i18n.jsx'
 
 // 任务调度数字字段的中文标签（与后端 worker 段字段一一对应）
@@ -405,7 +405,7 @@ export function useSettingsData() {
     testWebhook, saveWebhook,
     uiSaveBusy, setUiSaveBusy, uiSaved, setUiSaved, buildUiPatch, saveUi,
     notifySaveBusy, setNotifySaveBusy, notifySaved, setNotifySaved,
-    setNotifyField, saveNotify,
+    setNotifyField, handleTestNotify, saveNotify,
     minioAccessInput, setMinioAccessInput, minioSecretInput, setMinioSecretInput,
     minioSaveBusy, setMinioSaveBusy, minioSaved, setMinioSaved, setMinioField,
     buildMinioPatch, saveMinio,

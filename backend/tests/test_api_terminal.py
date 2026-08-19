@@ -10,7 +10,6 @@
 
 import asyncio
 import json
-import os
 import threading
 from types import SimpleNamespace
 

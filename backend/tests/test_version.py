@@ -12,7 +12,6 @@
 """
 import json
 
-import pytest
 
 from botler.version import build_health_payload, read_version_info
 

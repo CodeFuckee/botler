@@ -10,7 +10,6 @@ client 模拟 minio SDK，不做真实外呼。
 
 import hashlib
 import json
-import os
 
 import pytest
 

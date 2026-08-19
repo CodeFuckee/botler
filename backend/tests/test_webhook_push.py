@@ -9,7 +9,6 @@
 - 未启用 / 未配置地址不发送；测试推送未配置地址报错
 """
 
-from types import SimpleNamespace
 
 import httpx
 import pytest

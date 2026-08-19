@@ -13,7 +13,7 @@
 //      操作），现有组件与测试不受影响；
 //   5. 切换语言时同步 <html lang>，利于屏幕阅读器与浏览器翻译。
 // ============================================================
-import { createContext, useContext, useMemo, useState } from 'react'
+import { createContext, useContext, useCallback, useMemo, useState } from 'react'
 import zhCN from './locales/zh-CN.json'
 import enUS from './locales/en-US.json'
 
@@ -105,16 +105,16 @@ const I18nContext = createContext({
  *  storage：localStorage 兼容对象（测试可注入）；无存储环境时按默认中文。 */
 export function I18nProvider({ children, storage }) {
   const [lang, setLangState] = useState(() => loadLangPreference(storage) || FALLBACK_LANG)
-  const setLang = (next) => {
+  const setLang = useCallback((next) => {
     if (!isValidLang(next)) return
     setLangState(next)
     saveLangPreference(storage, next)
     applyHtmlLang(next)
-  }
+  }, [storage])
   const value = useMemo(() => {
     const tf = (key, vars) => translate(lang, key, vars)
     return { lang, setLang, t: tf, tr: tf }
-  }, [lang])
+  }, [lang, setLang])
   return (
     <I18nContext.Provider value={value}>
       {children}

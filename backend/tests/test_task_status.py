@@ -6,12 +6,11 @@
 UPDATE）+ finish_task 条件终态（仅 running/retrying 可流转终态）。
 """
 
-import sqlite3
 
 import pytest
 
 from botler.database import (
-    Database, STATUS_FAILED, STATUS_QUEUED, STATUS_RUNNING,
+    Database, STATUS_FAILED, STATUS_RUNNING,
     STATUS_RETRYING, STATUS_SUCCEEDED,
 )
 

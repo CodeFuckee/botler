@@ -104,7 +104,7 @@ function mkTask(overrides = {}) {
 
 // total 指定总条数时，mock 按 offset 返回对应页数据（每页 1 条便于断言页数据）。
 // 返回 { renderer, calls }：calls 记录全部 /api/tasks 请求 pathname。
-async function renderAndSettle(total, tasksByPage, extra = {}) {
+async function renderAndSettle(total, tasksByPage) {
   const calls = []
   mock.method(api, 'get', async (pathname) => {
     if (pathname.startsWith('/api/tasks?')) {

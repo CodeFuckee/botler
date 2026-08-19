@@ -30,7 +30,7 @@ const vite = await createServer({
   logLevel: 'error',
 })
 const { default: Overview } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
-const { default: IssueDrawer, isEscapeKey, ISSUE_STATE_META } =
+const { isEscapeKey, ISSUE_STATE_META } =
   await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 

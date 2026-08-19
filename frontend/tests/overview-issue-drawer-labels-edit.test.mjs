@@ -371,7 +371,7 @@ test('标记池加载失败：错误 + 重试按钮；重试成功后正常进�
 })
 
 test('空标记池：提示「该仓库暂无标记」，仍可保存（仅移除）', async () => {
-  const putMock = mock.method(api, 'put', async () => ({ labels: [] }))
+  mock.method(api, 'put', async () => ({ labels: [] }))
   const { renderer, root } = await renderDrawer(LABELED_ISSUE, {
     labelPool: [],
   })

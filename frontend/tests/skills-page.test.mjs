@@ -210,7 +210,7 @@ test('交互：切换引擎展示该引擎技能列表', async () => {
 // （与 backup-manager 测试同款手法，issue #105）
 const dialog = await vite.ssrLoadModule('/src/dialog.js')
 
-function mountSkills(m) {
+function mountSkills(_m) {
   return TestRenderer.act(async () => {
     const renderer = TestRenderer.create(React.createElement(Skills))
     await new Promise((resolve) => setTimeout(resolve, 60))

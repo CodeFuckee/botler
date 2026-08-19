@@ -18,7 +18,6 @@ requirements.txt 不声明、部署机手动安装）。issue #112 起 Docker �
 import re
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]  # botler/ 仓库根
 DOCKERFILE = ROOT / "Dockerfile"

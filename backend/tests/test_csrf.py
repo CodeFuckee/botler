@@ -75,7 +75,6 @@ def _oidc_handler(request: httpx.Request) -> httpx.Response:
             "userinfo_endpoint": "https://nas.example.com/oauth/userinfo",
         })
     if url.endswith("/oauth/token"):
-        form = dict(parse_qsl(request.content.decode()))
         return httpx.Response(200, json={"access_token": "at-1", "token_type": "Bearer"})
     if url.endswith("/oauth/userinfo"):
         return httpx.Response(200, json={
@@ -251,9 +250,8 @@ class TestCsrfCookieLifecycle:
         """登录回调下发 CSRF cookie：非 HttpOnly（前端 JS 可读）、SameSite=Lax。"""
         tc, _ = sso_client
         _login(tc)
-        set_cookie = [h for h in tc.headers.getlist("set-cookie")] if hasattr(tc.headers, "getlist") else []
-        resp = tc.get("/api/auth/callback", follow_redirects=False)  # 触发一次
         # 从完整登录流程中检查 cookie 属性
+        tc.get("/api/auth/callback", follow_redirects=False)  # 触发一次
         tc2, _ = sso_client
         r = tc2.get("/api/auth/login", follow_redirects=False)
         state = dict(parse_qsl(urlparse(r.headers["location"]).query))["state"]

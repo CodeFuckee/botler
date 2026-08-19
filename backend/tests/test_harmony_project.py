@@ -88,7 +88,7 @@ class TestRealProject:
     def test_real_project_passes_all_checks(self, vh):
         """仓库内真实 harmony 工程必须通过全部结构校验。"""
         errors = vh.validate_project(HARMONY_DIR)
-        assert errors == [], f'鸿蒙工程结构校验失败:\n' + '\n'.join(f'  - {e}' for e in errors)
+        assert errors == [], '鸿蒙工程结构校验失败:\n' + '\n'.join(f'  - {e}' for e in errors)
 
 
 # ============================================================

@@ -5,7 +5,7 @@ import { confirmDialog } from '../dialog.js'
 import { Icon } from '../components/Icon.jsx'
 
 export default function Templates() {
-  const [params, setParams] = useSearchParams()
+  const [params] = useSearchParams()
   const [repos, setRepos] = useState([])
   const [globalTemplate, setGlobalTemplate] = useState('')
   // 中断恢复模版（issue #116）：与全局默认模版同机制可编辑
@@ -57,7 +57,12 @@ export default function Templates() {
     }
   }
 
-  useEffect(() => { load().catch((e) => setError(e.message)) }, [])
+  useEffect(() => {
+    // 挂载时仅加载一次：load 只使用模块级 api 与稳定 setter，每次渲染
+    // 重建引用，加入 deps 会形成「加载→setState→重渲染→再加载」死循环
+    load().catch((e) => setError(e.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const selectRepo = async (repoId) => {
     const data = await api.get(`/api/repos/${repoId}/template`)

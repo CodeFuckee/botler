@@ -118,7 +118,6 @@ class WorkspaceMixin:
         checkout / reset --hard / clean -fd——保留 Claude 上次的未提交改动
         与本地提交，供恢复会话接续使用。
         """
-        cfg = self.config.get()
         workdir = self._repo_workdir(repo)
         askpass = self._askpass_script(repo["name"])
         # 先剔除 CI 环境变量再设置关键项：gitlab-runner 的 CI_JOB_TOKEN 等

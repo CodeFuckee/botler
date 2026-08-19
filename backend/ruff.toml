@@ -1,0 +1,7 @@
+# Ruff 配置（issue #203）：后端代码质量门禁
+# 规则先宽松——仅启用 pyflakes（F）高价值规则，error 级拦截：
+#   F401 未用导入 / F821 未定义名 / F841 未用变量 / F811 重复定义 等
+# 风格类规则（E/W 等）暂不启用，避免一上来全仓库爆红；后续可逐步收紧
+# （line-length / isort / pycodestyle 等）。
+[lint]
+select = ["F"]

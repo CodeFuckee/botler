@@ -161,7 +161,7 @@ test('联动：只输入标题 → 描述框自动复制标题内容', async () 
 })
 
 test('联动：继续修改标题 → 描述跟随更新', async () => {
-  const { renderer, renderError } = await renderAddIssueModal()
+  const { renderer } = await renderAddIssueModal()
   try {
     await setTitle(renderer, '第一版标题')
     await setTitle(renderer, '第二版标题')
@@ -171,7 +171,7 @@ test('联动：继续修改标题 → 描述跟随更新', async () => {
 })
 
 test('不覆盖：描述已输入时修改标题，描述保持用户输入', async () => {
-  const { renderer, renderError } = await renderAddIssueModal()
+  const { renderer } = await renderAddIssueModal()
   try {
     await setDesc(renderer, '用户手写的描述')
     await setTitle(renderer, '新标题')
@@ -188,7 +188,7 @@ test('源码数据流：标题 onChange 联动描述（为空才复制）', () =
 // ---- 提交兜底 ----
 
 test('提交：只输标题直接提交 → POST description 等于标题', async () => {
-  const { renderer, renderError } = await renderAddIssueModal()
+  const { renderer } = await renderAddIssueModal()
   try {
     await setTitle(renderer, '只有标题')
     await checkFirstLabel(renderer)
@@ -201,7 +201,7 @@ test('提交：只输标题直接提交 → POST description 等于标题', asyn
 })
 
 test('提交：自动复制后手动清空描述 → POST description 仍等于标题', async () => {
-  const { renderer, renderError } = await renderAddIssueModal()
+  const { renderer } = await renderAddIssueModal()
   try {
     await setTitle(renderer, '清空描述试试')
     assert.equal(descInput(renderer).props.value, '清空描述试试',
@@ -215,7 +215,7 @@ test('提交：自动复制后手动清空描述 → POST description 仍等于�
 })
 
 test('提交：标题与描述都输入 → POST description 为用户输入的描述', async () => {
-  const { renderer, renderError } = await renderAddIssueModal()
+  const { renderer } = await renderAddIssueModal()
   try {
     await setTitle(renderer, '有标题')
     await setDesc(renderer, '有描述')
@@ -229,7 +229,7 @@ test('提交：标题与描述都输入 → POST description 为用户输入的�
 // ---- 回归防护 ----
 
 test('回归：标题为空仍被校验拦截，不发起 POST', async () => {
-  const { renderer, renderError } = await renderAddIssueModal()
+  const { renderer } = await renderAddIssueModal()
   try {
     await setTitle(renderer, '   ')
     await checkFirstLabel(renderer)

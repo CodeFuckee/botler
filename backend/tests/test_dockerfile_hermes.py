@@ -16,7 +16,6 @@ hermes-agent 源码（源码在 NAS 上经 compose 只读挂载），SDK 安装�
 
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]  # botler/ 仓库根
 DOCKERFILE = ROOT / "Dockerfile"
