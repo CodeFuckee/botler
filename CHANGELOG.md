@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 ### Added
+- **设置页左侧设置导航栏四周不再留边距（issue #344）**：设置页左侧设置导航栏
+  （`.settings-nav`，issue #139 引入、issue #168 支持整体折叠）原先为「悬浮
+  卡片」形态——面板带 16px 四边内边距（`padding: var(--space-4)`）+ 卡片背景
+  + 阴影 + 圆角，四周留白明显；issue #339 将设置页改为「左侧列表 + 右侧详情」
+  的手机设置页观感后，本次去掉导航面板的卡片容器样式，四周不再留边距，
+  导航内容直接铺在页面上，贴近手机设置页左侧列表的观感：
+  - **改动范围**：`.settings-nav` 移除 `background` / `box-shadow` /
+    `border-radius`（不再悬浮卡片）并显式 `padding: 0`（四周不留边距）；
+    `.settings-nav-rail`（整体折叠态窄栏）同步移除卡片容器样式（背景/阴影/
+    圆角/内边距），折叠与展开两种状态观感一致；两栏布局（`.settings-layout`
+    网格与 24px 列间距）、导航内部滚动（`max-height` + `overflow-y: auto`）、
+    搜索/分组/子项等内部元素间距与交互全部保留不受影响；
+  - **新增测试**：`tests/settings-nav-no-margin.test.mjs` 新增 5 例源码级
+    断言——`.settings-nav` 不声明非零内边距（四周不留边距）、不再声明
+    背景/阴影/圆角（不再是卡片容器）、`.settings-nav-rail` 折叠态同样无
+    卡片容器样式、`.settings-layout` 两栏网格与 24px 列间距保留（防误伤）、
+    导航面板内部滚动能力保留；全量前端单元测试（1375 例）无 regression。
 - **竖屏下概览页 issue 详情右边栏标题与 × 关闭按钮同行、标题过长省略号（issue #341）**：
   竖屏（≤860px 且 orientation: portrait，手机/窄窗口竖屏）下概览页 issue 详情
   右边栏头部（`.drawer.issue-drawer .modal-header`）原先允许换行（issue #334

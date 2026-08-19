@@ -689,12 +689,9 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .settings-sidebar.collapsed .settings-nav {
   display: none;
 }
-/* 折叠态窄栏：垂直排列的展开按钮 */
+/* 折叠态窄栏：垂直排列的展开按钮（issue #344：与展开态一致，
+   四周不留边距——去掉卡片容器样式，窄栏直接铺在页面上） */
 .settings-nav-rail {
-  background: var(--bg-card);
-  box-shadow: var(--shadow-card);
-  border-radius: var(--radius);
-  padding: var(--space-2);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -754,12 +751,12 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .settings-group-title:first-child {
   margin-top: 0;
 }
-/* 左侧导航面板（issue #139）：吸顶（宽视口），与卡片同材质 */
+/* 左侧导航面板（issue #139）：吸顶（宽视口），内部滚动。
+   issue #344：四周不再留边距——去掉卡片容器样式（内边距/背景/阴影/圆角），
+   导航内容直接铺在页面上，贴近手机设置页「左侧列表」的观感（issue #339
+   左右布局的延续），折叠态窄栏（.settings-nav-rail）同样处理保持一致 */
 .settings-nav {
-  background: var(--bg-card);
-  box-shadow: var(--shadow-card);
-  border-radius: var(--radius);
-  padding: var(--space-4);
+  padding: 0;
   max-height: calc(100vh - 92px);
   overflow-y: auto;
 }
