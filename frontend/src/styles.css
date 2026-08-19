@@ -1441,7 +1441,12 @@ code {
    任务执行详情抽屉与其他 .modal-header 使用者 */
 .issue-drawer .modal-header {
   position: sticky;
-  top: 0;
+  /* issue #335：top 必须为负的 --space-4（与负 margin 同值）——实测
+     position: sticky + flex 容器下负 margin 不参与静态定位（边框盒停在
+     content-box 顶 16px），top: 0 时头部与抽屉顶部留 16px 空隙，滚动时
+     内容文字从空隙露出；top 取负值使 sticky 约束按 -16px 计算，头部边框
+     盒紧贴抽屉顶部（gap=0，静止与滚动全程无空隙） */
+  top: calc(-1 * var(--space-4));
   z-index: 5;
   background: var(--bg-card);
   margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;
@@ -1449,7 +1454,9 @@ code {
 }
 .pipeline-drawer .modal-header {
   position: sticky;
-  top: 0;
+  /* issue #335：同 issue 抽屉——top 取负的 --space-4 抵消 .drawer padding，
+     使头部边框盒紧贴抽屉顶部（top: 0 会留 16px 空隙、滚动时内容露出） */
+  top: calc(-1 * var(--space-4));
   z-index: 5;
   background: var(--bg-card);
   margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;

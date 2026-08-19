@@ -834,6 +834,22 @@
     生成落盘持久目录并模拟部署轮换后仍可读取），实现前全部可复现失败；
     `test_api_repo_logo.py` 全量通过，后端全量测试无 regression。
 
+- **概览页 issue 详情与流水线详情右边栏头部与抽屉顶部空隙（issue #335）**：
+  概览页 issue 详情右边栏与流水线详情右边栏的 sticky 头部与抽屉顶部存在 16px
+  空隙，滚动时内容文字从空隙中露出，体验差。根因：`.modal-header` 用负 margin
+  （`calc(-1 * var(--space-4))`）抵消 `.drawer` 的 padding 以铺满顶部，但实测
+  `position: sticky` + flex 容器下负 margin 不参与静态定位（头部边框盒停在
+  content-box 顶 16px），`top: 0` 时头部与抽屉顶部始终留 16px 空隙，滚动内容
+  从空隙露出。修复：`.issue-drawer .modal-header` / `.pipeline-drawer
+  .modal-header` 的 `top: 0` 改为 `top: calc(-1 * var(--space-4))`（与负
+  margin 同值），sticky 约束按 -16px 计算，头部边框盒紧贴抽屉顶部
+  （gap=0），静止与滚动全程无空隙。测试：`frontend/e2e/tests/
+  issue-drawer-sticky.spec.js` 新增 2 例真实浏览器回归（issue/流水线抽屉：
+  静止与滚动到底后头部与抽屉顶部 gap<1px、顶部 8px 条带 topmost 元素命中
+  头部而非内容行）；修复前 2 例均失败（gap=16），修复后全部通过；
+  `overview-drawer-actions-sticky.test.mjs` 源码断言随修复更新
+  （`top: calc(-1 * var(--space-4))`）；前端全量测试无 regression。
+
 ## [1.4.3] - 2026-08-19
 ### Added
 

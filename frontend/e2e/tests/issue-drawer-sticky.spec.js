@@ -178,3 +178,136 @@ test('竖屏视口：× 关闭按钮固定在顶部、其余操作按钮固定�
   expect(Math.abs(after.headerTop - topBefore)).toBeLessThan(2) // 头部固定未移动
   expect(Math.abs(after.bottomBottom - bottomBefore)).toBeLessThan(2) // 底部固定未移动
 })
+
+// 顶部空隙回归测试（issue #335）：概览页 issue 详情右边栏与流水线详情
+// 右边栏的 sticky 头部必须紧贴抽屉顶部（无空隙）——修复前 .modal-header
+// 的负 margin（抵消 .drawer padding）在 position: sticky + flex 容器下
+// 不生效，头部边框盒停在 content-box 顶（16px），抽屉顶部留下 16px 空隙；
+// 滚动时内容文字从空隙中露出（elementFromPoint 顶部条带命中内容行），
+// 体验差。本用例在真实 Chromium 中断言：
+//   1) 静止时头部与抽屉顶部无空隙（headerTop - drawerTop < 1px）；
+//   2) 滚动到底后头部仍紧贴顶部（gap 不随滚动变化）；
+//   3) 滚动后抽屉顶部 8px 条带的 topmost 元素必须是头部（或其子元素），
+//      不是滚动上来的内容行——即「文字从空隙露出」不再发生。
+// 返回 drawer 内顶部条带（顶部 8px 处）的 topmost 元素信息
+async function topStripInfo(page, drawerLocator) {
+  return drawerLocator.evaluate((drawer) => {
+    const dr = drawer.getBoundingClientRect()
+    const x = dr.left + dr.width / 2
+    const y = dr.top + 8
+    const el = document.elementFromPoint(x, y)
+    const header = drawer.querySelector('.modal-header')
+    return {
+      drawerTop: dr.top,
+      headerTop: header.getBoundingClientRect().top,
+      gap: Math.round((header.getBoundingClientRect().top - dr.top) * 100) / 100,
+      inHeader: !!header && header.contains(el),
+      elCls: el ? (el.className || el.tagName) : null,
+    }
+  })
+}
+
+// 断言头部紧贴抽屉顶部且顶部条带无内容露出
+async function expectHeaderFlush(page, drawerLocator) {
+  const info = await topStripInfo(page, drawerLocator)
+  expect(info.gap, `头部与抽屉顶部应无空隙（gap=${info.gap}）`).toBeLessThan(1)
+  expect(info.inHeader,
+         `抽屉顶部条带应命中头部而非内容（命中：${info.elCls}）`).toBe(true)
+}
+
+// 构造可滚动且带多个 job 的流水线 fixture（job 列表足够长保证抽屉可滚动）
+function tallPipelineFixture() {
+  const jobs = Array.from({ length: 40 }, (_, i) => ({
+    id: 1000 + i,
+    name: `job-${i} 这是一个很长的任务名称用于撑高流水线详情内容`,
+    status: 'success',
+    allow_failure: false,
+    web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/jobs/1000',
+    artifacts: [],
+  }))
+  return {
+    pipelines: [{
+      repo_id: 1,
+      repo_name: 'botler',
+      enabled: true,
+      pipeline: {
+        id: 335,
+        status: 'success',
+        ref: 'main',
+        sha: 'abcdef1234567890',
+        created_at: '2026-08-19 20:00:00',
+        updated_at: '2026-08-19 20:05:00',
+        finished_at: '2026-08-19 20:06:00',
+        duration: 300,
+        web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/pipelines/335',
+      },
+      stages: Array.from({ length: 8 }, (_, s) => ({
+        name: `stage-${s}`,
+        status: 'success',
+        jobs: jobs.slice(s * 5, s * 5 + 5),
+      })),
+      commit_time: '2026-08-19 20:00:00',
+    }],
+    errors: [],
+  }
+}
+
+test('issue 详情右边栏头部紧贴抽屉顶部，滚动后顶部无内容露出（issue #335）', async ({ page }) => {
+  await mockGitLabApis(page, { issues: tallIssueFixture() })
+  await page.route('**/api/issues/123/332/detail', (route) => {
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notes: [], engine: 'claude', task_id: null,
+        task_duration_seconds: null, task_status: null,
+      }),
+    })
+  })
+
+  await page.goto('/overview')
+  await expect(page.locator('.issue-link').first()).toBeVisible()
+  await page.locator('.issue-link').first().click()
+  const drawer = page.locator('.issue-drawer')
+  await expect(drawer).toBeVisible()
+
+  // 1. 静止时头部紧贴抽屉顶部（无空隙）
+  await expectHeaderFlush(page, drawer)
+
+  // 2. 抽屉内容可滚动（否则「滚动后」断言无意义）
+  const scrollable = await drawer.evaluate((el) => el.scrollHeight > el.clientHeight)
+  expect(scrollable).toBe(true)
+
+  // 3. 滚动到底后头部仍紧贴顶部，且顶部条带命中头部（内容不露出）
+  await drawer.evaluate((el) => { el.scrollTop = el.scrollHeight })
+  await page.waitForTimeout(300)
+  const info = await topStripInfo(page, drawer)
+  expect(info.gap, `滚动后头部与抽屉顶部应仍无空隙（gap=${info.gap}）`).toBeLessThan(1)
+  expect(info.inHeader,
+         `滚动后抽屉顶部条带应命中头部而非内容（命中：${info.elCls}）`).toBe(true)
+})
+
+test('流水线详情右边栏头部紧贴抽屉顶部，滚动后顶部无内容露出（issue #335）', async ({ page }) => {
+  await mockGitLabApis(page, { pipelines: tallPipelineFixture() })
+
+  await page.goto('/overview')
+  const pipelineLink = page.locator('.pipeline-link').first()
+  await expect(pipelineLink).toBeVisible()
+  await pipelineLink.click()
+  const drawer = page.locator('.pipeline-drawer')
+  await expect(drawer).toBeVisible()
+
+  // 1. 静止时头部紧贴抽屉顶部（无空隙）
+  await expectHeaderFlush(page, drawer)
+
+  // 2. 抽屉内容可滚动（否则「滚动后」断言无意义）
+  const scrollable = await drawer.evaluate((el) => el.scrollHeight > el.clientHeight)
+  expect(scrollable).toBe(true)
+
+  // 3. 滚动到底后头部仍紧贴顶部，且顶部条带命中头部（内容不露出）
+  await drawer.evaluate((el) => { el.scrollTop = el.scrollHeight })
+  await page.waitForTimeout(300)
+  const info = await topStripInfo(page, drawer)
+  expect(info.gap, `滚动后头部与抽屉顶部应仍无空隙（gap=${info.gap}）`).toBeLessThan(1)
+  expect(info.inHeader,
+         `滚动后抽屉顶部条带应命中头部而非内容（命中：${info.elCls}）`).toBe(true)
+})

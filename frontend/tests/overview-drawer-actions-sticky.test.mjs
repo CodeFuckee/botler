@@ -66,7 +66,11 @@ function toText(node) {
 test('styles.css：issue 详情右边栏头部操作区 sticky 固定在顶部', () => {
   const body = ruleBody(styles, '\\.issue-drawer\\s+\\.modal-header', 'position')
   assert.match(body, /position:\s*sticky/, 'issue 抽屉头部应 sticky（不随内容滚动）')
-  assert.match(body, /top:\s*0/, 'issue 抽屉头部应吸附抽屉顶部')
+  // issue #335：top 必须为负的 --space-4（抵消 .drawer padding）——实测
+  // position: sticky + flex 容器下负 margin 不生效，top: 0 时头部边框盒停在
+  // content-box 顶（16px），抽屉顶部留空隙、滚动时内容文字从空隙露出
+  assert.match(body, /top:\s*calc\(-1 \* var\(--space-4\)\)/,
+               'issue 抽屉头部应吸附抽屉顶部（top 抵消 padding，无空隙）')
   assert.match(body, /z-index/, 'issue 抽屉头部应浮于滚动内容之上（z-index）')
   assert.match(body, /background/, 'issue 抽屉头部应有不透明背景（遮住滚过的内容）')
 })
@@ -74,7 +78,10 @@ test('styles.css：issue 详情右边栏头部操作区 sticky 固定在顶部',
 test('styles.css：流水线详情右边栏头部操作区 sticky 固定在顶部', () => {
   const body = ruleBody(styles, '\\.pipeline-drawer\\s+\\.modal-header', 'position')
   assert.match(body, /position:\s*sticky/, '流水线抽屉头部应 sticky（不随内容滚动）')
-  assert.match(body, /top:\s*0/, '流水线抽屉头部应吸附抽屉顶部')
+  // issue #335：同 issue 抽屉——top 必须为负的 --space-4（抵消 padding），
+  // 否则头部与抽屉顶部留空隙、滚动时内容从空隙露出
+  assert.match(body, /top:\s*calc\(-1 \* var\(--space-4\)\)/,
+               '流水线抽屉头部应吸附抽屉顶部（top 抵消 padding，无空隙）')
   assert.match(body, /z-index/, '流水线抽屉头部应浮于滚动内容之上（z-index）')
   assert.match(body, /background/, '流水线抽屉头部应有不透明背景（遮住滚过的内容）')
 })
