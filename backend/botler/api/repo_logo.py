@@ -33,9 +33,12 @@
   issue 创建链路（per-repo client——仓库 remote URL 内嵌 token 优先，
   无 token 回退全局 bot token）；成功返回 ok=true + 项目
   path_with_namespace + 新 avatar_url，前端展示「已同步到 GitLab」。
-  上传前压缩（issue #310）：GitLab 项目头像上限 200KB，logo 超限时先用
-  Pillow 压缩到 200KB 以内再上传（本地 logo 文件保持原始质量，仅为上传
-  生成压缩副本；压缩可能转码 PNG → JPEG/WebP，mime 与文件名同步调整）。
+  上传前压缩 + 格式归一（issue #310/#318）：GitLab 项目头像上限 200KB
+  且仅支持 png/jpeg/gif/bmp/tiff/vnd.microsoft.icon——logo 超限时先用
+  Pillow 压缩到 200KB 以内再上传；logo 为不受支持格式（如 WebP/AVIF/
+  SVG，GitLab 返回 400「file format is not supported」）时转码为支持
+  格式（含透明 → PNG，无透明 → PNG/JPEG，禁止 WebP）。本地 logo 文件
+  保持原始质量，仅为上传生成压缩/转码副本；mime 与文件名同步调整。
 
 错误映射：仓库不存在 → 404；仓库已删除/未启用 → 400；未配置 AI 对话
 模型 → 400（引导设置页配置）；未配置生图模型 → 400（引导设置页配置）；
@@ -105,6 +108,9 @@ _MIME_EXT = {
     "image/gif": ".gif",
     "image/avif": ".avif",
     "image/svg+xml": ".svg",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+    "image/vnd.microsoft.icon": ".ico",
 }
 
 
@@ -205,54 +211,78 @@ def _save_logo(repo_id: int, data: bytes, mime: str) -> tuple[str, str]:
 GITLAB_AVATAR_LIMIT = 200 * 1024
 GITLAB_AVATAR_TARGET = int(GITLAB_AVATAR_LIMIT * 0.95)
 
+# GitLab 项目头像支持的文件格式（issue #318）：PUT /projects/{id} 的
+# avatar 仅接受以下 MIME，其余格式（含 WebP/AVIF/SVG）一律返回 400
+# 「file format is not supported」。压缩/转码候选只允许落在该集合内。
+GITLAB_AVATAR_MIMES = frozenset({
+    "image/png", "image/jpeg", "image/gif", "image/bmp", "image/tiff",
+    "image/vnd.microsoft.icon",
+})
+
+# Pillow 探测出的真实图片格式 → MIME（issue #318）：直通判定与 mime
+# 校正基于文件内容而非存储 mime，防止生图模型返回格式与记录不一致。
+_PIL_FORMAT_MIME = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "GIF": "image/gif",
+    "BMP": "image/bmp",
+    "TIFF": "image/tiff",
+    "ICO": "image/vnd.microsoft.icon",
+}
+
 
 def _compress_image_for_gitlab(data: bytes, mime: str) -> tuple[bytes, str]:
-    """把图片压缩到 GitLab 项目头像 200KB 上限以内（issue #310）。
+    """把图片转为 GitLab 项目头像支持的格式并压缩到 200KB 以内（issue #310/#318）。
 
     仅在 sync-logo 上传前调用：本地 logo 文件保持原始质量，只为 GitLab
-    上传生成压缩副本。策略（Pillow；缺失或解码失败时回退原始字节）：
-    1. 原始字节 ≤ 压缩目标（200KB 的 95%，留余量）→ 原样返回；
-    2. 原格式重编码逐级降质量（JPEG/WebP 降 quality；PNG 走无损优化）；
-    3. 仍超限 → 转 WebP（保留透明通道）/ JPEG（无透明）继续降质量；
-    4. 仍超限 → 等比降分辨率（1.0→0.2 阶梯）重复 2/3；
-    5. 全部候选失败或 Pillow 不可用/图片无法解码 → 返回原始字节，交由
-       GitLab 报错兜底。
-    返回 (压缩后字节, 压缩后 mime)；mime 可能变化（PNG → JPEG/WebP），
-    调用方需同步调整上传文件名扩展名。
+    上传生成上传副本。策略（Pillow；缺失或解码失败时回退原始字节）：
+    1. 解码并探测真实格式（按文件内容而非存储 mime，防止模型返回格式
+       与 mime 记录不一致）；
+    2. 真实格式在 GitLab 支持集合内且原始字节 ≤ 压缩目标（200KB 的
+       95%，留余量）→ 原样直通（字节不变），仅按真实格式校正 mime；
+    3. 其余情况（超限，或格式不受支持如 WebP/AVIF/SVG）→ 转码为
+       GitLab 支持格式：含透明通道 → PNG（保留 alpha；GitLab 头像不支持
+       WebP，issue #318 不再用 WebP 保留透明）；无透明 → PNG/JPEG 候选
+       （JPEG 有损、体积更小，超限兜底）；
+    4. 仍超限 → 等比降分辨率（1.0→0.2 阶梯）重复 3；
+    5. 全部候选失败或 Pillow 不可用/图片无法解码 → 返回原始字节与存储
+       mime，交由 GitLab 报错兜底。
+    返回 (压缩后字节, 压缩后 mime)；mime 可能变化（WebP → PNG/JPEG、
+    PNG → JPEG），调用方需同步调整上传文件名扩展名。
     """
-    if len(data) <= GITLAB_AVATAR_TARGET:
-        return data, mime
+    stored_mime = (mime or "image/png").strip().lower()
     try:
         from PIL import Image
-    except Exception:  # Pillow 未安装：跳过压缩，让 GitLab 返回超限错误
-        return data, mime
+    except Exception:  # Pillow 未安装：跳过压缩/转码，让 GitLab 返回错误
+        return data, stored_mime
     try:
         img = Image.open(io.BytesIO(data))
+        fmt = (img.format or "").upper()
         img.load()
     except Exception:  # 无法解码（损坏/非图片）：原样上传，不崩溃
-        return data, mime
+        return data, stored_mime
 
-    fmt = (img.format or "").upper()
+    # 真实格式判定（按文件内容）：直通仅当格式受 GitLab 支持（issue
+    # #318）且未超限；mime 同时校正为真实值，避免存储 mime 与实际内容
+    # 不一致导致 GitLab 按内容嗅探拒绝。
+    actual_mime = _PIL_FORMAT_MIME.get(fmt)
+    if actual_mime in GITLAB_AVATAR_MIMES and len(data) <= GITLAB_AVATAR_TARGET:
+        return data, actual_mime
+
     has_alpha = img.mode in ("RGBA", "LA") or (
         img.mode == "P" and "transparency" in img.info)
-    # 压缩候选：格式 / mime / Pillow save 参数，按质量从高到低排列——
-    # 第一个压进目标大小的候选即「保质量最优」的结果。
+    # 压缩/转码候选（仅 GitLab 支持格式，issue #318 禁止 WebP）：先按
+    # 原格式重编码（JPEG 降质量 / 其余一律 PNG 无损，保留透明），无透明
+    # 通道时追加 JPEG 有损降质候选——第一个压进目标大小的候选即「保质量
+    # 最优」的结果。
     candidates: list[tuple[str, str, dict]] = []
     if fmt in ("JPEG", "JPG"):
         for q in (85, 70, 55, 40):
             candidates.append(("JPEG", "image/jpeg", {"quality": q, "optimize": True}))
-    elif fmt == "WEBP":
-        for q in (85, 70, 55, 40):
-            candidates.append(("WEBP", "image/webp", {"quality": q, "method": 6}))
     else:
         candidates.append(("PNG", "image/png", {"optimize": True, "compress_level": 9}))
-    if has_alpha:
-        # 含透明通道：WebP 是唯一可保留 alpha 的候选（JPEG 不支持透明）
-        for q in (80, 60, 40):
-            candidates.append(("WEBP", "image/webp", {"quality": q, "method": 6}))
-    else:
-        for q in (80, 60, 40):
-            candidates.append(("WEBP", "image/webp", {"quality": q, "method": 6}))
+    if not has_alpha:
+        for q in (85, 70, 55, 40):
             candidates.append(("JPEG", "image/jpeg", {"quality": q, "optimize": True}))
 
     def _encode(im, img_fmt: str, save_kwargs: dict) -> bytes:
@@ -283,7 +313,10 @@ def _compress_image_for_gitlab(data: bytes, mime: str) -> tuple[bytes, str]:
                 best = (out, out_mime)
             if len(out) <= GITLAB_AVATAR_TARGET:
                 return best
-    return best if best is not None else (data, mime)
+    return best if best is not None else (data, stored_mime)
+
+
+
 
 
 @router.post("/{repo_id}/generate-logo", status_code=201)
@@ -425,9 +458,11 @@ def sync_repo_logo(request: Request, repo_id: int):
         raise HTTPException(500, f"读取 logo 文件失败: {e}") from e
     mime = row["logo_mime"] or "image/png"
 
-    # issue #310：GitLab 项目头像上限 200KB——超限图片上传前先压缩（本地
-    # logo 文件保持原始质量，仅为上传生成压缩副本）；压缩可能转换格式
-    # （PNG → JPEG/WebP），mime 变化时同步修正上传文件名扩展名。
+    # issue #310/#318：GitLab 项目头像上限 200KB 且仅支持
+    # png/jpeg/gif/bmp/tiff/vnd.microsoft.icon——上传前先压缩超限图片、
+    # 把不支持格式（如 WebP，GitLab 返回 400）转码为支持格式（本地
+    # logo 文件保持原始质量，仅为上传生成副本）；mime 变化时同步修正
+    # 上传文件名扩展名。
     data, mime = _compress_image_for_gitlab(data, mime)
     filename = path.name
     if mime != (row["logo_mime"] or "image/png"):

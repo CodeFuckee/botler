@@ -18,9 +18,12 @@ logo（简约美观大方）；生成的 logo 显示在仓库页面每个仓库�
   400 / 未配置生图模型 400 / AI 生成提示词失败与空回复 502 / 生图模型
   调用失败与未返回图片 502 / 未生成 logo 404 / logo 文件缺失 404；
 - 重复生成覆盖同名文件；生成后 GET /api/repos 仓库列表带 logo 字段。
-- 同步上传前压缩（issue #310）：logo 超过 GitLab 项目头像 200KB 上限时，
-  sync-logo 上传前用 Pillow 压缩到 200KB 以内（本地文件保持原始质量）；阈值内
-  直通不转码；Pillow 缺失/图片无法解码回退原始字节。
+- 同步上传前压缩 + 格式归一（issue #310/#318）：logo 超过 GitLab 项目头像
+  200KB 上限时，sync-logo 上传前用 Pillow 压缩到 200KB 以内（本地文件保持
+  原始质量）；GitLab 头像不支持 WebP/AVIF/SVG（400「file format is not
+  supported」），不受支持格式（或超限图片）统一转码为 png/jpeg/gif/bmp/tiff/
+  vnd.microsoft.icon（含透明 → PNG，禁止 WebP），仅对阈值内且格式受支持的
+  图片原样直通（mime 按真实内容校正）；Pillow 缺失/图片无法解码回退原始字节。
 """
 
 import base64
@@ -639,11 +642,18 @@ class TestSyncLogoCompression:
         import io
         im = Image.open(io.BytesIO(data))
         im.load()
+        # 上传格式必须是 GitLab 头像支持的格式（issue #318）：禁止 WebP
+        from botler.api.repo_logo import GITLAB_AVATAR_MIMES
+        assert mime in GITLAB_AVATAR_MIMES, mime
         # mime 与上传文件名扩展名一致（压缩可能转换格式）
         if mime == "image/jpeg":
             assert filename.endswith(".jpg"), filename
-        elif mime == "image/webp":
-            assert filename.endswith(".webp"), filename
+        elif mime == "image/bmp":
+            assert filename.endswith(".bmp"), filename
+        elif mime == "image/tiff":
+            assert filename.endswith(".tiff"), filename
+        elif mime == "image/vnd.microsoft.icon":
+            assert filename.endswith(".ico"), filename
         else:
             assert filename.endswith(".png"), filename
 
@@ -688,6 +698,36 @@ class TestSyncLogoCompression:
         assert r.status_code == 200, r.text
         assert stub.avatar_calls == [(42, "42.png", corrupt, "image/png")]
 
+    def test_webp_logo_converted_to_supported_format(self, logo_env):
+        """WebP logo（阈值内）同步：GitLab 头像不支持 WebP（issue #318），
+        必须转码为 GitLab 支持格式（PNG/JPEG），不能原样直通。"""
+        tc, stub, db, logo_dir = logo_env
+        stub.avatar_result = {"path_with_namespace": "chenkaidi/botler"}
+        import io
+        from PIL import Image
+        img = Image.new("RGBA", (64, 64), (30, 144, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP")
+        webp = buf.getvalue()
+        assert len(webp) <= self.GITLAB_AVATAR_LIMIT  # 阈值内
+        repo_id = _add_repo(db, 42, "botler")
+        db.update_repo(repo_id, logo_path="42.webp",
+                       logo_updated_at="2026-08-19 10:00:00",
+                       logo_mime="image/webp")
+        logo_dir.mkdir(parents=True, exist_ok=True)
+        (logo_dir / "42.webp").write_bytes(webp)
+        r = tc.post(f"/api/repos/{repo_id}/sync-logo")
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] is True
+        from botler.api.repo_logo import GITLAB_AVATAR_MIMES
+        pid, filename, data, mime = stub.avatar_calls[0]
+        assert pid == 42
+        assert mime in GITLAB_AVATAR_MIMES, mime
+        assert mime != "image/webp"
+        assert filename.endswith((".png", ".jpg"))
+        im = Image.open(io.BytesIO(data))
+        im.load()
+
 
 class TestCompressImageForGitlab:
     """_compress_image_for_gitlab 单元测试（issue #310）。
@@ -719,6 +759,40 @@ class TestCompressImageForGitlab:
         assert out == data
         assert mime == "image/png"
 
+    def test_small_webp_converted_to_supported_format(self):
+        """阈值内 WebP：GitLab 头像不支持 WebP（issue #318），即使未超限
+        也必须转码为支持格式（PNG/JPEG），不能原样直通。"""
+        from botler.api.repo_logo import (
+            GITLAB_AVATAR_LIMIT, GITLAB_AVATAR_MIMES,
+            _compress_image_for_gitlab,
+        )
+        import io
+        from PIL import Image
+        img = Image.new("RGBA", (64, 64), (30, 144, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP")
+        data = buf.getvalue()
+        assert len(data) <= GITLAB_AVATAR_LIMIT  # 阈值内，尺寸不是问题
+        out, mime = _compress_image_for_gitlab(data, "image/webp")
+        assert mime in GITLAB_AVATAR_MIMES, mime
+        assert mime != "image/webp"
+        im = Image.open(io.BytesIO(out))
+        im.load()
+
+    def test_small_png_with_mislabeled_mime_corrected(self):
+        """存储 mime 与实际内容不一致（声称 webp 实为 PNG）：按真实格式
+        直通并校正 mime（不转码不压缩，字节不变）。"""
+        from botler.api.repo_logo import _compress_image_for_gitlab
+        import io
+        from PIL import Image
+        img = Image.new("RGB", (32, 32), (30, 144, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        data = buf.getvalue()
+        out, mime = _compress_image_for_gitlab(data, "image/webp")
+        assert out == data  # 字节原样直通
+        assert mime == "image/png"
+
     def test_large_png_compressed_within_limit(self):
         """超限 PNG：输出 ≤ 目标大小且仍是可解码图片，mime 合法。"""
         from botler.api.repo_logo import (
@@ -730,12 +804,15 @@ class TestCompressImageForGitlab:
         assert len(large) > GITLAB_AVATAR_LIMIT
         out, mime = _compress_image_for_gitlab(large, "image/png")
         assert len(out) <= GITLAB_AVATAR_LIMIT
-        assert mime in ("image/png", "image/jpeg", "image/webp")
+        # issue #318：输出格式必须在 GitLab 头像支持集合内（禁止 WebP）
+        from botler.api.repo_logo import GITLAB_AVATAR_MIMES
+        assert mime in GITLAB_AVATAR_MIMES, mime
         im = Image.open(io.BytesIO(out))
         im.load()
 
-    def test_rgba_preserves_transparency_via_webp(self):
-        """含透明通道的 PNG：压缩输出 WebP（保留 alpha），不转 JPEG。"""
+    def test_rgba_preserves_transparency_via_png(self):
+        """含透明通道的 PNG：压缩输出 PNG（保留 alpha 且是 GitLab 支持
+        格式），禁止转 WebP（issue #318，GitLab 头像不支持 WebP）。"""
         from botler.api.repo_logo import (
             GITLAB_AVATAR_LIMIT, _compress_image_for_gitlab,
         )
@@ -753,7 +830,7 @@ class TestCompressImageForGitlab:
         rgba = buf.getvalue()
         assert len(rgba) > GITLAB_AVATAR_LIMIT
         out, mime = _compress_image_for_gitlab(rgba, "image/png")
-        assert mime == "image/webp"
+        assert mime == "image/png"
         assert len(out) <= GITLAB_AVATAR_LIMIT
         im = Image.open(io.BytesIO(out))
         im.load()
@@ -766,6 +843,29 @@ class TestCompressImageForGitlab:
         out, mime = _compress_image_for_gitlab(bad, "image/png")
         assert out == bad
         assert mime == "image/png"
+
+    def test_large_jpeg_stays_jpeg(self):
+        """超限 JPEG：保持 JPEG 格式逐级降质量/降分辨率压缩进 200KB
+        （JPEG 本身是 GitLab 支持格式，无需转码）。"""
+        from botler.api.repo_logo import (
+            GITLAB_AVATAR_LIMIT, _compress_image_for_gitlab,
+        )
+        import io
+        import random as _random
+        from PIL import Image
+        rng = _random.Random(1)
+        img = Image.new("RGB", (800, 800))
+        img.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                     for _ in range(800 * 800)])
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95)
+        data = buf.getvalue()
+        assert len(data) > GITLAB_AVATAR_LIMIT
+        out, mime = _compress_image_for_gitlab(data, "image/jpeg")
+        assert mime == "image/jpeg"
+        assert len(out) <= GITLAB_AVATAR_LIMIT
+        im = Image.open(io.BytesIO(out))
+        im.load()
 
     def test_pillow_missing_falls_back(self, monkeypatch):
         """Pillow 缺失：原样返回，不抛异常。"""

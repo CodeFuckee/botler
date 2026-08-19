@@ -62,6 +62,31 @@
 
 ### Fixed
 
+- **仓库设置页「同步到 GitLab」图标上传报 400「file format is not supported」（issue #318）**：
+  GitLab 项目头像仅支持 `png / jpeg / gif / bmp / tiff / vnd.microsoft.icon`，
+  **不支持 WebP/AVIF/SVG**——issue #310 的压缩逻辑把超限含透明 logo 转成
+  WebP、且 ≤200KB 的 logo 按原格式直通，生图模型产出的 WebP logo 同步到
+  GitLab 时被拒（`GitLab API 错误 400: {"message":{"avatar":["file format
+  is not supported…"]}}`）。修复：
+  - `backend/botler/api/repo_logo.py`：`_compress_image_for_gitlab` 改为
+    「格式归一 + 压缩」——先用 Pillow 按**文件内容**（而非存储 mime）探测
+    真实格式，仅对「阈值内（200KB 的 95%）且格式受 GitLab 支持」的图片
+    原样直通（mime 同时校正为真实值）；其余一律转码为支持格式：含透明
+    通道 → **PNG**（保留 alpha，不再用 GitLab 不支持的 WebP 保留透明），
+    无透明 → PNG/JPEG 候选（JPEG 有损降质量兜底），仍超限走等比降分辨率
+    阶梯（1.0→0.2），全程候选格式限定在 `GITLAB_AVATAR_MIMES` 内；新增
+    `_PIL_FORMAT_MIME` 内容探测映射，`_MIME_EXT` 补充 bmp/tiff/ico；
+  - **测试**：`backend/tests/test_api_repo_logo.py` 新增/收紧
+    `TestSyncLogoCompression.test_webp_logo_converted_to_supported_format`
+    （阈值内 WebP 同步必须转码为支持格式）、
+    `TestCompressImageForGitlab.test_small_webp_converted_to_supported_format`
+    （小 WebP 不直通）、`test_small_png_with_mislabeled_mime_corrected`
+    （存储 mime 与实际内容不一致时按真实格式校正）、
+    `test_large_jpeg_stays_jpeg`（超限 JPEG 保持 JPEG 降质），并把 RGBA
+    测试改为断言输出 PNG（原断言 WebP）、超限压缩断言收紧为输出必须落在
+    GitLab 支持集合内；实现前 3 例可复现失败；test_api_repo_logo.py 全量
+    44 例通过，后端全量测试 + 覆盖率门禁（≥70%）无 regression。
+
 - **识图模型图片 URL 经 nginx 访问 404 / 跳转平台——MinIO 代理路径映射错误（issue #311）**：
   后端生成的识图图片对象 URL 形如 `https://<站点>/minio-public/<bucket>/<sha256 哈希>`
   （`public_base_url/bucket/<哈希>`，默认桶 `public` → `/minio-public/public/<哈希>`），
