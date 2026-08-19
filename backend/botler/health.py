@@ -44,7 +44,7 @@ def probe_minio(endpoint: str, secure: bool, timeout: float = MINIO_PROBE_TIMEOU
     scheme = "https" if secure else "http"
     url = f"{scheme}://{endpoint}/minio/health/live"
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # nosec B310（与 tools.py 同款：端点来自配置白名单）
             if resp.status == 200:
                 return {"status": "ok", "detail": f"{url} 返回 200"}
             return {"status": "fail", "detail": f"{url} 返回 HTTP {resp.status}"}
