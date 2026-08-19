@@ -794,7 +794,8 @@ name/picture，头像加载失败或无头像时回退首字母占位）、会�
   令牌、GitLab PAT（`glpat-*`）、`${ENV}` 引用名；配置中声明的凭据 Key
   （`ai_providers[].api_key`、gitlab token、webhook secret、minio 凭据等）
   自动纳入规则。executor 子进程输出、任务日志落库（task_logs）、GitLab API
-  错误响应、全部 logging 输出统一走脱敏；正常日志内容不受影响。- webhook 用 `X-Gitlab-Token` 校验，防伪造请求
+  错误响应、全部 logging 输出统一走脱敏；正常日志内容不受影响。
+- webhook 用 `X-Gitlab-Token` 校验，防伪造请求
 - 工作区每次执行前 `reset --hard` + `clean -fd`，不同仓库互相隔离
 - SSO 启用后 `/api/*` 除登录流程与健康检查外均需登录（会话为签名 cookie，
   密钥自动生成于 `backend/data/session_secret.key`，已 gitignore；Docker 部署
