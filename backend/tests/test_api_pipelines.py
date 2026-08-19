@@ -16,6 +16,7 @@ GitLab CI/CD 风格展示：
 import time
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -51,6 +52,9 @@ class StubGitLab:
         # commit 详情桩（issue #43）：按 (project_id, sha) 配置，默认 None（404 语义）
         self.commits_by_sha: dict[tuple[int, str], dict | None] = {}
         self.fail_commits: set[tuple[int, str]] = set()
+        # 产物下载桩（issue #329）
+        self.artifact_bytes: dict[tuple[int, int], bytes] = {}
+        self.fail_artifacts: dict[int, GitLabError] = {}
         self.calls: list[str] = []
 
     def get_latest_pipeline(self, project_id):
@@ -71,6 +75,19 @@ class StubGitLab:
             raise GitLabError("模拟 commit 查询故障")
         return self.commits_by_sha.get((project_id, sha))
 
+    # 产物下载桩（issue #329）：按 (project_id, job_id) 返回字节；
+    # fail_artifacts 按 job_id 注入 GitLabError（404 无产物 / 500 故障）
+    def download_job_artifacts(self, project_id, job_id):
+        self.calls.append(f"artifacts:{project_id}:{job_id}")
+        err = self.fail_artifacts.get(job_id)
+        if err:
+            raise err
+        return httpx.Response(
+            200,
+            content=self.artifact_bytes.get((project_id, job_id),
+                                            b"PK\x03\x04test-artifacts"),
+            headers={"content-type": "application/zip"})
+
 
 def make_pipeline(pid: int, status: str = "success", ref: str = "main",
                   sha: str = "abc123") -> dict:
@@ -86,12 +103,15 @@ def make_pipeline(pid: int, status: str = "success", ref: str = "main",
 
 
 def make_job(job_id: int, stage: str, status: str = "success",
-             allow_failure: bool = False) -> dict:
-    return {
+             allow_failure: bool = False, artifacts=None) -> dict:
+    job = {
         "id": job_id, "name": f"job{job_id}", "stage": stage, "status": status,
         "allow_failure": allow_failure,
         "web_url": f"https://gitlab.example.com/group/proj/-/jobs/{job_id}",
     }
+    if artifacts is not None:
+        job["artifacts"] = artifacts
+    return job
 
 
 @pytest.fixture
@@ -729,3 +749,127 @@ class TestOverviewPerRepoToken:
         assert data["pipelines"][0]["commit_time"] == "2026-08-13 04:00:00"
         assert "commit:42:abc123" in per.calls
         assert not any(c.startswith("commit:") for c in stub.calls)
+
+
+# ---- job 产物明细（issue #329） ----
+
+class TestJobArtifacts:
+    """aggregate_stages 携带 job id 与精简后的产物列表（过滤 trace/metadata 噪音）。"""
+
+    def test_job_carries_id_and_artifacts(self):
+        """archive + 报告类型保留，trace/metadata 噪音过滤。"""
+        jobs = [make_job(11, "build", artifacts=[
+            {"file_type": "archive", "size": 208520,
+             "filename": "artifacts.zip", "file_format": "zip"},
+            {"file_type": "cobertura", "size": 27832,
+             "filename": "cobertura-coverage.xml.gz", "file_format": "gzip"},
+            {"file_type": "trace", "size": 2009224,
+             "filename": "job.log", "file_format": None},
+            {"file_type": "metadata", "size": 263,
+             "filename": "metadata.gz", "file_format": "gzip"},
+        ])]
+        stages = aggregate_stages(jobs)
+        job = stages[0]["jobs"][0]
+        assert job["id"] == 11
+        assert job["artifacts"] == [
+            {"file_type": "archive", "size": 208520,
+             "filename": "artifacts.zip", "file_format": "zip"},
+            {"file_type": "cobertura", "size": 27832,
+             "filename": "cobertura-coverage.xml.gz", "file_format": "gzip"},
+        ]
+
+    def test_job_without_artifacts_field(self):
+        """无 artifacts 字段（旧数据/未上传产物）→ 空列表，不崩溃。"""
+        jobs = [make_job(1, "build")]
+        job = aggregate_stages(jobs)[0]["jobs"][0]
+        assert job["artifacts"] == []
+        assert job["id"] == 1
+
+    def test_malformed_artifacts_tolerated(self):
+        """artifacts 非列表 / 元素非对象 / 缺字段逐项兜底。"""
+        jobs = [make_job(1, "build", artifacts="oops"),
+                make_job(2, "build", artifacts=[None, {"filename": "a.zip"}]),
+                make_job(3, "build", artifacts=[
+                    {"file_type": "archive", "filename": "a.zip"}])]
+        stages = aggregate_stages(jobs)
+        assert [j["artifacts"] for j in stages[0]["jobs"]] == [
+            [],
+            [{"file_type": None, "filename": "a.zip",
+              "size": None, "file_format": None}],
+            [{"file_type": "archive", "filename": "a.zip",
+              "size": None, "file_format": None}],
+        ]
+
+
+# ---- 流水线产物下载（issue #329） ----
+
+class TestArtifactsDownload:
+    """GET /api/pipelines/{repo_id}/artifacts?job_id= 后端代理下载。"""
+
+    def test_download_ok(self, client):
+        """正常下载：200 + zip 字节 + Content-Disposition attachment。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_bytes = {(42, 5): b"PK\x03\x04fake-zip-bytes"}
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/artifacts?job_id=5")
+
+        assert resp.status_code == 200
+        assert resp.content == b"PK\x03\x04fake-zip-bytes"
+        assert resp.headers["content-type"] == "application/zip"
+        cd = resp.headers["content-disposition"]
+        assert cd.startswith("attachment;")
+        assert 'filename="job-5-artifacts.zip"' in cd
+        assert "artifacts:42:5" in stub.calls
+
+    def test_download_uses_per_repo_fallback_global(self, client):
+        """仓库 remote 无 token 时回退全局客户端（桩即全局），且按 repo 查询。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_bytes = {(42, 9): b"zzz"}
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/artifacts?job_id=9")
+
+        assert resp.status_code == 200
+        assert "artifacts:42:9" in stub.calls
+
+    def test_download_404_no_artifacts(self, client):
+        """GitLab 404（任务无产物）→ 接口 404 与中文提示。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.fail_artifacts = {7: GitLabError("资源不存在（404）", 404)}
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/artifacts?job_id=7")
+
+        assert resp.status_code == 404
+        assert "无产物" in resp.json()["detail"]
+
+    def test_download_gitlab_5xx_maps_502(self, client):
+        """GitLab 侧故障（500）→ 接口 502，不透传堆栈。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.fail_artifacts = {8: GitLabError("GitLab API 错误 500: boom", 500)}
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/artifacts?job_id=8")
+
+        assert resp.status_code == 502
+        assert "GitLab 产物下载失败" in resp.json()["detail"]
+
+    def test_download_unknown_repo_404(self, client):
+        """repo_id 不存在 → 404，不发起 GitLab 调用。"""
+        tc, stub, db, tmp_path = client
+
+        resp = tc.get("/api/pipelines/9999/artifacts?job_id=1")
+
+        assert resp.status_code == 404
+        assert "仓库不存在" in resp.json()["detail"]
+        assert not any(c.startswith("artifacts:") for c in stub.calls)
+
+    def test_download_missing_job_id_422(self, client):
+        """job_id 必填：缺失时 FastAPI 校验 422。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/artifacts")
+
+        assert resp.status_code == 422

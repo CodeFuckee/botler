@@ -652,6 +652,8 @@ GET    /api/skills/{engine}/files      技能目录内 md 文件列表（?skill=
 GET    /api/skills/{engine}/file       读取技能 md 文件内容（?skill=&path=，issue #282）
 PUT    /api/skills/{engine}/file       保存技能 md 文件内容（body: {skill, path, content}，仅允许技能目录内 md/markdown，issue #282）
 POST   /api/settings/reconcile-now    手动触发对账
+GET    /api/pipelines/overview       概览页 CI/CD 流水线聚合（所有配置仓库最新一次流水线整体状态 + 按 jobs 聚合的 stage 进度；job 明细含 id/name/status/allow_failure/web_url 与精简产物列表 artifacts——保留 archive 与报告类型、过滤 trace/metadata 噪音，issue #39/#329；10 秒 TTL 缓存，单仓库失败进 errors 不中断整体）
+GET    /api/pipelines/{repo_id}/artifacts 下载指定 job 的流水线产物（?job_id=；后端代理 GitLab jobs artifacts zip 归档，per-repo token 优先回退全局 bot token，流式透传 + Content-Disposition attachment；无产物 404、GitLab 故障 502，issue #329）
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138；「每小时余额变化速率」由前端基于历史观测样本计算，issue #304）
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment；?include_usage=1 可选附带 token 用量字段，issue #235）
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url/environment——执行环境快照 JSON：引擎版本/模型/起始提交/平台版本/配置哈希，issue #276；usage——任务 token 用量：engine/model/prompt_tokens/completion_tokens/total_tokens/estimated_cost/currency/raw_usage，无用量数据为 null，issue #235）

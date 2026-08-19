@@ -9,11 +9,14 @@
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键。
 //
 // 数据来源：复用 GET /api/pipelines/overview 已返回的 stages + jobs
-// 明细（后端聚合时已按 GitLab jobs API 精简每个 job 的 name/status/
-// allow_failure/web_url），无需新增后端接口。
+// 明细（后端聚合时已按 GitLab jobs API 精简每个 job 的 id/name/status/
+// allow_failure/web_url/artifacts），无需新增接口。issue #329：任务行
+// 展示产物清单（文件名/大小，后端已过滤 trace/metadata 噪音），「下载
+// 全部」经 GET /api/pipelines/{repo_id}/artifacts?job_id= 后端代理下载
+// GitLab zip 归档（浏览器不持有 GitLab token）。
 import { useEffect } from 'react'
 import { Icon } from './Icon.jsx'
-import { shortSha, fmtTime, fmtSeconds } from '../api.js'
+import { shortSha, fmtTime, fmtSeconds, fmtSize } from '../api.js'
 
 // 流水线整体状态 → 徽章映射（issue #39，自 Overview.jsx 移入本组件，
 // 供详情抽屉与概览卡片共用）。样式类复用任务状态徽章 status-*
@@ -168,20 +171,51 @@ export default function PipelineDrawer({ entry, onClose }) {
                     <ul className="pipeline-detail-jobs">
                       {s.jobs.map((j, i) => (
                         <li key={i} className="pipeline-detail-job">
-                          <span className={'pipeline-detail-job-dot pipeline-stage-dot '
-                                           + stageClass(j.status)} />
-                          <span className="pipeline-detail-job-name"
-                                title={jobStatusLabel(j.status)}>{j.name || '—'}</span>
-                          <span className="muted pipeline-detail-job-status">
-                            {jobStatusLabel(j.status)}
-                          </span>
-                          {j.web_url ? (
-                            <a className="pipeline-detail-job-link" href={j.web_url}
-                               target="_blank" rel="noreferrer"
-                               title="在 GitLab 中打开任务">
-                              <Icon name="externalLink" />
-                            </a>
-                          ) : null}
+                          <div className="pipeline-detail-job-row">
+                            <span className={'pipeline-detail-job-dot pipeline-stage-dot '
+                                             + stageClass(j.status)} />
+                            <span className="pipeline-detail-job-name"
+                                  title={jobStatusLabel(j.status)}>{j.name || '—'}</span>
+                            <span className="muted pipeline-detail-job-status">
+                              {jobStatusLabel(j.status)}
+                            </span>
+                            {j.web_url ? (
+                              <a className="pipeline-detail-job-link" href={j.web_url}
+                                 target="_blank" rel="noreferrer"
+                                 title="在 GitLab 中打开任务">
+                                <Icon name="externalLink" />
+                              </a>
+                            ) : null}
+                          </div>
+                          {/* issue #329：流水线产物——列出产物文件名/大小，
+                              提供「下载全部」按钮（后端代理 GitLab zip 归档） */}
+                          {Array.isArray(j.artifacts) && j.artifacts.length > 0 && (
+                            <div className="pipeline-detail-artifacts">
+                              <div className="pipeline-detail-artifacts-head">
+                                <span className="pipeline-detail-artifacts-title">产物</span>
+                                {j.id != null && repo.repo_id != null && (
+                                  <a className="pipeline-detail-artifacts-download"
+                                     href={`/api/pipelines/${repo.repo_id}/artifacts?job_id=${j.id}`}
+                                     download
+                                     title="下载该任务全部产物（zip 归档）">
+                                    <Icon name="download" /> 下载全部
+                                  </a>
+                                )}
+                              </div>
+                              <ul className="pipeline-detail-artifact-list">
+                                {j.artifacts.map((a, k) => (
+                                  <li key={k} className="pipeline-detail-artifact"
+                                      title={a.file_type ? `类型：${a.file_type}` : ''}>
+                                    <span className="pipeline-detail-artifact-name"
+                                          title={a.filename || ''}>{a.filename || '—'}</span>
+                                    <span className="pipeline-detail-artifact-size">
+                                      {fmtSize(a.size)}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </li>
                       ))}
                     </ul>

@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 ### Added
+- **概览页流水线详情右边栏增加产物显示与下载（issue #329）**：概览页
+  右侧边栏的流水线详情页面（PipelineDrawer，issue #317）现在展示该次
+  流水线各任务的产物清单，并支持一键下载：
+  - **产物明细随概览接口下发**：`GET /api/pipelines/overview` 的 job
+    明细新增 `id` 与 `artifacts` 字段（精简自 GitLab jobs API 的
+    `artifacts` 数组：保留 archive 归档与 cobertura / sast /
+    dependency_scanning 等报告类型，过滤 trace 日志与 metadata 两类
+    噪音，缺字段/非列表/元素异常逐项兜底不崩溃）；
+  - **新增产物下载接口**：`GET /api/pipelines/{repo_id}/artifacts?job_id=`
+    经后端代理 GitLab `jobs/:id/artifacts` 下载 zip 归档（per-repo
+    token 优先、回退全局 bot token，与概览查询同链路），字节流式透传
+    并带 `Content-Disposition: attachment` 供浏览器保存；GitLab 404
+    （任务无产物）转接口 404、其余故障转 502，仓库不存在 404；
+  - **前端展示与下载**：流水线详情右边栏任务行下方展示产物清单（文件
+    名 + 人类可读大小，`fmtSize` 格式化），「下载全部」按钮触发浏览器
+    下载；job 缺 id / artifacts 为空 / 旧数据不渲染产物区块，不崩溃；
+  - **测试**：后端新增产物精简（过滤噪音/缺失字段兜底）与下载接口
+    用例（200 字节透传 + Content-Disposition / 404 无产物 / 502 /
+    仓库不存在 / job_id 缺失 422，共 9 例）；前端新增产物渲染（文件名/
+    大小/下载链接 href 与 download 属性）、空产物不渲染、缺 id 不渲染
+    下载按钮等断言（3 例）；前后端全量测试通过。
 - **工具页面新增 Image-Parse-MCP 安装方式（issue #327）**：内置市场新增
   `image-parse` 多模态图片分析 MCP 工具（GitHub
   1617110693/Image-Parse-MCP，可接入任意 OpenAI 兼容视觉大模型：

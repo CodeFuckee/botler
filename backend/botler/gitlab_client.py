@@ -496,6 +496,25 @@ class GitLabClient:
         """流水线全部 jobs（含 stage / status / allow_failure，供概览页聚合 stage 状态）。"""
         return self._paged(f"/projects/{project_id}/pipelines/{pipeline_id}/jobs")
 
+    def download_job_artifacts(self, project_id: int, job_id: int) -> httpx.Response:
+        """下载 job 全部产物（zip 归档，issue #329）。
+
+        概览页流水线详情右边栏「下载产物」经此代理 GitLab
+        GET /projects/{id}/jobs/{job_id}/artifacts：前端浏览器不持有
+        GitLab token，产物下载统一走后端（per-repo token 优先，回退
+        全局 bot token）。返回未关闭的 httpx.Response，调用方负责
+        迭代字节并 close；非 2xx（404 无产物 / 403 权限不足等）转
+        GitLabError（响应已关闭，避免连接泄漏）。
+        """
+        resp = self._http_request_with_retry(
+            "GET", f"/projects/{project_id}/jobs/{job_id}/artifacts")
+        if resp.status_code >= 400:
+            resp.close()
+            raise GitLabError(
+                f"GitLab 产物下载失败 {resp.status_code}: {resp.text[:300]}",
+                resp.status_code)
+        return resp
+
     def get_commit(self, project_id: int, sha: str) -> dict | None:
         """单条提交详情（issue #43：概览页取最近流水线对应提交的提交时间）。
 

@@ -26,7 +26,8 @@ import time
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from ..gitlab_client import GitLabClient, GitLabError
 from ..git_remote import build_repo_client
@@ -52,6 +53,37 @@ _REPO_CLIENTS: dict[int, tuple[float, GitLabClient]] = {}
 # 待运行类 job 状态（stage 聚合时统一视为 pending）
 _PENDING_STATUSES = {"pending", "created", "waiting_for_resource",
                      "preparing", "scheduled"}
+
+# job 产物中不属于「用户意义上的产物」的噪音类型（issue #329）：
+# trace = job 运行日志（job.log），metadata = GitLab 内部元数据。
+# 这两类每个成功 job 必有、对用户无下载价值，聚合展示时过滤。
+_ARTIFACT_NOISE_TYPES = {"trace", "metadata"}
+
+
+def _trim_artifacts(job: dict) -> list[dict]:
+    """精简 job 产物列表（issue #329）：保留 file_type / filename / size。
+
+    GitLab jobs API 的 artifacts 数组含 trace（job.log）与 metadata
+    （元数据），过滤不展示；archive（上传产物 zip）与各报告类型
+    （cobertura / sast / dependency_scanning / license_scanning 等）
+    原样透传。缺字段 / 非列表 / 元素非对象逐项兜底，不崩溃。
+    """
+    artifacts = job.get("artifacts")
+    if not isinstance(artifacts, list):
+        return []
+    trimmed: list[dict] = []
+    for a in artifacts:
+        if not isinstance(a, dict):
+            continue
+        if a.get("file_type") in _ARTIFACT_NOISE_TYPES:
+            continue
+        trimmed.append({
+            "file_type": a.get("file_type"),
+            "filename": a.get("filename"),
+            "size": a.get("size"),
+            "file_format": a.get("file_format"),
+        })
+    return trimmed
 
 # pipeline 对象透传给前端的字段（丢弃 user/tag 等无关字段）
 _PIPELINE_KEYS = ("id", "iid", "status", "ref", "sha", "web_url",
@@ -107,10 +139,13 @@ def aggregate_stages(jobs: list[dict]) -> list[dict]:
             by_name[name] = entry
             stages.append(entry)
         entry["jobs"].append({
+            "id": job.get("id"),
             "name": job.get("name"),
             "status": job.get("status"),
             "allow_failure": bool(job.get("allow_failure")),
             "web_url": job.get("web_url"),
+            # issue #329：job 产物明细（前端流水线详情右边栏展示 + 下载）
+            "artifacts": _trim_artifacts(job),
         })
     for entry in stages:
         entry["status"] = _stage_status(entry["jobs"])
@@ -221,3 +256,33 @@ def pipelines_overview(request: Request):
         _CACHE["expires_at"] = time.monotonic() + CACHE_TTL_SECONDS
         _CACHE["data"] = result
     return result
+
+
+@router.get("/{repo_id}/artifacts")
+def pipeline_artifacts_download(repo_id: int, job_id: int, request: Request):
+    """下载指定 job 的流水线产物（zip 归档，issue #329）。
+
+    概览页流水线详情右边栏「下载产物」经此代理 GitLab
+    GET /projects/{gitlab_project_id}/jobs/{job_id}/artifacts：前端
+    浏览器不持有 GitLab token，产物下载统一走后端（per-repo token
+    优先，回退全局 bot token，与 /overview 同链路）。GitLab 侧返回
+    的字节流式透传，并带 Content-Disposition attachment 供浏览器
+    保存为本地文件。
+    """
+    c = request.app.state.ctx
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        resp = client.download_job_artifacts(row["gitlab_project_id"], job_id)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "该任务无产物或不存在")
+        raise HTTPException(502, f"GitLab 产物下载失败: {e}") from e
+    filename = f"job-{job_id}-artifacts.zip"
+    return StreamingResponse(
+        resp.iter_bytes(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

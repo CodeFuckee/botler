@@ -12,7 +12,10 @@
 // 5. 关闭：× 按钮、点击遮罩（overlay）、Esc 键（isEscapeKey 纯函数）；
 // 6. 边界：pipeline 为 null 显示「暂无流水线」；stage 无 jobs 只显示
 //    阶段；job 缺 web_url 不渲染链接；重复点击同一卡片幂等；
-// 7. styles.css 提供 .pipeline-drawer 抽屉样式。
+// 7. styles.css 提供 .pipeline-drawer 抽屉样式；
+// 8. issue #329：任务行展示产物清单（文件名/大小）与「下载全部」按钮
+//    （href 为后端代理接口 /api/pipelines/{repo_id}/artifacts?job_id=）；
+//    无产物的 job 不渲染产物区块。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -48,6 +51,11 @@ test('流水线卡片主体改为按钮（点击打开抽屉），跳转统一�
   assert.match(overview, /pipeline-link/, '应保留 pipeline-link 样式类')
   assert.match(drawerSrc, /在 GitLab 中打开/, '抽屉右上角应有「在 GitLab 中打开」按钮')
   assert.match(drawerSrc, /pl\.web_url|pipeline\.web_url/, '跳转按钮应指向 pipeline web_url')
+  // issue #329：产物展示与下载（fmtSize 格式化大小，下载走后端代理）
+  assert.match(drawerSrc, /fmtSize/, '产物大小应经 fmtSize 人类可读格式化')
+  assert.match(drawerSrc, /下载全部/, '应有「下载全部」按钮文案')
+  assert.match(drawerSrc, /\/api\/pipelines\/\$\{repo\.repo_id\}\/artifacts\?job_id=\$\{j\.id\}/,
+    '下载链接应指向后端代理接口（repo_id + job_id）')
 })
 
 test('PipelineDrawer 监听 Esc 关闭（isEscapeKey 纯函数判定）', () => {
@@ -117,15 +125,22 @@ const PIPELINE_ENTRY = {
     {
       name: 'build', status: 'success',
       jobs: [
-        { name: 'compile', status: 'success',
-          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/11' },
+        { id: 11, name: 'compile', status: 'success',
+          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/11',
+          artifacts: [
+            { file_type: 'archive', filename: 'artifacts.zip',
+              size: 208520, file_format: 'zip' },
+            { file_type: 'cobertura', filename: 'cobertura-coverage.xml.gz',
+              size: 63151, file_format: 'gzip' },
+          ] },
       ],
     },
     {
       name: 'test', status: 'running',
       jobs: [
-        { name: 'unit', status: 'running',
-          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/22' },
+        { id: 22, name: 'unit', status: 'running',
+          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/22',
+          artifacts: [] },
       ],
     },
   ],
@@ -340,10 +355,85 @@ test('边界：重复点击同一流水线卡片幂等（只打开一个抽屉�
   }
 })
 
+test('任务行展示流水线产物：文件名/大小 + 下载全部按钮（issue #329）', async () => {
+  const { renderer, root } = await openPipelineDrawer({
+    pipelines: [PIPELINE_ENTRY], errors: [],
+  })
+  try {
+    const text = drawerText(root)
+    // 产物明细：archive 与 cobertura 报告都展示（文件名 + 人类可读大小）
+    assert.ok(text.includes('artifacts.zip'), '应展示 archive 产物文件名')
+    assert.ok(text.includes('203.6 KB'), 'archive 大小应经 fmtSize 格式化')
+    assert.ok(text.includes('cobertura-coverage.xml.gz'), '应展示报告型产物文件名')
+    // 下载按钮：href 指向后端代理接口（repo_id + job_id）
+    const dl = root.findAll(
+      (n) => n.type === 'a' && String(n.props.className || '')
+        .includes('pipeline-detail-artifacts-download'))
+    assert.equal(dl.length, 1, '有产物的 job 应渲染一个「下载全部」按钮')
+    assert.equal(dl[0].props.href, '/api/pipelines/1/artifacts?job_id=11',
+      '下载链接应指向后端代理接口')
+    assert.equal(dl[0].props.download, true, '应带 download 属性触发浏览器下载')
+    assert.ok(text.includes('下载全部'), '应有「下载全部」文案')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('无产物的 job 不渲染产物区块（issue #329）', async () => {
+  const { renderer, root } = await openPipelineDrawer({
+    pipelines: [PIPELINE_ENTRY], errors: [],
+  })
+  try {
+    const dl = root.findAll(
+      (n) => n.type === 'a' && String(n.props.className || '')
+        .includes('pipeline-detail-artifacts-download'))
+    assert.equal(dl.length, 1, '仅 compile（有产物）应渲染下载按钮')
+    // 产物区块只在 compile（有产物）的 li 中出现一次：unit 的 artifacts
+    // 为空数组，不应渲染产物区块
+    // 精确匹配产物容器类（避免 -head/-title/-download 子元素误命中）
+    const artifactBlocks = root.findAll(
+      (n) => String(n.props.className || '').split(/\s+/)
+        .includes('pipeline-detail-artifacts'))
+    assert.equal(artifactBlocks.length, 1, '空 artifacts 的 job 不应渲染产物区块')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('边界：job 缺 id / 缺 artifacts 字段不渲染下载按钮且不崩溃', async () => {
+  const entry = {
+    ...PIPELINE_ENTRY,
+    stages: [
+      { name: 'build', status: 'success', jobs: [
+        { name: 'legacy', status: 'success', web_url: 'https://x/-/jobs/1' }, // 无 id/artifacts
+        { id: 2, name: 'with-art', status: 'success',
+          artifacts: [{ file_type: 'archive', filename: 'a.zip', size: 10 }] },
+      ] },
+    ],
+  }
+  const { renderer, root } = await openPipelineDrawer({
+    pipelines: [entry], errors: [],
+  })
+  try {
+    const dl = root.findAll(
+      (n) => n.type === 'a' && String(n.props.className || '')
+        .includes('pipeline-detail-artifacts-download'))
+    assert.equal(dl.length, 1, '仅带 id 的 job 渲染下载按钮')
+    assert.equal(dl[0].props.href, '/api/pipelines/1/artifacts?job_id=2')
+    assert.equal(findDrawer(root).length, 1, '抽屉应正常打开不崩溃')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
 // ---- styles.css ----
 
 test('styles.css 提供 .pipeline-drawer 抽屉样式', () => {
   assert.match(styles, /\.pipeline-drawer\s*\{/, '应有 .pipeline-drawer 抽屉样式')
+  assert.match(styles, /\.pipeline-detail-artifacts\s*\{/, '应有产物区块样式')
 })
 
 // ---- PipelineDrawer 直接渲染（脱离 Overview 的单元级渲染）----
