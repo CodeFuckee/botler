@@ -13,7 +13,8 @@
 - ``custom``：自定义 OpenAI 兼容视觉模型（chat/completions 接口），
   无默认端点/模型，用户自填 Base URL / 模型（如硅基流动 / DeepSeek-VL /
   qwen-vl 等网关）；自定义 Base URL 作为完整请求地址直接使用（issue
-  #150 语义），未配置 Base URL 时明确报错。
+  #150 语义），未以 /chat/completions 结尾时自动补拼操作路径（issue
+  #321，与 openai_vision 一致），未配置 Base URL 时明确报错。
 
 新增供应商：实现 ``VisionProviderPlugin.describe`` 并调用
 ``register_plugin`` 注册即可（或放入 ``worker.plugin_paths`` 外部加载）。
@@ -160,6 +161,34 @@ def format_request_info(
         parts.append("请求体: " + json.dumps(
             _mask_request_body(payload), ensure_ascii=False))
     return "，".join(parts)
+
+
+def _image_url_rejected_hint(image: bytes | str, resp_text: str) -> str:
+    """OpenAI 兼容网关对 http URL 图片报 url 类错误时的诊断提示（issue #321）。
+
+    issue #321 现象：设置页「识图模型」测试报错
+    ``HTTP 400 ... url error, please check url！``——图片已以 http URL
+    （MinIO 上传模式，issue #163）传入但网关仍拒绝。两种典型原因：
+    1) Base URL 只填到 API 前缀（如 ``.../compatible-mode/v1``）、缺
+       ``/chat/completions`` 操作路径，请求打到网关根路径被拒——该场景已
+       由 resolve_request_url 自动补拼（issue #321）修复，本提示兜底；
+    2) 图片 URL 对网关公网不可达（内网地址 / 返回 HTML 而非图片）。
+
+    :param image: describe 收到的图片（str = MinIO http URL 模式；
+        bytes = base64 内联模式，走 _data_url_rejected_hint 分支）
+    :param resp_text: 网关返回的响应文本
+    :return: 命中的提示文案；未命中返回空串
+    """
+    if not isinstance(image, str):
+        return ""
+    text = (resp_text or "").lower()
+    if any(k in text for k in ("url error", "invalid url", "图片 url")):
+        return ("；提示：网关返回图片 URL 相关错误——图片为 http URL 输入。"
+                "请确认：① Base URL 填写完整（OpenAI 兼容接口地址应以 "
+                "/chat/completions 结尾，如 https://.../compatible-mode/v1/"
+                "chat/completions）；② 图片 URL 可被该网关公网访问（浏览器/"
+                "curl 直接访问应返回图片内容而非 HTML 或 4xx）")
+    return ""
 
 
 def _post_json(
@@ -323,9 +352,11 @@ class OpenAIVisionProvider(VisionProviderPlugin):
             "Authorization": f"Bearer {client.api_key}",
             "Content-Type": "application/json",
         }
-        # 自定义 base_url 视为完整端点直接使用（issue #150），否则按
-        # 官方接口拼接 chat/completions 操作路径
-        url = self.resolve_request_url(client.base_url, "/chat/completions")
+        # 自定义 base_url：未以 /chat/completions 结尾时自动补拼操作路径
+        # （issue #321：阿里云百炼兼容网关等只填 API 前缀的配置，此前直发
+        # 根路径被网关以 400 url error 拒绝）；已含完整路径则原样直用
+        url = self.resolve_request_url(
+            client.base_url, "/chat/completions", append_if_missing=True)
         resp = _post_json(client, url, headers, payload)
         if resp.status_code >= 400:
             hint = ("；若为 404 page not found：自定义 Base URL 将作为完整"
@@ -336,7 +367,8 @@ class OpenAIVisionProvider(VisionProviderPlugin):
             raise VisionModelError(
                 f"OpenAI 请求失败: HTTP {resp.status_code} {resp.text[:200]}"
                 f"（{format_request_info(url, headers, payload)}）{hint}"
-                f"{_data_url_rejected_hint(image, resp.text)}")
+                f"{_data_url_rejected_hint(image, resp.text)}"
+                f"{_image_url_rejected_hint(image, resp.text)}")
         data = _parse_json_response(resp, url, "OpenAI", headers, payload)
         try:
             content_out = data["choices"][0]["message"]["content"]
@@ -403,7 +435,12 @@ class CustomVisionProvider(VisionProviderPlugin):
             "Authorization": f"Bearer {client.api_key}",
             "Content-Type": "application/json",
         }
-        url = client.base_url  # 自定义完整端点直接使用（issue #150）
+        # 自定义完整端点直接使用（issue #150）；未以 /chat/completions
+        # 结尾时自动补拼操作路径（issue #321，与 openai_vision 一致——
+        # 阿里云百炼兼容网关等只填 API 前缀的配置，此前直发根路径被网关
+        # 以 400 url error 拒绝）
+        url = self.resolve_request_url(
+            client.base_url, "/chat/completions", append_if_missing=True)
         resp = _post_json(client, url, headers, payload)
         if resp.status_code >= 400:
             hint = ("；若为 404 page not found：自定义 Base URL 将作为完整"
@@ -415,7 +452,8 @@ class CustomVisionProvider(VisionProviderPlugin):
                 f"自定义识图模型请求失败: HTTP {resp.status_code} "
                 f"{resp.text[:200]}（"
                 f"{format_request_info(url, headers, payload)}）{hint}"
-                f"{_data_url_rejected_hint(image, resp.text)}")
+                f"{_data_url_rejected_hint(image, resp.text)}"
+                f"{_image_url_rejected_hint(image, resp.text)}")
         data = _parse_json_response(resp, url, "自定义识图模型",
                                     headers, payload)
         try:

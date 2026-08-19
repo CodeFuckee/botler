@@ -84,6 +84,33 @@
 
 ### Fixed
 
+- **识图模型点击测试报错——OpenAI 兼容网关 Base URL 只填 API 前缀时直发根路径被拒，报 `url error`（issue #321）**：
+  设置页「识图模型」卡片「测试」按钮报错
+  `OpenAI 请求失败: HTTP 400 ... "url error, please check url！"`。定位：图片经 MinIO
+  上传后的 http URL 公网可达（浏览器/curl 直取返回 image/jpeg）、TLS 证书链完整，网关
+  仍拒绝——抓包对比发现是**请求地址少了 `/chat/completions` 操作路径**：用户按 OpenAI
+  兼容惯例把 Base URL 填成 API 前缀（如阿里云百炼兼容网关
+  `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`），而
+  `resolve_request_url`（issue #150 语义）把「不等于预设默认」的自定义 base_url 一律
+  当作完整请求地址原样直发，POST 直接打到网关根路径，网关以
+  `InvalidParameter: url error, please check url`（HTTP 400）拒绝；补上
+  `/chat/completions` 后同一请求即返回 200 并正确描述图片。修复：
+  - **`VisionProviderPlugin.resolve_request_url` 新增 `append_if_missing` 参数
+    （issue #321）**：OpenAI 兼容识图供应商（`openai_vision` / `custom`）启用后，
+    自定义 base_url 未以 `/chat/completions` 结尾时自动补拼操作路径——只填 API
+    前缀（`.../compatible-mode/v1`）即可正常调用；已以 `/chat/completions` 结尾的
+    完整地址（如硅基流动 `https://api.siliconflow.cn/v1/chat/completions`）保持
+    原样直用，兼容旧配置；Gemini 官方接口不受影响；
+  - **错误提示增强**：MinIO http URL 模式下网关仍返回 `url error` 时，错误信息附带
+    可操作诊断（Base URL 应以 `/chat/completions` 结尾 + 图片 URL 需网关公网可达），
+    不再只透出网关原文（`_image_url_rejected_hint`，与 base64 内联模式的
+    `_data_url_rejected_hint` 互补）；
+  - **测试**：`tests/test_vision_models.py` 新增 4 例——openai_vision / custom 前缀
+    base_url 自动补拼 `/chat/completions`、完整地址原样直用、http URL 模式 url error
+    诊断提示，实现前复现失败（mock 捕获的实际请求地址为根路径）；全量后端测试无
+    regression；本地按真实配置端到端复现（上传图片 → MinIO http URL → 调用
+    qwen3.6-flash）修复前 400 报错、修复后成功返回图片描述。
+
 - **识图模型点击测试报错——图片 URL 经 :448 站点返回 HTML，外部模型网关报 url error（issue #319）**：
   识图模型（阿里云百炼 qwen3.6-flash 等 OpenAI 兼容网关）调用时图片以 http URL
   传入（issue #163/#164），URL 形如 `https://<站点>/minio-public/<bucket>/<sha256 哈希>`；

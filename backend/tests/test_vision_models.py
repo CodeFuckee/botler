@@ -548,6 +548,73 @@ class TestOpenAIVisionClient:
         assert captured["url"] in str(exc.value)
         assert "Base URL" in str(exc.value)
 
+    def test_base_url_without_chat_completions_appends(self):
+        """issue #321：自定义 base_url 只填 API 前缀（如阿里云百炼兼容
+        网关 https://.../compatible-mode/v1，未以 /chat/completions 结尾）
+        时自动补拼操作路径——此前直接 POST 到网关根路径被 400 url error
+        拒绝（设置页「识图模型」测试报错现象）。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "户型图描述"}}],
+            })
+
+        client = self._client(
+            handler,
+            base_url="https://token-plan.cn-beijing.maas.aliyuncs.com/"
+                     "compatible-mode/v1")
+        client.image_store = FakeImageStore()
+        desc = client.describe(b"\x89PNG-x", mime_type="image/png")
+        assert captured["url"] == ("https://token-plan.cn-beijing.maas."
+                                   "aliyuncs.com/compatible-mode/v1/"
+                                   "chat/completions")
+        assert desc == "户型图描述"
+
+    def test_base_url_with_chat_completions_verbatim(self):
+        """自定义 base_url 已以 /chat/completions 结尾（完整操作地址，
+        如硅基流动网关）→ 原样直用，不重复拼接（兼容旧配置）。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "ok"}}],
+            })
+
+        client = self._client(
+            handler,
+            base_url="https://api.siliconflow.cn/v1/chat/completions")
+        client.image_store = FakeImageStore()
+        client.describe(b"\x89PNG-x")
+        assert captured["url"] == "https://api.siliconflow.cn/v1/chat/completions"
+
+    def test_url_error_hint_for_http_url_mode(self):
+        """issue #321：MinIO http URL 模式下网关仍报 url error 时，错误
+        提示附带可操作诊断（Base URL 补全 + 图片 URL 公网可达性），不再
+        只透出网关原文。"""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={
+                "code": "InvalidParameter",
+                "message": "url error, please check url！",
+            })
+
+        client = self._client(
+            handler,
+            base_url="https://token-plan.cn-beijing.maas.aliyuncs.com/"
+                     "compatible-mode/v1")
+        client.image_store = FakeImageStore(
+            url="http://img.example.com:9000/public/abc")
+        with pytest.raises(VisionModelError) as exc:
+            client.describe(b"\x89PNG-x", mime_type="image/png")
+        msg = str(exc.value)
+        assert "url error" in msg
+        assert "chat/completions" in msg
+        assert "公网" in msg
+        # http URL 模式不误导为 base64 问题
+        assert "base64" not in msg
+
     def test_missing_content_error_includes_request_url(self):
         """响应 choices 为空（issue #156）：错误信息应同时带响应片段与
         实际请求地址。"""
@@ -650,11 +717,11 @@ class TestCustomVisionProvider:
 
     CUSTOM_URL = "https://api.siliconflow.cn/v1/chat/completions"
 
-    def _client(self, handler):
+    def _client(self, handler, base_url=None):
         transport = httpx.MockTransport(handler)
         client = VisionModelClient(
             name="自定义视觉", provider="custom",
-            base_url=self.CUSTOM_URL, api_key="sk-custom",
+            base_url=base_url or self.CUSTOM_URL, api_key="sk-custom",
             model="Qwen/Qwen2.5-VL-7B-Instruct", timeout=5)
         client._http = httpx.Client(transport=transport)
         return client
@@ -690,6 +757,24 @@ class TestCustomVisionProvider:
         assert captured["url"] == self.CUSTOM_URL
         assert captured["body"]["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
         assert desc == "图中有高楼与蓝天"
+
+    def test_custom_base_url_without_chat_completions_appends(self):
+        """issue #321：自定义 provider 的 base_url 只填 API 前缀（如
+        https://api.example.com/v1）时自动补拼 /chat/completions——此前
+        直接 POST 到根路径被网关 400 拒绝。"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "自定义网关描述"}}],
+            })
+
+        client = self._client(handler, base_url="https://api.example.com/v1")
+        client.image_store = FakeImageStore()
+        desc = client.describe(b"\x89PNG-x")
+        assert captured["url"] == "https://api.example.com/v1/chat/completions"
+        assert desc == "自定义网关描述"
 
     def test_custom_with_image_store_uses_http_url(self):
         """issue #163：自定义 OpenAI 兼容网关同样走 http URL 图片模式

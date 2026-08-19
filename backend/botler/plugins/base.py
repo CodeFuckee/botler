@@ -148,7 +148,8 @@ class VisionProviderPlugin(Plugin):
         """描述图片内容，返回文本描述。"""
         raise NotImplementedError(f"识图供应商插件 {self.name} 未实现 describe()")
 
-    def resolve_request_url(self, base_url: str, api_path: str) -> str:
+    def resolve_request_url(self, base_url: str, api_path: str,
+                            append_if_missing: bool = False) -> str:
         """解析识图请求地址（issue #150 语义，与生图插件一致）。
 
         用户配置的 base_url 分两种情况：
@@ -158,8 +159,21 @@ class VisionProviderPlugin(Plugin):
         - 未配置 / 等于预设默认（含尾斜杠归一）→ 按官方接口在默认
           base_url 后拼接操作路径（如 /chat/completions、
           /models/{model}:generateContent）。
+
+        ``append_if_missing``（issue #321）：OpenAI 兼容 chat/completions
+        类供应商（openai_vision / custom）启用。此类供应商自定义
+        base_url 常只填到 API 前缀（如阿里云百炼兼容网关
+        ``https://.../compatible-mode/v1``），而非完整操作地址——此前
+        自定义 base_url 一律原样直发，缺操作路径的地址直接 POST 到网关
+        根路径，网关返回 400 ``url error, please check url``（issue #321
+        现象：设置页「识图模型」测试报错）。启用后：base_url 未以
+        api_path（``/chat/completions``）结尾时自动补拼；已以操作路径
+        结尾的完整地址保持原样直用（兼容旧配置，如硅基流动
+        ``https://api.siliconflow.cn/v1/chat/completions``）。
         """
         if base_url and base_url != self.default_base_url:
+            if append_if_missing and not base_url.rstrip("/").endswith(api_path):
+                return f"{base_url.rstrip('/')}{api_path}"
             return base_url
         return f"{self.default_base_url}{api_path}"
 

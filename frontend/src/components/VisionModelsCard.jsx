@@ -357,9 +357,12 @@ export default function VisionModelsCard() {
         保持现有。测试按钮：点击后请上传一张图片（png / jpg 等），后端用
         当前配置真实调用一次识图接口，返回模型对图片的描述（列表行测试
         用已保存配置，表单内测试用当前填写值，均不落盘）。自定义 Base URL
-        （不等于官方预设默认值）将作为完整请求地址直接使用，不再自动拼接
-        接口路径（如配置 https://api.example.com/v1/chat/completions 就
-        直接请求该地址）；留空或使用预设默认值则按官方接口拼接
+        （不等于官方预设默认值）作为完整请求地址直接使用：已以
+        /chat/completions 结尾的地址（如
+        https://api.example.com/v1/chat/completions）原样请求，只填到
+        API 前缀（如阿里云百炼兼容网关
+        https://.../compatible-mode/v1）时后端自动补拼 /chat/completions
+        （issue #321）；留空或使用预设默认值则按官方接口拼接
         （/chat/completions、:generateContent）。修改后点击「保存识图模型
         配置」写回 config.yaml，重启后不丢失。
       </p>

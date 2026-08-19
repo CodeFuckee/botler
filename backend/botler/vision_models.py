@@ -69,8 +69,14 @@ class VisionModelClient:
     默认 → 按官方接口在默认地址后拼接操作路径（``/chat/completions``、
     ``:generateContent``）；自定义（不等于预设默认，如代理网关
     ``https://api.example.com/v1/chat/completions``）→ 作为完整请求
-    地址直接使用，不再拼接。自定义 provider（无默认地址）未配置
-    Base URL 时由插件明确报错。
+    地址直接使用，不再拼接。issue #321 起 OpenAI 兼容识图供应商
+    （openai_vision / custom）对自定义 base_url 增加补拼：未以
+    ``/chat/completions`` 结尾时自动补拼操作路径（如阿里云百炼兼容网关
+    ``https://.../compatible-mode/v1`` → 实际请求
+    ``https://.../compatible-mode/v1/chat/completions``）——此前只填
+    API 前缀的配置会直接 POST 到网关根路径，被网关以 400 ``url error``
+    拒绝（issue #321 现象）；已含完整路径的地址保持原样直用。自定义
+    provider（无默认地址）未配置 Base URL 时由插件明确报错。
     """
 
     def __init__(
