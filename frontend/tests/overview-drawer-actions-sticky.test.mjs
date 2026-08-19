@@ -331,3 +331,20 @@ test('styles.css：竖屏下 issue 抽屉头部仅保留 × 关闭按钮、其�
   assert.ok(bottomClose, 'portrait 断点内应声明底部操作栏 × 隐藏规则')
   assert.match(bottomClose[1], /display:\s*none/, '竖屏下底部操作栏应隐藏 ×（避免与顶部重复）')
 })
+
+// 竖屏底部操作栏右对齐（issue #340）：竖屏（≤860px 且 orientation:
+// portrait）下概览页 issue 详情右边栏的底部操作栏
+// （.drawer.issue-drawer .drawer-bottom-actions，承载「关闭 issue /
+// 查看执行的详情 / 在 GitLab 中打开」等按钮）原先为 flex 默认左对齐
+// （justify-content 缺省 flex-start）；本 issue 要求改为右对齐
+// （justify-content: flex-end）。修复前竖屏断点内该规则体无
+// justify-content 声明，本用例必失败。
+test('styles.css：竖屏下 issue 抽屉底部操作栏按钮右对齐（issue #340）', () => {
+  const block = portraitMediaBlock(styles)
+  const bottom = block.match(/\.drawer\.issue-drawer\s+\.drawer-bottom-actions\s*\{([^}]*)\}/)
+  assert.ok(bottom, 'portrait 断点内应声明 issue 抽屉底部操作栏显示规则')
+  assert.match(bottom[1], /justify-content:\s*flex-end/,
+               '竖屏下底部操作栏按钮应右对齐（justify-content: flex-end）')
+  // 布局继承不受影响：仍为 flex 行容器（sticky 常驻底部布局来自 860px 断点）
+  assert.match(bottom[1], /display:\s*flex/, '竖屏下底部操作栏仍应保持 flex 布局')
+})

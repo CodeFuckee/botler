@@ -4556,6 +4556,10 @@ code {
      position:sticky/bottom:0） */
   .drawer.issue-drawer .drawer-bottom-actions {
     display: flex;
+    /* issue #340：竖屏下底部操作栏按钮从左对齐改为右对齐——flex 默认
+       justify-content: flex-start 为左对齐，显式改为 flex-end 右对齐
+       （仅作用于竖屏 + issue 抽屉；横屏窄视口/桌面端对齐方式不变） */
+    justify-content: flex-end;
   }
   /* 底部操作栏不再重复展示 ×（× 已固定在顶部，避免两处关闭入口） */
   .drawer.issue-drawer .drawer-bottom-actions .modal-close {

@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 ### Added
+- **竖屏下概览页 issue 详情右边栏底部按钮改为右对齐（issue #340）**：竖屏
+  （≤860px 且 orientation: portrait，手机/窄窗口竖屏）下概览页 issue 详情
+  右边栏的底部 sticky 操作栏（`.drawer.issue-drawer .drawer-bottom-actions`，
+  承载「关闭 issue / 查看执行的详情 / 在 GitLab 中打开」等按钮，issue #270
+  下沉、issue #334 拆分后位于底部）原先为 flex 默认左对齐
+  （justify-content 缺省 flex-start）；本次显式改为右对齐
+  （`justify-content: flex-end`），贴近移动端底部操作区「动作按钮靠右」的
+  常规视觉习惯：
+  - **改动范围**：仅在竖屏断点（`@media (max-width: 860px) and
+    (orientation: portrait)`）内为 issue 抽屉底部操作栏追加
+    `justify-content: flex-end`，一行 CSS——横屏窄视口（landscape）与
+    桌面端（>860px）的对齐方式不受影响；仅作用于概览页 issue 抽屉
+    （`.drawer.issue-drawer`），任务执行详情第二层/流水线抽屉不波及；
+  - **新增测试**：`tests/overview-drawer-actions-sticky.test.mjs` 新增 1 例
+    （竖屏断点内底部操作栏规则体须含 `justify-content: flex-end` 且保持
+    flex 布局，源码级防回归）；e2e `issue-drawer-sticky.spec.js` 竖屏用例
+    新增 computed style 断言（375×667 竖屏视口下底部操作栏
+    justifyContent 实测为 flex-end）；全量前端单元测试（1365 例）无
+    regression。
 - **竖屏下设置页改为左右布局（issue #339）**：竖屏界面（641~860px 且
   orientation: portrait，平板/窄窗口竖屏）上，设置页原先回落单栏——设置左侧
   导航栏置顶、设置面板在其下，需要滚动整段导航才能看到设置项，不像设置页面。
