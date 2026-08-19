@@ -227,11 +227,38 @@ test('关闭抽屉：× 按钮关闭', async () => {
   try {
     const closeBtn = root.findAll(
       (n) => n.type === 'button' && String(n.props.className || '').includes('modal-close'))
-    assert.equal(closeBtn.length, 1, '抽屉应有 × 关闭按钮')
+    assert.ok(closeBtn.length >= 1, '抽屉应有 × 关闭按钮（头部 + 底部操作栏）')
     await TestRenderer.act(async () => {
       closeBtn[0].props.onClick()
     })
     assert.equal(findDrawer(root).length, 0, '× 点击后抽屉应卸载')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('移动端底部操作栏应包含 × 关闭按钮（issue #330）', async () => {
+  const { renderer, root } = await openDrawer([FULL_ISSUE])
+  try {
+    // issue #330 复现：移动端（≤860px）CSS 将头部操作区
+    // .issue-drawer-actions 整体 display:none（issue #270 操作按钮下沉
+    // 底部操作栏），若底部操作栏不含 × 关闭按钮，窄视口下抽屉将没有任何
+    // 可见的关闭入口（只剩 Esc / 点遮罩，用户不可发现）；流水线右边栏
+    // 详情页（.pipeline-drawer）头部不受隐藏规则影响、× 始终可见——
+    // 故底部操作栏必须与头部一样提供 × 关闭按钮
+    const bottomBar = root.findAll(
+      (n) => String(n.props.className || '').includes('drawer-bottom-actions'))
+    assert.equal(bottomBar.length, 1, '应有底部操作栏')
+    const closeBtn = bottomBar[0].findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('modal-close'))
+    assert.ok(closeBtn.length >= 1,
+              '底部操作栏应包含 × 关闭按钮（窄视口头部隐藏后仍可关闭）')
+    await TestRenderer.act(async () => {
+      closeBtn[0].props.onClick()
+    })
+    assert.equal(findDrawer(root).length, 0, '× 点击后抽屉应关闭')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

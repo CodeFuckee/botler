@@ -358,6 +358,24 @@
 
 ### Fixed
 
+- **概览页 issue 右边栏详情页移动端（≤860px）无关闭右边栏按钮（issue #330）**：
+  移动端响应式（issue #270）把头部操作区 `.issue-drawer-actions` 整体
+  `display: none` 下沉到抽屉底部操作栏，但底部操作栏只有「关闭 issue /
+  重试 / 查看执行详情 / 在 GitLab 中打开」，**没有 × 关闭按钮**——窄视口下
+  抽屉没有任何可见关闭入口（只剩 Esc / 点击遮罩，用户不可发现）；流水线
+  右边栏详情页（`.pipeline-drawer`）头部不受隐藏规则影响、× 始终可见。
+  修复：
+  - **× 关闭按钮并入 `drawerActions`**：IssueDrawer 的关闭按钮从头部单独
+    渲染改为并入桌面端头部与移动端底部操作栏共用的 `drawerActions` JSX——
+    桌面端位置不变（头部右侧最末），移动端底部操作栏同步获得 × 关闭按钮，
+    与流水线右边栏详情页交互对齐；点击后关闭抽屉（onClose 卸载）；
+  - **测试**：`overview-issue-drawer.test.mjs` 新增「移动端底部操作栏应
+    包含 × 关闭按钮」回归用例（修复前底部操作栏无 modal-close 按钮、用例
+    必失败），既有 × 关闭按钮数量断言放宽为 ≥1（头部 + 底部操作栏各一）；
+    `responsive-mobile.spec.js` E2E 在 375×667 移动视口断言底部操作栏
+    × 按钮可见、点击后抽屉关闭；前端全量单元测试（1322 例）+ 移动端 E2E
+    通过。
+
 - **竖屏窄视口下概览页 issue 详情抽屉被挤出屏幕（issue #326）**：移动端底部
   操作栏 `.drawer-bottom-actions` 此前是 `.drawer-overlay`（flex 行布局、
   `justify-content: flex-end`）的**兄弟节点**，≤860px 视口下 `display: flex`

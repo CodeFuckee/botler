@@ -682,6 +682,14 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
       )}
       <a className="btn" href={i.web_url} target="_blank" rel="noreferrer"
          title="在 GitLab 中打开 issue">在 GitLab 中打开</a>
+      {/* issue #330：× 关闭按钮并入 drawerActions——桌面端渲染在头部
+          右侧（与原单独按钮同位置），移动端（≤860px）头部操作区被
+          styles.css 整体隐藏后，底部操作栏仍保留关闭入口（此前底部
+          操作栏只有「关闭 issue/重试/查看执行详情/在 GitLab 中打开」，
+          窄视口无任何可见关闭按钮，只能 Esc/点遮罩；流水线右边栏
+          详情页头部 × 不受隐藏规则影响、始终可见，本修复与其对齐） */}
+      <button type="button" className="btn modal-close" onClick={onClose}
+              title="关闭" aria-label="关闭右边栏"><Icon name="x" /></button>
     </>
   )
 
@@ -694,8 +702,6 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
           </strong>
           <span className="issue-drawer-actions">
             {drawerActions}
-            <button className="btn modal-close" onClick={onClose} title="关闭"
-                    aria-label="关闭右边栏"><Icon name="x" /></button>
           </span>
         </div>
         {closeErr && <div className="issue-drawer-error" role="alert">{closeErr}</div>}

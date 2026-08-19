@@ -63,6 +63,14 @@ test.describe('移动端响应式（issue #270）', () => {
     await expect(
       page.locator('.drawer-bottom-actions a', { hasText: '在 GitLab 中打开' }),
     ).toBeVisible()
+    // issue #330 回归：窄视口头部操作区（含 × 关闭按钮）被整体隐藏，
+    // 底部操作栏必须提供 × 关闭入口——点击后抽屉关闭（此前底部操作栏
+    // 只有「关闭 issue/重试/查看执行详情/在 GitLab 中打开」，没有任何
+    // 可见关闭按钮，只能 Esc / 点遮罩，用户不可发现）
+    const mobileClose = page.locator('.drawer-bottom-actions .modal-close')
+    await expect(mobileClose).toBeVisible()
+    await mobileClose.click()
+    await expect(drawer).not.toBeVisible()
   })
 
   test('任务页：窄视口渲染卡片式列表，无 12 列表格', async ({ page }) => {
