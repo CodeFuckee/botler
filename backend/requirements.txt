@@ -8,6 +8,9 @@ APScheduler>=3.10,<4
 python-dotenv>=1.0
 pytest>=8.0
 pytest-cov>=6.0
+# Prometheus 指标端点（issue #208）：/metrics 文本格式，任务状态/执行时长/webhook/GitLab API/队列/磁盘/DB 观测（prometheus-client 为纯 Python 零依赖）
+prometheus-client>=0.20
+
 # 并行执行（issue #211）：pytest-xdist 提供 -n auto / -n 4 多进程分片，
 # 加速 CI backend:test 与本地全量测试（各用例使用独立 tmp_path SQLite 临时库，
 # 无共享状态，可安全并行）

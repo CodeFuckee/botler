@@ -388,6 +388,8 @@ curl http://localhost:9000/minio/health/live   # MinIO 健康检查（issue #160
 ./deploy/verify-docker.sh --full           # 冒烟检查（临时数据目录，不碰真实数据，含 MinIO 与 healthcheck 假死模拟，issue #207）
 ```
 
+**运行观测（issue #208）**：`GET /metrics` 输出 Prometheus 文本格式运行指标（任务状态计数 / 执行时长直方图 / webhook 接收计数 / GitLab API 调用与错误计数 / 调度器队列深度 / 磁盘与 DB 大小），无 SSO 保护可直接被抓取；个人自用可在 Prometheus 配置 `scrape_configs` 指向 `http://<botler-host>:8000/metrics`，再接入 Grafana 面板观测任务失败率 / 队列堆积 / 平均完成时长等（配合统计看板 /api/stats/dashboard，issue #264）。
+
 **healthcheck（issue #207）**：botler 容器内置 `curl -fsS http://127.0.0.1:8000/api/health`
 探针（Dockerfile 与 compose 双份定义，参数一致：interval 30s / timeout 5s /
 retries 3 / start_period 60s），事件循环卡死或 /api/health 依赖失效（MinIO
@@ -632,6 +634,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 
 ```
 GET    /api/health                    健康检查（含平台版本号 version / 构建信息 build / 依赖探测 deps——MinIO 连通（仅启用时）与磁盘空间；关键依赖失败返回 503，issue #207；版本与前端 version.json 同源 issue #233）
+GET    /metrics                       Prometheus 指标端点（issue #208，文本格式 v0.0.4/1.0.0，无 SSO 保护可直接被抓取）：任务状态计数 botler_task_state{status}、执行时长直方图 botler_task_duration_seconds（tasks 表 started_at→finished_at 实时聚合，重启不丢历史）、webhook 接收计数 botler_webhook_received_total{result}、GitLab API 调用/错误计数 botler_gitlab_api_requests_total{method} / botler_gitlab_api_errors_total{method}、调度器队列深度 botler_queue_depth / 运行中 botler_running_tasks、磁盘与 DB 大小 botler_disk_free_bytes / botler_disk_total_bytes / botler_db_size_bytes；Prometheus + Grafana 按此地址抓取
 GET    /api/repos                     仓库列表
 POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook + 在目标 GitLab 项目补齐标记库缺失的默认标签（issue #157）；priority 1~999 缺省 100，Web UI 添加仓库表单可填写调度优先级，issue #161）
 GET    /api/repos/browse              浏览服务器目录（无 path 时初始定位到 browse.default_path，默认服务器用户主目录 ~）

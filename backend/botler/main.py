@@ -19,6 +19,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from .api import router as api_router
@@ -33,6 +34,7 @@ from .reconciler import Reconciler
 from .scheduler import TaskScheduler
 from .templates import TemplateRenderer
 from .health import build_deps_report, deps_critical_failed
+from .metrics import CONTENT_TYPE_LATEST, render_metrics
 from .version import build_health_payload, read_version_info
 from .webhook import WebhookHandler, WebhookError
 
@@ -215,6 +217,20 @@ def create_app(config_path: str | None = None) -> FastAPI:
         if deps_critical_failed(deps):
             return JSONResponse(payload, status_code=503)
         return payload
+
+    # ---- Prometheus 指标（issue #208）----
+    # 根路径 /metrics（不在 /api/ 前缀下）：SSO 中间件只保护 /api/*，
+    # 天然放行，符合 issue 验收「无 SSO 或受限访问保护该端点」；
+    # Prometheus/Grafana 直接按此地址抓取
+    @app.get("/metrics")
+    def metrics():
+        """Prometheus 文本格式运行指标：任务状态计数 / 执行时长 histogram /
+        webhook 接收计数 / GitLab API 调用与错误计数 / 队列深度 / 磁盘与
+        DB 大小 gauge（供 Prometheus + Grafana 观测平台运行状态）。"""
+        return Response(
+            content=render_metrics(app.state.ctx),
+            media_type=CONTENT_TYPE_LATEST,
+        )
 
     # ---- 前端静态托管 ----
     if FRONTEND_DIST.exists():

@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 ### Added
+- **新增 Prometheus 指标端点 /metrics（issue #208）**：平台此前只有 /api/health 与日志，
+  无结构化运行指标（任务队列长度、执行时长分布、失败率、webhook 处理延迟、GitLab API
+  调用次数/错误率、磁盘空间等均无法持续观测）。本次新增 `GET /metrics`（Prometheus
+  文本格式，无 SSO 保护可直接被抓取，接入 Prometheus + Grafana 即可观测运行状态）：
+  - **后端**：新增 `botler/metrics.py`（prometheus-client 实现）——计数器
+    `botler_webhook_received_total{result=accepted|rejected|error}`（webhook.py
+    接收埋点）、`botler_gitlab_api_requests_total{method}` 与
+    `botler_gitlab_api_errors_total{method}`（gitlab_client.py 请求/错误埋点，
+    HTTP>=400 与传输层异常计入错误）；gauge `botler_task_state{status}`（tasks
+    表实时聚合，缺失状态补 0）、`botler_queue_depth` / `botler_running_tasks`
+    （调度器内存队列）、`botler_disk_free_bytes` / `botler_disk_total_bytes`
+    （复用 health.py 磁盘探测）、`botler_db_size_bytes`（SQLite 库文件大小）；
+    直方图 `botler_task_duration_seconds`（自定义 collector，抓取时按
+    tasks.started_at→finished_at 一次 SQL 聚合桶计数/sum/count，重启不丢历史）；
+    main.py 注册根路径 `/metrics`（不在 /api/ 前缀下，SSO 天然放行）；
+  - **测试**：新增 `tests/test_metrics.py` 21 例——文本格式可被标准解析器解析、
+    全部指标族存在、任务状态计数随库更新、执行时长直方图桶/sum/count 正确
+    （含非法时间戳与未结束任务排除、空库兜底）、webhook 接收按结果分类计数、
+    GitLab API 请求/HTTP 错误/传输层错误计数、队列深度/磁盘/DB gauge、
+    测试隔离（reset_for_tests）；后端全量测试无 regression。
 - **技能页面增加「同步所有 agent 技能」功能（issue #328）**：技能页顶部新增
   「同步所有 agent 技能」按钮，点击后把全部执行引擎（executor 插件）的技能
   合并去重后，复制到每个引擎的技能根目录（方案A，需求方已确认）：

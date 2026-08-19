@@ -17,6 +17,7 @@ from .gitlab_client import GitLabClient, GitLabError
 from .git_remote import build_repo_client_with_username
 from .labels import CLAIM_SKIP_LABELS
 from .scheduler import TaskScheduler
+from .metrics import inc_webhook_received
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,22 @@ class WebhookHandler:
         self.scheduler = scheduler
 
     def handle(self, body: dict, header_token: str | None) -> dict:
-        """处理 webhook 请求，返回响应体。校验失败抛 WebhookError。"""
+        """处理 webhook 请求，返回响应体。校验失败抛 WebhookError。
+
+        指标（issue #208）：每次接收计数一次，按结果分类——accepted
+        （入队/去重跳过）/ rejected（事件无关/未指派/标签过滤等）/
+        error（校验失败抛 WebhookError），三类之和即 webhook 接收总数。
+        """
+        try:
+            result = self._handle_impl(body, header_token)
+        except WebhookError:
+            inc_webhook_received("error")
+            raise
+        inc_webhook_received("accepted" if result.get("accepted") else "rejected")
+        return result
+
+    def _handle_impl(self, body: dict, header_token: str | None) -> dict:
+        """处理 webhook 请求（原 handle 主体），返回响应体。校验失败抛 WebhookError。"""
         cfg = self.config.get()
 
         # 1. secret 校验（防伪造）

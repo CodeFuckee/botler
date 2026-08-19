@@ -1620,6 +1620,38 @@ class Database:
                 "SELECT status, COUNT(*) AS c FROM tasks GROUP BY status").fetchall()
         return {r["status"]: r["c"] for r in rows}
 
+
+    def task_duration_histogram(self, buckets: list[float]) -> tuple[int, float, list[int]]:
+        """任务执行时长直方图聚合（issue #208，/metrics 数据源）。
+
+        时长 = finished_at - started_at（UTC，SQLite julianday 差值换算秒），
+        仅统计两个时间戳都已写入的任务（queued/running 无 finished_at 自然
+        排除）；时间串非法（julianday 解析失败 → NULL）与负值（时钟回拨）
+        的行不参与统计。返回 (count, sum_seconds, bucket_counts)：
+        bucket_counts[i] 为 duration < buckets[i] 的累计计数，+Inf 桶由
+        调用方用 count 补齐（Prometheus 直方图语义）。
+        """
+        if not buckets:
+            return (0, 0.0, [])
+        marks = ", ".join(
+            f"COALESCE(SUM(CASE WHEN dur < ? THEN 1 ELSE 0 END), 0) AS b{i}"
+            for i in range(len(buckets)))
+        sql = (
+            "SELECT COUNT(*) AS cnt, COALESCE(SUM(dur), 0.0) AS total, " + marks + " "
+            "FROM ("
+            "  SELECT (julianday(finished_at) - julianday(started_at)) * 86400.0 AS dur "
+            "  FROM tasks "
+            "  WHERE finished_at IS NOT NULL AND started_at IS NOT NULL"
+            ") WHERE dur IS NOT NULL AND dur >= 0"
+        )
+        with self._conn() as conn:
+            row = conn.execute(sql, [float(b) for b in buckets]).fetchone()
+        return (
+            int(row["cnt"]),
+            float(row["total"]),
+            [int(row[f"b{i}"]) for i in range(len(buckets))],
+        )
+
     # ---- notification_events（issue #21）----
 
     def add_notification(self, type_: str, title: str, body: str = "",

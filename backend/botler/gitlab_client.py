@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote
 
 import httpx
+from .metrics import inc_gitlab_api_error, inc_gitlab_api_request
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,9 @@ class GitLabClient:
         """
         attempts = self.retry_max_attempts
         for attempt in range(attempts):
+            # 指标（issue #208）：GitLab API 请求计数——每次实际 HTTP 尝试
+            # 计一次（含重试），错误率 = gitlab_api_errors / gitlab_api_requests
+            inc_gitlab_api_request(method)
             try:
                 resp = self._http.request(method, path, **kwargs)
             except httpx.HTTPError as e:
@@ -232,7 +236,10 @@ class GitLabClient:
             # 传输层故障（DNS 解析失败 / 连接拒绝 / 超时等）统一转 GitLabError，
             # 调用方按「GitLab 故障」优雅降级（对账/概览单仓库失败不中断整体，
             # issue #212 E2E 用假 GitLab 地址启动时不再裸抛 httpx 异常）
+            inc_gitlab_api_error(method)  # 指标（issue #208）：调用失败计数
             raise GitLabError(f"GitLab 请求失败（{path}）: {e}") from e
+        if resp.status_code >= 400:
+            inc_gitlab_api_error(method)  # 指标（issue #208）：调用失败计数
         if resp.status_code == 401:
             raise GitLabError("token 无效或已过期（401）", 401)
         if resp.status_code == 403:
@@ -259,10 +266,13 @@ class GitLabClient:
                     "GET", path, params={"page": page, "per_page": 100, **kwargs})
             except httpx.HTTPError as e:
                 # 与 _request 一致：传输层故障统一转 GitLabError（issue #212）
+                inc_gitlab_api_error("GET")  # 指标（issue #208）：调用失败计数
                 raise GitLabError(f"GitLab 请求失败（{path}）: {e}") from e
             if resp.status_code == 404:
                 break
             if resp.status_code >= 400:
+                # 指标（issue #208）：调用失败计数（404 分页截止不算失败）
+                inc_gitlab_api_error("GET")
                 raise GitLabError(f"GitLab API 错误 {resp.status_code}: {resp.text[:300]}", resp.status_code)
             batch = resp.json()
             items.extend(batch)
@@ -509,6 +519,7 @@ class GitLabClient:
         resp = self._http_request_with_retry(
             "GET", f"/projects/{project_id}/jobs/{job_id}/artifacts")
         if resp.status_code >= 400:
+            inc_gitlab_api_error("GET")  # 指标（issue #208）：调用失败计数
             resp.close()
             raise GitLabError(
                 f"GitLab 产物下载失败 {resp.status_code}: {resp.text[:300]}",
