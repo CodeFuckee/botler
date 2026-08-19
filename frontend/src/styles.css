@@ -3686,6 +3686,20 @@ code {
 /* ---- 概览页 DeepSeek 余额卡片「去充值」链接按钮（issue #178）：与「刷新」
    按钮并排展示，跳转 DeepSeek 开放平台充值页；复用 .btn / .btn-small 外观，
    按钮间间距由 .form-row 的 gap 提供（不额外加 margin） ---- */
+/* ---- 概览页 DeepSeek 余额卡片「刷新」/「充值」按钮文字对齐（issue #336）----
+   .btn 未设置 font-family / line-height：<button> 使用浏览器 UA 默认字体且
+   line-height: normal（不继承 body 字体栈），<a> 继承 body 的系统字体栈与
+   line-height: 1.6——字体度量/行高不同导致两按钮高度不同、按钮内文字不在
+   同一垂直高度（竖屏触屏 min-height:44px 下更明显）；统一字体/行高 +
+   flex 垂直居中修复（仅作用于本卡片两按钮，不影响其他 .btn） */
+.deepseek-balance-section .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  line-height: 1.6;
+}
+
 .deepseek-topup-link {
   text-decoration: none;
 }

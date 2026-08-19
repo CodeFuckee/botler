@@ -12,7 +12,7 @@
 // 5. 余额接口请求失败（网络异常）→ 不渲染卡片、页面不崩溃；
 // 6. 点击「刷新」按钮 → 重新请求余额接口；
 // 7. styles.css 提供余额卡片样式类；
-// 8. 卡片内提供「去充值」链接按钮（issue #178）：点击跳转 DeepSeek
+// 8. 卡片内提供「充值」链接按钮（issue #178）：点击跳转 DeepSeek
 //    开放平台充值页 https://platform.deepseek.com/top_up（新标签页打开，
 //    target=_blank + rel=noreferrer），方便用户直接在官方页面充值。
 import { after, mock, test } from 'node:test'
@@ -71,15 +71,15 @@ test('styles.css 提供余额卡片样式', () => {
   assert.match(styles, /\.deepseek-balance-total\s*\{/, '应有总余额数字样式')
 })
 
-test('卡片提供「去充值」链接按钮（issue #178）', () => {
+test('卡片提供「充值」链接按钮（issue #178）', () => {
   assert.match(overview, /DEEPSEEK_TOPUP_URL\s*=\s*'https:\/\/platform\.deepseek\.com\/top_up'/,
                '应定义 DeepSeek 开放平台充值页地址常量')
-  assert.match(overview, /deepseek-topup-link/, '去充值链接应有独立样式类')
+  assert.match(overview, /deepseek-topup-link/, '充值链接应有独立样式类')
   assert.match(overview, /href=\{DEEPSEEK_TOPUP_URL\}/, '链接应指向充值页地址')
   assert.match(overview, /target="_blank"/, '应新标签页打开')
   assert.match(overview, /rel="noreferrer"/, '外链应带 rel=noreferrer')
-  assert.match(overview, /tr\('overview\.recharge'\)/, '「去充值」按钮应经 t() 国际化')
-  assert.equal(zhCN['overview.recharge'], '去充值', '中文「去充值」文案应保留')
+  assert.match(overview, /tr\('overview\.recharge'\)/, '「充值」按钮应经 t() 国际化')
+  assert.equal(zhCN['overview.recharge'], '充值', '中文「充值」文案应保留')
   assert.match(overview, /name="externalLink" \/> \{tr\('overview\.recharge'\)\}/, '应使用 Lucide ExternalLink 图标 + t() 国际化')
 })
 
@@ -265,20 +265,20 @@ test('交互：余额信息缺失时显示空状态（balance_infos 为空）', 
   }
 })
 
-// ---- 「去充值」链接按钮（issue #178）：跳转 DeepSeek 开放平台充值页 ----
+// ---- 「充值」链接按钮（issue #178）：跳转 DeepSeek 开放平台充值页 ----
 
-// 在已渲染的余额卡片中定位「去充值」链接（返回 <a> 元素数组）
+// 在已渲染的余额卡片中定位「充值」链接（返回 <a> 元素数组）
 function topupLinks(renderer) {
   return renderer.root.findAll(
     (n) => n.type === 'a' && String(n.props.className || '').includes('deepseek-topup-link'))
 }
 
-test('渲染：已配置时卡片提供「去充值」链接按钮（新标签页打开充值页）', async () => {
+test('渲染：已配置时卡片提供「充值」链接按钮（新标签页打开充值页）', async () => {
   const r = await renderOverview({ balancePayload: BALANCE_PAYLOAD })
   try {
     assert.equal(r.renderError, null, `渲染抛错：${r.renderError?.message || r.renderError}`)
     const links = topupLinks(r.renderer)
-    assert.equal(links.length, 1, '应恰好渲染一个「去充值」链接')
+    assert.equal(links.length, 1, '应恰好渲染一个「充值」链接')
     const a = links[0]
     assert.equal(a.props.href, 'https://platform.deepseek.com/top_up',
                  '链接应指向 DeepSeek 开放平台充值页')
@@ -286,7 +286,7 @@ test('渲染：已配置时卡片提供「去充值」链接按钮（新标签�
     assert.equal(a.props.rel, 'noreferrer', '外链应带 rel=noreferrer')
     assert.ok(String(a.props.title || '').includes('充值'), '应提供可访问的提示文案')
     const text = treeText(r.renderer)
-    assert.ok(text.includes('去充值'), '应渲染「去充值」文案')
+    assert.ok(text.includes('充值'), '应渲染「充值」文案')
     assert.ok(text.includes('lucide-external-link'), '应渲染 Lucide ExternalLink 图标')
     // 刷新按钮仍在
     const section = findByClass(r.renderer, 'deepseek-balance-section')
@@ -298,19 +298,19 @@ test('渲染：已配置时卡片提供「去充值」链接按钮（新标签�
   }
 })
 
-test('渲染：未配置（configured=false）时不渲染「去充值」链接', async () => {
+test('渲染：未配置（configured=false）时不渲染「充值」链接', async () => {
   const r = await renderOverview()
   try {
     assert.equal(r.renderError, null, '渲染不应崩溃')
-    assert.equal(topupLinks(r.renderer).length, 0, '未配置时不应渲染去充值链接')
+    assert.equal(topupLinks(r.renderer).length, 0, '未配置时不应渲染充值链接')
     const text = treeText(r.renderer)
-    assert.ok(!text.includes('去充值'), '未配置时不应出现去充值文案')
+    assert.ok(!text.includes('充值'), '未配置时不应出现充值文案')
   } finally {
     await r.unmount()
   }
 })
 
-test('渲染：余额接口报错时「去充值」链接仍可用（方便用户去官方页面充值）', async () => {
+test('渲染：余额接口报错时「充值」链接仍可用（方便用户去官方页面充值）', async () => {
   const r = await renderOverview({
     balancePayload: {
       configured: true,
@@ -321,17 +321,17 @@ test('渲染：余额接口报错时「去充值」链接仍可用（方便用�
   try {
     assert.equal(r.renderError, null, '渲染不应崩溃')
     const links = topupLinks(r.renderer)
-    assert.equal(links.length, 1, '错误态下仍应渲染去充值链接')
+    assert.equal(links.length, 1, '错误态下仍应渲染充值链接')
     assert.equal(links[0].props.href, 'https://platform.deepseek.com/top_up',
                  '链接应指向充值页')
     const text = treeText(r.renderer)
-    assert.ok(text.includes('去充值'), '错误态下仍应展示去充值入口')
+    assert.ok(text.includes('充值'), '错误态下仍应展示充值入口')
   } finally {
     await r.unmount()
   }
 })
 
-test('渲染：余额信息为空时「去充值」链接仍可用（余额为 0 正是需要充值的场景）', async () => {
+test('渲染：余额信息为空时「充值」链接仍可用（余额为 0 正是需要充值的场景）', async () => {
   const r = await renderOverview({
     balancePayload: {
       configured: true,
@@ -342,7 +342,7 @@ test('渲染：余额信息为空时「去充值」链接仍可用（余额为 0
   try {
     assert.equal(r.renderError, null, '渲染不应崩溃')
     const links = topupLinks(r.renderer)
-    assert.equal(links.length, 1, '空余额态下仍应渲染去充值链接')
+    assert.equal(links.length, 1, '空余额态下仍应渲染充值链接')
     assert.equal(links[0].props.href, 'https://platform.deepseek.com/top_up',
                  '链接应指向充值页')
   } finally {
@@ -350,6 +350,6 @@ test('渲染：余额信息为空时「去充值」链接仍可用（余额为 0
   }
 })
 
-test('styles.css 提供「去充值」链接按钮样式', () => {
-  assert.match(styles, /\.deepseek-topup-link\s*\{/, '应有去充值链接样式类')
+test('styles.css 提供「充值」链接按钮样式', () => {
+  assert.match(styles, /\.deepseek-topup-link\s*\{/, '应有充值链接样式类')
 })

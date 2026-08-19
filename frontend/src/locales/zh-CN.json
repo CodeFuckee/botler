@@ -46,7 +46,7 @@
   "overview.totalBalance": "总余额",
   "overview.grantedBalance": "赠送 {amount}",
   "overview.rechargeBalance": "充值 {amount}",
-  "overview.recharge": "去充值",
+  "overview.recharge": "充值",
   "overview.rechargeTitle": "前往 DeepSeek 开放平台充值",
   "overview.rateDecrease": "每小时减少 {amount}",
   "overview.rateIncrease": "每小时增加 {amount}",

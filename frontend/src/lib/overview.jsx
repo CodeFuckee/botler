@@ -31,7 +31,7 @@ export const INSPIRATION_POLL_MS = 15000
 // 轮询 + 卡片内手动刷新按钮兜底（后端代调 deepseek user/balance）
 export const DEEPSEEK_BALANCE_POLL_MS = 60000
 
-// DeepSeek 开放平台充值页（issue #178）：余额卡片「去充值」链接按钮的跳转
+// DeepSeek 开放平台充值页（issue #178）：余额卡片「充值」链接按钮的跳转
 // 目标，点击后在新标签页打开官方充值页，方便用户直接在 DeepSeek 页面充值
 export const DEEPSEEK_TOPUP_URL = 'https://platform.deepseek.com/top_up'
 

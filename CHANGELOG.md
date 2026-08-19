@@ -613,6 +613,31 @@
 
 ### Fixed
 
+- **竖屏下概览页 DeepSeek 余额卡片「刷新」与「充值」按钮文字不在同一高度、
+  按钮文案「去充值」改为「充值」（issue #336）**：竖屏界面（含手机触屏
+  竖屏，`.btn-small` 在 `@media (pointer: coarse)` 下 `min-height: 44px`）
+  下，概览页 DeepSeek 余额卡片底部的「刷新」按钮（`<button>`）与「充值」
+  链接按钮（`<a>`）文字不在同一垂直高度。根因：两按钮共享 `.btn` /
+  `.btn-small` 样式，但 `.btn` 未设置 `font-family` 与 `line-height`——
+  `<button>` 使用浏览器 UA 默认字体且 `line-height: normal`（不继承 body
+  字体栈），`<a>` 继承 body 的系统字体栈（-apple-system…）与
+  `line-height: 1.6`，字体度量/行高不同导致两按钮高度不同、按钮内文字
+  垂直位置不一致（实测文字中心 y 差 2.09px）。修复：
+  - **样式**：`styles.css` 为 `.deepseek-balance-section .btn` 追加
+    `display: inline-flex; align-items: center; justify-content: center;
+    font-family: inherit; line-height: 1.6`——两按钮统一字体与行高、
+    icon 与文字在按钮内垂直居中，仅作用于本卡片两按钮，不影响其他
+    `.btn`；
+  - **文案**：`locales/zh-CN.json` 的 `overview.recharge` 由「去充值」改为
+    「充值」（en-US 保持 `Top up`），`lib/overview.jsx` 相关注释同步；
+  - **新增测试**：e2e `deepseek-balance-buttons.spec.js` 新增 375×667
+    竖屏视口真实浏览器用例——mock 余额接口渲染卡片后，用 Range API 测量
+    两按钮内文本节点实际渲染矩形，断言文字中心在同一垂直高度（差值
+    ≤1px）+ 文案为「充值」；`tests/overview-deepseek-balance.test.mjs`
+    既有「去充值」断言同步更新为「充值」。修复前新 e2e 用例稳定失败
+    （差值 2.09px），修复后通过；全量前端单元测试（1367 例）+ backend
+    pytest（2617 例）+ 全量 E2E 无 regression。
+
 - **GitHub 镜像同步（sync_to_github）并发互删 /tmp 目录导致流水线失败（issue #334
   联动）**：sync job 使用固定路径 `/tmp/sync-github-botler` 作为克隆目录；同一
   runner 并发数 >1 且相邻两次 main push 各自触发 sync 时（如流水线 #1239/#1240
