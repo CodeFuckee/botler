@@ -29,8 +29,16 @@ from botler.database import Database
 
 @pytest.fixture
 def db(tmp_path):
-    """临时 SQLite 数据库（tools 表随迁移 v20 创建）。"""
-    return Database(str(tmp_path / "test.db"))
+    """临时 SQLite 数据库（tools 表随迁移 v20 创建）。
+
+    测试结束后显式 close 当前线程持有的 sqlite 连接：避免连接随 GC
+    延迟回收（unclosed database ResourceWarning），在 pytest-xdist
+    并发/CI 高负载下累积占用 fd 并触发 WAL 锁协议偶发冲突
+    （issue #395 修复触发的流水线 #1290 backend:test 即因此偶发失败）。
+    """
+    database = Database(str(tmp_path / "test.db"))
+    yield database
+    database.close()
 
 
 def make_definition(**overrides):
@@ -306,12 +314,18 @@ class _Handler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def http_server():
-    """启动本地 HTTP server 返回 base URL（teardown 关闭）。"""
+    """启动本地 HTTP server 返回 base URL（teardown 关闭）。
+
+    shutdown() 只退出 serve_forever，监听 socket 需 server_close()
+    才会释放——否则每个用例泄漏一个监听 fd（issue #395 修复触发
+    的流水线 #1290 偶发 EBADF 的资源退化因素之一）。
+    """
     server = HTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{server.server_port}"
     server.shutdown()
+    server.server_close()
 
 
 def route_json(base: str, path: str, data) -> str:

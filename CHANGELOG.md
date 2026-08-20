@@ -129,6 +129,19 @@
 
 ### Fixed
 
+- **backend 测试夹具资源释放：sqlite 连接与本地 HTTP 监听 socket 显式关闭（issue #395 修复触发）**：
+  修复 issue #395 的提交触发的流水线 #1290 中 backend:test 偶发失败——`tests/test_tools.py::TestImportFromUrl::test_import_single_definition_file`
+  报 `ValueError: 下载失败: [Errno 9] Bad file descriptor`（2901 passed / 1 failed，本地串行/低并发不
+  复现）：`db` fixture 持有的 sqlite 连接不关闭（全量运行产生大量
+  `ResourceWarning: unclosed database`），`http_server` fixture 仅 `shutdown()`（退出 serve_forever）
+  未 `server_close()`（监听 socket 仍开着），两类资源依赖 GC 延迟回收，在 pytest-xdist 4 worker 高
+  并发下累积 fd 占用与过早回收复用，导致本地 HTTP 下载偶发 EBADF；
+  - **修复**：`backend/tests/test_tools.py` 的 `db` fixture teardown 显式 `database.close()`、
+    `http_server` teardown 补 `server.server_close()`；`backend/tests/test_executor_dsh.py` 的
+    executor / dsh_executor fixture 同样显式关闭 sqlite 连接；验证：test_tools + test_executor_dsh
+    xdist 4 worker 78 例通过，backend 全量 pytest 2902 通过、coverage 门禁通过。
+
+
 - **CI backend:test 并发迁移竞态修复：test_metrics.py 模块级导入隔离临时库（issue #395 修复触发）**：
   修复 issue #395 的提交触发的流水线 #1289 中 backend:test 失败——`tests/test_metrics.py`
   在设置 `BOTLER_CONFIG` / `BOTLER_DB` 环境变量**之前**就已执行 `from botler.database

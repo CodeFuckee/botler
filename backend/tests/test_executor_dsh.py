@@ -81,7 +81,9 @@ def _mk_executor(tmp_path, config: ConfigManager) -> ClaudeExecutor:
 
 @pytest.fixture
 def executor(tmp_path):
-    return _mk_executor(tmp_path, _mk_config(tmp_path))
+    ex = _mk_executor(tmp_path, _mk_config(tmp_path))
+    yield ex
+    ex.db.close()  # 显式关闭 sqlite 连接，避免泄漏（unclosed database）
 
 
 @pytest.fixture
@@ -96,7 +98,9 @@ def dsh_executor(tmp_path):
                   f"\n  model: deepseek-v4-flash"
                   f"\n  max_tokens: 49152"
                   f"\n  session_root: {sessions}")
-    return _mk_executor(tmp_path, config)
+    ex = _mk_executor(tmp_path, config)
+    yield ex
+    ex.db.close()  # 显式关闭 sqlite 连接，避免泄漏（unclosed database）
 
 
 class _FakeRunner:
