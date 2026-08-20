@@ -63,6 +63,17 @@
     基础规则，`overview-issue-task.test.mjs` 概览页板块顺序断言同步加入
     「来源分布」，全量测试无 regression。
 
+### Fixed
+
+- **CI backend:test 并行测试文件描述符耗尽修复（issue #360）**：
+  并发 worker 下部分用例泄漏的 sqlite 连接（ResourceWarning: unclosed database）
+  累积占用 fd，超过进程 ulimit 后触发 `OSError: [Errno 24] Too many open files`
+  与 `sqlite3.OperationalError: unable to open database file`（流水线 #1272/#1273/
+  #1275 实测，本地串行全量 2868 例通过不受影响）。本次在 `.gitlab-ci.yml`
+  `backend:test` 步骤 4 中先尝试 `ulimit -n 65535` 提升文件描述符上限，并将
+  pytest-xdist 并发默认封顶由 8 worker 降至 4（仍可用 CI 变量 `PYTEST_WORKERS`
+  覆盖），兼顾稳定性与速度。
+
 ## [1.5.3] - 2026-08-20
 ### Added
 - **标记库页新增「一键同步全部」按钮，一次性把全部默认标签同步到所有仓库（issue #358）**：
