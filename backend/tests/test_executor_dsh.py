@@ -249,16 +249,17 @@ class TestDshCredentials:
         ex = _mk_executor(tmp_path, config)
         assert ex._dsh_credentials(config.get()) == (None, None)
 
-    def test_non_deepseek_provider_skipped(self, tmp_path):
-        """provider 非 deepseek 的项（如 openai）不回退。"""
+    def test_non_openai_compat_provider_skipped(self, tmp_path):
+        """（issue #395）非 OpenAI 兼容协议 provider（anthropic）不回退——
+        dsh 引擎需 OpenAI 兼容 chat/completions 接口，anthropic 走 /messages。"""
         config = _mk_config(
             tmp_path,
             ai_providers_extra="""
-- name: openai
-  provider: openai
-  base_url: https://api.openai.com/v1
-  api_key: sk-openai
-  model: gpt-4o
+- name: anthropic
+  provider: anthropic
+  base_url: https://api.anthropic.com/v1
+  api_key: sk-anthropic
+  model: claude-sonnet-5
   enabled: true
 """)
         ex = _mk_executor(tmp_path, config)
@@ -1043,3 +1044,95 @@ class TestDshTranscript:
         row = dsh_executor.db.get_task(task_id)
         data = json.loads(row["dsh_transcript"])
         assert data["messages"][0]["role"] == "user"
+
+
+class TestDshCredentialsRelayFallback:
+    """（issue #395）dsh 引擎回退第三方中转站（OpenAI 兼容）配置。
+
+    用户复现：在设置页「AI API 供应商」配置第三方中转站的 base_url /
+    api_key 后（provider 通常选 openai / custom 等 OpenAI 兼容类型），
+    dsh 执行引擎不可用——任务 #569 失败日志：
+    `llm-deepseek: no API key for provider route "deepseek-official"`。
+    根因：_dsh_credentials 仅回退 provider=deepseek 的 ai_providers 项，
+    openai/custom 等中转站项匹配不到 → SDK 无 key。中转站本身可用
+    （其他消费 ai_providers 的功能正常），纯配置链路断裂。
+    """
+
+    def test_falls_back_to_openai_relay(self, tmp_path):
+        """（bug 复现）仅配 provider=openai 的中转站 → 应回退其 key/base_url。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: 中转站
+  provider: openai
+  base_url: https://relay.example.com/v1
+  api_key: sk-relay-12345
+  model: deepseek-chat
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (
+            "sk-relay-12345", "https://relay.example.com/v1")
+
+    def test_falls_back_to_custom_relay(self, tmp_path):
+        """（bug 复现）provider=custom 的中转站同样回退。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: 中转站
+  provider: custom
+  base_url: https://relay.example.com/v1
+  api_key: sk-relay-999
+  model: deepseek-chat
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (
+            "sk-relay-999", "https://relay.example.com/v1")
+
+    def test_deepseek_still_preferred_over_relay(self, tmp_path):
+        """（issue #115 语义保持）deepseek 项与 openai 中转站并存 → 仍优先 deepseek。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra=_AI_PROVIDERS_DEEPSEEK + """
+- name: 中转站
+  provider: openai
+  base_url: https://relay.example.com/v1
+  api_key: sk-relay-12345
+  model: deepseek-chat
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (
+            "sk-ai-provider-key", "https://api.deepseek.com/v1")
+
+    def test_disabled_relay_skipped(self, tmp_path):
+        """中转站项 enabled=false → 不回退。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: 中转站
+  provider: openai
+  base_url: https://relay.example.com/v1
+  api_key: sk-relay-12345
+  model: deepseek-chat
+  enabled: false
+""")
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (None, None)
+
+    def test_gemini_still_not_fallback(self, tmp_path):
+        """（边界）非 OpenAI 兼容协议 provider（gemini）不回退——dsh 需要
+        OpenAI 兼容 chat/completions 接口，gemini 走 generateContent。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: gemini
+  provider: gemini
+  base_url: https://generativelanguage.googleapis.com/v1beta
+  api_key: sk-gemini
+  model: gemini-2.5-pro
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        assert ex._dsh_credentials(config.get()) == (None, None)

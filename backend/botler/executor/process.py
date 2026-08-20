@@ -577,31 +577,59 @@ class ProcessMixin:
         finally:
             log_f.close()
 
+    # dsh 引擎凭据回退的 OpenAI 兼容 provider 白名单（issue #395）：设置页
+    # 「AI 供应商」中配第三方中转站时 provider 通常选 openai / custom 等
+    # OpenAI 兼容类型，此前仅回退 provider=deepseek 导致中转站 key 未被
+    # 消费（任务 #569 no API key）。deepseek 仍优先（issue #115），其余
+    # 按 ai_providers 列表顺序取第一个启用项作中转站回退源。
+    _DSH_OPENAI_COMPAT_PROVIDERS = frozenset({
+        "deepseek", "openai", "custom", "siliconflow", "openrouter",
+        "moonshot", "qwen", "zhipu", "ollama",
+    })
+
     # ---- dsh 引擎（issue #84）----
     def _dsh_credentials(self, cfg) -> tuple[str | None, str | None]:
         """dsh 引擎 API Key / Base URL 解析链，返回 (api_key, base_url)。
 
         优先级：dsh 段显式配置 > 设置页「AI 供应商」中 provider=deepseek
-        且 enabled 的项（issue #115）> 环境变量 DEEPSEEK_API_KEY /
-        DEEPSEEK_BASE_URL（SDK 默认读取，botler 不覆盖，返回 None 即
-        由 SDK 兜底）。
+        且 enabled 的项（issue #115）> 设置页「AI 供应商」中其他 OpenAI
+        兼容 provider（openai / custom 等，issue #395）> 环境变量
+        DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL（SDK 默认读取，botler 不
+        覆盖，返回 None 即由 SDK 兜底）。
 
         issue #115 根因：任务 #194 #195 切 dsh 引擎后全部失败——用户
         只在设置页「AI 供应商」配过 DeepSeek key，dsh 段未配、部署机
         环境无 DEEPSEEK_API_KEY，SDK 无 key 可用 → DeepSeek API 401
         AUTH → finish_reason=error → 判失败。key 已在平台上配过却不
         消费，属于配置链路断裂，在此补齐回退。
+
+        issue #395 根因：任务 #569 在设置页配置第三方中转站（base_url /
+        api_key）后 dsh 引擎仍报 `no API key for provider route
+        "deepseek-official"`——第三方中转站通常选 OpenAI 兼容类型
+        （provider=openai / custom），此前只回退 provider=deepseek 的项，
+        中转站配置匹配不到，key 未被消费；中转站本身可用（其他 agent 里
+        使用完全没问题），纯属 dsh 凭据回退范围过窄。这里把回退扩大到
+        所有 OpenAI 兼容 provider（deepseek 仍优先，保持 issue #115 语义）。
         """
         api_key = cfg.dsh_api_key or None
         base_url = cfg.dsh_base_url or None
         if api_key is None:
+            # OpenAI 兼容 provider 白名单（issue #395）：deepseek 优先，
+            # 其余（openai / custom / siliconflow 等）作为中转站回退源
+            candidates = [
+                p for p in (getattr(cfg, "ai_providers", None) or [])
+                if isinstance(p, dict)
+                and str(p.get("provider", "")).strip()
+                in self._DSH_OPENAI_COMPAT_PROVIDERS
+                and bool(p.get("enabled", True))
+                and str(p.get("api_key", "") or "").strip()
+            ]
+            # 优先 provider=deepseek（issue #115），否则取列表第一个
+            # 启用的 OpenAI 兼容中转站项（issue #395）
             provider = next(
-                (p for p in (getattr(cfg, "ai_providers", None) or [])
-                 if isinstance(p, dict)
-                 and str(p.get("provider", "")).strip() == "deepseek"
-                 and bool(p.get("enabled", True))
-                 and str(p.get("api_key", "") or "").strip()),
-                None)
+                (p for p in candidates
+                 if str(p.get("provider", "")).strip() == "deepseek"),
+                None) or (candidates[0] if candidates else None)
             if provider is not None:
                 api_key = str(provider.get("api_key", "")).strip() or None
                 base_url = base_url or (

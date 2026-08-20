@@ -129,6 +129,23 @@
 
 ### Fixed
 
+- **dsh 引擎凭据回退扩展：设置页「AI API 供应商」的第三方中转站（OpenAI 兼容）配置可被 dsh 引擎消费（issue #395）**：
+  此前 `_dsh_credentials` 的 ai_providers 回退**只匹配 `provider == "deepseek"`** 的项——用户在设置页
+  配置第三方中转站的 base_url / api_key（provider 通常选 openai / custom 等 OpenAI 兼容类型）后，
+  dsh 执行引擎匹配不到该配置、拿不到 API Key，SDK 报
+  `llm-deepseek: no API key for provider route "deepseek-official"`，任务失败（任务 #569 实测日志）；
+  中转站本身可用（其他消费 ai_providers 的功能正常），纯属 dsh 侧回退范围过窄的配置链路断裂；
+  - **后端**：`backend/botler/executor/process.py` 的 `_dsh_credentials` 增加 OpenAI 兼容 provider
+    白名单（`_DSH_OPENAI_COMPAT_PROVIDERS`：deepseek / openai / custom / siliconflow / openrouter /
+    moonshot / qwen / zhipu / ollama），ai_providers 回退按「provider=deepseek 优先（issue #115 语义
+    保持）→ 其余 OpenAI 兼容中转站按列表顺序取第一个启用项」扩展；base_url 一并回退（dsh 段显式
+    配置仍最高优先）；gemini / anthropic 等非 OpenAI 兼容协议 provider 不回退；
+  - **测试**：`backend/tests/test_executor_dsh.py` 新增 `TestDshCredentialsRelayFallback` 5 例——
+    openai / custom 中转站回退（bug 复现用例）、deepseek 与中转站并存时 deepseek 优先、中转站
+    enabled=false 不回退、gemini 不回退；原 `test_non_deepseek_provider_skipped` 改为
+    `test_non_openai_compat_provider_skipped`（anthropic 不回退）；backend 全量 pytest 2902 通过、
+    前端 node 全量 1538 通过。
+
 - **概览页开放 issue 行：评论气泡图标与计数数字垂直堆叠修复（issue #359）**：
   概览界面每条开放 issue 行最右侧的评论气泡图标（Lucide message）与评论计数
   数字上下堆叠、未横向并排（计数为 0 时最明显：数字被挤到图标正下方）。根因
