@@ -80,6 +80,26 @@
 
 ### Fixed
 
+- **概览页开放 issue 行：评论气泡图标与计数数字垂直堆叠修复（issue #359）**：
+  概览界面每条开放 issue 行最右侧的评论气泡图标（Lucide message）与评论计数
+  数字上下堆叠、未横向并排（计数为 0 时最明显：数字被挤到图标正下方）。根因
+  是 **`.issue-notes` 同名类冲突**——右边栏评论/活动区块（issue #97）的
+  `display:flex; flex-direction:column` 规则与概览页计数 span 的同名规则在同一
+  stylesheet 中**合并生效**，概览页计数 span 被变成纵向 flex 容器，图标与数字
+  因此垂直排布。本次修复：
+  - **前端**：`frontend/src/components/overview/IssueListSection.jsx` 概览页计数
+    span 类名由 `issue-notes` 改为独立类 `issue-notes-count`，彻底隔离右边栏
+    同名样式合并；`frontend/src/styles.css` 新增 `.issue-notes-count` 规则
+    （`display:inline-flex; align-items:center; gap:var(--space-1)`）显式行向
+    排布——无论评论数为 0、1、2 或任意数值，数字始终紧跟图标右侧同一行；原
+    `.issue-notes` 规则保留，右边栏评论/活动区块渲染不变；
+  - **测试**：新增 E2E `frontend/e2e/tests/issue-notes-layout.spec.js` 3 例——
+    评论数 0/1/10 三种数值下，真实浏览器计算断言图标与数字文本垂直中心重合
+    （同一行）且数字左缘位于图标右缘右侧；修复前 3 例全部失败（computed
+    `flex-direction=column` 确认复现），修复后全部通过；
+  - **验证**：前端全量测试、后端 pytest 全量测试与 Playwright E2E 全部通过，
+    无 regression。
+
 - **合并时间线模式：评论/活动与标记活动 id 跨序列相同时渲染 key 冲突修复（issue #351）**：
   合并时间线（issue #342/#351）把评论/活动（GitLab notes）与标记活动
   （resource_label_events）按时间交错为一条时间线，但 notes 与 label_events

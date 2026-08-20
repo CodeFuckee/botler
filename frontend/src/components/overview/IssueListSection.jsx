@@ -404,7 +404,7 @@ export default function IssueListSection({
                                         </span>
                                       )}
                                       {typeof i.user_notes_count === 'number' && (
-                                        <span className="issue-notes" title={tr('overview.notesCount')}>
+                                        <span className="issue-notes-count" title={tr('overview.notesCount')}>
                                           <Icon name="message" /> {i.user_notes_count}
                                         </span>
                                       )}
