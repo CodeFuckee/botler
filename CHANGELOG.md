@@ -5,6 +5,26 @@
 ## [Unreleased]
 
 ### Added
+- **概览页「来源分布」统计卡片迁入统计页（issue #361）**：
+  概览页底部任务来源分布卡片（来源/任务量/成功率/平均耗时，近 30 天，issue
+  #224 新增）整体迁入统计页——统计页原有「来源分布」表格与卡片同源同口径
+  （均为 dashboard 响应的 `by_source`：来源/任务数/成功率/平均耗时），直接
+  迁移会造成同页重复展示，故由卡片替换原表格（卡片信息更全：含「共 N 个
+  任务」与空态文案）；
+  - **前端**：`frontend/src/components/overview/SourceStatsSection.jsx` 移至
+    `frontend/src/components/stats/SourceStatsSection.jsx`，组件行为不变
+    （`GET /api/stats/dashboard?days=30` + 60 秒低频轮询、页面隐藏自动暂停）；
+    `frontend/src/pages/Overview.jsx` 移除组件与导入；`frontend/src/pages/Stats.jsx`
+    迁入组件替换原「来源分布」表格；i18n key 由 `overview.sourceStats*` 重命名
+    为 `stats.sourceStats*`（中英文同步）；CSS 类 `overview-source-stats-*`
+    重命名为 `stats-source-*`（与统计页 `stats-source-trend-*` 命名对齐）；
+  - **测试**：`frontend/tests/overview-source-stats.test.mjs` 迁移重写为
+    `frontend/tests/stats-source-stats.test.mjs`（新增「Stats 渲染 / Overview
+    不再渲染」迁移校验、i18n 新 key 与样式类断言）；`stats-page.test.mjs` 板块
+    断言更新为迁入组件；`overview-issue-task.test.mjs` 概览页板块顺序断言移除
+    「来源分布」；前端全量测试全部通过；
+  - **文档**：README 统计看板 API 说明更新（来源分布卡片归属统计页）。
+
 - **任务执行前预检：token 失效 / 磁盘不足等环境性失败在消耗模型调用前快速失败（issue #238）**：
   此前任务入队后执行器直接进入工作区拉取仓库、调用引擎——token 失效、本地
   路径不可访问、磁盘空间不足等环境问题要到执行中途才报错，白白消耗一次模型

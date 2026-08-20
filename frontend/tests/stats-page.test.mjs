@@ -75,7 +75,7 @@ test('源码：页面包含统计看板各板块', () => {
   assert.match(statsSrc, /失败数/, '应有失败数卡片')
   assert.match(statsSrc, /引擎对比/, '应有引擎对比板块')
   assert.match(statsSrc, /仓库排行/, '应有仓库排行板块')
-  assert.match(statsSrc, /来源分布/, '应有来源分布板块')
+  assert.match(statsSrc, /SourceStatsSection/, '应有来源分布板块（迁入组件，issue #361）')
   assert.match(statsSrc, /失败原因 Top 分布/, '应有失败原因 Top 板块')
 })
 

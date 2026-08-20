@@ -5170,21 +5170,21 @@ body:has(.drawer-overlay) {
 }
 .search-jump-highlight { animation: search-jump-flash 1.6s ease-out 2; }
 
-/* ============ 概览页「来源分布」统计卡片（issue #224） ============ */
-.overview-source-stats-section {
+/* ============ 统计页「来源分布」统计卡片（issue #224 + #361） ============ */
+.stats-source-section {
   margin-top: var(--space-5);
 }
-.overview-source-stats-section h2 {
+.stats-source-section h2 {
   font-size: 16px;
   margin: 0 0 var(--space-1);
 }
-.overview-source-stats-cards {
+.stats-source-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: var(--space-3);
   margin-top: var(--space-3);
 }
-.overview-source-stats-card {
+.stats-source-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 8px);
@@ -5193,22 +5193,22 @@ body:has(.drawer-overlay) {
   flex-direction: column;
   gap: 4px;
 }
-.overview-source-stats-name {
+.stats-source-name {
   font-weight: 600;
   color: var(--text);
 }
-.overview-source-stats-count {
+.stats-source-count {
   font-size: 24px;
   font-weight: 700;
   line-height: 1.2;
 }
-.overview-source-stats-rate {
+.stats-source-rate {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
   margin-top: 2px;
 }
-.overview-source-stats-rate b {
+.stats-source-rate b {
   font-size: 15px;
 }
 

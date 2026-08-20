@@ -7,7 +7,8 @@
 // - 按引擎对比成功率与平均耗时（纯 CSS 条形图，避免引入 recharts 等
 //   重依赖，验收标准「可用现有技术栈」）；
 // - 按仓库排行任务量与成功率；
-// - 按来源（webhook/手动/对账，#224 已做来源维度，本页聚焦成功率）；
+// - 按来源（webhook/手动/对账，#224 已做来源维度，本页聚焦成功率；
+//   #361 起「来源分布」卡片由概览页迁入，替换本页同数据表格）；
 // - 失败原因 Top 分布（failed/interrupted 任务 error_message，与 #40
 //   失败分类口径联动）；
 // - 时间段选择（最近 7 天 / 30 天 / 全部）持久化到 localStorage，刷新
@@ -25,6 +26,7 @@ import { Icon } from '../components/Icon.jsx'
 import { fmtTokens, fmtCost } from '../components/UsageCard.jsx'
 import { useI18n } from '../i18n.jsx'
 import { failureCategoryClass, failureCategoryLabel } from '../failure-categories.js'
+import SourceStatsSection from '../components/stats/SourceStatsSection.jsx'
 
 // Issue 完成耗时统计轮询间隔（issue #180）：平均完成耗时与走势图数据
 // 来自本地 tasks 表成功终态任务（GET /api/issues/completion-stats），
@@ -405,25 +407,11 @@ export default function Stats() {
             </table>
           </section>
 
-          {/* 按来源（webhook/手动/对账）分布 */}
-          <section className="stats-section">
-            <h2>来源分布</h2>
-            <table className="table stats-table">
-              <thead>
-                <tr><th>来源</th><th>任务数</th><th>成功率</th><th>平均耗时</th></tr>
-              </thead>
-              <tbody>
-                {(data.by_source || []).map((s) => (
-                  <tr key={s.key}>
-                    <td className="stats-name">{s.name || '—'}</td>
-                    <td>{s.task_count}</td>
-                    <td><b>{pct(s.success_rate)}</b></td>
-                    <td>{fmtSeconds(s.avg_duration_seconds) || <span className="muted">—</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
+          {/* issue #361：概览页「来源分布」卡片迁入，替换原「来源分布」表格
+              （同源同口径：来源/任务量/成功率/平均耗时，避免同页重复展示）；
+              组件自持近 30 天数据与 60 秒低频轮询，下方「来源按天趋势」随
+              时间段选择联动 */}
+          <SourceStatsSection />
 
           {/* issue #224：来源按天趋势——各来源每日任务量走势（近 7/30 天
               或全部），数据来自同一 dashboard 响应的 by_source_daily，

@@ -335,10 +335,10 @@ test('渲染：无活跃任务时概览页仅剩三板块且不渲染任何任�
       .map((n) => textOf(n.props.children).trim())
     // issue #131：新增灵感板块；issue #293：灵感组件保持原始位置（放在
     // 开放 Issue 板块下方）；issue #322：完成耗时/用量统计板块迁出至统计页，
-    // 概览页板块顺序为 开放 Issue → 灵感 → CI/CD 流水线；
-    // issue #224：新增「来源分布」统计卡片（近 30 天，无任务时显示空态）
-    assert.deepEqual(h2s, ['开放 Issue', '灵感', 'CI/CD 流水线', '来源分布'],
-                     '概览页板块顺序应为：开放 Issue → 灵感 → CI/CD 流水线 → 来源分布')
+    // issue #361：来源分布卡片迁出至统计页，概览页板块顺序为
+    // 开放 Issue → 灵感 → CI/CD 流水线
+    assert.deepEqual(h2s, ['开放 Issue', '灵感', 'CI/CD 流水线'],
+                     '概览页板块顺序应为：开放 Issue → 灵感 → CI/CD 流水线')
     assert.equal(root.findAll((n) => n.props.className === 'issue-task').length, 0,
                  '无任务时不得渲染任务块')
   } finally {
