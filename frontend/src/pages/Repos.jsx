@@ -32,6 +32,9 @@ export default function Repos() {
   const [syncFromGitlabResults, setSyncFromGitlabResults] = useState({})
   // 放大查看中的 logo（issue #188）: repo 对象（null = 关闭弹窗）
   const [viewLogo, setViewLogo] = useState(null)
+  // logo 加载失败集合（issue #338）: repoId -> true——低网速/网络错误下
+  // 缩略图加载失败时显示占位图标兜底，避免渲染破图
+  const [logoFailed, setLogoFailed] = useState({})
 
   const load = async () => {
     try {
@@ -297,19 +300,26 @@ export default function Repos() {
         {repos.map((repo) => (
           <div key={repo.id} className="repo-item">
             {/* issue #188：每个仓库最左侧展示已生成 logo——点击放大并
-                支持下载；未生成时显示占位图标，提示可点右侧「生成图标」 */}
+                支持下载；未生成时显示占位图标，提示可点右侧「生成图标」。
+                issue #338：列表加载小尺寸缩略图（?thumb=1，后端 Pillow
+                实时缩放），低网速下快速可见；放大弹窗仍加载原图 */}
             <div className="repo-logo">
-              {repo.logo_path ? (
+              {repo.logo_path && !logoFailed[repo.id] ? (
                 <button type="button" className="repo-logo-btn"
                         onClick={() => setViewLogo(repo)}
                         title="点击放大 logo 并下载">
                   <img
-                    src={`/api/repos/${repo.id}/logo?v=${encodeURIComponent(repo.logo_updated_at || '')}`}
+                    src={`/api/repos/${repo.id}/logo?thumb=1&v=${encodeURIComponent(repo.logo_updated_at || '')}`}
                     alt={`${repo.name} logo`}
+                    loading="lazy"
+                    onError={() => setLogoFailed((f) => ({ ...f, [repo.id]: true }))}
                   />
                 </button>
               ) : (
-                <span className="repo-logo-placeholder" title="尚未生成 logo，点击右侧「生成图标」">
+                <span className="repo-logo-placeholder"
+                      title={repo.logo_path
+                        ? 'logo 加载失败，请检查网络后刷新'
+                        : '尚未生成 logo，点击右侧「生成图标」'}>
                   <Icon name="image" />
                 </span>
               )}

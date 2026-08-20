@@ -317,6 +317,59 @@ def _compress_image_for_gitlab(data: bytes, mime: str) -> tuple[bytes, str]:
     return best if best is not None else (data, stored_mime)
 
 
+# 缩略图最长边（px）（issue #338）：仓库页列表 logo 展示区 44×44，按
+# 2x 高分屏取 88px 再加少量余量——缩略图体积远小于原图（生图模型产出的
+# logo 常达几百 KB），低网速下列表快速可见。
+THUMBNAIL_MAX_SIZE = 96
+
+
+def _make_thumbnail(data: bytes, mime: str,
+                    max_size: int = THUMBNAIL_MAX_SIZE) -> tuple[bytes, str]:
+    """用 Pillow 内存等比生成 logo 缩略图（issue #338）。
+
+    仓库页列表直接加载缩略图（GET /api/repos/{id}/logo?thumb=1），避免
+    低网速下加载原图慢/超时；放大弹窗仍加载原图。只生成内存副本，
+    不落盘（方案 A：实时缩放，零额外存储）。规则：
+    1. Pillow 不可用 / 图片无法解码（SVG 等 Pillow 不支持的格式、损坏
+       文件）→ 回退返回原始字节，不崩溃；
+    2. 图片本身 ≤ max_size → 不放大、原样返回（避免无谓重编码）；
+    3. 超限 → 等比缩小（Image.thumbnail 保持宽高比且不放大）：JPEG
+       保持 JPEG（quality 85 重编码）；其余格式（PNG/WebP/BMP/TIFF/
+       ICO/GIF 等）统一 PNG 输出（保留 alpha，浏览器兼容性最好）。
+    返回 (缩略图字节, 输出 mime)；mime 可能变化（如 GIF → image/png）。
+    """
+    stored_mime = (mime or "image/png").strip().lower()
+    try:
+        from PIL import Image
+    except Exception:  # Pillow 未安装：回退原图，不崩溃
+        return data, stored_mime
+    try:
+        img = Image.open(io.BytesIO(data))
+        fmt = (img.format or "").upper()
+        img.load()
+    except Exception:  # 无法解码（SVG/损坏/非图片）：回退原图，不崩溃
+        return data, stored_mime
+    # 小图不放大：原样返回（避免无谓重编码与体积膨胀）
+    if img.width <= max_size and img.height <= max_size:
+        return data, stored_mime
+    img.thumbnail((max_size, max_size), Image.LANCZOS)
+    buf = io.BytesIO()
+    if fmt in ("JPEG", "JPG"):
+        # JPEG 保持 JPEG（压缩体积小）；不支持透明，先合成白底 RGB
+        if img.mode in ("RGBA", "LA"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+        else:
+            img = img.convert("RGB")
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        return buf.getvalue(), "image/jpeg"
+    # 其余格式统一 PNG 输出（保留 alpha，透明 logo 缩略图不黑底）
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue(), "image/png"
+
+
+
 
 
 
@@ -547,12 +600,16 @@ def sync_logo_from_gitlab(request: Request, repo_id: int):
 
 
 @router.get("/{repo_id}/logo")
-def get_repo_logo(request: Request, repo_id: int, download: int = 0):
+def get_repo_logo(request: Request, repo_id: int, download: int = 0,
+                  thumb: int = 0):
     """读取仓库已生成的 logo 图片（issue #188）。
 
     仓库管理页每个仓库最左侧的 <img> 直接以此接口作 src（前端按
     logo_updated_at 拼缓存击穿参数）；?download=1 时返回
     Content-Disposition: attachment（下载按钮走浏览器下载）。
+    issue #338：?thumb=1 时用 Pillow 内存等比缩放返回小尺寸缩略图
+    （列表 <img> 直接加载缩略图，低网速下快速可见；放大弹窗仍加载
+    原图）；download 优先于 thumb——下载始终返回原图。
     """
     c = request.app.state.ctx
     row = c.db.get_repo(repo_id)
@@ -568,6 +625,10 @@ def get_repo_logo(request: Request, repo_id: int, download: int = 0):
     except OSError as e:
         raise HTTPException(500, f"读取 logo 文件失败: {e}") from e
     mime = row["logo_mime"] or "image/png"
+    # issue #338：缩略图预览——列表 <img> 直接加载小尺寸图，低网速下
+    # 快速可见；?download=1 优先，下载始终返回原图（thumb 仅当未下载时生效）
+    if thumb and not download:
+        data, mime = _make_thumbnail(data, mime)
     headers = {}
     if download:
         # 文件名做安全净化：仓库名可能含引号/换行等会破坏响应头字符

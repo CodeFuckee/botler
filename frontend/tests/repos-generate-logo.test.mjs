@@ -113,11 +113,15 @@ test('源码含「生成图标」按钮、logo 展示与放大下载弹窗', () 
   )
   assert.match(reposSrc, /生成中…/, '请求中应显示「生成中…」')
   // logo 展示：最左侧缩略图（repo.logo_path 条件）+ 未生成占位
-  assert.match(reposSrc, /repo\.logo_path \?/, '应条件渲染 logo（有 logo_path 才显示）')
   assert.match(
     reposSrc,
-    /\/api\/repos\/\$\{repo\.id\}\/logo\?v=/,
-    'logo img src 应带 logo_updated_at 缓存击穿参数',
+    /repo\.logo_path && !logoFailed\[repo\.id\] \?/,
+    '应条件渲染 logo（有 logo_path 且未加载失败才显示）',
+  )
+  assert.match(
+    reposSrc,
+    /\/api\/repos\/\$\{repo\.id\}\/logo\?thumb=1&v=/,
+    'logo img src 应带 thumb=1 缩略图参数与 logo_updated_at 缓存击穿参数',
   )
   assert.match(reposSrc, /repo-logo-placeholder/, '未生成 logo 应显示占位框')
   // 放大下载弹窗
@@ -142,7 +146,7 @@ test('仓库行最左侧渲染 logo 缩略图（带缓存参数）与未生成�
   assert.equal(logos.length, 1, '应有 1 个 logo 缩略图（第二个仓库未生成）')
   assert.equal(
     logos[0].props.src,
-    `/api/repos/1/logo?v=${encodeURIComponent('2026-08-18 10:00:00')}`,
+    `/api/repos/1/logo?thumb=1&v=${encodeURIComponent('2026-08-18 10:00:00')}`,
   )
   // 未生成仓库：占位框
   const placeholders = renderer.root.findAll(

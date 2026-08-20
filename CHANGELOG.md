@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 ### Added
+- **仓库页 logo 生成缩略图预览，低网速下加载更快（issue #338）**：
+  仓库管理页 logo 此前列表与放大弹窗都直接加载原图——生图模型产出的
+  logo 常达几百 KB，低网速下列表加载慢/超时（破图）。本次新增小尺寸
+  预览图：列表直接加载缩略图、点击放大时弹窗加载原图：
+  - **后端**：GET /api/repos/{id}/logo 新增 `?thumb=1` 参数——用
+    Pillow 内存等比缩放到最长边 ≤ 96px 后返回（不落盘，方案 A 实时
+    缩放；44×44 展示区 × 2x 高分屏 + 余量）。边界兜底：Pillow 缺失 /
+    SVG / 损坏文件回退原图字节不崩溃；图片本身 ≤ 96px 不放大原样返回；
+    JPEG 保持 JPEG（quality 85 重编码）、其余格式统一 PNG 输出（保留
+    alpha）；?download=1 优先于 thumb（下载始终返回原图）；
+  - **前端**：仓库页列表 logo img 加载 `?thumb=1` 缩略图 + 新增
+    `loading="lazy"` 懒加载；缩略图加载失败（404/网络错误/低网速超时）
+    时显示占位图标兜底（不再渲染破图）；放大弹窗仍加载原图；
+  - **测试**：`backend/tests/test_api_repo_logo.py` 新增
+    `TestGetLogoThumbnail` 10 例（PNG 缩放保持宽高比 / JPEG 保持格式 /
+    RGBA 保留透明 / 小图不放大 / SVG 与损坏文件与 Pillow 缺失回退 /
+    download 优先 / 404 边界），`frontend/tests/repos-logo-thumbnail.
+    test.mjs` 新增 3 例（源码 thumb+lazy+onError / 渲染精确 src / 失败
+    占位兜底），并同步更新 repos-generate-logo.test.mjs 既有 src 断言，
+    全量测试无 regression。
 - **概览页 issue 详情右边栏显示标记相关活动（issue #349）**：
   概览页 issue 详情右边栏此前仅展示评论与活动（notes 系统事件），标记的
   添加/移除不产生系统活动（实测 GitLab notes 不含标记加/删事件），用户

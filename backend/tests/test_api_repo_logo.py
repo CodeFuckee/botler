@@ -1133,3 +1133,170 @@ class TestLogoDirPersistence:
         r2 = tc.get(f"/api/repos/{repo_id}/logo")
         assert r2.status_code == 200
         assert r2.content == b"fake-logo-png-bytes"
+
+
+class TestGetLogoThumbnail:
+    """logo 缩略图（issue #338）：GET /api/repos/{id}/logo?thumb=1 用
+    Pillow 内存等比缩放到最长边 ≤ 96px 返回小尺寸预览图——仓库页列表
+    直接加载缩略图，低网速下加载快；放大弹窗仍加载原图（不带 thumb）。
+
+    覆盖：
+    - 正常路径：超限 PNG 缩到最长边 ≤ 96 且保持宽高比，mime 不变；
+    - 小图不放大：图片本身 ≤ 96px 原样返回（字节不变，不做无谓重编码）；
+    - JPEG 大图：等比缩放后保持 JPEG 输出；
+    - 含透明通道 PNG：缩略图保留 alpha（PNG 输出）；
+    - SVG（Pillow 无法解码）→ 回退原图字节，不崩溃；
+    - 损坏文件 → 回退原图字节，不崩溃；
+    - Pillow 缺失 → 回退原图字节，不崩溃；
+    - ?thumb=1&download=1：download 优先，返回原图 + attachment 头；
+    - 未生成 logo → 404；logo 文件缺失 → 404（thumb 不改变既有校验顺序）。
+    """
+
+    THUMB_MAX = 96
+
+    @staticmethod
+    def _make_png(width=300, height=200, mode="RGB",
+                  color=(30, 144, 255)) -> bytes:
+        """构造确定性 PNG（纯色填充，体积小且尺寸明确）。"""
+        import io
+        from PIL import Image
+        img = Image.new(mode, (width, height), color)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _add_logo_repo(self, db, logo_dir, data, mime="image/png",
+                       name="botler", project_id=42):
+        """便捷：插入仓库 + logo 元信息 + 落盘指定 logo 文件。"""
+        repo_id = _add_repo(db, project_id, name)
+        db.update_repo(repo_id, logo_path=f"{repo_id}.png",
+                       logo_updated_at="2026-08-18 10:00:00", logo_mime=mime)
+        logo_dir.mkdir(parents=True, exist_ok=True)
+        (logo_dir / f"{repo_id}.png").write_bytes(data)
+        return repo_id
+
+    def _open(self, data):
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(data))
+        im.load()
+        return im
+
+    def test_thumb_resizes_png_keeping_ratio(self, logo_env):
+        """PNG 大图：缩到最长边 ≤ 96 且保持宽高比，mime 不变。"""
+        tc, stub, db, logo_dir = logo_env
+        repo_id = self._add_logo_repo(db, logo_dir, self._make_png(300, 200))
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/png"
+        im = self._open(r.content)
+        # 300:200 → 96:64，宽高比保持且最长边 = 96
+        assert im.size == (96, 64), im.size
+        assert im.format == "PNG"
+
+    def test_thumb_no_upscale_small_image(self, logo_env):
+        """小图（≤96px）不放大：原样返回原图字节。"""
+        tc, stub, db, logo_dir = logo_env
+        small = self._make_png(48, 48)
+        repo_id = self._add_logo_repo(db, logo_dir, small)
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/png"
+        assert r.content == small
+
+    def test_thumb_jpeg_stays_jpeg(self, logo_env):
+        """JPEG 大图：等比缩放后保持 JPEG 输出。"""
+        tc, stub, db, logo_dir = logo_env
+        import io
+        from PIL import Image
+        img = Image.new("RGB", (200, 300), (200, 60, 60))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95)
+        data = buf.getvalue()
+        repo_id = self._add_logo_repo(db, logo_dir, data, mime="image/jpeg")
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/jpeg"
+        im = self._open(r.content)
+        # 200:300 → 64:96，保持竖版宽高比
+        assert im.size == (64, 96), im.size
+        assert im.format == "JPEG"
+
+    def test_thumb_rgba_preserves_transparency(self, logo_env):
+        """含透明通道 PNG：缩略图保留 alpha（PNG 输出）。"""
+        tc, stub, db, logo_dir = logo_env
+        data = self._make_png(200, 200, mode="RGBA", color=(0, 0, 0, 0))
+        repo_id = self._add_logo_repo(db, logo_dir, data)
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/png"
+        im = self._open(r.content)
+        assert im.mode == "RGBA"
+        assert im.size == (96, 96)
+
+    def test_thumb_svg_falls_back_original(self, logo_env):
+        """SVG（Pillow 无法解码）：回退返回原图字节，不崩溃。"""
+        tc, stub, db, logo_dir = logo_env
+        svg = (b'<svg xmlns="http://www.w3.org/2000/svg" '
+               b'width="300" height="300"/>')
+        repo_id = self._add_logo_repo(db, logo_dir, svg, mime="image/svg+xml")
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/svg+xml"
+        assert r.content == svg
+
+    def test_thumb_corrupt_falls_back_original(self, logo_env):
+        """损坏文件：回退返回原图字节，不崩溃。"""
+        tc, stub, db, logo_dir = logo_env
+        corrupt = b"not-an-image" * 200
+        repo_id = self._add_logo_repo(db, logo_dir, corrupt)
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 200
+        assert r.content == corrupt
+
+    def test_thumb_pillow_missing_falls_back(self, logo_env, monkeypatch):
+        """Pillow 缺失：回退返回原图字节，不崩溃。"""
+        tc, stub, db, logo_dir = logo_env
+        data = self._make_png(300, 200)
+        repo_id = self._add_logo_repo(db, logo_dir, data)
+        import builtins
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "PIL":
+                raise ImportError("No module named 'PIL'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 200
+        assert r.content == data
+
+    def test_thumb_with_download_returns_original(self, logo_env):
+        """?thumb=1&download=1：download 优先，返回原图 + attachment 头。"""
+        tc, stub, db, logo_dir = logo_env
+        data = self._make_png(300, 200)
+        repo_id = self._add_logo_repo(db, logo_dir, data)
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1&download=1")
+        assert r.status_code == 200
+        assert "attachment" in r.headers["content-disposition"]
+        assert r.content == data
+
+    def test_thumb_not_generated_404(self, logo_env):
+        """未生成 logo：404（thumb 不改变校验顺序）。"""
+        tc, stub, db, logo_dir = logo_env
+        repo_id = _add_repo(db, 42, "botler")
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 404
+        assert "尚未生成 logo" in r.json()["detail"]
+
+    def test_thumb_file_missing_404(self, logo_env):
+        """DB 有 logo_path 但文件被删：404 引导重新生成。"""
+        tc, stub, db, logo_dir = logo_env
+        repo_id = _add_repo(db, 42, "botler")
+        db.update_repo(repo_id, logo_path=f"{repo_id}.png",
+                       logo_updated_at="2026-08-18 10:00:00",
+                       logo_mime="image/png")
+        r = tc.get(f"/api/repos/{repo_id}/logo?thumb=1")
+        assert r.status_code == 404
+        assert "logo 文件不存在" in r.json()["detail"]
