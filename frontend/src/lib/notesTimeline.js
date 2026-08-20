@@ -49,3 +49,31 @@ export function buildTimeline(notes) {
   })
   return items
 }
+
+/** 合并时间线（含标记活动，issue #351）：把 detail 接口返回的 notes
+ *  （system=false 评论 / system=true 活动）与 label_events（标记活动——
+ *  谁添加/移除了哪个标记）按 created_at 升序交错为一条时间线（排序规则
+ *  与 buildTimeline 完全一致：同一时刻按 id 升序、异常元素防御性跳过、
+ *  缺 created_at 按空串排最前）；每条统一标注 _kind（comment / activity
+ *  / label）供渲染方区分条目类型，不因坏数据崩溃。 */
+export function buildMergedTimeline(notes, labelEvents) {
+  const items = []
+  for (const n of (notes || [])) {
+    if (n && typeof n === 'object' && typeof n.id === 'number') {
+      items.push({ ...n, _kind: n.system ? 'activity' : 'comment' })
+    }
+  }
+  for (const e of (labelEvents || [])) {
+    if (e && typeof e === 'object' && typeof e.id === 'number') {
+      items.push({ ...e, _kind: 'label' })
+    }
+  }
+  items.sort((a, b) => {
+    const ta = typeof a.created_at === 'string' ? a.created_at : ''
+    const tb = typeof b.created_at === 'string' ? b.created_at : ''
+    if (ta < tb) return -1
+    if (ta > tb) return 1
+    return a.id - b.id
+  })
+  return items
+}

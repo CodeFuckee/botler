@@ -52,7 +52,7 @@ import { api, fmtTime, fmtSeconds } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import Markdown, { linkifyCommits } from './Markdown.jsx'
 import TaskDetailDrawer from './TaskDetailDrawer.jsx'  // issue #167：任务执行详情第二层右边栏
-import { loadTimelineEnabled, buildTimeline } from '../lib/notesTimeline.js'  // issue #342：评论/活动合并时间线开关与排序
+import { loadTimelineEnabled, buildMergedTimeline } from '../lib/notesTimeline.js'  // issue #342：评论/活动合并时间线开关；issue #351：标记活动并入时间线排序
 import { buildLabelEvents, labelEventText } from '../lib/labelEvents.js'  // issue #349：标记活动（谁添加/移除了标记）归一化与文案
 
 // issue 状态 → 徽章映射（聚合只返回开放 issue，closed 为兜底映射）
@@ -334,8 +334,9 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   const comments = (notes || []).filter((n) => n && !n.system)
   const activities = (notes || []).filter((n) => n && n.system)
   // issue #342：合并时间线——评论与活动按 created_at 升序交错（同一时刻
-  // 按 note id），由 renderTimelineBody 消费；分开显示模式不使用
-  const timelineItems = timeline ? buildTimeline(notes) : []
+  // 按 note id）；issue #351：标记活动（label_events）同样并入时间线（标注
+  // _kind 区分条目类型），由 renderTimelineBody 消费；分开显示模式不使用
+  const timelineItems = timeline ? buildMergedTimeline(notes, labelEvents) : []
 
   // 点击「关闭 issue」：二次确认 → 调用后端关闭 → 成功标记关闭状态
   // 并通知父组件刷新；失败展示错误信息（按钮保留可重试）。
@@ -634,11 +635,15 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     if (!hasDetail) return <p className="muted">无法加载（缺少仓库信息）</p>
     if (detailErr) return <p className="muted">加载失败</p>
     if (notes === null) return <p className="muted">加载中…</p>
-    if (timelineItems.length === 0) return <p className="muted">暂无评论与活动</p>
+    if (timelineItems.length === 0) {
+      return <p className="muted">暂无评论、活动与标记活动</p>
+    }
     return <ul className="timeline-list">
-      {timelineItems.map((n) => (n.system
-        ? renderActivityItem(n, 'timeline-item timeline-activity', false)
-        : renderCommentItem(n, 'timeline-item timeline-comment')))}
+      {timelineItems.map((n) => (n._kind === 'label'
+        ? renderLabelEventTimelineItem(n, 'timeline-item timeline-label-event')
+        : n.system
+          ? renderActivityItem(n, 'timeline-item timeline-activity', false)
+          : renderCommentItem(n, 'timeline-item timeline-comment')))}
     </ul>
   }
 
@@ -798,6 +803,23 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
       <li key={typeof e.id === 'number' ? e.id : `le-${idx}`}
           className="activity-item label-event-item">
         <span className="activity-dot" title="标记活动">•</span>
+        <span className="activity-text" title="标记变更事件">
+          {labelEventText(e)}
+        </span>
+        {e.created_at && (
+          <span className="activity-time">{fmtTime(e.created_at)}</span>
+        )}
+      </li>
+    )
+  }
+
+  // 标记活动时间线条目（issue #351）：合并时间线模式下标记事件并入时间线，
+  // 观感与活动文本节点一致（操作人/动作/标记名 + 时间；左侧竖线节点圆点
+  // 由 CSS 绘制，不再重复画 activity-dot），labelEventText 对缺 user/未知
+  // action/缺标记名逐项兜底，不崩溃
+  function renderLabelEventTimelineItem(e, cls) {
+    return (
+      <li key={e.id} className={cls}>
         <span className="activity-text" title="标记变更事件">
           {labelEventText(e)}
         </span>
@@ -1064,13 +1086,17 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
         </div>
         {/* issue #349：标记活动区块——展示谁在什么时间添加/移除了哪个
             标记（数据源 GitLab resource_label_events，独立于 notes；
-            notes 系统活动不含标记加/删事件，实测）。置于评论/活动（或
-            合并时间线）区块之后，两种显示模式下均独立展示；加载失败
-            时与评论/活动共用上方 detailErr 横幅，标题下显示「加载失败」 */}
-        <div className="issue-notes-block label-events-block">
-          <h3>标记活动</h3>
-          {renderLabelEventsBody()}
-        </div>
+            notes 系统活动不含标记加/删事件，实测）。分开显示模式下置于
+            评论/活动区块之后独立成区；issue #351：合并时间线模式开启时
+            标记活动已并入时间线（不再重复独立成区，避免同一事件两处
+            展示）；加载失败时与评论/活动共用上方 detailErr 横幅，标题下
+            显示「加载失败」 */}
+        {!timeline && (
+          <div className="issue-notes-block label-events-block">
+            <h3>标记活动</h3>
+            {renderLabelEventsBody()}
+          </div>
+        )}
         {/* 移动端底部操作栏（issue #270）：与头部同一组 drawerActions，
             仅 ≤860px 视口显示（styles.css 控制），sticky 常驻抽屉底部，
             thumb 可及——关闭 issue/重试/查看执行详情/在 GitLab 中打开。

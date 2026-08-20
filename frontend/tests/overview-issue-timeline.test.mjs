@@ -17,7 +17,9 @@
 //    条目保留作者/头像/时间/Markdown/回复按钮，活动条目保留 linkify
 //    提交链接；
 // 5. 边界（开启）：只有评论 / 只有活动 / 空 notes / 加载中 / 加载失败
-//    重试 / 缺 project_id 不拉接口。
+//    重试 / 缺 project_id 不拉接口；
+// 6. 标记活动并入时间线（issue #351）：合并时间线模式下标记事件
+//    （谁添加/移除了标记）按时间并入时间线，不再独立成「标记活动」区块。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -49,6 +51,7 @@ const {
   loadTimelineEnabled,
   saveTimelineEnabled,
   buildTimeline,
+  buildMergedTimeline,
 } = await import(path.join(ROOT, 'src/lib/notesTimeline.js'))
 
 // 捕获 api.get 原始实现：node:test 的 mock.method 多次调用后 restoreAll
@@ -78,7 +81,8 @@ test('源码：IssueDrawer 读取 botler.timeline 并渲染时间线容器', () 
   assert.match(drawerSrc, /botler\.timeline/, '应引用存储键 botler.timeline')
   assert.match(drawerSrc, /timeline-list/, '应渲染时间线列表容器')
   assert.match(drawerSrc, /评论与活动（时间线）/, '应渲染时间线区块标题')
-  assert.match(drawerSrc, /buildTimeline/, '应按时间合并排序')
+  assert.match(drawerSrc, /buildMergedTimeline/, '应把标记活动并入时间线合并排序')
+  assert.match(drawerSrc, /timeline-label-event/, '应渲染标记事件时间线节点类名')
 })
 
 test('源码：设置页 UiCard 渲染合并时间线开关行', () => {
@@ -129,6 +133,58 @@ test('buildTimeline：缺 created_at 不崩溃（按空串排最前）', () => {
   const out = buildTimeline([
     { id: 2, body: '有时间', system: false, created_at: '2026-08-15 09:00:00' },
     { id: 1, body: '无时间', system: true },
+  ])
+  assert.deepEqual(out.map((n) => n.id), [1, 2], '缺 created_at 应排最前且不崩溃')
+})
+
+test('buildMergedTimeline：评论/活动/标记事件按时间交错，_kind 标注类型（issue #351）', () => {
+  const out = buildMergedTimeline([
+    { id: 5, body: '评论', system: false, created_at: '2026-08-15 11:00:00' },
+    { id: 3, body: '活动', system: true, created_at: '2026-08-15 09:00:00' },
+  ], [
+    { id: 4, action: 'add', label: 'feature', created_at: '2026-08-15 10:00:00' },
+  ])
+  assert.deepEqual(out.map((n) => n.id), [3, 4, 5], '应按时间交错排序')
+  assert.deepEqual(out.map((n) => n._kind),
+                   ['activity', 'label', 'comment'], '应标注活动/标记/评论类型')
+  assert.equal(out[1].label, 'feature', '标记事件应保留 label 字段')
+  assert.equal(out[0].body, '活动', '活动应保留 body 字段')
+})
+
+test('buildMergedTimeline：同一时刻按 id 升序（排序稳定）', () => {
+  const out = buildMergedTimeline([
+    { id: 9, body: 'b', system: false, created_at: '2026-08-15 10:00:00' },
+  ], [
+    { id: 2, action: 'add', label: 'x', created_at: '2026-08-15 10:00:00' },
+  ])
+  assert.deepEqual(out.map((n) => n.id), [2, 9], '同时间戳应按 id 升序')
+  assert.deepEqual(out.map((n) => n._kind), ['label', 'comment'], '类型标注应正确')
+})
+
+test('buildMergedTimeline：空/null/异常元素防御', () => {
+  assert.deepEqual(buildMergedTimeline(null, null), [], 'null 应返回空数组')
+  assert.deepEqual(buildMergedTimeline(undefined, undefined), [], 'undefined 应返回空数组')
+  assert.deepEqual(buildMergedTimeline([], []), [], '空数组应返回空数组')
+  const out = buildMergedTimeline([
+    null,
+    'bad',
+    { body: '缺 id', system: false, created_at: '2026-08-15 10:00:00' },
+    { id: 7, body: 'ok', system: false, created_at: '2026-08-15 09:00:00' },
+  ], [
+    null,
+    42,
+    { action: 'add', label: '缺id' },
+    { id: 8, action: 'remove', label: 'ok', created_at: '2026-08-15 08:00:00' },
+  ])
+  assert.deepEqual(out.map((n) => n.id), [8, 7], '异常元素应跳过，notes 与标记事件均保留')
+  assert.deepEqual(out.map((n) => n._kind), ['label', 'comment'], '类型标注应正确')
+})
+
+test('buildMergedTimeline：缺 created_at 不崩溃（按空串排最前）', () => {
+  const out = buildMergedTimeline([
+    { id: 2, body: '有时间', system: false, created_at: '2026-08-15 09:00:00' },
+  ], [
+    { id: 1, action: 'add', label: '无时间' },
   ])
   assert.deepEqual(out.map((n) => n.id), [1, 2], '缺 created_at 应排最前且不崩溃')
 })
@@ -309,9 +365,36 @@ test('开启后：只有评论 / 只有活动均正常渲染', async () => {
   assert.equal(findByClass(onlyActivities.root, 'timeline-activity').length, 1, '应为活动节点')
 })
 
-test('开启后：空 notes 显示「暂无评论与活动」占位', async () => {
+test('开启后：标记活动并入时间线按时间交错（issue #351）', async () => {
+  // detail 返回 活动(09:00) + 评论(10:00) + 标记活动(10:30)：时间线应为
+  // 活动 → 评论 → 标记活动，标记事件为文本节点（timeline-label-event），
+  // 且不再渲染独立的「标记活动」区块
+  const LABEL_EVENT = {
+    id: 205, action: 'add', label: 'feature',
+    user: { name: 'code01', username: 'code01' },
+    created_at: '2026-08-15 10:30:00',
+  }
+  const { root } = await renderDrawer(OPEN_ISSUE, [COMMENT_1, ACTIVITY_1],
+    memStorage({ [TIMELINE_STORAGE_KEY]: '1' }),
+    async (pathname) => {
+      if (pathname === `/api/issues/${OPEN_ISSUE.project_id}/${OPEN_ISSUE.iid}/detail`) {
+        return { notes: [ACTIVITY_1, COMMENT_1], label_events: [LABEL_EVENT] }
+      }
+      throw new Error('unexpected ' + pathname)
+    })
+  const items = findByClass(root, 'timeline-item').map((n) => toText(n))
+  assert.equal(items.length, 3, '时间线应含 3 条（活动/评论/标记活动）')
+  assert.ok(items[0].includes('assigned to @agent'), '第 1 条应为 09:00 活动')
+  assert.ok(items[1].includes('确认'), '第 2 条应为 10:00 评论')
+  assert.ok(items[2].includes('code01 添加了标记 feature'), '第 3 条应为 10:30 标记活动')
+  assert.equal(findByClass(root, 'timeline-label-event').length, 1, '应渲染标记事件时间线节点')
+  assert.equal(findByClass(root, 'label-events-list').length, 0, '不应再渲染独立标记活动列表')
+  assert.ok(!drawerText(root).includes('标记活动'), '不应再显示独立「标记活动」区块标题')
+})
+
+test('开启后：空 notes 与空标记活动显示「暂无评论、活动与标记活动」占位（issue #351）', async () => {
   const { root } = await renderDrawer(OPEN_ISSUE, [], memStorage({ [TIMELINE_STORAGE_KEY]: '1' }))
-  assert.ok(drawerText(root).includes('暂无评论与活动'), '空时间线应显示占位文案')
+  assert.ok(drawerText(root).includes('暂无评论、活动与标记活动'), '空时间线应显示合并占位文案')
 })
 
 test('开启后：加载中/加载失败重试/缺 project_id 兜底', async () => {

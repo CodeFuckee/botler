@@ -203,12 +203,14 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > （localStorage 键 botler.timeline，默认关闭 = 分开显示）：开启后概览页 issue 详情右边栏的
 > 评论（用户发言）与活动（系统事件）不再分两个区块，而是按时间交错合并为一条时间线展示
 > （类似 GitLab issue 时间线，左侧竖线 + 节点圆点，评论为卡片节点、活动为文本节点），
+> 标记活动（谁添加/移除了哪个标记）同样并入时间线按时间交错（issue #351），不再单独成区；
 > 评论的回复/添加评论交互与活动的提交链接均保留；切换即时生效、刷新保持。
 >
-> 标记活动（issue #349）：概览页 issue 详情右边栏新增「标记活动」区块——展示谁在什么时间
-> 添加/移除了哪个标记（如「chenkaidi 添加了标记 feature」「code01 移除了标记 ui」），数据源为
-> GitLab resource_label_events API（notes 系统活动不含标记加/删事件，实测，故独立拉取）；
-> 条目按时间升序排列，与评论/活动（或合并时间线）区块并列展示，加载失败自动降级不影响主内容。
+> 标记活动（issue #349）：概览页 issue 详情右边栏展示谁在什么时间添加/移除了哪个标记
+> （如「chenkaidi 添加了标记 feature」「code01 移除了标记 ui」），数据源为 GitLab
+> resource_label_events API（notes 系统活动不含标记加/删事件，实测，故独立拉取）；
+> 分开显示模式下为独立「标记活动」区块、按时间升序排列；开启合并时间线模式（issue #342）
+> 后标记活动并入时间线按时间交错展示，不再单独成区（issue #351）；加载失败自动降级不影响主内容。
 >
 > 左侧边栏导航（issue #324）：顶部导航选项卡过多（11 个）改为左侧边栏，支持整体
 > **折叠/展开**——展开态 240px 展示图标+文字，折叠态收成 56px 图标窄栏（导航项
@@ -787,7 +789,7 @@ GET    /api/issues/overview           已启用仓库开放 issue 聚合（10s �
 GET    /api/issues/completion-stats  已完成 issue 平均完成耗时与逐日走势（本地 tasks 表成功终态任务：处理用时 = finished_at - created_at，issue #180）；repos 字段返回每个已启用仓库的平均耗时与走势拆分（issue #288）
 POST   /api/issues/{project_id}/{iid}/close   关闭指定 issue（概览页右边栏「关闭 issue」按钮，issue #94）
 POST   /api/issues/{project_id}/{iid}/retry   重新执行 issue 对应的任务（概览页右边栏「重试」按钮：复用最近失败/中断任务或新建任务入队，issue #117）
-GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 label_events 字段——标记活动事件（谁添加/移除了哪个标记，独立拉取 resource_label_events，最多 100 条，失败降级空列表），概览页右边栏「标记活动」区块展示，issue #349；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120；含 task_id 字段——该 issue 最近一条任务记录 id，已执行过才有值，从未执行/尚未派发为 null，概览页右边栏「任务」行展示，issue #290；含 task_duration_seconds 字段——该 issue 最近任务完成耗时秒数（finished_at - created_at），仅成功终态任务有值，其余为 null，概览页右边栏「完成耗时」行展示，issue #300）
+GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 label_events 字段——标记活动事件（谁添加/移除了哪个标记，独立拉取 resource_label_events，最多 100 条，失败降级空列表），概览页右边栏展示（分开显示独立区块、合并时间线模式下并入时间线），issue #349/#351；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120；含 task_id 字段——该 issue 最近一条任务记录 id，已执行过才有值，从未执行/尚未派发为 null，概览页右边栏「任务」行展示，issue #290；含 task_duration_seconds 字段——该 issue 最近任务完成耗时秒数（finished_at - created_at），仅成功终态任务有值，其余为 null，概览页右边栏「完成耗时」行展示，issue #300）
 GET    /api/issues/{project_id}/{iid}/tasks 该 issue 的全部任务执行记录（id 倒序最新在前，同 issue 多条任务记录全部返回；概览页右边栏「查看执行的详情」数据源，issue #167）
 POST   /api/issues/{project_id}/{iid}/comments   添加 issue 评论（概览页右边栏「添加评论」，正文必填，成功后清缓存并返回精简评论，issue #125）
 POST   /api/issues/{project_id}/{iid}/comments/{note_id}/reply   回复 issue 某条评论（概览页右边栏「回复评论」，后端经 discussions API 解析评论所在线程后追加回复，issue #125）
@@ -813,7 +815,7 @@ POST   /api/tasks/{id}/dequeue 排队任务移出队列（置为终态 canceled_
 POST   /api/issues/{project_id}/{iid}/prioritize 排队任务一键置顶（概览页右边栏「优先处理」按钮；仅 queued 任务，issue #242）
 GET    /api/issues/{project_id}/members      项目成员清单（概览页右边栏负责人下拉数据源：GitLab members/all + user_id 补齐，issue #303）
 PUT    /api/issues/{project_id}/{iid}/assignee  更新 issue 负责人（assignee_id 为 GitLab 用户 id，null 清除负责人；同步 GitLab，成功后清缓存并返回更新后负责人列表，issue #303）
-GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 label_events 字段——标记活动事件（谁添加/移除了哪个标记，独立拉取 resource_label_events，最多 100 条，失败降级空列表），概览页右边栏「标记活动」区块展示，issue #349；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120；含 task_id 字段——该 issue 最近一条任务记录 id，已执行过才有值，从未执行/尚未派发为 null，概览页右边栏「任务」行展示，issue #290；含 task_duration_seconds 字段——该 issue 最近任务完成耗时秒数（finished_at - created_at），仅成功终态任务有值，其余为 null，概览页右边栏「完成耗时」行展示，issue #300）
+GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 label_events 字段——标记活动事件（谁添加/移除了哪个标记，独立拉取 resource_label_events，最多 100 条，失败降级空列表），概览页右边栏展示（分开显示独立区块、合并时间线模式下并入时间线），issue #349/#351；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120；含 task_id 字段——该 issue 最近一条任务记录 id，已执行过才有值，从未执行/尚未派发为 null，概览页右边栏「任务」行展示，issue #290；含 task_duration_seconds 字段——该 issue 最近任务完成耗时秒数（finished_at - created_at），仅成功终态任务有值，其余为 null，概览页右边栏「完成耗时」行展示，issue #300）
 GET    /api/inspirations/overview      概览页灵感聚合：所有未软删除仓库 + 各自灵感（仓库按优先级排序，灵感按 updated_at 降序，issue #131）
 POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；默认仅存本地数据库，issue #131）
 PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）

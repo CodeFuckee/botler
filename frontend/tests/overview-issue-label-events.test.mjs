@@ -10,7 +10,8 @@
 //    兜底）、labelActorName（name 优先回退 username）、buildLabelEvents
 //    （排序/空/null/异常元素防御/缺 created_at 不崩溃）；
 // 3. 渲染：正常（操作人 + 添加/移除了标记 + 标记名 + 时间）/ 空 /
-//    加载中 / 加载失败 / 异常元素跳过；时间线模式开启时区块仍展示。
+//    加载中 / 加载失败 / 异常元素跳过；时间线模式开启（botler.timeline）时
+//    标记活动并入时间线（issue #351），不再独立展示。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -272,7 +273,7 @@ test('渲染：异常事件元素防御性跳过，正常事件仍展示', async
   assert.ok(toText(items[0]).includes('chenkaidi 添加了标记 feature'), '合法事件应正常展示')
 })
 
-test('渲染：合并时间线模式开启时，标记活动区块仍独立展示', async () => {
+test('渲染：合并时间线模式开启时，标记活动并入时间线，不再独立展示（issue #351）', async () => {
   // 注入 localStorage 开启 botler.timeline（与 timeline 测试同模式）
   const storage = { getItem: (k) => (k === 'botler.timeline' ? '1' : null) }
   globalThis.localStorage = storage
@@ -280,8 +281,47 @@ test('渲染：合并时间线模式开启时，标记活动区块仍独立展�
     const { root } = await renderDrawer(OPEN_ISSUE, [LABEL_EVENT_ADD])
     const text = drawerText(root)
     assert.ok(text.includes('评论与活动（时间线）'), '应渲染合并时间线区块')
-    assert.ok(text.includes('标记活动'), '标记活动区块应独立展示')
-    assert.equal(findByClass(root, 'label-events-list').length, 1, '应渲染标记活动列表')
+    assert.ok(text.includes('chenkaidi 添加了标记 feature'), '标记事件应并入时间线展示')
+    assert.equal(findByClass(root, 'timeline-label-event').length, 1, '应渲染标记事件时间线节点')
+    assert.ok(!text.includes('标记活动'), '不应再渲染独立的「标记活动」区块标题')
+    assert.equal(findByClass(root, 'label-events-list').length, 0, '不应再渲染独立标记活动列表')
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+test('渲染：合并时间线模式下标记活动与评论/活动按时间交错（issue #351）', async () => {
+  // 注入 localStorage 开启 botler.timeline；detail 返回 1 条评论(10:30) +
+  // 1 条标记活动(11:00) + 1 条活动(12:00)，时间线应严格按时间交错
+  const storage = { getItem: (k) => (k === 'botler.timeline' ? '1' : null) }
+  globalThis.localStorage = storage
+  try {
+    const { root } = await renderDrawer(OPEN_ISSUE, [LABEL_EVENT_REMOVE], [
+      { id: 201, body: '一条评论', system: false,
+        author: { name: 'u', username: 'u' }, created_at: '2026-08-15 10:30:00' },
+      { id: 202, body: '一条活动', system: true,
+        author: { name: 'u', username: 'u' }, created_at: '2026-08-15 12:00:00' },
+    ])
+    const items = findByClass(root, 'timeline-item').map((n) => toText(n))
+    assert.equal(items.length, 3, '时间线应含评论/标记活动/活动 3 条')
+    assert.ok(items[0].includes('一条评论'), '第 1 条应为 10:30 评论')
+    assert.ok(items[1].includes('code01 移除了标记 ui'), '第 2 条应为 11:00 标记活动')
+    assert.ok(items[2].includes('一条活动'), '第 3 条应为 12:00 活动')
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+test('渲染：合并时间线模式下仅标记活动 → 全部并入时间线，无独立区块（issue #351）', async () => {
+  const storage = { getItem: (k) => (k === 'botler.timeline' ? '1' : null) }
+  globalThis.localStorage = storage
+  try {
+    const { root } = await renderDrawer(OPEN_ISSUE, [LABEL_EVENT_ADD, LABEL_EVENT_REMOVE])
+    const items = findByClass(root, 'timeline-item')
+    assert.equal(items.length, 2, '仅标记活动也应全部并入时间线')
+    assert.ok(toText(items[0]).includes('添加了标记 feature'), '第 1 条应为添加事件')
+    assert.ok(toText(items[1]).includes('移除了标记 ui'), '第 2 条应为移除事件')
+    assert.equal(findByClass(root, 'label-events-list').length, 0, '不应渲染独立列表')
   } finally {
     delete globalThis.localStorage
   }

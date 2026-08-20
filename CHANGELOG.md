@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 ### Added
+- **概览页 issue 详情右边栏：合并时间线模式下标记活动并入时间线（issue #351）**：
+  开启「合并显示评论与活动（时间线）」开关（issue #342）后，评论与活动已按
+  时间交错为一条时间线，但标记活动（issue #349 新增的「谁添加/移除了哪个
+  标记」）仍独立成区展示——同一事件流被拆成两个区块。本次让合并时间线模式
+  下标记活动一并并入时间线：评论/活动/标记活动按 created_at 升序交错为一条
+  时间线（同一时刻按 id 升序，异常元素防御性跳过，缺 created_at 按空串排
+  最前），标记事件渲染为文本节点（操作人 + 添加/移除了标记 + 标记名 + 时间，
+  观感与活动节点一致，左侧竖线节点圆点为中性灰）；独立的「标记活动」区块在
+  合并时间线模式下不再重复展示（分开显示模式保持 issue #349 现状不变）：
+  - **前端**：`src/lib/notesTimeline.js` 新增 `buildMergedTimeline(notes,
+    labelEvents)` 纯函数——把 notes（评论/活动）与 label_events（标记活动）
+    合并排序并逐条标注 `_kind`（comment/activity/label）供渲染方区分；
+    IssueDrawer 时间线数据源由 `buildTimeline(notes)` 切换为
+    `buildMergedTimeline(notes, labelEvents)`，新增 `renderLabelEventTimelineItem`
+    渲染标记事件时间线节点（类名 `timeline-label-event`），空时间线占位文案
+    更新为「暂无评论、活动与标记活动」；`styles.css` 补充 `.timeline-label-event`
+    样式（与活动节点同款，复用 activity-text/activity-time）；
+  - **测试**：`frontend/tests/overview-issue-timeline.test.mjs` 新增
+    `buildMergedTimeline` 4 例单元测试（时间交错与 _kind 标注 / 同时间按 id /
+    空与异常元素防御 / 缺 created_at 不崩溃）+ 1 例渲染测试（标记活动并入
+    时间线按时间交错、不再渲染独立区块）+ 空占位文案更新；
+    `frontend/tests/overview-issue-label-events.test.mjs` 更新合并时间线模式
+    断言为并入时间线并新增 2 例渲染测试（标记活动与评论/活动交错、仅标记
+    活动全部并入），全量测试无 regression。
 - **仓库页 logo 生成缩略图预览，低网速下加载更快（issue #338）**：
   仓库管理页 logo 此前列表与放大弹窗都直接加载原图——生图模型产出的
   logo 常达几百 KB，低网速下列表加载慢/超时（破图）。本次新增小尺寸
