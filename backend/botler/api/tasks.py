@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from botler.env_snapshot import parse_snapshot
+from botler.precheck import parse_precheck
 from botler.events import parse_claude_stream_line, parse_hermes_event_line
 from botler.executor import (
     find_session_file, format_display_line, parse_transcript, read_log_delta,
@@ -152,6 +153,9 @@ def _task_to_dict(row, repo: dict | None = None, usage_row=None,
         # issue #276：任务执行环境快照（引擎版本/模型/起始提交/平台版本/
         # config hash JSON）；旧任务无快照返回 None
         "environment": parse_snapshot(row["environment"]),
+        # issue #238：任务执行前预检结果（检查项 ✓/✗ JSON）；未启用预检或
+        # 旧任务返回 None，任务详情页「元信息」区展示
+        "precheck_result": parse_precheck(row["precheck_result"]),
         "commit_sha": row["commit_sha"],
         "commit_url": _commit_url(repo_url, row["commit_sha"]),  # issue #19
         "log_path": row["log_path"],

@@ -68,6 +68,7 @@ DEFAULT_RULES: dict[str, list[str]] = {
         r"token[^。\n]{0,40}(invalid|expired|revoked|失效|无效|已过期)",
         r"(invalid|expired|revoked)[^。\n]{0,40}token",
         r"no space left", r"磁盘", r"disk full", r"quota", r"ENOSPC",
+        r"任务执行前预检失败", r"预检失败", r"不可克隆", r"无法克隆", r"仓库不可达",
     ],
     CATEGORY_ENGINE: [
         r"command not found", r"找不到.*命令", r"请先 npm install",

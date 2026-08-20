@@ -58,7 +58,7 @@ _AI_PROVIDERS_DEEPSEEK = """
 """
 
 
-def _mk_config(tmp_path, worker_extra="{}", dsh_extra="{}",
+def _mk_config(tmp_path, worker_extra="{precheck_enabled: false}", dsh_extra="{}",
                hermes_extra="{}", ai_providers_extra="[]") -> ConfigManager:
     """worker_extra / dsh_extra / hermes_extra 为整段子键文本（非空时需自带前置换行）。"""
     config_path = tmp_path / "config.yaml"
@@ -91,7 +91,7 @@ def dsh_executor(tmp_path):
     sessions = tmp_path / "dsh-sessions"
     sessions.mkdir(exist_ok=True)
     config = _mk_config(
-        tmp_path, worker_extra="\n  engine: dsh",
+        tmp_path, worker_extra="\n  engine: dsh\n  precheck_enabled: false",
         dsh_extra="\n  provider: deepseek-official"
                   f"\n  model: deepseek-v4-flash"
                   f"\n  max_tokens: 49152"
@@ -191,12 +191,12 @@ class TestEngine:
     """_engine：dsh 白名单与回退。"""
 
     def test_engine_dsh(self, tmp_path):
-        config = _mk_config(tmp_path, worker_extra="\n  engine: dsh")
+        config = _mk_config(tmp_path, worker_extra="\n  engine: dsh\n  precheck_enabled: false")
         ex = _mk_executor(tmp_path, config)
         assert ex._engine(config.get()) == "dsh"
 
     def test_engine_uppercase_normalized(self, tmp_path):
-        config = _mk_config(tmp_path, worker_extra="\n  engine: DSH")
+        config = _mk_config(tmp_path, worker_extra="\n  engine: DSH\n  precheck_enabled: false")
         ex = _mk_executor(tmp_path, config)
         assert ex._engine(config.get()) == "dsh"
 
@@ -309,7 +309,7 @@ class TestRunDshOnce:
             self, monkeypatch, tmp_path, fake_runner):
         """issue #115：dsh 段无 key 时，ai_providers 的 deepseek 凭据传给 runner。"""
         config = _mk_config(
-            tmp_path, worker_extra="\n  engine: dsh",
+            tmp_path, worker_extra="\n  engine: dsh\n  precheck_enabled: false",
             ai_providers_extra=_AI_PROVIDERS_DEEPSEEK)
         ex = _mk_executor(tmp_path, config)
         _patch_workspace(monkeypatch, ex, tmp_path)
@@ -587,7 +587,7 @@ class TestRunDshOnce:
 
         monkeypatch.setattr("botler.executor.HermesSdkRunner", _FakeHermesRunner)
         config = _mk_config(
-            tmp_path, worker_extra="\n  engine: hermes")
+            tmp_path, worker_extra="\n  engine: hermes\n  precheck_enabled: false")
         ex = _mk_executor(tmp_path, config)
         _patch_workspace(monkeypatch, ex, tmp_path)
         code, _ = ex._run_once(1, _REPO, _ISSUE)
@@ -754,7 +754,7 @@ class TestDshSessionPrePersist:
             self, tmp_path, monkeypatch, fake_runner):
         """session_root 目录不存在 → resume 降级全新会话（诚实降级）。"""
         config = _mk_config(
-            tmp_path, worker_extra="\n  engine: dsh",
+            tmp_path, worker_extra="\n  engine: dsh\n  precheck_enabled: false",
             dsh_extra="\n  session_root: /nonexistent-dsh-sessions-xyz")
         ex = _mk_executor(tmp_path, config)
         _patch_workspace(monkeypatch, ex, tmp_path)

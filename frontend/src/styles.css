@@ -2320,6 +2320,11 @@ body:has(.drawer-overlay) {
   font-weight: 600;
 }
 
+.err-text {
+  color: var(--err);
+  font-weight: 600;
+}
+
 /* Synology SSO 登录页（issue #27） */
 .login-page {
   flex: 1;

@@ -149,6 +149,47 @@ function EnvSnapshot({ env }) {
   )
 }
 
+// 任务执行前预检（issue #238）：领取任务后、消耗模型调用前对环境做的
+// 快速检查（git 凭据/token / 本地路径 / 磁盘剩余空间 / 工作区可用），
+// 检查明细（✓/✗）落库 tasks.precheck_result；无记录（旧任务/未启用预检）
+// 显示「暂无预检记录」。
+function PrecheckPanel({ precheck }) {
+  if (!precheck) {
+    return <p className="muted">暂无预检记录（任务未启用预检或为旧任务）</p>
+  }
+  if (precheck.error && !(precheck.checks || []).length) {
+    return <p className="muted"><Icon name="warning" /> {precheck.error}（预检执行异常，不影响任务继续）</p>
+  }
+  const checks = precheck.checks || []
+  const failed = checks.filter((c) => c.ok === false).length
+  return (
+    <div>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        {precheck.ok === false
+          ? <span className="err-text">{failed} 项检查未通过，任务已在预检阶段判定失败</span>
+          : <span className="ok-text">全部检查通过</span>}
+        {precheck.checked_at ? `（${fmtTime(precheck.checked_at)}）` : ''}
+      </p>
+      {checks.length === 0 && <p className="muted">预检无检查项</p>}
+      <table className="table kv">
+        <tbody>
+          {checks.map((c, i) => (
+            <tr key={c.name || i}>
+              <th>{c.label || c.name}</th>
+              <td>
+                <span className={c.ok === false ? 'err-text' : 'ok-text'}>
+                  {c.ok === true ? '✓ 通过' : c.ok === false ? '✗ 未通过' : '— 跳过'}
+                </span>
+                {c.detail ? <span className="muted small"> {c.detail}</span> : null}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export default function TaskDetail() {
   const { id } = useParams()
   const location = useLocation()
@@ -169,6 +210,8 @@ export default function TaskDetail() {
   const [showThinking, setShowThinking] = useState(false)
   // 执行环境快照折叠面板（issue #276）：元信息区展示，默认展开可收起
   const [showEnv, setShowEnv] = useState(true)
+  // 任务执行前预检折叠面板（issue #238）：元信息区展示，默认展开可收起
+  const [showPrecheck, setShowPrecheck] = useState(true)
   const [showChat, setShowChat] = useState(true)
   const [showLogs, setShowLogs] = useState(true)
   // 实时执行面板（issue #20）：live 为 null 表示尚未拉取过
@@ -437,6 +480,23 @@ export default function TaskDetail() {
       {/* Token 用量（issue #235）：引擎采集的模型调用 token 用量与估算
           费用卡片；无用量数据时显示「无数据」而不是报错 */}
       <UsageCard usage={task.usage} />
+
+      {/* 任务执行前预检（issue #238）：元信息区折叠面板，展示执行前环境
+          预检结果（git 凭据/token / 本地路径 / 磁盘空间 / 工作区 ✓/✗）；
+          预检失败时任务在消耗模型调用前即已判定失败 */}
+      <div className="card">
+        <SectionToggle open={showPrecheck} level="h2"
+                       onClick={() => setShowPrecheck(!showPrecheck)}>
+          任务执行前预检
+          {task.precheck_result &&
+            <span className="muted small">
+              （{task.precheck_result.ok === false
+                ? <span className="err-text">未通过</span>
+                : <span className="ok-text">通过</span>}）
+            </span>}
+        </SectionToggle>
+        {showPrecheck && <PrecheckPanel precheck={task.precheck_result} />}
+      </div>
 
       {/* 执行环境快照（issue #276）：元信息区折叠面板，展示任务开始时
           采集的执行环境（引擎/模型/起始提交/平台版本/配置哈希） */}

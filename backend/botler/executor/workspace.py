@@ -110,6 +110,25 @@ class WorkspaceMixin:
         )
         script.chmod(0o700)
         return script
+    def _build_git_env(self, repo: dict) -> dict:
+        """构建 git 子进程凭据环境（issue #238：预检与 prepare_workspace 共用）。
+
+        先剔除 CI 环境变量再设置关键项：gitlab-runner 的 CI_JOB_TOKEN 等
+        会被 git 凭据流程误用（经 store 优先于 GIT_ASKPASS → 403 不重试），
+        且外部 GIT_ASKPASS 可能指向别处覆盖凭据注入；GIT_ASKPASS 指向 bot
+        token 脚本（prepare_workspace 的 clone/fetch/push 与预检的 ls-remote
+        探测使用同一凭据来源，保证预检结论与真实执行一致）。
+        """
+        askpass = self._askpass_script(repo["name"])
+        git_env = self._clean_process_env()
+        git_env["GIT_ASKPASS"] = str(askpass)
+        git_env["GIT_TERMINAL_PROMPT"] = "0"
+        git_env["HOME"] = str(Path.home())
+        # 禁用全局 credential store（失效 job token 条目优先于 askpass 被选用）
+        git_env["GIT_CONFIG_GLOBAL"] = str(self._git_global_config())
+        git_env["GIT_CONFIG_SYSTEM"] = os.devnull
+        return git_env
+
     def prepare_workspace(self, repo: dict, resume: bool = False) -> tuple[Path, dict]:
         """确保工作区存在且干净，返回 (workdir, git_env)。
 
@@ -119,17 +138,7 @@ class WorkspaceMixin:
         与本地提交，供恢复会话接续使用。
         """
         workdir = self._repo_workdir(repo)
-        askpass = self._askpass_script(repo["name"])
-        # 先剔除 CI 环境变量再设置关键项：gitlab-runner 的 CI_JOB_TOKEN 等
-        # 会被 git 凭据流程误用（经 store 优先于 GIT_ASKPASS → 403 不重试），
-        # 且外部 GIT_ASKPASS 可能指向别处覆盖凭据注入
-        git_env = self._clean_process_env()
-        git_env["GIT_ASKPASS"] = str(askpass)
-        git_env["GIT_TERMINAL_PROMPT"] = "0"
-        git_env["HOME"] = str(Path.home())
-        # 禁用全局 credential store（失效 job token 条目优先于 askpass 被选用）
-        git_env["GIT_CONFIG_GLOBAL"] = str(self._git_global_config())
-        git_env["GIT_CONFIG_SYSTEM"] = os.devnull
+        git_env = self._build_git_env(repo)
 
         if not (workdir / ".git").exists():
             if _row_get(repo, "local_path"):

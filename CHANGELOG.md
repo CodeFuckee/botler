@@ -5,6 +5,35 @@
 ## [Unreleased]
 
 ### Added
+- **任务执行前预检：token 失效 / 磁盘不足等环境性失败在消耗模型调用前快速失败（issue #238）**：
+  此前任务入队后执行器直接进入工作区拉取仓库、调用引擎——token 失效、本地
+  路径不可访问、磁盘空间不足等环境问题要到执行中途才报错，白白消耗一次模型
+  调用并等到超时。本次在执行器领取任务后、消耗任何模型调用前增加环境预检：
+  - **预检项**（`backend/botler/precheck.py`，任一未通过即整体失败）：
+    `git_token`——`git ls-remote` 探测远端可达性与认证（URL 仓库直接探测
+    url；local_path 仓库在本地目录对所选 remote 探测，与 clone/fetch/push
+    同一凭据环境）；`local_path`——配置 local_path 时目录存在且可写（未配置
+    跳过）；`disk_space`——磁盘剩余空间不低于配置阈值（默认 2GB）；
+    `workspace`——工作区根目录存在且可写、目标目录未被文件占用。git 探测带
+    8s 超时，整体预检 < 10s，不显著增加任务开始延迟；
+  - **失败语义**：预检未通过 → 任务直接判 `failed`（**不重试、不消耗模型
+    调用**），`error_message` 写入明确原因（如「任务执行前预检失败：Git
+    凭据/Token检查未通过：…」），失败分类为环境类（env）；检查明细（✓/✗）
+    序列化落库 `tasks.precheck_result`，任务详情页「元信息」区新增「任务执行
+    前预检」折叠面板展示各检查项结果；
+  - **配置**：`worker.precheck_enabled`（总开关，默认开启）+ 
+    `worker.precheck_disk_min_free_mb`（磁盘剩余空间阈值 MiB，默认 2048）；
+    预检通过 / 未启用 / 预检自身异常时任务行为与现状完全一致；
+  - **测试**：`backend/tests/test_precheck.py` 新增 29 例——各检查项通过 /
+    失败 / 跳过路径（本地真实 git 仓库 + file:// 远端、不存在远端、缺 url、
+    缺 remote、超时、目录缺失 / 是文件 / 不可写、磁盘低于 / 高于阈值、探测
+    目标回退父目录、工作区根目录缺失 / 不可写 / 被文件占用）、序列化 roundtrip、
+    失败摘要文案、执行器集成（预检失败 → 直接 failed 且不调用 `_run_once` /
+    不进入重试 / 明细落库 / 分类 env；预检通过 → 任务照常成功；未启用 →
+    行为与现状一致；预检自身异常 → 不阻塞）与 API 数据契约（详情页
+    `precheck_result` 字段，旧任务为 null）；既有 run_task 单测在配置中关闭
+    预检（聚焦状态机/重试逻辑），全量测试无 regression。
+
 - **左侧边栏全局搜索框宽度与下方导航项对齐（issue #354）**：
   此前 `.sidebar-search` 基础规则为 `width: calc(100% - 24px)` 且
   `margin: 12px 12px 4px`——左右各内缩 12px；而导航项 `.navlink` 为

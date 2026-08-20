@@ -66,6 +66,12 @@ def _ui_default(ui: dict, key: str, default: bool) -> bool:
     return val if isinstance(val, bool) else default
 
 
+def _worker_bool(worker: dict, key: str, default: bool) -> bool:
+    """读取 worker 段布尔开关：缺省或非布尔值回退默认（issue #238）。"""
+    val = worker.get(key, default)
+    return val if isinstance(val, bool) else default
+
+
 def _tpl_bool(tpl: dict, key: str, default: bool) -> bool:
     """读取 templates 段布尔开关：缺省或非布尔值回退默认（issue #223）。"""
     val = tpl.get(key, default)
@@ -224,6 +230,14 @@ class Settings:
     # 暂停窗口内仍可开始新任务（不受暂停窗口影响）；0 = 关闭（所有仓库都受
     # 暂停窗口约束，issue #169 行为不变）。设置页「任务调度」卡片可编辑。
     pause_priority_threshold: int = 0
+    # 任务执行前预检（issue #238）：领取任务后、消耗模型调用前对环境做快速
+    # 检查（git 凭据/token 有效性、local_path 可写、磁盘剩余空间、工作区
+    # 可用），环境性失败直接判任务失败（不重试、不消耗模型调用），检查明细
+    # 落库 tasks.precheck_result，任务详情页「元信息」区展示（✓/✗）。
+    # precheck_enabled = 总开关（默认开启）；precheck_disk_min_free_mb =
+    # 磁盘剩余空间阈值（MiB，默认 2048 = 2GB）。
+    precheck_enabled: bool = True
+    precheck_disk_min_free_mb: int = 2048
     # CI 流水线等待（issue #40）：任务成功收尾前等待任务提交触发的流水线
     # 到终态。detect = 探测窗口（GitLab 收到 push 即创建流水线记录，
     # 窗口内找不到匹配 sha 说明仓库无 CI）；timeout = 等待终态总上限；
@@ -428,7 +442,8 @@ KNOWN_FIELDS = {
                "engine", "plugin_paths", "issue_priority",
                "pause_windows", "pause_weekdays", "pause_timezone",
                "pause_priority_threshold",
-               "fallback_engines", "fallback_after_failures"},
+               "fallback_engines", "fallback_after_failures",
+               "precheck_enabled", "precheck_disk_min_free_mb"},
     "claude": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
             "session_root", "cordis", "runtime_bin", "base_url", "api_key"},
@@ -700,6 +715,8 @@ class ConfigManager:
             pause_weekdays=_pause_weekdays(worker),
             pause_timezone=str(worker.get("pause_timezone") or "").strip(),
             pause_priority_threshold=_pause_priority_threshold(worker),
+            precheck_enabled=_worker_bool(worker, "precheck_enabled", True),
+            precheck_disk_min_free_mb=max(1, int(worker.get("precheck_disk_min_free_mb", 2048))),
             ci_wait_detect_seconds=int(worker.get("ci_wait_detect_seconds", 120)),
             ci_wait_interval_seconds=int(worker.get("ci_wait_interval_seconds", 15)),
             ci_wait_timeout_seconds=int(worker.get("ci_wait_timeout_seconds", 1800)),

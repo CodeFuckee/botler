@@ -27,7 +27,7 @@ gitlab:
   bot_token: test-token
   webhook_secret: test-secret
   verify_ssl: false
-worker: {}
+worker: {precheck_enabled: false}
 claude: {}
 templates: {}
 repos: []

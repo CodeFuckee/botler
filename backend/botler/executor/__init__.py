@@ -33,6 +33,7 @@ import os  # noqa: F401 （对外再导出，测试 monkeypatch botler.executor.
 import subprocess
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from ..config import ConfigManager
@@ -62,6 +63,15 @@ from ..failure_classify import (
     category_advice,
     category_label,
     classify_failure,
+)
+from ..precheck import (
+    check_disk_space,
+    check_git_credentials,
+    check_local_path,
+    check_workspace,
+    format_precheck_failure,
+    parse_precheck,  # noqa: F401 （对外再导出，测试 monkeypatch 目标）
+    serialize_precheck,
 )
 from .. import engine_health
 from ..report import (
@@ -303,6 +313,57 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
             self.db.add_log(task_id, "warn", f"留引擎降级评论失败: {e}")
 
     # ---- 重试与结果判定 ----
+    def _run_precheck(self, task_id: int, repo: dict, cfg) -> dict:
+        """任务执行前预检（issue #238）：环境快速检查，返回结果 dict。
+
+        检查项（详情页「元信息」区按此顺序展示）：
+        - git_token：git 凭据/token 有效性（git ls-remote 探测，与
+          prepare_workspace 同一凭据环境——URL 仓库探测 url，local_path
+          仓库在本地目录探测所选 remote）
+        - local_path：配置 local_path 时目录存在且可写（未配置跳过）
+        - disk_space：磁盘剩余空间不低于 cfg.precheck_disk_min_free_mb
+          （默认 2GB），目标为仓库实际落盘目录所在文件系统
+        - workspace：工作区根目录存在且可写、目标目录未被文件占用
+
+        任一检查未通过 → 结果 ok=False（调用方直接判任务失败，不重试、
+        不消耗模型调用）。git 探测带超时（8s），整体预检远小于 10s。
+        """
+        # repo 为 sqlite3.Row（dict 接口）——转普通 dict 供预检函数
+        # 统一取值（sqlite3.Row 无 .get()，dict 行为一致且无副作用）
+        repo = dict(repo)
+        workdir = self._repo_workdir(repo)
+        # 与 prepare_workspace 同一凭据来源，保证预检结论与真实执行一致
+        git_env = self._build_git_env(repo)
+        checks: list[dict] = []
+
+        ok, detail = check_git_credentials(repo, workdir, git_env)
+        checks.append({"name": "git_token", "label": "Git 凭据/Token",
+                       "ok": ok, "detail": detail})
+
+        ok, detail = check_local_path(repo)
+        checks.append({"name": "local_path", "label": "本地路径",
+                       "ok": ok, "detail": detail})
+
+        # 磁盘探测目标：仓库实际落盘目录（URL = 工作区，local_path = 本地
+        # 目录；目录尚未创建时取其父目录/工作区根目录，均为已存在路径）
+        disk_target = workdir
+        if not disk_target.exists():
+            disk_target = disk_target.parent if disk_target.parent.exists() \
+                else self.workspace_root
+        ok, detail = check_disk_space(disk_target, cfg.precheck_disk_min_free_mb)
+        checks.append({"name": "disk_space", "label": "磁盘剩余空间",
+                       "ok": ok, "detail": detail})
+
+        ok, detail = check_workspace(self.workspace_root, workdir)
+        checks.append({"name": "workspace", "label": "工作区可用",
+                       "ok": ok, "detail": detail})
+
+        return {
+            "ok": all(c["ok"] is not False for c in checks),
+            "checks": checks,
+            "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+
     def run_task(self, task_id: int) -> None:
         """任务主流程：单次或重试执行，写状态机与收尾评论。
 
@@ -361,6 +422,39 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         if self._stop_requested(task_id):
             self._finish_stopped(task_id)
             return
+
+        # issue #238：任务执行前预检——环境性失败（token 失效/仓库不可克隆/
+        # 本地路径不可写/磁盘不足/工作区异常）在消耗任何模型调用前快速失败：
+        # 直接判任务 failed（不重试），错误原因写入 error_message，检查明细
+        # （✓/✗）落库 tasks.precheck_result，任务详情页「元信息」区展示。
+        # 预检本身 < 10s（git 探测 8s 超时 + 本地文件系统检查），通过后
+        # 行为与现状完全一致。
+        if cfg.precheck_enabled:
+            try:
+                precheck = self._run_precheck(task_id, repo, cfg)
+            except Exception as e:  # noqa: BLE001 预检自身异常不阻塞任务（记日志照常执行）
+                logger.exception("任务 %s 预检执行异常", task_id)
+                precheck = {
+                    "ok": True,
+                    "error": f"预检执行异常: {e}",
+                    "checks": [],
+                    "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                }
+            self.db.set_task_status(task_id, None,
+                                    precheck_result=serialize_precheck(precheck))
+            if precheck["ok"]:
+                passed = sum(1 for c in precheck["checks"] if c["ok"] is True)
+                skipped = sum(1 for c in precheck["checks"] if c["ok"] is None)
+                self.db.add_log(task_id, "info",
+                                f"任务执行前预检通过（{passed} 项通过"
+                                f"{f'，{skipped} 项跳过' if skipped else ''}）")
+            else:
+                reason = format_precheck_failure(precheck)
+                self.db.add_log(task_id, "error", reason)
+                self._finish_failed(task_id, reason,
+                                    error_detail=serialize_precheck(precheck),
+                                    repo=repo)
+                return
 
         # issue #120：执行引擎按任务落库——记录本次实际执行的引擎
         # （claude / hermes / dsh），概览页 issue 右边栏按任务展示历史

@@ -692,6 +692,8 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `worker.pause_weekdays` | `[]` | 定时暂停窗口生效星期（0=周一 … 6=周日）；空 = 每天都生效（issue #169） |
 | `worker.pause_timezone` | 空 | 定时暂停窗口判断所用时区（IANA 名，如 `Asia/Shanghai`）；空 = 服务器本地时区（issue #169） |
 | `worker.pause_priority_threshold` | 0 | 暂停窗口豁免优先级阈值（issue #299）：仓库调度优先级（`repos[].priority`，1~999，数字越小越优先）不差于该值（`priority <= 阈值`）的仓库，在定时暂停窗口内仍可开始新任务（不受窗口影响）；`0` = 关闭（所有仓库都受暂停窗口约束，默认）。设置页「任务调度」卡片可编辑 |
+| `worker.precheck_enabled` | `true` | 任务执行前预检总开关（issue #238）：领取任务后、消耗模型调用前对环境做快速检查（git 凭据/token 有效性、local_path 可写、磁盘剩余空间、工作区可用），环境性失败（token 失效 / 仓库不可克隆 / 磁盘不足等）直接判任务失败（不重试、不消耗模型调用），检查明细（✓/✗）在任务详情页「元信息」区「任务执行前预检」面板展示；预检通过 / 未启用 / 预检自身异常时任务行为与现状一致 |
+| `worker.precheck_disk_min_free_mb` | `2048` | 任务执行前预检的磁盘剩余空间阈值（MiB，默认 2048 = 2GB；issue #238），低于该值任务不开始 |
 | `worker.plugin_paths` | `[]` | 外部插件加载（issue #140）：Python 模块路径列表，应用启动时逐个加载注册进插件体系（新增执行引擎 / 大模型供应商 / 消息发送通道）；模块内调用 `botler.plugins.register_plugin` 完成登记，加载失败仅记日志不阻塞启动 |
 | `claude.command` / `args` | `claude -p --output-format stream-json --verbose` | claude 引擎执行命令（stream-json 逐行实时输出，任务页面逐事件查看执行过程） |
 | `hermes`（段） | `{}` | hermes 引擎无配置项（issue #171 起 SDK 进程内集成，LLM 配置在 hermes 侧 `~/.hermes`）；SDK 安装见 `docs/hermes-engine-deployment.md` |

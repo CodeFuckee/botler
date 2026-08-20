@@ -50,7 +50,7 @@ _HERMES_OUTPUT = json.dumps({
 }, ensure_ascii=False)
 
 
-def _mk_config(tmp_path, worker_extra="{}") -> ConfigManager:
+def _mk_config(tmp_path, worker_extra="{precheck_enabled: false}") -> ConfigManager:
     """worker_extra 为整段子键文本（非空时需自带前置换行）。"""
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -76,7 +76,7 @@ def executor(tmp_path):
 @pytest.fixture
 def hermes_executor(tmp_path):
     """engine=hermes 的 executor（SDK 进程内模式，无需 command/args 配置）。"""
-    config = _mk_config(tmp_path, worker_extra="\n  engine: hermes")
+    config = _mk_config(tmp_path, worker_extra="\n  engine: hermes\n  precheck_enabled: false")
     return _mk_executor(tmp_path, config)
 
 
@@ -166,12 +166,12 @@ class TestEngine:
         assert executor._engine(executor.config.get()) == "claude"
 
     def test_engine_hermes(self, tmp_path):
-        config = _mk_config(tmp_path, worker_extra="\n  engine: hermes")
+        config = _mk_config(tmp_path, worker_extra="\n  engine: hermes\n  precheck_enabled: false")
         ex = _mk_executor(tmp_path, config)
         assert ex._engine(config.get()) == "hermes"
 
     def test_unknown_engine_falls_back_to_claude(self, tmp_path):
-        config = _mk_config(tmp_path, worker_extra="\n  engine: gpt5")
+        config = _mk_config(tmp_path, worker_extra="\n  engine: gpt5\n  precheck_enabled: false")
         ex = _mk_executor(tmp_path, config)
         assert ex._engine(config.get()) == "claude"
 
@@ -326,7 +326,7 @@ class TestRunHermesOnce:
                 self.stop_calls += 1
 
         monkeypatch.setattr("botler.executor.DshRunner", _FakeDsh)
-        config = _mk_config(tmp_path, worker_extra="\n  engine: dsh")
+        config = _mk_config(tmp_path, worker_extra="\n  engine: dsh\n  precheck_enabled: false")
         ex = _mk_executor(tmp_path, config)
         _patch_workspace(monkeypatch, ex, tmp_path)
         code, _ = ex._run_once(1, _REPO, _ISSUE)

@@ -141,11 +141,14 @@ def test_user_version_marker(tmp_path):
     + v14 task_progress 任务进度账本表 issue #281
     + v15 repos.logo_* 仓库 logo 列 issue #188
     + v16 task_usage 任务 token 用量表 issue #235
-    + v17 tasks.base_sha 任务改动基线提交 issue #252）。"""
+    + v17 tasks.base_sha 任务改动基线提交 issue #252
+    + v22 tasks.engine_fallback 引擎降级原因列 issue #236
+    + v23 repos 仓库级任务参数覆盖列 issue #237
+    + v24 tasks.precheck_result 任务执行前预检结果列 issue #238）。"""
     db = Database(str(tmp_path / "ver.db"))
     with db._conn() as conn:
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 23
+    assert ver == 24
 
 
 def test_legacy_db_gets_remote_username_column(tmp_path):
@@ -179,7 +182,7 @@ def test_legacy_db_gets_remote_username_column(tmp_path):
         cols = {r["name"] for r in conn2.execute("PRAGMA table_info(repos)")}
         assert "remote_username" in cols
         ver = conn2.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 23  # v9 旧库迁移应推进到最新版本（v23：repos 仓库级参数覆盖，issue #237）
+    assert ver == 24  # v9 旧库迁移应推进到最新版本（v24：tasks.precheck_result 预检结果列，issue #238）
     # 新列可正常写入读取
     repo_id = db.upsert_repo(
         42, "demo", "https://gitlab.example.com/group/demo.git",

@@ -28,6 +28,7 @@ worker:
   engine: claude
   fallback_engines: ["dsh", "hermes"]
   fallback_after_failures: 2
+  precheck_enabled: false
 claude: {}
 templates: {}
 repos: []

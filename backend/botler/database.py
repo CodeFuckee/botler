@@ -47,7 +47,7 @@ _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
                 "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript",
                 "engine", "environment", "base_sha",
-                "failure_category", "engine_fallback"}
+                "failure_category", "engine_fallback", "precheck_result"}
 
 # ---- 关键行类型化（issue #213）----
 # tasks / repos 表行类型：mypy 下 dict key 拼错（如 row["commit_shaa"]）与
@@ -85,6 +85,9 @@ class TaskRow(TypedDict):
     # issue #236：引擎降级原因文案（如「引擎 claude 不可用（...），已降级
     # dsh 执行」）；未发生降级为空串
     engine_fallback: str | None
+    # issue #238：任务执行前预检结果 JSON（检查项 ✓/✗ 明细）；未启用预检
+    # 或旧任务为 NULL
+    precheck_result: str | None
     manual_priority: int | None
     created_at: str | None
 
@@ -182,6 +185,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   base_sha TEXT,
   failure_category TEXT DEFAULT '',
   engine_fallback TEXT DEFAULT '',
+  precheck_result TEXT,
   manual_priority INTEGER,
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -710,6 +714,16 @@ class Database:
             if "engine" not in cols:
                 conn.execute("ALTER TABLE repos ADD COLUMN engine TEXT")
             conn.execute("PRAGMA user_version = 23")
+            ver = 23
+        if ver < 24:
+            # issue #238：任务执行前预检结果——执行器领取任务后、消耗模型
+            # 调用前对环境做快速检查（git 凭据/token、local_path、磁盘空间、
+            # 工作区），结果 JSON 落库本列，任务详情页「元信息」区展示
+            # （✓/✗）。新库 _SCHEMA 已含；旧库（user_version=23）补列。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "precheck_result" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN precheck_result TEXT")
+            conn.execute("PRAGMA user_version = 24")
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
