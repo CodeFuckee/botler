@@ -10,12 +10,24 @@ export const LABEL_ACTION_META = {
   remove: { text: '移除了标记' },
 }
 
-/** 事件操作人显示名：user.name 优先回退 username，全无显示「—」
- *  （与 noteAuthorName 兜底逻辑一致）。 */
+/** 脱敏名判定（issue #353）：GitLab resource_label_events API 对
+ *  bot/项目令牌用户返回 name='****'（脱敏）、username 为真实值——name
+ *  缺失（null/undefined/非字符串）、空串/纯空白、或仅由掩码星号组成
+ *  （如 '****'）时视为脱敏，展示层应回退 username，不把星号当真实名字。 */
+export function isMaskedName(name) {
+  if (typeof name !== 'string') return true
+  const s = name.trim()
+  if (!s) return true
+  return /^[*＊]+$/.test(s)
+}
+
+/** 事件操作人显示名（issue #353）：user.name 优先，但 name 被脱敏时
+ *  回退展示真实 username（GitLab 对 bot 用户返回 name='****'）；全无
+ *  显示「—」（与 noteAuthorName 兜底逻辑一致）。 */
 export function labelActorName(event) {
   const u = event && typeof event === 'object' ? event.user : null
   if (!u || typeof u !== 'object') return '—'
-  return u.name || u.username || '—'
+  return isMaskedName(u.name) ? (u.username || '—') : u.name
 }
 
 /** 标记事件展示文本（issue #349）：`{操作人} {动作} {标记名}`，

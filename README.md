@@ -209,6 +209,8 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 标记活动（issue #349）：概览页 issue 详情右边栏展示谁在什么时间添加/移除了哪个标记
 > （如「chenkaidi 添加了标记 feature」「code01 移除了标记 ui」），数据源为 GitLab
 > resource_label_events API（notes 系统活动不含标记加/删事件，实测，故独立拉取）；
+> GitLab 对 bot/项目令牌用户返回的 user.name 为 `****`（脱敏）、username 为真实值，
+> 操作人展示在 name 脱敏时回退显示真实用户名（issue #353）；
 > 分开显示模式下为独立「标记活动」区块、按时间升序排列；开启合并时间线模式（issue #342）
 > 后标记活动并入时间线按时间交错展示，不再单独成区（issue #351）；加载失败自动降级不影响主内容。
 >

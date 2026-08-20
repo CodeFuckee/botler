@@ -5,6 +5,20 @@
 ## [Unreleased]
 
 ### Added
+- **概览页 issue 详情右边栏：标记活动展示真实用户名（issue #353）**：
+  此前标记活动（issue #349 的「谁添加/移除了哪个标记」）对 bot/项目令牌用户
+  展示脱敏星号——GitLab resource_label_events API 返回的 user.name 为
+  `****`（脱敏）而 username 为真实值，前端 `labelActorName` 优先取 name
+  导致展示「**** 添加了标记 in-progress」等。本次修复：
+  - **前端**：`frontend/src/lib/labelEvents.js` 新增 `isMaskedName` 纯函数
+    （name 缺失/空串/纯星号视为脱敏），`labelActorName` 在 name 脱敏时回退
+    展示真实 username（如「project_123_bot_… 添加了标记 in-progress」）；
+    分开显示区块与合并时间线模式（issue #351）共用 `labelEventText`，一处
+    修复两种模式均生效；
+  - **测试**：`frontend/tests/overview-issue-label-events.test.mjs` 新增 6 例
+    （isMaskedName 脱敏形态/正常名/缺失判定、labelActorName 回退 username
+    与缺失兜底、labelEventText 脱敏文案、分开显示与合并时间线两种模式渲染
+    断言不出现星号），全量测试无 regression。
 - **任务来源维度统计：概览页来源分布卡片 + 统计页来源按天趋势（issue #224）**：
   此前 `tasks.triggered_by` 已记录任务来源（webhook / manual / reconcile）但无
   任何统计展示——issue #264 统计看板仅有按来源分组的汇总表，概览页与逐日趋势

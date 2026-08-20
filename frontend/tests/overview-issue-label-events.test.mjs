@@ -12,6 +12,11 @@
 // 3. 渲染：正常（操作人 + 添加/移除了标记 + 标记名 + 时间）/ 空 /
 //    加载中 / 加载失败 / 异常元素跳过；时间线模式开启（botler.timeline）时
 //    标记活动并入时间线（issue #351），不再独立展示。
+//
+// issue #353：GitLab resource_label_events API 对 bot/项目令牌用户返回
+// name='****'（脱敏）而 username 为真实值——lib 新增 isMaskedName 判定，
+// labelActorName 在 name 脱敏时回退展示 username（分开显示与合并时间线
+// 两种模式均生效），断言覆盖脱敏形态/正常名/缺失兜底。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -42,6 +47,7 @@ const {
   labelActorName,
   labelEventText,
   buildLabelEvents,
+  isMaskedName,
 } = await import(path.join(ROOT, 'src/lib/labelEvents.js'))
 
 // 捕获 api.get 原始实现（与 overview-issue-timeline.test.mjs 同款：
@@ -71,6 +77,7 @@ test('源码：labelEvents lib 提供动作文案/操作人/归一化函数', ()
   assert.equal(typeof labelActorName, 'function', '应导出 labelActorName')
   assert.equal(typeof labelEventText, 'function', '应导出 labelEventText')
   assert.equal(typeof buildLabelEvents, 'function', '应导出 buildLabelEvents')
+  assert.equal(typeof isMaskedName, 'function', '应导出 isMaskedName（issue #353）')
 })
 
 // ---- 2. lib 单元测试 ----
@@ -107,6 +114,39 @@ test('labelActorName：name 优先回退 username，全无显示「—」', () =
   assert.equal(labelActorName({ user: {} }), '—')
   assert.equal(labelActorName({}), '—', '缺 user 对象应显示「—」')
   assert.equal(labelActorName(null), '—', '非对象输入不崩溃')
+})
+
+test('isMaskedName：脱敏名判定（issue #353）', () => {
+  assert.equal(isMaskedName('****'), true, 'GitLab bot 用户脱敏名应判定为脱敏')
+  assert.equal(isMaskedName('***'), true, '多星号应判定为脱敏')
+  assert.equal(isMaskedName('*'), true, '单星号应判定为脱敏')
+  assert.equal(isMaskedName(''), true, '空串应判定为脱敏')
+  assert.equal(isMaskedName('   '), true, '纯空白应判定为脱敏')
+  assert.equal(isMaskedName(null), true, 'null 应判定为脱敏')
+  assert.equal(isMaskedName(undefined), true, 'undefined 应判定为脱敏')
+  assert.equal(isMaskedName('chenkaidi'), false, '正常用户名不应判定为脱敏')
+  assert.equal(isMaskedName('code01'), false, '正常用户名不应判定为脱敏')
+  assert.equal(isMaskedName('张三'), false, '中文名不应判定为脱敏')
+})
+
+test('labelActorName：name 脱敏时回退显示 username（issue #353）', () => {
+  assert.equal(
+    labelActorName({ user: { name: '****',
+                             username: 'project_123_bot_cb5fcbc6b6d6c4c7d8efd11210a3d10f' } }),
+    'project_123_bot_cb5fcbc6b6d6c4c7d8efd11210a3d10f', '脱敏 name 应回退展示真实 username')
+  assert.equal(
+    labelActorName({ user: { name: '****' } }), '—', 'name 脱敏且无 username 应显示「—」')
+  assert.equal(
+    labelActorName({ user: { name: '***', username: 'bot' } }), 'bot', '多星号脱敏同样回退 username')
+})
+
+test('labelEventText：name 脱敏时展示文案用真实 username（issue #353）', () => {
+  assert.equal(
+    labelEventText({ id: 6, action: 'add', label: 'in-progress',
+                     user: { name: '****',
+                             username: 'project_123_bot_cb5fcbc6b6d6c4c7d8efd11210a3d10f' } }),
+    'project_123_bot_cb5fcbc6b6d6c4c7d8efd11210a3d10f 添加了标记 in-progress',
+    '脱敏 name 的标记事件应展示真实用户名')
 })
 
 test('buildLabelEvents：按 created_at 升序、同一时刻按 id 升序', () => {
@@ -168,6 +208,16 @@ const LABEL_EVENT_REMOVE = {
   user: { name: 'code01', username: 'code01',
           avatar_url: 'https://gitlab.example.com/b.png' },
   created_at: '2026-08-15 11:00:00',
+}
+
+// issue #353：GitLab resource_label_events API 对 bot/项目令牌用户返回
+// name='****'（脱敏）、username 为真实值——渲染应展示真实用户名而非星号
+const LABEL_EVENT_MASKED = {
+  id: 3, action: 'add', label: 'in-progress',
+  user: { name: '****',
+          username: 'project_123_bot_cb5fcbc6b6d6c4c7d8efd11210a3d10f',
+          avatar_url: 'https://gitlab.example.com/c.png' },
+  created_at: '2026-08-15 12:00:00',
 }
 
 // 渲染 IssueDrawer 并等待 detail 拉取完成（detail 返回 notes 与
@@ -322,6 +372,32 @@ test('渲染：合并时间线模式下仅标记活动 → 全部并入时间线
     assert.ok(toText(items[0]).includes('添加了标记 feature'), '第 1 条应为添加事件')
     assert.ok(toText(items[1]).includes('移除了标记 ui'), '第 2 条应为移除事件')
     assert.equal(findByClass(root, 'label-events-list').length, 0, '不应渲染独立列表')
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+// ---- 4. issue #353：脱敏用户名渲染 ----
+
+test('渲染：name 脱敏的标记活动展示真实用户名而非星号（issue #353）', async () => {
+  const { root } = await renderDrawer(OPEN_ISSUE, [LABEL_EVENT_MASKED])
+  const text = drawerText(root)
+  assert.ok(!text.includes('****'), '不应展示脱敏星号')
+  assert.ok(
+    text.includes('project_123_bot_cb5fcbc6b6d6c4c7d8efd11210a3d10f 添加了标记 in-progress'),
+    '应展示真实用户名')
+})
+
+test('渲染：合并时间线模式下脱敏 name 的标记活动同样展示真实用户名（issue #353）', async () => {
+  const storage = { getItem: (k) => (k === 'botler.timeline' ? '1' : null) }
+  globalThis.localStorage = storage
+  try {
+    const { root } = await renderDrawer(OPEN_ISSUE, [LABEL_EVENT_MASKED])
+    const text = drawerText(root)
+    assert.ok(!text.includes('****'), '不应展示脱敏星号')
+    assert.ok(
+      text.includes('project_123_bot_cb5fcbc6b6d6c4c7d8efd11210a3d10f 添加了标记 in-progress'),
+      '时间线模式应展示真实用户名')
   } finally {
     delete globalThis.localStorage
   }
