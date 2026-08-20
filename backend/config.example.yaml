@@ -138,6 +138,17 @@ templates:
        close issue」）；issue 引用一律写全角括号 `（issue #N）` 形式。
     6. 若确实无法解决，不要推送代码，如实汇报失败原因和已做的尝试
 
+    GitLab API 认证约定（issue #403：任务 #585 因误判认证失效而终止）：
+    - 认证验证以实际 API 调用为准：优先执行 `glab api user`（平台已配置
+      GITLAB_HOST 与 glab 有效 token）；或从 `git remote get-url origin`
+      内嵌凭据解析 token，用 `curl -k -H "PRIVATE-TOKEN: <token>" "{gitlab_url}/api/v4/user"` 验证。
+    - 注意：`glab auth status` 对 4 段式新格式 PAT（>26 字符）会误报
+      "Invalid token provided"（glab 1.36 缺陷），不能据此判定认证失效；
+      环境变量 `GITLAB_TOKEN` 在 dsh 引擎的 bash 工具中可能不可见（运行时
+      按安全策略过滤 *TOKEN* 环境变量名），不要依赖它。
+    - 仅当实际 API 调用返回 401/403 且确认为凭据问题时，才按「认证失效即
+      终止」处理并如实汇报；不得因验证方法误报而直接终止任务。
+
     注意：只修改与 issue 相关的代码，不要顺手重构无关部分。
   # 中断恢复模版（issue #116）：平台重启/中断后恢复会话的引导语
   # （claude/hermes/dsh 三引擎通用），支持与 default 相同的全部占位符。

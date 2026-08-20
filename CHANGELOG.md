@@ -129,6 +129,37 @@
 
 ### Fixed
 
+- **dsh 会话误判认证失效即终止被平台标为成功（issue #403）**：
+  诊断并修复任务 #585 运行失败的根因——两条独立缺陷：
+  - **会话误判认证失效**：任务 #585（issue #402，dsh 引擎）第一步即终止，根因是
+    「认证二选一：`glab auth status` / `GITLAB_TOKEN`」指引在 dsh 会话中双重失效——
+    ① glab 1.36 的 `IsValidToken` 只认 26 字符 `glpat-` 前缀或 20 字符 token，而本
+    实例 PAT 是 51 字符 4 段式新格式，`glab auth status` 对有效 token 误报
+    "Invalid token provided"（实际 `glab api` / REST / GraphQL 调用全部正常）；
+    ② dsh 运行时对 bash 工具子进程做凭据过滤（`SENSITIVE_ENV_PATTERN=
+    /KEY|PASSWORD|SECRET|TOKEN/i`），`GITLAB_TOKEN` 被过滤，agent 在 shell 中
+    看不到该变量。agent 按「认证失效即终止」约束终止任务，未做任何处理；
+  - **失败会话被误判成功**（`backend/botler/executor/process.py`）：`_dsh_result`
+    仅看 `finish_reason=completed` + 非空 final_response 即判 success——任务 #585
+    的最终回复明确报告「任务已终止，未进行代码修改」仍被标记 `succeeded` + `bot-done`，
+    用户侧表现为「任务585运行失败却显示成功」。
+  本次修复：
+  - **失败信号识别**：新增 `ABORT_PATTERNS` / `_is_aborted`（`[PROGRESS] ... status=failed`
+    里程碑标记、「本会话终止 / 终止本会话 / 本任务已终止 / 任务已终止，未进行代码修改」
+    等第一人称终止信号），`_dsh_result` / `_hermes_result` 命中即判 `failed`（可重试），
+    不再静默成功；正常完成报告中转述历史失败（如「任务585已终止的原因是…」）不受影响；
+  - **模板认证指引修正**（`backend/botler/config.py` `DEFAULT_TEMPLATE` +
+    `backend/config.example.yaml` + 生产 `data/backend/config.yaml`）：认证验证改为以
+    实际 API 调用为准（`glab api user` / `curl -k -H "PRIVATE-TOKEN: <remote 内嵌
+    token>"`），明确警告 `glab auth status` 对 4 段式 PAT 误报、`GITLAB_TOKEN` 在
+    dsh bash 工具中不可见，仅当实际 API 返回 401/403 才按「认证失效即终止」处理；
+    同时修正仓库自检脚本对 remote URL 内嵌凭据（`user:token@`）的解析（任务
+    #583/#585 及本任务均踩坑，误把凭据段解析进 host 导致仓库校验失败）；
+  - **测试**：`backend/tests/test_executor_dsh.py` 新增 `TestDshResultAbortDetection`
+    6 例（任务585真实失败报告 / 进度失败标记 / 终止无产出 / 阻塞终止 / 正常报告
+    提及「认证失败」不误伤 / hermes 同判定），`backend/tests/test_config_template.py`
+    新增 4 例模板认证指引内容校验；全量后端测试通过。
+
 - **dsh 引擎：会话文件损坏续跑不再反复失败，模型名跟随 AI 供应商配置（issue #397/#401）**：
   修复任务 #581/#582 失败根因——两条独立缺陷：
   - **会话损坏续跑降级**（`backend/botler/executor/process.py`）：dsh 引擎模型流式输出

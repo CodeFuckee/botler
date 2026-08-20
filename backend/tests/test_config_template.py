@@ -340,3 +340,39 @@ class TestUrlEncodedPlaceholders:
         assert rendered == "长" * 200
         # body_max_chars 非法 → 默认 8000（不截断 200 字）
         assert "已截断" not in rendered
+
+
+class TestDefaultTemplateAuthGuidance:
+    """认证指引（issue #403）：模板不得再依赖 glab auth status / GITLAB_TOKEN。
+
+    任务 #585 因「认证二选一：glab auth status / GITLAB_TOKEN」指引误判
+    认证失效而终止：glab 1.36 对 4 段式 PAT 误报 "Invalid token provided"，
+    且 GITLAB_TOKEN 被 dsh 运行时从 bash 工具环境过滤（*TOKEN* 安全过滤）。
+    模板必须引导 agent 以实际 API 调用为准、给出 token 获取路径（remote
+    URL 内嵌凭据 / glab 配置），并明确不得因验证方法误报而终止任务。
+    """
+
+    def test_example_template_guides_api_verification(self):
+        t = _example_template()
+        assert "glab api user" in t
+        assert "git remote get-url origin" in t
+        assert "PRIVATE-TOKEN" in t
+        assert "401/403" in t
+
+    def test_example_template_warns_glab_auth_status_misreport(self):
+        t = _example_template()
+        assert "glab auth status" in t
+        assert "Invalid token provided" in t
+
+    def test_example_template_notes_gitlab_token_invisible(self):
+        t = _example_template()
+        assert "GITLAB_TOKEN" in t
+        assert "过滤" in t
+
+    def test_default_template_builtin_guides_api_verification(self):
+        """代码内置兜底模板同样带认证指引（新部署/未配置模板时生效）。"""
+        from botler.config import DEFAULT_TEMPLATE
+        assert "glab api user" in DEFAULT_TEMPLATE
+        assert "PRIVATE-TOKEN" in DEFAULT_TEMPLATE
+        assert "glab auth status" in DEFAULT_TEMPLATE
+        assert "Invalid token provided" in DEFAULT_TEMPLATE

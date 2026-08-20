@@ -35,6 +35,22 @@ UNRESOLVABLE_PATTERNS = [
 ]
 _UNRESOLVABLE_RE = re.compile("|".join(UNRESOLVABLE_PATTERNS), re.IGNORECASE)
 
+# 明确「任务已终止/主动放弃」的表述（issue #403）：dsh/hermes 会话在
+# 环境/认证等前置校验失败后按「认证失效即终止」等约束主动终止时，最终回复
+# 会明确报告终止与未产出（如任务 #585 的「[PROGRESS] ... status=failed …
+# 任务已终止，未进行代码修改」），此前被 _dsh_result 误判为 success 并打
+# bot-done。命中按失败重试（环境可能变化、模板已修正），不静默成功。
+# 仅匹配第一人称/当前会话的终止信号与平台自有进度失败标记，避免误伤
+# 正常完成报告中对历史失败（如诊断「任务585已终止的原因」）的转述。
+ABORT_PATTERNS = [
+    r"\[PROGRESS\]\s*step=\d+\s+status=failed",   # 平台进度标记：明确失败里程碑
+    r"本会话终止",                                      # 模板 §1.1 阻塞 / 主动终止（第一人称）
+    r"终止本会话",                                      # 同上（语序变体）
+    r"本任务已终止",                                    # 当前任务主动终止（第一人称）
+    r"任务已终止，未进行代码修改",                        # 终止 + 无产出（任务585原文）
+]
+_ABORTED_RE = re.compile("|".join(ABORT_PATTERNS), re.IGNORECASE)
+
 # 「等待用户决策」提问信号（issue #67）：无人值守执行中 Claude 停在
 # 需要用户选择/回答的节点时，最终回复的结尾会出现选项型提问
 # （「请选择 A 或 B」「请回复 1 或 2」「请问……？」等）。任务完成汇报的
@@ -434,6 +450,8 @@ class ProcessMixin:
             return "failed"
         if self._is_unresolvable(final_response):
             return "unresolvable"
+        if self._is_aborted(final_response):
+            return "failed"
         return "success"
     def _hermes_resume_data(self, raw: str | None) -> tuple[list | None, str | None]:
         """解析任务落库的 hermes_history（{"session_id", "messages"} JSON）。
@@ -982,6 +1000,8 @@ class ProcessMixin:
             return "failed"
         if self._is_unresolvable(final_response):
             return "unresolvable"
+        if self._is_aborted(final_response):
+            return "failed"
         return "success"
     def _dsh_collision(self, output: str) -> bool:
         """识别 SDK 会话 id collision（issue #291）：结果行 error 且输出含
@@ -1135,6 +1155,16 @@ class ProcessMixin:
         return False
     def _is_unresolvable(self, output: str) -> bool:
         return bool(_UNRESOLVABLE_RE.search(output))
+    def _is_aborted(self, output: str) -> bool:
+        """最终回复是否明确报告「任务已终止/主动放弃」（issue #403）。
+
+        用于 dsh/hermes 结果判定：会话正常结束（finish_reason=completed）
+        但 final_response 明确报告终止且无产出（认证/环境类前置失败后按
+        「认证失效即终止」约束主动终止，或模板 §1.1 阻塞流程）时，不得判
+        success——此前任务 #585 因 glab auth status 误报 + GITLAB_TOKEN
+        被 dsh 运行时过滤而终止，却被平台误标成功并打 bot-done。
+        """
+        return bool(_ABORTED_RE.search(output))
     def _result_text(self, output: str) -> str:
         """提取引擎最终回复文本（claude result 行 / hermes final_response）。
 

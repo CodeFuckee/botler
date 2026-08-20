@@ -1279,3 +1279,66 @@ class TestDshCredentialsRelayFallback:
 """)
         ex = _mk_executor(tmp_path, config)
         assert ex._dsh_credentials(config.get()) == (None, None, None)
+
+
+class TestDshResultAbortDetection:
+    """issue #403：agent 明确报告任务终止/失败时不得判 success。
+
+    任务 #585（issue #402）的 dsh 会话在 step 1 因「GitLab API 认证失败」
+    （glab auth status 误报 Invalid token + GITLAB_TOKEN 被 dsh 运行时
+    过滤不可见）主动终止，final_response 明确报告「任务已终止，未进行代码
+    修改」，但 _dsh_result 仅看 finish_reason=completed + 非空回复即判
+    success，平台误打 bot-done。本类测试锁定失败信号识别。
+    """
+
+    def _out(self, final_response, finish_reason="completed", error=None,
+             session_id="s1"):
+        data = {"final_response": final_response,
+                "finish_reason": finish_reason,
+                "session_id": session_id}
+        if error:
+            data["error"] = error
+        return json.dumps(data, ensure_ascii=False)
+
+    def test_task585_abort_report_is_not_success(self, executor):
+        """任务585的真实失败报告（认证失败 + 任务已终止）→ 不得判 success。"""
+        final = ('[PROGRESS] step=1 status=failed desc="仓库路径与主分支校验'
+                 '通过，但 GitLab API 认证失败" evidence="GITLAB_TOKEN 未设置，'
+                 'glab auth status 报 Invalid token provided"任务已终止，未进行'
+                 '代码修改。\n\n原因：\n- 但 GitLab API 认证失败：`glab auth '
+                 'status` 报告 `Invalid token provided`\n- 环境变量 '
+                 '`GITLAB_TOKEN` 未设置\n\n根据认证失效即终止的约束，未读取 '
+                 'Issue、未编写代码、未提交或推送任何改动，也未调用 Issue 关闭接口。')
+        result = executor._dsh_result(self._out(final))
+        assert result != "success"
+        assert result == "failed"  # 认证/环境类失败 → 可重试
+
+    def test_progress_failed_marker_is_failure(self, executor):
+        """[PROGRESS] ... status=failed 里程碑标记 → 判失败。"""
+        final = ('[PROGRESS] step=2 status=failed desc="定位根因失败" '
+                 'evidence="测试未通过"\n任务终止。')
+        assert executor._dsh_result(self._out(final)) == "failed"
+
+    def test_terminated_without_changes_is_failure(self, executor):
+        """「任务已终止，未进行代码修改」→ 判失败。"""
+        final = '任务已终止，未进行代码修改。原因：环境异常。'
+        assert executor._dsh_result(self._out(final)) == "failed"
+
+    def test_blocked_session_terminated_is_failure(self, executor):
+        """模板 §1.1 阻塞流程的「本会话终止，不再继续处理」→ 判失败（不判成功）。"""
+        final = ('已评论缺失疑问，移除 in-progress，本会话终止，不再继续处理'
+                 '该任务，等待用户补充信息。')
+        assert executor._dsh_result(self._out(final)) == "failed"
+
+    def test_success_report_with_auth_word_is_not_false_positive(self, executor):
+        """正常完成报告中提及「认证失败」诊断不应误判失败。"""
+        final = ('已定位根因：认证失败源于 glab 1.36 对 4 段式 PAT 的误报，'
+                 '已修复并推送，测试全部通过，任务完成。')
+        assert executor._dsh_result(self._out(final)) == "success"
+
+    def test_hermes_abort_report_is_failure(self, executor):
+        """hermes 引擎同样识别任务终止失败报告。"""
+        final = '任务已终止，未进行代码修改。GitLab API 认证失败。'
+        out = json.dumps({"final_response": final, "session_id": "h1"},
+                         ensure_ascii=False)
+        assert executor._hermes_result(out) == "failed"
