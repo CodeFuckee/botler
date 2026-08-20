@@ -189,6 +189,22 @@ test('buildMergedTimeline：缺 created_at 不崩溃（按空串排最前）', (
   assert.deepEqual(out.map((n) => n.id), [1, 2], '缺 created_at 应排最前且不崩溃')
 })
 
+
+test('buildMergedTimeline：note 与 label 事件 id 跨序列相同，_key 唯一（issue #351 边界）', () => {
+  // GitLab notes 与 resource_label_events 的 id 是不同序列（各自全局自增），
+  // 合并时间线中可能出现相同 id——渲染 key 必须带来源前缀唯一（_key），
+  // 否则 React 复用错乱
+  const out = buildMergedTimeline([
+    { id: 5, body: '评论', system: false, created_at: '2026-08-15 10:00:00' },
+  ], [
+    { id: 5, action: 'add', label: 'feature', created_at: '2026-08-15 11:00:00' },
+  ])
+  assert.equal(out.length, 2, 'id 相同的 note 与 label 事件都应保留')
+  const keys = out.map((n) => n._key)
+  assert.equal(new Set(keys).size, 2, '渲染 key 应唯一，不因跨序列 id 相同而冲突')
+  assert.deepEqual([...keys].sort(), ['label-5', 'note-5'], 'key 应带来源前缀（note-/label-）保证唯一')
+})
+
 test('loadTimelineEnabled：默认关闭，仅显式 1 开启', () => {
   assert.equal(loadTimelineEnabled(null), false, '无存储环境应兜底关闭')
   assert.equal(loadTimelineEnabled(undefined), false, 'undefined 存储应兜底关闭')
@@ -395,6 +411,32 @@ test('开启后：标记活动并入时间线按时间交错（issue #351）', a
 test('开启后：空 notes 与空标记活动显示「暂无评论、活动与标记活动」占位（issue #351）', async () => {
   const { root } = await renderDrawer(OPEN_ISSUE, [], memStorage({ [TIMELINE_STORAGE_KEY]: '1' }))
   assert.ok(drawerText(root).includes('暂无评论、活动与标记活动'), '空时间线应显示合并占位文案')
+})
+
+
+test('开启后：note 与 label 事件 id 相同时时间线正常渲染不冲突（issue #351 边界）', async () => {
+  // GitLab notes 与 resource_label_events 的 id 是不同序列，跨序列可能
+  // 出现相同 id（如这里评论 id=201 与标记事件 id=201 相同）——渲染 key
+  // 必须唯一（_key），否则 React key 冲突导致节点复用错乱
+  const LABEL_EVENT_SAME_ID = {
+    id: 201, action: 'add', label: 'feature',
+    user: { name: 'code01', username: 'code01' },
+    created_at: '2026-08-15 11:00:00',
+  }
+  const { root } = await renderDrawer(OPEN_ISSUE, [COMMENT_1],
+    memStorage({ [TIMELINE_STORAGE_KEY]: '1' }),
+    async (pathname) => {
+      if (pathname === `/api/issues/${OPEN_ISSUE.project_id}/${OPEN_ISSUE.iid}/detail`) {
+        return { notes: [COMMENT_1], label_events: [LABEL_EVENT_SAME_ID] }
+      }
+      throw new Error('unexpected ' + pathname)
+    })
+  const items = findByClass(root, 'timeline-item').map((n) => toText(n))
+  assert.equal(items.length, 2, 'id 相同的评论与标记事件应渲染两条')
+  assert.ok(items[0].includes('确认'), '第 1 条应为 10:00 评论')
+  assert.ok(items[1].includes('code01 添加了标记 feature'), '第 2 条应为 11:00 标记活动')
+  assert.equal(findByClass(root, 'timeline-comment').length, 1, '评论节点应渲染')
+  assert.equal(findByClass(root, 'timeline-label-event').length, 1, '标记事件节点应渲染')
 })
 
 test('开启后：加载中/加载失败重试/缺 project_id 兜底', async () => {

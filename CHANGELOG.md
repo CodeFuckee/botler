@@ -80,6 +80,24 @@
 
 ### Fixed
 
+- **合并时间线模式：评论/活动与标记活动 id 跨序列相同时渲染 key 冲突修复（issue #351）**：
+  合并时间线（issue #342/#351）把评论/活动（GitLab notes）与标记活动
+  （resource_label_events）按时间交错为一条时间线，但 notes 与 label_events
+  的 id 是 GitLab 两个**独立自增序列**——跨序列数值可能相同（本项目实测
+  note id 已达 3600+、label event id 2200+，序列持续增长必然相交），时间线
+  列表以 id 作 React key 时触发 `Encountered two children with the same key`
+  冲突，节点可能被复用/错乱。本次修复：
+  - **前端**：`src/lib/notesTimeline.js` 的 `buildMergedTimeline` 为每条
+    条目标注唯一 `_key`（notes → `note-{id}`、label_events → `label-{id}`，
+    带来源前缀保证跨序列唯一）；IssueDrawer 评论/活动/标记活动时间线节点的
+    React key 优先取 `_key`（分开显示模式无 `_key` 时回退原 id 逻辑，行为
+    不变）；
+  - **测试**：`frontend/tests/overview-issue-timeline.test.mjs` 新增 2 例——
+    `buildMergedTimeline` 输入 id 相同的 note 与 label 事件时两条均保留且
+    `_key` 唯一（`note-5`/`label-5`）；渲染 id 相同的评论与标记事件时两条均
+    正常显示、不再触发重复 key 警告；前端全量测试 1535 例、后端 2868 例全部
+    通过，无 regression。
+
 - **CI backend:test 并行测试文件描述符耗尽修复（issue #360）**：
   并发 worker 下部分用例泄漏的 sqlite 连接（ResourceWarning: unclosed database）
   累积占用 fd，超过进程 ulimit 后触发 `OSError: [Errno 24] Too many open files`

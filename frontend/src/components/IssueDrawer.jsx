@@ -729,7 +729,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 时间线='timeline-item timeline-comment'）
   function renderCommentItem(n, cls) {
     return (
-      <li key={n.id} className={cls}>
+      <li key={n._key || n.id} className={cls}>
         <div className="comment-head">
           <NoteAvatar note={n} />
           <span className="comment-author">{noteAuthorName(n)}</span>
@@ -782,7 +782,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 传 false），避免与「•」重复
   function renderActivityItem(n, cls, showDot = true) {
     return (
-      <li key={n.id} className={cls}>
+      <li key={n._key || n.id} className={cls}>
         {showDot && <span className="activity-dot" title="系统活动">•</span>}
         <span className="activity-text">
           {n.body ? linkifyCommits(n.body, projectUrl, `act${n.id}-`)
@@ -819,7 +819,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // action/缺标记名逐项兜底，不崩溃
   function renderLabelEventTimelineItem(e, cls) {
     return (
-      <li key={e.id} className={cls}>
+      <li key={e._key || e.id} className={cls}>
         <span className="activity-text" title="标记变更事件">
           {labelEventText(e)}
         </span>

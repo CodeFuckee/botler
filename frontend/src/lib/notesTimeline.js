@@ -55,17 +55,21 @@ export function buildTimeline(notes) {
  *  谁添加/移除了哪个标记）按 created_at 升序交错为一条时间线（排序规则
  *  与 buildTimeline 完全一致：同一时刻按 id 升序、异常元素防御性跳过、
  *  缺 created_at 按空串排最前）；每条统一标注 _kind（comment / activity
- *  / label）供渲染方区分条目类型，不因坏数据崩溃。 */
+ *  / label）供渲染方区分条目类型，另标注唯一 _key——GitLab notes 与
+ *  resource_label_events 的 id 是不同自增序列，跨序列可能相同，渲染 key
+ *  必须带来源前缀（note-/label-）保证唯一，避免 React 节点复用错乱；
+ *  不因坏数据崩溃。 */
 export function buildMergedTimeline(notes, labelEvents) {
   const items = []
   for (const n of (notes || [])) {
     if (n && typeof n === 'object' && typeof n.id === 'number') {
-      items.push({ ...n, _kind: n.system ? 'activity' : 'comment' })
+      items.push({ ...n, _kind: n.system ? 'activity' : 'comment',
+                   _key: `note-${n.id}` })
     }
   }
   for (const e of (labelEvents || [])) {
     if (e && typeof e === 'object' && typeof e.id === 'number') {
-      items.push({ ...e, _kind: 'label' })
+      items.push({ ...e, _kind: 'label', _key: `label-${e.id}` })
     }
   }
   items.sort((a, b) => {
