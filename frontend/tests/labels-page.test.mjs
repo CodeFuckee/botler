@@ -108,8 +108,16 @@ function treeText(renderer) {
 }
 
 function syncBtns(renderer) {
+  // 单标签「同步到所有仓库」按钮：title 形如「同步「xxx」到所有已添加仓库」，
+  // 与「一键同步全部」（issue #358）按钮区分开
   return renderer.root.findAll((n) => n.type === 'button'
-    && String(n.props.title || '').includes('所有已添加仓库'))
+    && String(n.props.title || '').startsWith('同步「'))
+}
+
+function allSyncBtn(renderer) {
+  // 「一键同步全部」按钮（issue #358）：按固定 title 查找（请求中文本会变「同步中…」）
+  return renderer.root.findAll((n) => n.type === 'button'
+    && String(n.props.title || '').includes('一键同步全部'))[0]
 }
 
 async function renderLabels({ labels = LABELS_DATA } = {}) {
@@ -137,7 +145,11 @@ test('默认标签提供「同步到所有仓库」按钮（issue #307）', () =
     /api\.post\(`\/api\/labels\/\$\{encodeURIComponent\(label\.name\)\}\/sync`\)/,
     '点击后应调 POST /api/labels/{name}/sync',
   )
-  assert.match(labels, /disabled=\{syncing !== null\}/, '同步请求中应禁用按钮')
+  assert.match(
+    labels,
+    /disabled=\{syncing !== null \|\| syncingAll\}/,
+    '同步请求中（单标签或一键同步全部）应禁用按钮',
+  )
   assert.match(labels, /同步中…/, '请求中应显示「同步中…」')
   assert.match(labels, /包括启用和未启用的|含启用与未启用的/, '应说明同步范围含启用与未启用仓库')
 })
@@ -206,5 +218,109 @@ test('同步请求中按钮禁用并显示「同步中…」', async () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
   })
   assert.equal(syncBtns(renderer)[0].props.disabled, true, '请求中按钮应禁用')
+  assert.match(treeText(renderer), /同步中…/, '请求中应显示「同步中…」')
+})
+
+// ---- 一键同步全部默认标签（issue #358） ----
+
+test('页面提供「一键同步全部」按钮（issue #358）', () => {
+  assert.match(labels, /一键同步全部/, '应有「一键同步全部」按钮文案')
+  assert.match(
+    labels,
+    /api\.post\('\/api\/labels\/sync-all'\)/,
+    '点击后应调 POST /api/labels/sync-all',
+  )
+  assert.match(labels, /syncingAll/, '应有 syncingAll 状态')
+  assert.match(labels, /同步全部中…|同步中…/, '请求中应显示同步中提示')
+})
+
+test('后端提供 POST /api/labels/sync-all 接口（issue #358）', () => {
+  assert.match(apiLabels, /@router\.post\("\/sync-all"\)/, '应有 POST /api/labels/sync-all')
+  assert.match(apiLabels, /DEFAULT_LABELS/, '应遍历内置默认清单')
+  assert.match(apiLabels, /list_repos\(\)/, '应遍历全部已添加仓库（含启用与未启用）')
+  assert.match(apiLabels, /build_repo_client/, '应优先使用 per-repo client')
+  assert.match(apiLabels, /total_created/, '响应应含全局新建统计')
+  assert.match(apiLabels, /total_failed/, '响应应含全局失败统计')
+})
+
+test('渲染：「一键同步全部」按钮出现在默认标签卡片', async () => {
+  const { renderer, renderError } = await renderLabels()
+  assert.equal(renderError, null, String(renderError || ''))
+  assert.ok(allSyncBtn(renderer), '应有一个「一键同步全部」按钮')
+})
+
+test('点击「一键同步全部」调用后端并展示汇总', async () => {
+  const { renderer } = await renderLabels()
+  const postCalls = []
+  mock.method(api, 'post', async (pathname) => {
+    postCalls.push(pathname)
+    if (pathname === '/api/labels/sync-all') {
+      return {
+        total_repos: 2,
+        total_created: 3,
+        total_already_exists: 25,
+        total_failed: 0,
+        labels: [
+          { label: 'bug', created: ['repo-a'], already_exists: ['repo-b'], failed: [] },
+        ],
+      }
+    }
+    throw new Error('unexpected ' + pathname)
+  })
+  const allBtn = allSyncBtn(renderer)
+  await TestRenderer.act(async () => {
+    allBtn.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  assert.deepEqual(postCalls, ['/api/labels/sync-all'], '应调用 sync-all 接口')
+  assert.match(treeText(renderer), /已同步全部/, '成功应显示同步汇总')
+  assert.match(treeText(renderer), /新建 3 个/, '应显示新建数量')
+  assert.match(treeText(renderer), /已存在 25 个/, '应显示已存在数量')
+})
+
+test('「一键同步全部」部分失败展示失败明细', async () => {
+  const { renderer } = await renderLabels()
+  mock.method(api, 'post', async () => ({
+    total_repos: 2,
+    total_created: 2,
+    total_already_exists: 24,
+    total_failed: 2,
+    labels: [
+      { label: 'bug', created: [], already_exists: [], failed: [{ repo: 'repo-b', error: '权限不足' }] },
+    ],
+  }))
+  const allBtn = allSyncBtn(renderer)
+  await TestRenderer.act(async () => {
+    allBtn.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  assert.match(treeText(renderer), /失败 2 个/, '应显示失败数量')
+  assert.match(treeText(renderer), /repo-b/, '应展示失败仓库')
+})
+
+test('「一键同步全部」失败展示错误信息', async () => {
+  const { renderer } = await renderLabels()
+  mock.method(api, 'post', async () => {
+    throw new Error('GitLab API 错误 500: 内部错误')
+  })
+  const allBtn = allSyncBtn(renderer)
+  await TestRenderer.act(async () => {
+    allBtn.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  assert.match(treeText(renderer), /同步全部失败|一键同步失败/, '应展示失败提示')
+  assert.match(treeText(renderer), /500/, '应透传后端错误详情')
+})
+
+test('「一键同步全部」请求中禁用并显示同步中', async () => {
+  const { renderer } = await renderLabels()
+  mock.method(api, 'post', async () => new Promise(() => {}))
+  const allBtn = allSyncBtn(renderer)
+  await TestRenderer.act(async () => {
+    allBtn.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  const btnAfter = allSyncBtn(renderer)
+  assert.equal(btnAfter.props.disabled, true, '请求中按钮应禁用')
   assert.match(treeText(renderer), /同步中…/, '请求中应显示「同步中…」')
 })

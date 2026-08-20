@@ -8,6 +8,9 @@ import { Icon } from '../components/Icon.jsx'
 // issue #307：每个默认标签提供「同步到所有仓库」按钮，点击后经
 // POST /api/labels/{name}/sync 把该默认标签一键补齐到全部已添加仓库
 // （含启用与未启用的），只创建缺失、不覆盖已有颜色/描述。
+// issue #358：默认标签卡片新增「一键同步全部」按钮，经
+// POST /api/labels/sync-all 一次性把全部默认标签同步到所有已添加仓库，
+// 语义与单标签同步一致，自定义标签不参与。
 export default function Labels() {
   const [data, setData] = useState(null) // {default, custom}
   const [error, setError] = useState('')
@@ -16,6 +19,7 @@ export default function Labels() {
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
   const [syncingName, setSyncingName] = useState(null) // 正在同步的默认标签名
+  const [syncingAll, setSyncingAll] = useState(false) // 一键同步全部进行中（issue #358）
   const [note, setNote] = useState(null) // {ok, text}
 
   const load = async () => {
@@ -65,6 +69,30 @@ export default function Labels() {
     } finally { setSyncingName(null) }
   }
 
+  // 一键同步全部默认标签到所有已添加仓库（issue #358）：
+  // 一次调用 POST /api/labels/sync-all，服务端批量遍历内置默认清单，
+  // 每个标签按 issue #307 语义同步（缺失创建、已存在不覆盖、尽力而为）。
+  const syncAll = async () => {
+    setSyncingAll(true); setNote(null); setError('')
+    try {
+      const res = await api.post('/api/labels/sync-all')
+      const created = res.total_created ?? 0
+      const exists = res.total_already_exists ?? 0
+      const failed = res.total_failed ?? 0
+      let text = `已同步全部默认标签到 ${res.total_repos ?? 0} 个仓库：新建 ${created} 个、已存在 ${exists} 个`
+      if (failed) {
+        // 汇总失败仓库（去重，保持出现顺序）
+        const failedRepos = [...new Set(
+          (res.labels || []).flatMap((l) => (l.failed || []).map((f) => f.repo)),
+        )]
+        text += `、失败 ${failed} 个（${failedRepos.join('、')}）`
+      }
+      setNote({ ok: failed === 0, text })
+    } catch (e) {
+      setNote({ ok: false, text: `一键同步全部失败：${e.message}` })
+    } finally { setSyncingAll(false) }
+  }
+
   const LabelChip = ({ label, removable, onRemove, onSync, syncing }) => (
     <li className="label-chip">
       <span className="label-color" style={{ background: label.color || '#6699cc' }} />
@@ -79,7 +107,7 @@ export default function Labels() {
               className="btn btn-small"
               title={`同步「${label.name}」到所有已添加仓库`}
               onClick={() => onSync(label)}
-              disabled={syncing !== null}
+              disabled={syncing !== null || syncingAll}
             >
               {syncing === label.name ? '同步中…' : '同步到所有仓库'}
             </button>
@@ -132,7 +160,17 @@ export default function Labels() {
       </div>
 
       <div className="card">
-        <h2>默认标签（{data?.default?.length ?? '…'} 个，内置不可删除）</h2>
+        <div className="card-title-row">
+          <h2>默认标签（{data?.default?.length ?? '…'} 个，内置不可删除）</h2>
+          <button
+            className="btn btn-primary btn-small"
+            title="一键同步全部默认标签到所有已添加仓库（含启用与未启用的）"
+            onClick={syncAll}
+            disabled={syncingAll || syncingName !== null}
+          >
+            {syncingAll ? '同步中…' : '一键同步全部'}
+          </button>
+        </div>
         <p className="muted small">
           点击「同步到所有仓库」将该默认标签自动同步到已添加的全部仓库（包括启用和未启用的），
           目标仓库缺失该标签时创建，已存在则不覆盖。

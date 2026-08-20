@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 ### Added
+- **标记库页新增「一键同步全部」按钮，一次性把全部默认标签同步到所有仓库（issue #358）**：
+  此前标记库页每个默认标签需逐个点击「同步到所有仓库」（issue #307），新规范/新标签
+  较多时操作繁琐。本次新增页面级「一键同步全部」按钮，一次点击把内置默认清单的
+  **全部默认标签**同步到平台已添加的**全部仓库（含启用与未启用的，软删除除外）**：
+  - **后端**：`backend/botler/api/labels.py` 新增 `POST /api/labels/sync-all`——
+    抽取单标签同步核心逻辑为 `_sync_label_to_repos()`（issue #307 单标签接口
+    同步复用，不重复实现），批量遍历 `DEFAULT_LABELS` 逐标签执行；每个标签的
+    语义与单标签同步完全一致（目标仓库缺失才创建、已存在不覆盖、单仓库失败
+    尽力而为不中断）；身份 per-repo client（仓库 remote URL 内嵌 token）优先、
+    无 token 回退全局 bot token；返回 `{total_repos, labels, total_created,
+    total_already_exists, total_failed}`（labels 按标签分组给出
+    created/already_exists/failed 明细）；
+  - **前端**：`frontend/src/pages/Labels.jsx` 默认标签卡片标题行新增「一键同步全部」
+    按钮（`styles.css` 新增 `.card-title-row` 标题与按钮并排样式），请求中禁用并
+    显示「同步中…」，完成后展示汇总（新建/已存在/失败数量与失败仓库明细），
+    一键同步进行中同时禁用单标签同步按钮（互斥防并发）；
+  - **测试**：`backend/tests/test_api_labels.py` 新增 `TestSyncAllLabels` 6 例
+    （启用+未启用仓库全部补齐 / 已存在跳过不覆盖 / 混合仓库 / 无仓库空跑 /
+    单仓库失败不中断 / per-repo client 优先）；`frontend/tests/labels-page.
+    test.mjs` 新增 7 例（按钮渲染 / 点击调 sync-all 与汇总展示 / 部分失败明细 /
+    失败错误透传 / 请求中禁用），全量测试无 regression。
 - **概览页 issue 详情右边栏：合并时间线模式下标记活动并入时间线（issue #351）**：
   开启「合并显示评论与活动（时间线）」开关（issue #342）后，评论与活动已按
   时间交错为一条时间线，但标记活动（issue #349 新增的「谁添加/移除了哪个

@@ -759,6 +759,7 @@ POST   /api/repos/{id}/sync-logo   仓库管理页「同步到 GitLab」按钮�
 POST   /api/repos/{id}/sync-logo-from-gitlab 仓库管理页「从 GitLab 同步」按钮（issue #320）：把 GitLab 项目当前图标（头像）同步回仓库设置页——经 GitLab API GET /projects/{id} 取 avatar_url、GET /projects/{id}/avatar 下载图标字节（uploads 直链需会话鉴权，不能直接用 avatar_url 下载），落盘 LOGO_DIR 并写 repos 表 logo_path / logo_updated_at / logo_mime，仓库列表最左侧即展示 GitLab 图标（可放大/下载/继续「同步到 GitLab」回写，双向同步闭环）；GitLab 侧未设置图标返回 400 引导先去 GitLab 上传；身份复用 issue 创建链路（仓库 remote URL 内嵌 token 优先，无 token 回退全局 bot token）
 POST   /api/repos/{id}/remote-user
 POST   /api/labels/{name}/sync 标记库页默认标签「同步到所有仓库」按钮（issue #307）：把该默认标签一键同步到已添加的全部仓库（**含启用与未启用的**）——目标项目缺失才创建、已存在不覆盖；身份 per-repo client（仓库 remote URL 内嵌 token）优先、无 token 回退全局 bot token；返回 {label, total_repos, created, already_exists, failed}
+POST   /api/labels/sync-all  标记库页「一键同步全部」按钮（issue #358）：一次调用把**全部默认标签**同步到已添加的全部仓库（**含启用与未启用的**）——每个标签的语义与单标签同步（issue #307）一致（缺失才创建、已存在不覆盖、单仓库失败尽力而为）；身份 per-repo client 优先、无 token 回退全局 bot token；返回 {total_repos, labels, total_created, total_already_exists, total_failed}
    读取仓库 remote url 获取仓库用户（remote url userinfo 用户名，如 https://user:token@host/... 的 user；读取顺序：local_path 的 git remote → workspace 克隆 → 存储 url；结果落库并作为灵感「添加 Issue」的默认分配人，issue #153）
 GET/PUT /api/repos/{id}/template      仓库模版
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）

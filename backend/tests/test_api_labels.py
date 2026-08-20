@@ -278,3 +278,148 @@ class TestSyncDefaultLabel:
         assert {c["project_id"] for c in per_repo.created_labels} == {11, 22}
         # 全局 stub 未被用于创建标签
         assert stub.created_labels == []
+
+
+class TestSyncAllLabels:
+    """一键同步全部默认标签到所有已添加仓库（issue #358）。
+
+    需求：标记库页增加一键同步按钮，把所有默认标签一次性同步到已添加的
+    全部仓库（含启用与未启用的）。语义与单标签同步（issue #307）一致：
+    缺失才创建、已存在不覆盖、单仓库/单标签失败尽力而为不中断。
+
+    覆盖：启用+未启用仓库全部补齐 / 已存在跳过 / 混合场景 / 无仓库空跑 /
+    单仓库失败不中断 / per-repo client 优先 / 响应结构完整。
+    """
+
+    @staticmethod
+    def _add_repos(db, *specs):
+        for project_id, name, enabled in specs:
+            db.upsert_repo(
+                project_id=project_id, name=name, enabled=enabled,
+                url=f"https://gitlab.example.com/group/{name}.git")
+
+    def test_sync_all_creates_all_default_labels_in_all_repos(self, sync_client):
+        """启用与未启用仓库都补齐全部默认标签（颜色/描述与规范一致）。"""
+        api, _, db, stub, _ = sync_client
+        self._add_repos(db, (11, "repo-a", True), (22, "repo-b", False))
+        r = api.post("/api/labels/sync-all")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total_repos"] == 2
+        assert len(data["labels"]) == len(DEFAULT_LABELS)
+        # 每个默认标签都出现在结果里
+        names = {item["label"] for item in data["labels"]}
+        assert names == {l["name"] for l in DEFAULT_LABELS}
+        # 14 个标签 × 2 仓库全部创建
+        assert data["total_created"] == len(DEFAULT_LABELS) * 2
+        assert data["total_already_exists"] == 0
+        assert data["total_failed"] == 0
+        assert all(item["failed"] == [] for item in data["labels"])
+        # 每个仓库都收到全部默认标签，且颜色/描述与规范一致
+        per_repo = {pid: [] for pid in (11, 22)}
+        for created in stub.created_labels:
+            per_repo[created["project_id"]].append(created["name"])
+        assert sorted(per_repo[11]) == sorted(l["name"] for l in DEFAULT_LABELS)
+        assert sorted(per_repo[22]) == sorted(l["name"] for l in DEFAULT_LABELS)
+        spec_by_name = {l["name"]: l for l in DEFAULT_LABELS}
+        for created in stub.created_labels:
+            spec = spec_by_name[created["name"]]
+            assert created["color"] == spec["color"]
+            assert created["description"] == spec["description"]
+
+    def test_sync_all_skips_existing_labels(self, sync_client):
+        """远端已存在某标签 → 跳过不覆盖（保留用户已有的颜色/描述）。"""
+        api, _, db, stub, _ = sync_client
+        self._add_repos(db, (11, "repo-a", True), (22, "repo-b", False))
+        stub.existing_labels = [
+            {"name": "bug", "color": "#000000", "description": "用户自定义"},
+            {"name": "feature", "color": "#111111", "description": "用户自定义"}]
+        r = api.post("/api/labels/sync-all")
+        assert r.status_code == 200
+        data = r.json()
+        # 2 个标签已存在 × 2 仓库 = 4 次跳过
+        assert data["total_already_exists"] == 4
+        assert data["total_created"] == (len(DEFAULT_LABELS) - 2) * 2
+        assert data["total_failed"] == 0
+        # 跳过的标签没有 create 调用
+        assert not any(c["name"] in {"bug", "feature"} for c in stub.created_labels)
+
+    def test_sync_all_mixed_repos(self, sync_client):
+        """仓库 A 全缺失、仓库 B 已存在部分 → 各自按缺失创建。"""
+        api, _, db, stub, _ = sync_client
+        self._add_repos(db, (11, "repo-a", True), (22, "repo-b", True))
+
+        def list_by_project(project_id):
+            # 仅仓库 B（22）已存在 bug，仓库 A 全缺失
+            return [{"name": "bug", "color": "#000000"}] if project_id == 22 else []
+
+        stub.list_project_labels = list_by_project
+        r = api.post("/api/labels/sync-all")
+        data = r.json()
+        assert data["total_created"] == len(DEFAULT_LABELS) * 2 - 1  # 仅 repo-b 跳过 bug
+        assert data["total_already_exists"] == 1  # bug 只在 repo-b 跳过
+        assert data["total_failed"] == 0
+        # repo-b（22）没有创建 bug
+        assert not any(c["name"] == "bug" and c["project_id"] == 22
+                       for c in stub.created_labels)
+        # repo-a（11）创建了 bug
+        assert any(c["name"] == "bug" and c["project_id"] == 11
+                   for c in stub.created_labels)
+
+    def test_sync_all_with_no_repos(self, sync_client):
+        """未添加任何仓库 → 200 空跑：total_repos=0、每个标签结果为空条目
+        （与单标签同步接口在无仓库时返回完整结构的一致契约）。"""
+        api, _, _, _, _ = sync_client
+        r = api.post("/api/labels/sync-all")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total_repos"] == 0
+        # 每个默认标签都有结果条目，且全部为空
+        assert len(data["labels"]) == len(DEFAULT_LABELS)
+        assert all(item["created"] == [] and item["already_exists"] == []
+                   and item["failed"] == [] for item in data["labels"])
+        assert data["total_created"] == 0
+        assert data["total_already_exists"] == 0
+        assert data["total_failed"] == 0
+
+    def test_sync_all_best_effort_on_repo_failure(self, sync_client):
+        """单仓库失败（GitLab 报错）→ 记入该仓库每个标签的 failed，其余仓库照常。"""
+        api, _, db, stub, _ = sync_client
+        self._add_repos(db, (11, "repo-a", True), (22, "repo-b", True))
+        original = stub.list_project_labels
+
+        def failing_list(project_id):
+            if project_id == 22:
+                raise GitLabError("权限不足", 403)
+            return original(project_id)
+
+        stub.list_project_labels = failing_list
+        r = api.post("/api/labels/sync-all")
+        assert r.status_code == 200
+        data = r.json()
+        # 仓库 A 全部创建，仓库 B 每个标签失败
+        assert data["total_created"] == len(DEFAULT_LABELS)
+        assert data["total_failed"] == len(DEFAULT_LABELS)
+        assert all(len(item["failed"]) == 1 for item in data["labels"])
+        assert all(item["failed"][0]["repo"] == "repo-b" for item in data["labels"])
+        assert all("权限不足" in item["failed"][0]["error"] for item in data["labels"])
+        # 失败的标签在仓库 A 仍然创建成功
+        assert {c["project_id"] for c in stub.created_labels} == {11}
+
+    def test_sync_all_uses_per_repo_client_when_available(self, sync_client, monkeypatch):
+        """仓库 remote url 内嵌 token 时优先用 per-repo client（身份链路 issue #307/#358）。"""
+        api, _, db, stub, _ = sync_client
+        self._add_repos(db, (11, "repo-a", True), (22, "repo-b", False))
+        from botler import git_remote
+
+        per_repo = StubGitLab()
+        monkeypatch.setattr(
+            git_remote, "build_repo_client",
+            lambda row, verify_ssl=True: per_repo)
+        r = api.post("/api/labels/sync-all")
+        assert r.status_code == 200
+        # 全部创建走 per-repo client
+        assert len(per_repo.created_labels) == len(DEFAULT_LABELS) * 2
+        assert {c["project_id"] for c in per_repo.created_labels} == {11, 22}
+        # 全局 stub 未被用于创建标签
+        assert stub.created_labels == []

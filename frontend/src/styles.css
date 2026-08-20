@@ -657,6 +657,17 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   padding: var(--gutter);
   margin-bottom: var(--space-4);
 }
+/* 卡片标题与操作按钮并排（issue #358：标记库「一键同步全部」按钮） */
+.card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.card-title-row h2 {
+  margin: 0;
+}
 
 
 /* ---- 设置页左侧导航栏（issue #139 / issue #168）----

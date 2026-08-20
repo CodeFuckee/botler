@@ -71,3 +71,9 @@ Botler 平台「标记库」页（Web UI）为每个**默认标签**提供「同
   已存在的不覆盖（保留用户已有的颜色/描述）；
 - 身份：per-repo client（仓库 remote URL 内嵌 token）优先，无 token 回退全局 bot token；
 - 单仓库失败为尽力而为：不中断其余仓库，失败明细随响应 `failed` 返回，前端提示展示。
+
+**一键同步全部（issue #358）**：默认标签卡片新增「一键同步全部」按钮，一次调用
+`POST /api/labels/sync-all` 把**全部默认标签**同步到所有已添加仓库——逐标签复用
+单标签同步语义（缺失才创建、已存在不覆盖、单仓库失败尽力而为），响应按标签分组
+返回明细 `{total_repos, labels, total_created, total_already_exists, total_failed}`；
+自定义标签不参与（与 issue #307 一致，自定义标签为个性化配置，不全局同步）。
