@@ -5,6 +5,21 @@
 ## [Unreleased]
 
 ### Added
+- **左侧边栏全局搜索框宽度与下方导航项对齐（issue #354）**：
+  此前 `.sidebar-search` 基础规则为 `width: calc(100% - 24px)` 且
+  `margin: 12px 12px 4px`——左右各内缩 12px；而导航项 `.navlink` 为
+  `width: 100%`（box-sizing: border-box，左右边缘与侧边栏内容区齐平），
+  导致搜索框比下方导航项左右各窄 12px、未对齐。本次修复：
+  - **前端样式**：`frontend/src/styles.css` 中 `.sidebar-search` 基础规则
+    改为 `width: 100%; margin: 12px 0 4px;`——左右边缘与导航项完全对齐，
+    仅保留上下间距；桌面折叠态（min-width:861px 内 36px 图标窄条，
+    issue #346）与竖屏抽屉继承全宽行为均不受影响；
+  - **测试**：新增 `frontend/tests/sidebar-search-align.test.mjs` 5 例
+    （搜索框 width 100%、左右 margin 为 0、导航项对齐基准 width 100%、
+    折叠态 36px 不受影响、竖屏无宽度覆盖），并同步更新
+    `frontend/tests/responsive-sidebar-search.test.mjs`（issue #346 回归
+    断言由 `calc(100% - 24px)` 更新为 `width: 100%`，竖屏全宽意图不变）；
+    前端全量测试 1533 例全部通过。
 - **标记库新增 `bot-issue` 默认标记，任务调度时带该标记的任务排在所有任务之后（issue #360）**：
   - **标记库**：`backend/botler/labels.py` 的 `DEFAULT_LABELS` 新增调度标签
     `bot-issue`（并导出常量 `BOT_ISSUE_LABEL`），同步更新 `docs/labels.md`

@@ -13,8 +13,9 @@
 // 断言（styles.css 源码级）：
 // 1. 折叠态 36px 规则位于 @media (min-width: 861px) 块内（竖屏不应用，
 //    否则被挤成竖线）；
-// 2. `.sidebar-search` 基础规则保持全宽（width: calc(100% - 24px)），
-//    竖屏抽屉内搜索入口自然继承全宽并文字靠左；
+// 2. `.sidebar-search` 基础规则保持全宽（width: 100%，issue #354 起与
+//    下方导航项左右边缘对齐，左右 margin 为 0），竖屏抽屉内搜索入口
+//    自然继承全宽并文字靠左；
 // 3. 桌面折叠态不受影响：min-width 块内仍为 36px 图标窄条
 //    （width:36px / justify-content:center），折叠偏好仅作用于桌面端。
 import { test } from 'node:test'
@@ -55,10 +56,11 @@ test('竖屏（≤860px）不应用折叠态 36px 竖条规则：该规则限定
   assert.match(m[1], /justify-content:\s*center/, '桌面折叠态图标居中')
 })
 
-test('竖屏抽屉内搜索入口继承全宽基础规则：.sidebar-search 保持 calc(100% - 24px)', () => {
+test('竖屏抽屉内搜索入口继承全宽基础规则：.sidebar-search 保持 width: 100%（issue #354 与导航项对齐）', () => {
   const m = styles.match(/\.sidebar-search\s*\{([^}]*)\}/)
   assert.ok(m, '应存在 .sidebar-search 基础规则')
-  assert.match(m[1], /width:\s*calc\(100%\s*-\s*24px\)/, '基础规则保持全宽（竖屏抽屉内搜索框不再被挤成竖线）')
+  assert.match(m[1], /width:\s*100%/, '基础规则保持全宽（竖屏抽屉内搜索框不再被挤成竖线）')
+  assert.doesNotMatch(m[1], /calc\(100%\s*-\s*24px\)/, 'issue #354：宽度为 100% 与导航项对齐，不再 calc(100% - 24px)')
   assert.match(m[1], /display:\s*flex/, '基础规则为 flex 布局')
   assert.match(m[1], /align-items:\s*center/, '基础规则垂直居中')
 })

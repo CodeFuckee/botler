@@ -5012,8 +5012,11 @@ body:has(.drawer-overlay) {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: calc(100% - 24px);
-  margin: 12px 12px 4px;
+  /* issue #354：宽度与下方导航项对齐——导航项 .navlink 为 width:100%
+     （box-sizing: border-box，左右边缘与侧边栏内容区齐平），搜索框改为
+     同宽且左右 margin 归零，左右边缘完全对齐；仅保留上下间距 */
+  width: 100%;
+  margin: 12px 0 4px;
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5031,7 +5034,7 @@ body:has(.drawer-overlay) {
    若此规则在 ≤860px 仍生效，桌面折叠过侧边栏（localStorage 持久化
    botler.navCollapsed）的用户在竖屏打开抽屉时搜索框被挤成一条竖线、
    两侧留出约 100px 空白——限制在 min-width:861px 后，竖屏搜索入口
-   自然继承 .sidebar-search 全宽基础规则（calc(100% - 24px)） */
+   自然继承 .sidebar-search 全宽基础规则（width: 100%，issue #354） */
 @media (min-width: 861px) {
   .sidebar.collapsed .sidebar-search { width: 36px; margin: 12px auto 4px; padding: 8px; justify-content: center; }
 }
