@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 ### Added
+- **任务失败自动创建 GitLab issue 上报（issue #347）**：
+  任务失败收尾时此前只在原 issue 留失败评论 + bot-failed 标签，失败详情
+  分散在各任务里，用户需要逐个点开排查。本次新增「失败自动上报」：任务
+  失败（重试耗尽 / 无法解决 / 等待用户决策等失败终态，统一发 task_failed
+  事件）时，自动在任务所属仓库的 GitLab 项目创建一个失败上报 issue——
+  标题写明失败任务 id，正文含失败原因 / 失败分类徽章与处理建议（issue
+  #274 联动）/ 原始 issue 链接 / 引擎 / 重试次数 / 失败时间 / 错误详情，
+  标签 `bug`（需求指定）+ `bot-failed`（防对账调度器把上报 issue 重新
+  领取，避免 失败→上报→再失败 死循环），负责人按配置指定（默认 agent）：
+  - **后端**：新增 notifier 插件 `botler.plugins.auto_issue`（issue #140
+    插件体系，监听 `task_failed` 事件经 `_emit_task_event` 分发），创建
+    走 `_call_with_fallback`（全局 token 失效自动用仓库 remote token 兜底）
+    + `_transient_retry`（issue #280 瞬时故障退避重试）；同一任务只上报
+    一次（任务日志落「已自动提交失败上报 issue」标记去重）；负责人解析
+    失败 / 仓库查询失败 / 缺 project_id 均降级不阻塞上报，创建失败抛
+    GitLabError（调用方统一容错，仅记日志不阻塞任务收尾）；
+  - **配置**：新增 `auto_issue` 段（`enabled` 默认 true / `assignee` 默认
+    `agent`），config.example.yaml 示例 + config.py 字段 + KNOWN_FIELDS /
+    SECTION_SCHEMAS 登记 + settings API GET/PUT（`_validate_auto_issue`
+    类型校验）；
+  - **前端**：设置页新增「任务失败自动上报」卡片（`AutoIssueCard`）——
+    启用开关 + 负责人输入 + 卡片内独立保存（与 Webhook 卡片 issue #141
+    同模式），设置页导航自动收录；
+  - **测试**：`backend/tests/test_auto_issue.py` 23 例（标题/正文纯函数：
+    任务 id、原始 issue 链接、分类徽章、超长标题截断 255 上限、缺失字段
+    兜底；插件行为：未启用跳过 / 创建含标签与负责人 / 负责人解析失败降级 /
+    同任务去重 / 缺 project_id 跳过 / 创建失败抛错；配置默认与往返；API
+    GET/PUT/非法类型 400；executor `_finish_failed` 集成分发），
+    `frontend/tests/settings-auto-issue-card.test.mjs` 7 例（卡片/hook/
+    页面/插件/API/config/示例段源码断言），全量测试无 regression。
 - **概览页流水线详情查看代码静态分析报告与测试报告（issue #337）**：
   概览页流水线详情右边栏（PipelineDrawer）此前仅展示阶段/任务与产物清单，
   报告内容需跳转 GitLab 页面查看。本次在抽屉内直接渲染解析后的报告内容

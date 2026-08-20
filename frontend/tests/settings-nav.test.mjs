@@ -68,6 +68,7 @@ function fakeSettingsContent() {
       section('settings-notifications', '网页通知'),
       section('settings-alerts', '聚合告警'),
       section('settings-webhook', '消息推送 Webhook'),
+      section('settings-auto-issue', '任务失败自动上报'),
       group('执行引擎'),
       section('settings-claude', 'Claude Code'),
       section('settings-dsh', 'dsh 引擎'),
@@ -171,7 +172,7 @@ test('owner-token 区块通过 data-nav-label 提供短导航名', () => {
 
 // ---------- collectSettingsGroups：从设置页读取结构 ----------
 
-test('collectSettingsGroups：从设置页 DOM 结构生成 6 组 17 项（含识图模型）', () => {
+test('collectSettingsGroups：从设置页 DOM 结构生成 6 组 18 项（含识图模型）', () => {
   const groups = collectSettingsGroups(fakeSettingsContent())
   assert.equal(groups.length, 6, '应有 6 个分组')
   assert.deepEqual(
@@ -179,7 +180,7 @@ test('collectSettingsGroups：从设置页 DOM 结构生成 6 组 17 项（含�
     ['外部服务接入', '系统设置', '执行引擎', '运维与数据', '账号与安全', '关于'],
   )
   const items = navIds(groups)
-  assert.equal(items.length, 17, '应有 17 个设置子项')
+  assert.equal(items.length, 18, '应有 18 个设置子项')
   // issue #155 回归点：必须包含「识图模型」子选项
   const vision = groups.flatMap((g) => g.items).find((it) => it.id === 'settings-vision-models')
   assert.ok(vision, '导航应包含识图模型子选项（settings-vision-models）')
@@ -296,7 +297,7 @@ test('渲染：默认展示全部分组与子项（含识图模型），分组�
       assert.ok(head, `应渲染分组头「${title}」`)
       assert.equal(head.props['aria-expanded'], true, `分组「${title}」默认应展开`)
     }
-    assert.equal(linkCount(root), 17, '应渲染 17 个子项链接')
+    assert.equal(linkCount(root), 18, '应渲染 18 个子项链接')
     const visionLink = root.findAll((n) => n.type === 'a' && n.props.href === '#settings-vision-models')
     assert.equal(visionLink.length, 1, '应有识图模型子项链接')
     assert.equal(deepText(visionLink[0]), '识图模型', '识图模型链接文本应为「识图模型」')
@@ -384,7 +385,7 @@ test('渲染：清空搜索恢复全部分组', () => {
     })
     const clear = root.find((n) => n.type === 'button' && n.props['aria-label'] === '清空搜索')
     TestRenderer.act(() => { clear.props.onClick() })
-    assert.equal(linkCount(root), 17, '清空搜索后应恢复全部分组子项')
+    assert.equal(linkCount(root), 18, '清空搜索后应恢复全部分组子项')
   } finally {
     TestRenderer.act(() => renderer.unmount())
     restore()
@@ -399,10 +400,10 @@ test('渲染：点击分组头折叠子项，再次点击展开', () => {
     const head = findButton(root, '外部服务接入')
     TestRenderer.act(() => { head.props.onClick() })
     assert.equal(head.props['aria-expanded'], false, '点击后分组应收起')
-    assert.equal(linkCount(root), 17 - 5, '收起「外部服务接入」后应少 5 个子项')
+    assert.equal(linkCount(root), 18 - 5, '收起「外部服务接入」后应少 5 个子项')
     TestRenderer.act(() => { head.props.onClick() })
     assert.equal(head.props['aria-expanded'], true, '再次点击后分组应展开')
-    assert.equal(linkCount(root), 17, '展开后应恢复 17 个子项')
+    assert.equal(linkCount(root), 18, '展开后应恢复 18 个子项')
   } finally {
     TestRenderer.act(() => renderer.unmount())
     restore()
@@ -419,7 +420,7 @@ test('渲染：「全部收起」后所有分组折叠，「全部展开」恢�
     const expandAll = findButton(root, '全部展开')
     assert.ok(expandAll, '全部收起后按钮应变为「全部展开」')
     TestRenderer.act(() => { expandAll.props.onClick() })
-    assert.equal(linkCount(root), 17, '全部展开后应恢复 17 个子项')
+    assert.equal(linkCount(root), 18, '全部展开后应恢复 18 个子项')
   } finally {
     TestRenderer.act(() => renderer.unmount())
     restore()

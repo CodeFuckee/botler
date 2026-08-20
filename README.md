@@ -56,6 +56,15 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 > 引擎。引擎级故障不再只能 bot-failed——换引擎即可解决，且不影响其他正常任务
 > （跨仓库并行不受影响）。
 
+> 💡 **任务失败自动上报**（issue #347）：任务失败收尾时（重试耗尽 / 无法解决 /
+> 等待用户决策等失败终态），平台自动在任务所属仓库的 GitLab 项目创建一个
+> 失败上报 issue——标题写明失败任务 id，正文含失败原因 / 失败分类徽章与处理
+> 建议 / 原始 issue 链接，标签 `bug` + `bot-failed`（bot-failed 防止对账
+> 调度器把上报 issue 重新领取，避免 失败→上报→再失败 死循环），负责人按
+> 设置页「任务失败自动上报」卡片配置（`auto_issue.assignee`，默认 `agent`）；
+> 同一任务只上报一次。用户集中看上报 issue 即可排查失败任务，无需逐个点开
+> 任务详情。
+
 > 💡 **断点续跑**（issue #8）：CI/CD 频繁重新部署时，执行中的任务被进程重启打断后
 > 不会从头重跑——executor 持久化 claude 会话 id，重启恢复时用 `claude --resume`
 > 接续上次会话且保留工作区改动，从上次中断处继续（会话文件丢失时自动降级全新会话）。
@@ -538,7 +547,7 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 |---|---|---|
 | `executor` | 任务执行引擎（`worker.engine` 选择） | `claude`（Claude Code CLI）/ `hermes`（hermes-agent SDK）/ `dsh`（deepseek-harness SDK） |
 | `model_provider` | 大模型 API 供应商（生图模型 provider 选择） | `gemini_nano_banana`（Gemini generateContent）/ `openai_gpt_image`（OpenAI images API） |
-| `notifier` | 任务消息发送通道（任务收尾自动分发） | `webhook`（外部 HTTP 推送，issue #136）/ `in_app`（网页通知，issue #21） |
+| `notifier` | 任务消息发送通道（任务收尾自动分发） | `webhook`（外部 HTTP 推送，issue #136）/ `in_app`（网页通知，issue #21）/ `auto_issue`（任务失败自动创建上报 issue，issue #347） |
 
 - **向后兼容**：现有 `config.yaml` 全部配置字段与默认行为不变，存量部署零迁移；
 - **外部扩展**：`worker.plugin_paths` 声明 Python 模块路径（模块内调用
@@ -649,7 +658,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 
 `backend/config.yaml` 是唯一事实来源，Web UI 是编辑它的外壳。直接编辑 config.yaml 的修改会被运行中的进程自动感知（检测文件变化后重载，无需重启；issue #25），且后续 Web UI 保存设置不会覆盖手动编辑的内容。凭据一律用 `${ENV_VAR}` 引用环境变量（`backend/.env`），不入库、不进日志、不进提示词。
 
-设置页设置项较多时，左侧导航栏按功能分组整理全部设置项（issue #139）——分组：外部服务接入（Synology SSO 登录 / AI API 供应商 / 生图模型 / 识图模型 / MinIO 对象存储）、系统设置（任务调度 / 界面显示 / 网页通知 / 聚合告警 / 消息推送 Webhook）、执行引擎（Claude Code / dsh 引擎）、运维与数据（本地环境检测 / 数据备份）、账号与安全（Owner GitLab Token / GitLab 凭据）、关于（版本信息）。导航栏支持**关键词搜索设置项**（名称与关键字命中，含中英文别名）与**分组折叠/展开**（可「全部收起 / 全部展开」），点击子项平滑滚动到页面相应设置区块并高亮；导航面板可**整体折叠**成 44px 窄栏（仅保留「展开侧边栏」入口，issue #168），折叠后内容区占满全宽、最大化编辑空间，折叠偏好本地持久化（刷新保持）；窄视口（≤860px）平板/窄窗口竖屏（641~860px）下保持左右布局——左侧导航栏收窄为 200px 并吸顶、设置面板在右并排展示，类似手机/平板设置页面「左侧列表 + 右侧详情」的主从式感觉（issue #339，≤640px 手机竖屏内容列装不下两栏仍为单栏）；横屏窄视口回落单栏，导航置于页面顶部。
+设置页设置项较多时，左侧导航栏按功能分组整理全部设置项（issue #139）——分组：外部服务接入（Synology SSO 登录 / AI API 供应商 / 生图模型 / 识图模型 / MinIO 对象存储）、系统设置（任务调度 / 界面显示 / 网页通知 / 聚合告警 / 消息推送 Webhook / 任务失败自动上报）、执行引擎（Claude Code / dsh 引擎）、运维与数据（本地环境检测 / 数据备份）、账号与安全（Owner GitLab Token / GitLab 凭据）、关于（版本信息）。导航栏支持**关键词搜索设置项**（名称与关键字命中，含中英文别名）与**分组折叠/展开**（可「全部收起 / 全部展开」），点击子项平滑滚动到页面相应设置区块并高亮；导航面板可**整体折叠**成 44px 窄栏（仅保留「展开侧边栏」入口，issue #168），折叠后内容区占满全宽、最大化编辑空间，折叠偏好本地持久化（刷新保持）；窄视口（≤860px）平板/窄窗口竖屏（641~860px）下保持左右布局——左侧导航栏收窄为 200px 并吸顶、设置面板在右并排展示，类似手机/平板设置页面「左侧列表 + 右侧详情」的主从式感觉（issue #339，≤640px 手机竖屏内容列装不下两栏仍为单栏）；横屏窄视口回落单栏，导航置于页面顶部。
 
 关键配置（`config.example.yaml` 中有完整示例与注释）：
 
@@ -690,6 +699,8 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `webhook.enabled` | false | Webhook 消息推送总开关（issue #136）：任务完成（成功收尾）时调用 webhook 推送消息；设置页「消息推送 Webhook」卡片可配置，卡片内提供独立「保存 Webhook 配置」按钮（issue #141），也可用上方「任务调度」卡片全局「保存」 |
 | `webhook.url` / `content_type` / `authorization` | — | webhook 地址（POST 目标，须 http(s):// 开头）/ Content-Type 请求头（默认 `application/json`）/ Authorization 请求头（可选，支持 `${ENV}` 引用） |
 | `webhook.body_template` | 内置默认 JSON 模板 | POST 结构体模板，可使用全局模板占位符（`{repo_name}` `{issue_title}` `{issue_body}` `{issue_title_urlenc}` `{issue_body_urlenc}` `{issue_url}` `{gitlab_url}` `{project_id}` `{issue_iid}` `{project_path}` `{project_path_encoded}` `{gitlab_host}`），请求时自动填充；留空 = 内置默认模板 |
+| `auto_issue.enabled` | true | 任务失败自动上报总开关（issue #347）：任务失败收尾时自动在任务所属项目创建失败上报 issue（标题含任务 id、`bug` + `bot-failed` 标签、负责人按 assignee）；设置页「任务失败自动上报」卡片可配置，独立「保存自动上报配置」按钮 |
+| `auto_issue.assignee` | agent | 上报 issue 负责人用户名（GitLab 用户名，创建时解析为用户 id 指定；未配置 / 解析失败时不指定负责人，不阻塞上报） |
 | `alerts.enabled` | true | 聚合告警总开关（issue #229）：平台异常主动通知（网页通知 in_app + webhook 推送），替代「用户打开页面才发现」；关闭 = 全部告警不检测不通知。检测并入对账循环（reconciler 定时扫描），设置页「聚合告警」卡片可配置阈值，独立「保存告警配置」按钮（issue #229） |
 | `alerts.notify_failure_rate` / `failure_rate_threshold` / `failure_rate_window` | true / 50 / 3600 | 任务失败率告警：近 `failure_rate_window` 秒（默认 1 小时）终态任务失败率超过 `failure_rate_threshold`%（默认 50）→ 通知（`alert_failure_rate` 事件） |
 | `alerts.notify_queue_backlog` / `queue_backlog_threshold` / `queue_stall_minutes` | true / 5 / 30 | 队列堆积告警：活跃任务（排队中 + 运行中）超过 `queue_backlog_threshold` 条且 `queue_stall_minutes` 分钟内无任何任务收尾（无进度）→ 通知（`alert_queue_backlog` 事件） |

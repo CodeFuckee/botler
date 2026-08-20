@@ -99,6 +99,10 @@ export function useSettingsData() {
   // 在页面下方，需在卡片内可独立保存（与 SSO 卡片 issue #27 同模式）
   const [webhookSaveBusy, setWebhookSaveBusy] = useState(false)
   const [webhookSaved, setWebhookSaved] = useState(false)
+  // 任务失败自动上报（issue #347）：卡片内独立保存（只提交 auto_issue 段，
+  // 与 Webhook 卡片 issue #141 同模式）
+  const [autoIssueSaveBusy, setAutoIssueSaveBusy] = useState(false)
+  const [autoIssueSaved, setAutoIssueSaved] = useState(false)
   // MinIO 对象存储（issue #170）：识图图片上传配置——Access Key / Secret Key
   // 输入框留空 = 保持现有凭据（后端掩码不覆盖，与 webhook.authorization /
   // SSO client_secret 同模式）；卡片内独立保存（与 Webhook 卡片 issue #141
@@ -236,6 +240,9 @@ export function useSettingsData() {
 
   const setWebhookField = (key, val) =>
     setSettings((s) => ({ ...s, webhook: { ...s.webhook, [key]: val } }))
+  // 任务失败自动上报（issue #347）：字段级更新（enabled / assignee）
+  const setAutoIssueField = (key, val) =>
+    setSettings((s) => ({ ...s, auto_issue: { ...s.auto_issue, [key]: val } }))
 
   // webhook 段构建（issue #136）：authorization 输入框留空 = 保持现有
   // 凭据（后端掩码不覆盖，与 sso.client_secret 同模式）；全局 save 与
@@ -274,6 +281,17 @@ export function useSettingsData() {
         : { ok: false, text: (res.error || '发送失败') })
     } catch (e) { setWebhookTestNote({ ok: false, text: e.message }) }
     finally { setWebhookBusy(false) }
+  }
+
+  // 任务失败自动上报卡片内独立保存（issue #347）：只提交 auto_issue 段
+  // （部分更新），后端 PUT /api/settings 支持部分更新，不影响其他设置
+  const saveAutoIssue = async () => {
+    setAutoIssueSaveBusy(true); setError(''); setAutoIssueSaved(false)
+    try {
+      await api.put('/api/settings', { auto_issue: { ...settings.auto_issue } })
+      setAutoIssueSaved(true)
+      setTimeout(() => setAutoIssueSaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setAutoIssueSaveBusy(false) }
   }
 
   // Webhook 卡片内独立保存（issue #141）：只提交 webhook 段（部分更新），
@@ -445,6 +463,8 @@ export function useSettingsData() {
     webhookTestNote, setWebhookTestNote, webhookSaveBusy, setWebhookSaveBusy,
     webhookSaved, setWebhookSaved, setWebhookField, buildWebhookPatch,
     testWebhook, saveWebhook,
+    setAutoIssueField, autoIssueSaveBusy, setAutoIssueSaveBusy,
+    autoIssueSaved, setAutoIssueSaved, saveAutoIssue,
     uiSaveBusy, setUiSaveBusy, uiSaved, setUiSaved, buildUiPatch, saveUi,
     notifySaveBusy, setNotifySaveBusy, notifySaved, setNotifySaved,
     setNotifyField, handleTestNotify, saveNotify,

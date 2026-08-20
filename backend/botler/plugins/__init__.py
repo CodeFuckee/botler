@@ -6,6 +6,7 @@
 - ``models``：生图 API 供应商插件（gemini_nano_banana / openai_gpt_image）
 - ``vision_models``：识图 API 供应商插件（gemini_vision / openai_vision / custom，issue #152）
 - ``notifiers``：任务消息发送通道插件（webhook / in_app）
+- ``auto_issue``：任务失败自动创建 GitLab issue 上报插件（issue #347）
 
 导入本包即注册全部内置插件；外部插件通过 ``worker.plugin_paths`` 配置的
 Python 模块路径在应用启动时加载。调用方统一使用
@@ -51,6 +52,7 @@ from . import executors as _executors  # noqa: F401
 from . import models as _models  # noqa: F401
 from . import vision_models as _vision_models  # noqa: F401
 from . import notifiers as _notifiers  # noqa: F401
+from . import auto_issue as _auto_issue  # noqa: F401
 
 __all__ = [
     "DEFAULT_SIZE",

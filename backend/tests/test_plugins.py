@@ -215,10 +215,12 @@ class TestGlobalRegistry:
         assert "openai_gpt_image" in names
 
     def test_builtin_notifier_plugins(self):
-        """内置任务消息通道插件齐全（webhook / in_app）。"""
+        """内置任务消息通道插件齐全（webhook / in_app / auto_issue）。"""
         names = plugin_names(PluginKind.NOTIFIER)
         assert "webhook" in names
         assert "in_app" in names
+        # 任务失败自动创建 GitLab issue 上报（issue #347）
+        assert "auto_issue" in names
 
     def test_get_plugin_returns_builtin(self):
         """get_plugin 能取回内置插件（含描述信息）。"""

@@ -298,6 +298,17 @@ webhook:
                                     #   {project_path_encoded}/{gitlab_host}），
                                     #   请求时自动填充；留空 = 内置默认 JSON 模板
 
+auto_issue:
+  # 任务失败自动创建 GitLab issue 上报（issue #347）：任务失败收尾时自动
+  # 在任务所属项目创建失败上报 issue——标题写明失败任务 id，正文含失败原因 /
+  # 失败分类 / 处理建议 / 原始 issue 链接，标签 bug + bot-failed（bot-failed
+  # 防止对账调度器把上报 issue 重新领取形成死循环），负责人按 assignee 指定。
+  # 配置可在设置页修改（「任务失败自动上报」卡片）。
+  enabled: true                     # 总开关（关闭 = 失败时不再自动上报）
+  assignee: agent                   # 上报 issue 负责人用户名（GitLab 用户名，
+                                    #   如 agent；留空 = 内置默认 agent，解析
+                                    #   失败时不指定负责人，不阻塞上报）
+
 alerts:
   # 聚合告警（issue #229）：平台无人值守时主动通知异常——任务失败率过高 /
   # 队列堆积无进度 / GitLab token 失效 / 磁盘空间不足，替代「用户打开页面

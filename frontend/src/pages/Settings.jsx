@@ -20,6 +20,7 @@ import UiCard from '../components/settings/UiCard.jsx'
 import NotificationsCard from '../components/settings/NotificationsCard.jsx'
 import AlertsCard from '../components/settings/AlertsCard.jsx'
 import WebhookCard from '../components/settings/WebhookCard.jsx'
+import AutoIssueCard from '../components/settings/AutoIssueCard.jsx'
 import ClaudeCard from '../components/settings/ClaudeCard.jsx'
 import DshCard from '../components/settings/DshCard.jsx'
 import EnvironmentCard from '../components/settings/EnvironmentCard.jsx'
@@ -93,6 +94,9 @@ export default function Settings() {
         </section>
         <section id="settings-webhook" className="settings-section">
           <WebhookCard {...data} />
+        </section>
+        <section id="settings-auto-issue" className="settings-section">
+          <AutoIssueCard {...data} />
         </section>
 
         <h2 className="settings-group-title">执行引擎</h2>

@@ -374,6 +374,13 @@ class Settings:
     webhook_content_type: str = "application/json"
     webhook_authorization: str = ""
     webhook_body_template: str = ""
+    # 任务失败自动创建 GitLab issue 上报（issue #347）：任务失败收尾时
+    # 自动在任务所属项目创建失败上报 issue（标题含任务 id、bug+bot-failed
+    # 标签、负责人按 assignee 指定）。设置页「任务失败自动上报」卡片可编辑。
+    auto_issue_enabled: bool = True
+    # 上报 issue 负责人用户名（GitLab 用户名，创建时解析为用户 id 指定；
+    # 未配置 / 解析失败时不指定负责人，不阻塞上报）
+    auto_issue_assignee: str = "agent"
     # 任务 token 用量与费用（issue #235）：usage.currency 为估算费用货币
     # （默认 USD）；usage.pricing 为模型单价表——每项 {model（支持子串
     # 匹配，如 deepseek-v4-flash / claude）, input_per_million（每百万
@@ -434,6 +441,7 @@ KNOWN_FIELDS = {
                       "queue_empty", "queue_no_work"},
     "webhook": {"enabled", "url", "content_type", "authorization",
                "body_template"},
+    "auto_issue": {"enabled", "assignee"},
     "sso": {"enabled", "well_known_url", "client_id", "client_secret", "scope",
             "session_days", "redirect_uri", "verify_ssl"},
     # MinIO 对象存储（issue #163）：识图图片上传配置。凭据掩码/空串 =
@@ -492,6 +500,7 @@ SECTION_SCHEMAS: dict[str, SectionSchema] = {
     "notifications": SectionSchema(fields=tuple(KNOWN_FIELDS["notifications"])),
     "webhook": SectionSchema(fields=tuple(KNOWN_FIELDS["webhook"]),
                              masked=("authorization",)),
+    "auto_issue": SectionSchema(fields=tuple(KNOWN_FIELDS["auto_issue"])),
     "sso": SectionSchema(fields=tuple(KNOWN_FIELDS["sso"]),
                          masked=("client_secret",)),
     "minio": SectionSchema(fields=tuple(KNOWN_FIELDS["minio"]),
@@ -636,6 +645,7 @@ class ConfigManager:
         ui = data.get("ui", {})
         notify = data.get("notifications", {})
         webhook = data.get("webhook", {}) or {}
+        auto_issue = data.get("auto_issue", {}) or {}
         sso = data.get("sso", {})
         repos_raw = data.get("repos", []) or []
         labels_raw = (data.get("labels", {}) or {}).get("custom", []) or []
@@ -821,6 +831,12 @@ class ConfigManager:
             # body_template 留空 = 内置默认模板（推送内容保证关键信息）
             webhook_body_template=webhook.get("body_template", "")
             or DEFAULT_WEBHOOK_TEMPLATE,
+            # 任务失败自动上报 issue（issue #347）：enabled 默认开启（需求
+            # 指定自动提交）；assignee 默认 agent（负责人），配置为空串时
+            # 归一为内置默认
+            auto_issue_enabled=bool(auto_issue.get("enabled", True)),
+            auto_issue_assignee=str(auto_issue.get("assignee", "")).strip()
+            or "agent",
         )
 
     def save(self) -> None:

@@ -231,6 +231,13 @@ def get_settings(request: Request):
             "authorization_masked": _mask(s.webhook_authorization),
             "body_template": s.webhook_body_template,
         },
+        "auto_issue": {
+            # 任务失败自动上报 issue（issue #347）：任务失败收尾时自动在
+            # 任务所属项目创建失败上报 issue（标题含任务 id、bug 标签、
+            # 负责人按 assignee 指定）；bot-failed 标签防止对账重新领取
+            "enabled": s.auto_issue_enabled,
+            "assignee": s.auto_issue_assignee,
+        },
         "alerts": {
             # 聚合告警（issue #229）：阈值设置页可配置（检测并入对账循环，
             # 告警经现有 notifier 通知——网页通知 in_app + webhook 推送）
@@ -390,6 +397,11 @@ def update_settings(request: Request, body: dict):
     if webhook is not None:
         _validate_webhook(webhook)
         c.config.update_section("webhook", webhook)
+
+    auto_issue = body.get("auto_issue")
+    if auto_issue is not None:
+        _validate_auto_issue(auto_issue)
+        c.config.update_section("auto_issue", auto_issue)
 
     gitlab_patch = body.get("gitlab")
     if gitlab_patch is not None:
@@ -1006,6 +1018,21 @@ def _validate_webhook(patch: dict) -> None:
     if "content_type" in patch:
         val = (patch["content_type"] or "").strip()
         patch["content_type"] = val or "application/json"
+
+
+def _validate_auto_issue(patch: dict) -> None:
+    """校验 auto_issue 段（issue #347）：类型与归一。
+
+    - enabled 必须是布尔值；
+    - assignee 必须是字符串（空白归一为内置默认 agent）。
+    """
+    if "enabled" in patch and not isinstance(patch["enabled"], bool):
+        raise HTTPException(400, "auto_issue.enabled 必须是布尔值")
+    if "assignee" in patch:
+        val = patch["assignee"]
+        if not isinstance(val, str):
+            raise HTTPException(400, "auto_issue.assignee 必须是字符串")
+        patch["assignee"] = val.strip()
 
 
 def _validate_sso(patch: dict, current) -> None:
