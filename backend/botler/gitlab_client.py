@@ -722,6 +722,22 @@ class GitLabClient:
         return self._paged(f"/projects/{project_id}/issues/{iid}/notes",
                            limit=limit, sort="asc", order_by="created_at")
 
+    def list_issue_label_events(self, project_id: int, iid: int,
+                                limit: int | None = None) -> list[dict]:
+        """issue 标记活动事件（issue #349：概览页右边栏展示谁添加/移除了标记）。
+
+        GitLab resource_label_events API 返回结构化标记变更事件：
+        [{id, action: add|remove, user: {name, username, avatar_url},
+          label: {name, color, text_color}, created_at}]——与 notes 里的
+        assigned 等系统事件不同源，notes 不包含标记加/删事件（实测），
+        必须单独拉取。默认按事件 id 升序（GitLab 默认排序，即时间正序）；
+        limit 非空时最多取 limit 条（防大 issue 翻页打爆 API，与
+        list_issue_notes 同模式）。
+        """
+        return self._paged(
+            f"/projects/{project_id}/issues/{iid}/resource_label_events",
+            limit=limit)
+
     def add_labels(self, project_id: int, iid: int, labels: list[str],
                    remove: list[str] | None = None) -> dict:
         """加标签；remove 非空时同一次请求移除对应标签（issue #67：收尾

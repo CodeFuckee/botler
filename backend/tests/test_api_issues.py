@@ -112,6 +112,13 @@ class StubGitLab:
         self.notes_by_issue: dict[tuple[int, int], list[dict]] = {}
         self.fail_notes_errors: dict[tuple[int, int], Exception] = {}
         self.notes_calls: list[tuple[int, int, int | None]] = []
+        # issue #349：标记活动事件桩——label_events_by_issue 按
+        # (project_id, iid) 配置；fail_label_events_errors[(project_id,
+        # iid)] 注入异常（None 表示成功）；label_event_calls 记录
+        # (project_id, iid, limit)
+        self.label_events_by_issue: dict[tuple[int, int], list[dict]] = {}
+        self.fail_label_events_errors: dict[tuple[int, int], Exception] = {}
+        self.label_event_calls: list[tuple[int, int, int | None]] = []
         # issue #117：get_issue 桩——issue_by_key 按 (project_id, iid)
         # 配置返回对象；fail_get_issue_errors 注入异常（None 表示成功）；
         # get_issue_calls 记录 (project_id, iid) 调用参数
@@ -225,6 +232,16 @@ class StubGitLab:
         if err is not None:
             raise err
         items = list(self.notes_by_issue.get((project_id, iid), []))
+        # 模拟真实 GitLabClient._paged 的 limit 截断契约
+        return items[:limit] if limit is not None else items
+
+    def list_issue_label_events(self, project_id, iid, limit=None):
+        """标记活动事件桩（issue #349）：记录参数，可注入异常。"""
+        self.label_event_calls.append((project_id, iid, limit))
+        err = self.fail_label_events_errors.get((project_id, iid))
+        if err is not None:
+            raise err
+        items = list(self.label_events_by_issue.get((project_id, iid), []))
         # 模拟真实 GitLabClient._paged 的 limit 截断契约
         return items[:limit] if limit is not None else items
 
@@ -1569,6 +1586,28 @@ def make_note(note_id: int, body: str, system: bool = False,
             "author": author, "created_at": created_at}
 
 
+def make_label_event(event_id: int, action: str, label_name: str,
+                     username: str = "chenkaidi",
+                     created_at: str = "2026-08-15T10:00:00.000+08:00") -> dict:
+    """构造 GitLab resource_label_events 对象（issue #349：标记活动）。
+
+    user/label 与真实 API 一致为对象（user 含 name/username/avatar_url，
+    label 含 name/color 等），供 _trim_label_event 精简断言。
+    """
+    return {
+        "id": event_id,
+        "action": action,
+        "user": {"id": 1, "username": username, "name": username,
+                 "avatar_url": f"https://g.example.com/{username}.png",
+                 "state": "active"},
+        "label": {"id": 7, "name": label_name, "color": "#009966",
+                  "text_color": "#FFFFFF"},
+        "created_at": created_at,
+        "resource_type": "Issue",
+        "resource_id": 521,
+    }
+
+
 class TestIssueDetail:
     """GET /api/issues/{project_id}/{iid}/detail：右边栏评论与活动数据
     （issue #97）。
@@ -1634,7 +1673,8 @@ class TestIssueDetail:
         resp = tc.get("/api/issues/42/64/detail")
 
         assert resp.status_code == 200
-        assert resp.json() == {"notes": [], "engine": "claude",
+        assert resp.json() == {"notes": [], "label_events": [],
+                            "engine": "claude",
                             "task_id": None,
                             "task_status": None,
                             "task_duration_seconds": None}
@@ -1921,6 +1961,101 @@ class TestIssueDetail:
         assert resp.status_code == 200
         assert len(per.notes_calls) == 1
         assert stub.notes_calls == []
+
+
+class TestIssueLabelEvents:
+    """GET /api/issues/{project_id}/{iid}/detail 的 label_events 字段
+    （issue #349：概览页右边栏标记活动）。
+
+    resource_label_events 独立于 notes 拉取（notes 不含标记加/删事件，
+    实测），最多 100 条；精简字段：id/action/label/user{name,username,
+    avatar_url}/created_at（UTC 无后缀）；拉取失败（旧版 GitLab 无该
+    端点/网络故障）静默降级为空列表，不影响 notes 等主内容。
+    """
+
+    def test_returns_label_events_with_trimmed_fields(self, client):
+        """正常：返回标记活动事件，字段精简且时间转 UTC 无后缀。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.label_events_by_issue = {(42, 64): [
+            make_label_event(1, "add", "feature", username="chenkaidi",
+                             created_at="2026-08-15T10:00:00.000+08:00"),
+            make_label_event(2, "remove", "ui", username="code01",
+                             created_at="2026-08-15T11:30:00.000+08:00"),
+        ]}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        events = resp.json()["label_events"]
+        assert len(events) == 2
+        assert events[0] == {"id": 1, "action": "add", "label": "feature",
+                             "user": {"name": "chenkaidi", "username": "chenkaidi",
+                                      "avatar_url": "https://g.example.com/chenkaidi.png"},
+                             "created_at": "2026-08-15 02:00:00"}
+        # remove 事件同样透传（前端文案区分添加/移除）
+        assert events[1]["action"] == "remove"
+        assert events[1]["label"] == "ui"
+        assert events[1]["user"]["username"] == "code01"
+        assert events[1]["created_at"] == "2026-08-15 03:30:00"
+
+    def test_label_events_limit_passed_to_client(self, client):
+        """每 issue 最多拉 100 条：list_issue_label_events 收到 limit=100。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+
+        tc.get("/api/issues/42/64/detail")
+
+        assert stub.label_event_calls == [(42, 64, 100)]
+
+    def test_empty_label_events(self, client):
+        """边界：无标记活动 → label_events 为空列表，notes 正常返回。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): [
+            make_note(101, "assigned to @agent", system=True),
+        ]}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["label_events"] == []
+        assert len(body["notes"]) == 1, "无标记活动不影响 notes"
+
+    def test_label_events_failure_degrades_gracefully(self, client):
+        """拉取失败（旧版 GitLab 无该端点/网络故障）→ 降级空列表，
+        notes 等主内容仍正常返回（HTTP 200）。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.notes_by_issue = {(42, 64): [make_note(101, "评论", system=False)]}
+        stub.fail_label_events_errors[(42, 64)] = GitLabError("资源不存在", 404)
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["label_events"] == []
+        assert body["notes"][0]["body"] == "评论", "notes 不受标记活动故障影响"
+
+    def test_label_events_malformed_entries_skipped(self, client):
+        """异常元素（非 dict）防御性过滤，不因单条坏数据拖垮响应。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.label_events_by_issue = {(42, 64): [
+            make_label_event(1, "add", "feature"),
+            None,
+            "bad",
+            {"id": 2, "action": "remove", "label": None, "user": None},
+        ]}
+
+        resp = tc.get("/api/issues/42/64/detail")
+
+        assert resp.status_code == 200
+        events = resp.json()["label_events"]
+        assert len(events) == 2
+        assert events[1] == {"id": 2, "action": "remove", "label": None,
+                             "user": None, "created_at": None},             "缺 user/label/created_at 的事件逐字段兜底，不崩溃"
 
 
 class TestIssueTasks:

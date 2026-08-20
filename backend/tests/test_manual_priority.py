@@ -322,9 +322,14 @@ class StubGitLab:
 
     def __init__(self):
         self.notes: list[dict] = []
+        self.label_events: list[dict] = []
 
     def list_issue_notes(self, project_id, iid, limit=100):
         return list(self.notes)
+
+    def list_issue_label_events(self, project_id, iid, limit=100):
+        """标记活动事件桩（issue #349）：默认无事件。"""
+        return list(self.label_events)
 
 
 @pytest.fixture

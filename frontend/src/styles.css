@@ -1624,6 +1624,14 @@ body:has(.drawer-overlay) {
 .issue-notes .notes-retry {
   margin-left: var(--space-2);
 }
+/* issue #349：概览页 issue 详情右边栏「标记活动」区块——置于评论/活动
+   （或合并时间线）区块之后，独立展示谁添加/移除了哪个标记；与
+   issue-notes 同款上边框分隔 + 内边距，条目复用 activity-* 样式 */
+.label-events-block {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+  margin-top: var(--space-4);
+}
 .comment-list,
 .activity-list {
   list-style: none;

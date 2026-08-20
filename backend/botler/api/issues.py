@@ -790,6 +790,36 @@ def _trim_note(note: dict) -> dict:
     }
 
 
+# issue #349：每 issue 最多拉取的标记活动事件条数（与 notes 同模式，
+# 防大 issue 翻页打爆 API；事件按 id 升序即时间正序，截尾保留最近 N 条）
+MAX_LABEL_EVENTS_PER_ISSUE = 100
+
+
+def _trim_label_event(event: dict) -> dict:
+    """精简 resource_label_events 对象（issue #349：标记活动展示字段）。
+
+    - action：add/remove（谁添加/移除了标记，未知值原样透传前端兜底）；
+    - label：标记对象只留 name（标签胶囊/文案展示）；
+    - user：操作人对象只留 name/username/avatar_url（头像展示，与
+      note 同规则），缺失按 None（前端显示「—」）；
+    - created_at：与 note 同规则转 UTC 无后缀（前端 fmtTime 解析约定），
+      缺失静默为 None；
+    - id：事件 id（前端列表 key）。
+    """
+    user = event.get("user")
+    label = event.get("label")
+    return {
+        "id": event.get("id"),
+        "action": event.get("action"),
+        "label": label.get("name") if isinstance(label, dict) else None,
+        "user": (
+            {"name": user.get("name"), "username": user.get("username"),
+             "avatar_url": user.get("avatar_url")}
+            if isinstance(user, dict) else None),
+        "created_at": _commit_time_utc(event.get("created_at")),
+    }
+
+
 def _task_duration_seconds(latest) -> float | None:
     """任务记录 → 完成耗时秒数（issue #300）。
 
@@ -847,6 +877,8 @@ def issue_detail(request: Request, project_id: int, iid: int):
 
     响应字段：
     - notes：评论与活动（system 分区）；
+    - label_events（issue #349）：标记活动事件（谁添加/移除了哪个标记，
+      id/action/label/user/created_at 精简字段，与 notes 同时间规则）；
     - engine（issue #120）：该 issue 最近任务实际使用的执行引擎
       （无任务记录回退全局 worker.engine）；
     - task_id（issue #290）：该 issue 最近一条任务记录 id——已执行过
@@ -876,6 +908,16 @@ def issue_detail(request: Request, project_id: int, iid: int):
     except httpx.HTTPError as e:
         # per-repo client 可能指向不可达 host（remote url 解析出的地址）
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    # 标记活动（issue #349）：resource_label_events 独立于 notes 拉取
+    # （实测 notes 不含标记加/删事件），随 detail 一并返回供右边栏
+    # 「标记活动」区块展示；拉取失败（旧版 GitLab 无此端点/网络故障）
+    # 静默降级为空列表——标记活动是补充信息，不因上游故障拖垮整个
+    # 抽屉（notes 等主内容仍正常展示）
+    try:
+        label_events = client.list_issue_label_events(
+            project_id, iid, limit=MAX_LABEL_EVENTS_PER_ISSUE)
+    except (GitLabError, httpx.HTTPError):
+        label_events = []
     # 异常元素（非 dict）防御性过滤，不因单条坏数据拖垮整个抽屉；
     # engine（issue #120）：该 issue 最近任务实际执行的引擎（无任务
     # 记录回退全局 worker.engine），前端右边栏「执行引擎」行据此展示；
@@ -887,6 +929,8 @@ def issue_detail(request: Request, project_id: int, iid: int):
     # null，前端右边栏「完成耗时」行据此展示（未完成显示「—」）
     latest = c.db.find_latest_task(project_id, iid)
     return {"notes": [_trim_note(n) for n in notes or [] if isinstance(n, dict)],
+            "label_events": [_trim_label_event(e) for e in label_events or []
+                             if isinstance(e, dict)],
             "engine": (_task_engine_name(latest)
                        or str(getattr(c.config.get(), "engine", "")
                               or "claude").strip().lower()),

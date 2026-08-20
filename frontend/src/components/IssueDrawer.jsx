@@ -53,6 +53,7 @@ import { confirmDialog } from '../dialog.js'
 import Markdown, { linkifyCommits } from './Markdown.jsx'
 import TaskDetailDrawer from './TaskDetailDrawer.jsx'  // issue #167：任务执行详情第二层右边栏
 import { loadTimelineEnabled, buildTimeline } from '../lib/notesTimeline.js'  // issue #342：评论/活动合并时间线开关与排序
+import { buildLabelEvents, labelEventText } from '../lib/labelEvents.js'  // issue #349：标记活动（谁添加/移除了标记）归一化与文案
 
 // issue 状态 → 徽章映射（聚合只返回开放 issue，closed 为兜底映射）
 export const ISSUE_STATE_META = {
@@ -158,6 +159,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 非空表示加载失败，两个区块共用错误横幅 + 重试按钮）
   const [notes, setNotes] = useState(null)
   const [detailErr, setDetailErr] = useState('')
+  // issue #349：标记活动（谁添加/移除了标记）——detail 响应
+  // label_events 字段（后端独立拉取 resource_label_events 精简），
+  // 与 notes 同一请求返回，加载中/失败态共用 notes/detailErr
+  const [labelEvents, setLabelEvents] = useState([])
   // issue #108：标记编辑状态——editingLabels 是否处于编辑态；
   // labelPool null=标记池加载中；labelPoolErr 非空=加载失败；
   // selectedLabels 编辑态勾选集合；savingLabels 保存请求进行中；
@@ -287,6 +292,9 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     try {
       const d = await api.get(`/api/issues/${i.project_id}/${i.iid}/detail`)
       setNotes(Array.isArray(d && d.notes) ? d.notes : [])
+      // issue #349：标记活动——detail 响应 label_events（后端拉取
+      // 失败已降级为空数组）；异常值（非数组）按空列表兜底
+      setLabelEvents(Array.isArray(d && d.label_events) ? d.label_events : [])
       // issue #120：执行引擎来自该 issue 最近任务的实际记录（后端已
       // 做无任务回退），不再读取全局 worker.engine
       setEngine((typeof d.engine === 'string' && d.engine.trim()) ? d.engine : '')
@@ -782,6 +790,38 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     )
   }
 
+  // 标记活动条目（issue #349）：节点圆点 + 「操作人 添加/移除了标记
+  // 标记名」文本 + 时间，观感与活动条目一致（复用 activity-* 样式）；
+  // labelEventText 对缺 user/未知 action/缺标记名逐项兜底，不崩溃
+  function renderLabelEventItem(e, idx) {
+    return (
+      <li key={typeof e.id === 'number' ? e.id : `le-${idx}`}
+          className="activity-item label-event-item">
+        <span className="activity-dot" title="标记活动">•</span>
+        <span className="activity-text" title="标记变更事件">
+          {labelEventText(e)}
+        </span>
+        {e.created_at && (
+          <span className="activity-time">{fmtTime(e.created_at)}</span>
+        )}
+      </li>
+    )
+  }
+
+  // 标记活动区块四态渲染（issue #349，与 renderNotesBody 同款：缺
+  // project_id / 加载中 / 加载失败 / 空列表与内容列表）；列表经
+  // buildLabelEvents 归一化（按 created_at 升序、异常元素跳过）
+  function renderLabelEventsBody() {
+    if (!hasDetail) return <p className="muted">无法加载（缺少仓库信息）</p>
+    if (detailErr) return <p className="muted">加载失败</p>
+    if (notes === null) return <p className="muted">加载中…</p>
+    const items = buildLabelEvents(labelEvents)
+    if (items.length === 0) return <p className="muted">暂无标记活动</p>
+    return <ul className="activity-list label-events-list">
+      {items.map(renderLabelEventItem)}
+    </ul>
+  }
+
   // 添加评论输入区（issue #125）：分开显示置于评论区底部、合并时间线
   // 置于时间线底部；可评论条件不满足时返回 null（不渲染）
   function renderCommentComposer() {
@@ -1021,6 +1061,15 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
               </div>
             </>
           )}
+        </div>
+        {/* issue #349：标记活动区块——展示谁在什么时间添加/移除了哪个
+            标记（数据源 GitLab resource_label_events，独立于 notes；
+            notes 系统活动不含标记加/删事件，实测）。置于评论/活动（或
+            合并时间线）区块之后，两种显示模式下均独立展示；加载失败
+            时与评论/活动共用上方 detailErr 横幅，标题下显示「加载失败」 */}
+        <div className="issue-notes-block label-events-block">
+          <h3>标记活动</h3>
+          {renderLabelEventsBody()}
         </div>
         {/* 移动端底部操作栏（issue #270）：与头部同一组 drawerActions，
             仅 ≤860px 视口显示（styles.css 控制），sticky 常驻抽屉底部，

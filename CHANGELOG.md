@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 ### Added
+- **概览页 issue 详情右边栏显示标记相关活动（issue #349）**：
+  概览页 issue 详情右边栏此前仅展示评论与活动（notes 系统事件），标记的
+  添加/移除不产生系统活动（实测 GitLab notes 不含标记加/删事件），用户
+  无法在页面上看到「谁添加了标记、谁移除了标记」。本次新增「标记活动」
+  区块——独立拉取 GitLab resource_label_events API（结构化标记变更事件：
+  操作人 / 动作 add|remove / 标记名 / 时间），随 detail 接口一并返回并在
+  右边栏按时间升序展示（如「chenkaidi 添加了标记 feature」「code01 移除了
+  标记 ui」），评论/活动（或合并时间线）区块之后独立成区，两种显示模式下
+  均可见：
+  - **后端**：GitLabClient 新增 `list_issue_label_events`
+    （GET /projects/:id/issues/:iid/resource_label_events，分页拉取最多
+    100 条，与 notes 同模式）；`issue_detail` 响应新增 `label_events`
+    字段（`_trim_label_event` 精简：id/action/label/user{name,username,
+    avatar_url}/created_at，时间与 notes 同规则转 UTC 无后缀）；拉取失败
+    （旧版 GitLab 无该端点/网络故障）静默降级为空列表——标记活动是补充
+    信息，不因上游故障拖垮整个抽屉；
+  - **前端**：新增 `src/lib/labelEvents.js` 纯函数库（`LABEL_ACTION_META`
+    动作文案、`labelActorName` 操作人 name 优先回退 username、
+    `labelEventText` 组装「操作人 添加/移除了标记 标记名」、`buildLabelEvents`
+    按时间升序归一化），IssueDrawer 新增「标记活动」区块（四态：加载中 /
+    加载失败 / 空占位「暂无标记活动」/ 内容列表，条目复用 activity-* 样式，
+    异常元素防御性跳过），styles.css 补充区块分隔样式；
+  - **测试**：`backend/tests/test_api_issues.py` 新增
+    `TestIssueLabelEvents` 5 例（精简字段与 UTC 时间 / limit=100 传参 /
+    空列表 / 拉取失败降级不影响 notes / 异常元素跳过），
+    `frontend/tests/overview-issue-label-events.test.mjs` 14 例（源码 /
+    lib 单元：文案与操作人兜底、排序、异常防御 / 渲染：正常、空、加载中、
+    加载失败重试、异常跳过、时间线模式共存），全量测试无 regression。
 - **任务失败自动创建 GitLab issue 上报（issue #347）**：
   任务失败收尾时此前只在原 issue 留失败评论 + bot-failed 标签，失败详情
   分散在各任务里，用户需要逐个点开排查。本次新增「失败自动上报」：任务
