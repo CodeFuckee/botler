@@ -28,13 +28,6 @@ import pytest
 from fastapi.testclient import TestClient
 from prometheus_client.parser import text_string_to_metric_families
 
-from botler import metrics
-from botler.config import ConfigManager
-from botler.database import Database
-from botler.gitlab_client import GitLabClient, GitLabError
-from botler.metrics import DURATION_BUCKETS, render_metrics, reset_for_tests
-from botler.webhook import WebhookHandler, WebhookError
-
 CONFIG_TEXT = """\
 gitlab:
   url: https://gitlab.example.com
@@ -48,14 +41,26 @@ repos: []
 """
 
 # ---- botler.main 集成测试：模块级导入前设置临时 config/db 环境 ----
-# （import main 会触发模块级 create_app() 加载真实 config.yaml；此处先
-#   指到临时目录，避免触碰仓库内真实配置/数据库，导入后立即还原环境）
+# 必须早于任何 botler 模块导入：botler.database 的 DB_PATH 在模块导入时
+# 即求值（os.environ.get("BOTLER_DB", 默认路径)），若先导入 botler 模块
+# 再设置环境变量，DB_PATH 会绑定真实库（backend/botler.db），CI 上 xdist
+# 多 worker 并发对该库执行 _migrate 的 ALTER TABLE ADD COLUMN 会触发
+# "sqlite3.OperationalError: duplicate column name: precheck_result"
+# （issue #395 修复触发的流水线 #1289 即因此失败）。
 _MODULE_TMP = tempfile.mkdtemp(prefix="botler-metrics-")
 os.environ["BOTLER_CONFIG"] = os.path.join(_MODULE_TMP, "config.yaml")
 os.environ["BOTLER_DB"] = os.path.join(_MODULE_TMP, "botler.db")
 with open(os.environ["BOTLER_CONFIG"], "w", encoding="utf-8") as _f:
     _f.write(CONFIG_TEXT)
+
+from botler import metrics
+from botler.config import ConfigManager
+from botler.database import Database
+from botler.gitlab_client import GitLabClient, GitLabError
+from botler.metrics import DURATION_BUCKETS, render_metrics, reset_for_tests
+from botler.webhook import WebhookHandler, WebhookError
 from botler.main import app as main_app  # noqa: E402
+
 del os.environ["BOTLER_CONFIG"]
 del os.environ["BOTLER_DB"]
 

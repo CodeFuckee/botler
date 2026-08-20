@@ -129,6 +129,22 @@
 
 ### Fixed
 
+- **CI backend:test 并发迁移竞态修复：test_metrics.py 模块级导入隔离临时库（issue #395 修复触发）**：
+  修复 issue #395 的提交触发的流水线 #1289 中 backend:test 失败——`tests/test_metrics.py`
+  在设置 `BOTLER_CONFIG` / `BOTLER_DB` 环境变量**之前**就已执行 `from botler.database
+  import Database`，而 `botler.database.DB_PATH` 在模块导入时即求值绑定默认库
+  （backend/botler.db），随后设置的 `BOTLER_DB` 不生效；CI runner 工作区残留 v23 旧库
+  （无 precheck_result 列）时，pytest-xdist 多 worker 并发执行模块级 `import botler.main`
+  → `Database()._migrate()`，多个 worker 同时判定列不存在并执行
+  `ALTER TABLE tasks ADD COLUMN precheck_result`，后执行者报
+  `sqlite3.OperationalError: duplicate column name: precheck_result`，xdist 收集一致性
+  校验失败中止 pytest，覆盖率暴跌至 22.64%（门禁 70%）失败。本次修复：
+  - **测试**：`backend/tests/test_metrics.py` 将 `BOTLER_CONFIG` / `BOTLER_DB` 环境变量
+    设置与临时目录创建提前到**任何 botler 模块导入之前**，`DB_PATH` 正确绑定各 worker
+    独立的临时 SQLite 库，模块级 `import botler.main` 不再触碰真实库，并发迁移竞态消除；
+    验证：剥离注入环境变量（模拟 CI runner）后 test_metrics.py xdist 4 worker 21 例通过、
+    真实库保持 v23 未被迁移，backend 全量 pytest + coverage 门禁通过。
+
 - **dsh 引擎凭据回退扩展：设置页「AI API 供应商」的第三方中转站（OpenAI 兼容）配置可被 dsh 引擎消费（issue #395）**：
   此前 `_dsh_credentials` 的 ai_providers 回退**只匹配 `provider == "deepseek"`** 的项——用户在设置页
   配置第三方中转站的 base_url / api_key（provider 通常选 openai / custom 等 OpenAI 兼容类型）后，
