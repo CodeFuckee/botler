@@ -518,3 +518,66 @@ class TestDispatchBotIssueLabel:
         assert done2.wait(timeout=2)
         assert executor.run_ids == [t_early, t_late], \
             "bot-issue 任务之间按 issue 创建时间升序派发"
+
+
+class TestCrossRepoBotIssue:
+    """跨仓库场景下 bot-issue 必须排所有任务之后（issue #363）。
+
+    #360 只解决了同仓库队列内 bot-issue 排最后；跨仓库时 _repo_sort_key
+    先按仓库优先级（数字小先派发）选仓库，再取该仓库队内最优任务——若
+    bot-issue 任务所在仓库 priority 更小，其 bot-issue 任务会被优先派发，
+    违反「带 bot-issue 的 issue 在所有不带 bot-issue 的 issue 执行完成后
+    执行」的预期。
+    """
+
+    def test_bot_issue_not_dispatched_before_other_repo_normal_task(
+            self, config, db, executor):
+        """仓库 A（priority=1）有 bot-issue 任务、仓库 B（priority=2）有
+        普通 bug 任务：必须优先派发 B 的普通任务，bot-issue 任务不能
+        因仓库优先级靠前而被提前派发。"""
+        repo_a = _mk_repo(db, project_id=11, priority=1)   # 高优先级仓库
+        repo_b = _mk_repo(db, project_id=22, priority=2)   # 低优先级仓库
+        t_a_bot = _mk_task(db, repo_a, project_id=11, issue_iid=1,
+                           issue_labels=["bot-issue"])
+        t_b_bug = _mk_task(db, repo_b, project_id=22, issue_iid=1,
+                           issue_labels=["bug"])
+
+        sched = _scheduler(config, db, executor)
+        sched.enqueue(t_a_bot)
+        sched.enqueue(t_b_bug)
+
+        # 第一轮派发：应派发仓库 B 的普通 bug 任务（即使仓库 A 优先级更高）
+        _, done1 = executor.expect()
+        sched._dispatch()
+        assert done1.wait(timeout=2)
+        assert executor.run_ids == [t_b_bug], \
+            "仓库 A 优先级更高但任务带 bot-issue，应先派发仓库 B 的普通任务"
+
+        # 第二轮派发：普通任务执行完成后，才派发 bot-issue 任务
+        _, done2 = executor.expect()
+        sched._dispatch()
+        assert done2.wait(timeout=2)
+        assert executor.run_ids == [t_b_bug, t_a_bot], \
+            "普通任务完成后才派发 bot-issue 任务"
+
+    def test_bot_issue_wait_for_other_repo_running_task(self, config, db, executor):
+        """其他仓库有普通任务运行中：不应派发 bot-issue 任务（需等其完成）。"""
+        repo_a = _mk_repo(db, project_id=11, priority=1)
+        repo_b = _mk_repo(db, project_id=22, priority=2)
+        t_a_bot = _mk_task(db, repo_a, project_id=11, issue_iid=1,
+                           issue_labels=["bot-issue"])
+        t_b_bug = _mk_task(db, repo_b, project_id=22, issue_iid=1,
+                           issue_labels=["bug"])
+
+        sched = _scheduler(config, db, executor)
+        sched.enqueue(t_a_bot)
+        sched.enqueue(t_b_bug)
+        # 仓库 B 普通任务已派发并在运行中
+        with sched._lock:
+            sched._running[repo_b] = t_b_bug
+            sched._queues[repo_b].remove(t_b_bug)
+
+        # 仓库 B 普通任务运行中：bot-issue 任务不应被派发
+        sched._dispatch()
+        assert executor.run_ids == [], \
+            "其他仓库普通任务运行中时不应派发 bot-issue 任务"

@@ -278,6 +278,28 @@ class TaskScheduler:
         best = min(q, key=lambda tid: self._task_sort_key(tid, cfg))
         return (priority, self._task_sort_key(best, cfg), repo_id)
 
+
+    def _task_is_bot_issue(self, task_id: int, cfg) -> bool:
+        """任务是否带 bot-issue 标记（issue #363 跨仓库全局排最后判断）。
+
+        与 _task_sort_key 的判定保持一致：带 bot-issue 且配置未显式包含时
+        视为排最后标记；配置显式包含 bot-issue 时按配置顺序（用户自定义），
+        不再应用全局排最后约束。
+        """
+        task = self.db.get_task(task_id)
+        if task is None:
+            return False
+        labels = self._decode_labels(task["issue_labels"])
+        priority = cfg.issue_priority_labels
+        return BOT_ISSUE_LABEL in labels and BOT_ISSUE_LABEL not in priority
+
+    def _best_task_is_bot_issue(self, q: deque[int], cfg) -> bool:
+        """仓库队列中最优任务（_pick_task 将派发的任务）是否带 bot-issue。"""
+        if not q:
+            return False
+        best = min(q, key=lambda tid: self._task_sort_key(tid, cfg))
+        return self._task_is_bot_issue(best, cfg)
+
     def _dispatch(self) -> None:
         cfg = self.config.get()
         in_pause = self._in_pause_window()
@@ -303,6 +325,29 @@ class TaskScheduler:
                 ]
             if not candidates:
                 return
+            # issue #363：带 bot-issue 标记的任务全局排所有任务之后。
+            # #360 只保证同仓库队列内 bot-issue 排最后；跨仓库场景下仓库
+            # 优先级（数字小先派发，issue #51）会盖过 bot-issue 语义——
+            # 若 bot-issue 任务所在仓库 priority 更小，其 bot-issue 任务
+            # 会被提前派发，与预期（在所有不带 bot-issue 的 issue 执行
+            # 完成后执行）不符。修复：优先派发队内最优任务非 bot-issue
+            # 的仓库；若所有候选仓库的最优任务都带 bot-issue，则需等待
+            # 运行中的普通任务完成后再派发。人工置顶/手动顺序由
+            # _task_sort_key 优先体现，不受影响。
+            normal_candidates = [
+                (repo_id, q) for repo_id, q in candidates
+                if not self._best_task_is_bot_issue(q, cfg)
+            ]
+            if normal_candidates:
+                candidates = normal_candidates
+            else:
+                # 候选仓库只剩 bot-issue 任务：其他仓库运行中的普通任务
+                # 未完成前不派发 bot-issue 任务（等待其完成）
+                running_normal = any(
+                    not self._task_is_bot_issue(tid, cfg)
+                    for tid in self._running.values())
+                if running_normal:
+                    return
             repo_id, q = min(
                 candidates, key=lambda item: self._repo_sort_key(item[0], item[1], cfg))
             task_id = self._pick_task(q, cfg)

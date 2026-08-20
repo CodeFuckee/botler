@@ -129,6 +129,25 @@
 
 ### Fixed
 
+- **跨仓库调度：带 `bot-issue` 标记的任务现在严格排在所有不带该标记的任务之后（issue #363）**：
+  此前 #360 只保证**同仓库队列内** bot-issue 任务排最后——`_repo_sort_key` 先按仓库
+  优先级（issue #51，数字小先派发）选择仓库，再取该仓库队内最优任务派发；当 bot-issue
+  任务所在仓库 priority 更小（如 botler 仓库 priority=4 而其他仓库为 1/2/3）时，其
+  bot-issue 任务会被**提前派发**；且多仓库并行（max_concurrent_repos）时 bot-issue 任务
+  会与其他仓库的普通任务同时执行，均不符合「带 bot-issue 的 issue 在所有不带 bot-issue
+  的 issue 执行完成后执行」的预期；
+  - **修复**：`backend/botler/scheduler.py` 的 `_dispatch` 增加全局 bot-issue 约束——
+    优先派发队内最优任务非 bot-issue 的仓库（新增 `_task_is_bot_issue` /
+    `_best_task_is_bot_issue` 辅助方法，判定逻辑与 `_task_sort_key` 一致：带 bot-issue
+    且配置未显式包含）；若所有候选仓库的最优任务都带 bot-issue，则需等待其他仓库
+    运行中的普通任务完成后再派发；人工置顶（issue #242）/ 手动顺序（issue #287）仍
+    优先于该规则，配置显式包含 bot-issue 时按配置顺序（允许自定义）不受影响；
+  - **测试**：`backend/tests/test_scheduler_issue_priority.py` 新增
+    `TestCrossRepoBotIssue` 2 例——高优先级仓库的 bot-issue 任务不得先于低优先级仓库
+    的普通 bug 任务派发（bug 复现用例）、其他仓库普通任务运行中时不派发 bot-issue
+    任务；修复前 2 例均失败，修复后 backend 调度测试 21 例全部通过。
+
+
 - **backend 测试夹具资源释放：sqlite 连接与本地 HTTP 监听 socket 显式关闭（issue #395 修复触发）**：
   修复 issue #395 的提交触发的流水线 #1290 中 backend:test 偶发失败——`tests/test_tools.py::TestImportFromUrl::test_import_single_definition_file`
   报 `ValueError: 下载失败: [Errno 9] Bad file descriptor`（2901 passed / 1 failed，本地串行/低并发不
