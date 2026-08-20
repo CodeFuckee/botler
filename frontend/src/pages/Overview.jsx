@@ -10,6 +10,7 @@ import IssueListSection from '../components/overview/IssueListSection.jsx'
 import InspirationSection from '../components/overview/InspirationSection.jsx'
 import PipelineSection from '../components/overview/PipelineSection.jsx'
 import DeepSeekBalanceCard from '../components/overview/DeepSeekBalanceCard.jsx'
+import SourceStatsSection from '../components/overview/SourceStatsSection.jsx'
 import IssueDrawer from '../components/IssueDrawer.jsx'
 import PipelineDrawer from '../components/PipelineDrawer.jsx'
 import AddIssueModal from '../components/AddIssueModal.jsx'
@@ -173,6 +174,10 @@ function OverviewBody({ location, navigate }) {
 
       {/* CI/CD 流水线板块 */}
       <PipelineSection {...data} setSelectedPipeline={setSelectedPipeline} />
+
+      {/* issue #224：任务来源分布统计卡片（来源 + 成功率/平均耗时，
+          近 30 天）——数据来自本地任务表聚合，独立低频轮询 */}
+      <SourceStatsSection />
 
       {/* issue #85：issue 详情右边栏——点击列表项打开，显示具体信息与正文。
           issue #94：关闭 issue 成功后刷新列表（后端已清缓存，该 issue

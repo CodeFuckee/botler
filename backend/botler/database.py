@@ -19,7 +19,7 @@ import os
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TypedDict, cast
 
 logger = logging.getLogger(__name__)
@@ -1820,9 +1820,11 @@ class Database:
 
         数据源与任务列表同表（tasks），保证验收标准 1「统计页各维度数字
         与任务列表一致」；时间段按任务创建时间（UTC）过滤，days=0 为全部。
+        days 同时传给 aggregate_dashboard 决定 by_source_daily 的窗口语义
+        （days>0 最近 N 天零填充、days=0 仅返回有数据日期，issue #224）。
         聚合细节见模块级 aggregate_dashboard（纯函数，可单测）。
         """
-        return aggregate_dashboard(self.dashboard_task_rows(days))
+        return aggregate_dashboard(self.dashboard_task_rows(days), days=days)
     def task_stats(self) -> dict:
         with self._conn() as conn:
             rows = conn.execute(
@@ -2070,7 +2072,88 @@ def _normalize_failure_reason(msg: str) -> str:
     return text[:100]
 
 
-def aggregate_dashboard(rows) -> dict:
+def _source_daily_trend(rows, days: int = 0,
+                              today: date | None = None) -> list[dict]:
+    """按来源×日期聚合逐日趋势（issue #224）。
+
+    rows 为 dashboard_task_rows 的查询结果（含 created_at/triggered_by/
+    status/finished_at 等字段）。按任务创建日期（UTC，created_at 前 10 位
+    YYYY-MM-DD）分组：
+    - days>0：返回最近 N 天窗口（以 today 为参考日，默认当前 UTC 日期）
+      内每个来源的逐日序列，窗口内出现过的来源在无任务日期零填充
+      （task_count=0、success_rate/avg_duration 为 None），保证趋势图横轴
+      连续；
+    - days=0：仅返回有任务的日期（不零填充，日期升序）。
+    每条记录：{date, source, name, task_count, succeeded_count,
+    failed_count, interrupted_count, success_rate, avg_duration_seconds}，
+    日期升序、同日按来源 key 升序；created_at 缺失或非 YYYY-MM-DD 格式的
+    行跳过。来源展示名与 by_source 口径一致（webhook/手动/对账/其他）。
+    """
+    if today is None:
+        today = datetime.now(timezone.utc).date()
+    # 逐日×来源聚合桶
+    buckets: dict[tuple[str, str], dict] = {}
+    sources_in_window: set[str] = set()
+    dates_with_data: set[str] = set()
+    for row in rows:
+        created = row["created_at"] or ""
+        day = created[:10]
+        try:
+            datetime.strptime(day, "%Y-%m-%d")
+        except ValueError:
+            continue  # 缺失/非法日期：不参与趋势
+        src_raw = row["triggered_by"] or ""
+        status = row["status"] or ""
+        dur = _task_duration_seconds(row["created_at"], row["finished_at"])
+        key = (day, src_raw)
+        b = buckets.setdefault(key, {
+            "task_count": 0, "succeeded": 0, "failed": 0,
+            "interrupted": 0, "durations": [],
+        })
+        b["task_count"] += 1
+        if status == STATUS_SUCCEEDED:
+            b["succeeded"] += 1
+        elif status == STATUS_FAILED:
+            b["failed"] += 1
+        elif status == STATUS_INTERRUPTED:
+            b["interrupted"] += 1
+        if dur is not None:
+            b["durations"].append(dur)
+        sources_in_window.add(src_raw)
+        dates_with_data.add(day)
+
+    if days and days > 0:
+        start = today - timedelta(days=days - 1)
+        ordered_dates = [str(start + timedelta(days=i)) for i in range(days)]
+    else:
+        ordered_dates = sorted(dates_with_data)
+
+    out: list[dict] = []
+    for day in ordered_dates:
+        # days>0：窗口内每个来源逐日零填充（趋势图横轴连续）；
+        # days=0：仅输出当天有任务的来源（不零填充，输出紧凑）
+        day_sources = (sorted(sources_in_window) if (days and days > 0)
+                       else sorted(s for (d, s) in buckets if d == day))
+        for src_raw in day_sources:
+            gb = buckets.get((day, src_raw))
+            n = gb["task_count"] if gb else 0
+            out.append({
+                "date": day,
+                "source": src_raw,
+                "name": _SOURCE_DISPLAY.get(src_raw, src_raw or "其他"),
+                "task_count": n,
+                "succeeded_count": gb["succeeded"] if gb else 0,
+                "failed_count": gb["failed"] if gb else 0,
+                "interrupted_count": gb["interrupted"] if gb else 0,
+                "success_rate": (round(gb["succeeded"] / n, 4) if gb and n else None),
+                "avg_duration_seconds": (
+                    round(sum(gb["durations"]) / len(gb["durations"]), 3)
+                    if gb and gb["durations"] else None),
+            })
+    return out
+
+
+def aggregate_dashboard(rows, days: int = 0) -> dict:
     """由任务行聚合统计看板数据（issue #264）。
 
     rows 为 dashboard_task_rows 的查询结果（含 id/repo_id/status/engine/
@@ -2083,6 +2166,11 @@ def aggregate_dashboard(rows) -> dict:
       succeeded_count, failed_count, interrupted_count, success_rate,
       avg_duration_seconds}]，按 task_count 降序、并列按名称升序；
       engine 为空显示「未指定」，triggered_by 未知显示原名（'' 显示「其他」）；
+    - by_source_daily: 按来源×日期逐日趋势（issue #224）[{date, source,
+      name, task_count, succeeded_count, failed_count, interrupted_count,
+      success_rate, avg_duration_seconds}]——days>0 时最近 N 天窗口内每个
+      来源逐日零填充（趋势图横轴连续），days=0 时仅返回有数据的日期；
+      days 为 aggregate_dashboard 的窗口参数；
     - failure_reasons: 失败/中断任务 error_message 归一化后的 Top N
       [{reason, count}]，按 count 降序、count 相同按原因升序。
     成功率/耗时/失败原因口径与任务列表一致（失败原因展示口径：failed +
@@ -2178,6 +2266,7 @@ def aggregate_dashboard(rows) -> dict:
         "by_engine": _group(by_engine),
         "by_repo": _group(by_repo),
         "by_source": _group(by_source),
+        "by_source_daily": _source_daily_trend(rows, days),
         "failure_reasons": [
             # issue #274：每条失败原因附分类（category + 展示名），统计看板
             # 失败原因 Top 列表展示分类徽章，与详情页/失败评论口径联动

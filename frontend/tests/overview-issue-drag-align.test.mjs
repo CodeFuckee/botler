@@ -24,7 +24,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const styles = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
 
 test('拖动手柄应下移半个行高差，使图标中心与标题行中心重合（issue #343）', () => {
-  const rule = styles.match(/\.issue-drag-handle\s*\{[^}]*\}/)
+  const rule = styles.match(/^\.issue-drag-handle\s*\{[^}]*\}/m)
   assert.ok(rule, 'styles.css 缺少 .issue-drag-handle 样式规则')
   // 标题行 line-height 1.6em、图标 1em：图标需下移 (1.6em - 1em) / 2 = 0.3em，
   // 按 em 计算而非写死像素，字号/行高变化时依然对齐
@@ -37,7 +37,7 @@ test('拖动手柄应下移半个行高差，使图标中心与标题行中心�
 })
 
 test('拖动手柄保持顶部对齐——有标签/里程碑副行时图标仍对齐标题行', () => {
-  const rule = styles.match(/\.issue-drag-handle\s*\{[^}]*\}/)
+  const rule = styles.match(/^\.issue-drag-handle\s*\{[^}]*\}/m)
   assert.ok(rule, 'styles.css 缺少 .issue-drag-handle 样式规则')
   // align-self: flex-start：图标锚定标题首行；若改为 center 会在 issue
   // 带标签/里程碑副行时漂移到整行居中，偏离标题
@@ -49,7 +49,7 @@ test('拖动手柄保持顶部对齐——有标签/里程碑副行时图标仍�
 })
 
 test('图标在手柄内水平垂直居中（inline-flex 居中布局）', () => {
-  const rule = styles.match(/\.issue-drag-handle\s*\{[^}]*\}/)
+  const rule = styles.match(/^\.issue-drag-handle\s*\{[^}]*\}/m)
   assert.ok(rule, 'styles.css 缺少 .issue-drag-handle 样式规则')
   assert.match(rule[0], /display\s*:\s*inline-flex/, '手柄应为 inline-flex')
   assert.match(rule[0], /align-items\s*:\s*center/, '图标应在手柄内垂直居中')

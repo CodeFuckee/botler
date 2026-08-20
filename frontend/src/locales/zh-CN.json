@@ -337,5 +337,16 @@
   "tasks.effectiveMaxRetries": "生效重试",
   "tasks.effectiveEngine": "生效引擎",
   "tasks.paramSourceRepo": "仓库覆盖",
-  "tasks.paramSourceGlobal": "继承全局"
+  "tasks.paramSourceGlobal": "继承全局",
+  "overview.sourceStatsTitle": "来源分布",
+  "overview.sourceStatsDesc": "任务来源（webhook / 手动 / 对账）的任务量、成功率与平均耗时（近 30 天，每 {seconds} 秒自动刷新）",
+  "overview.sourceStatsEmpty": "暂无任务数据（近 30 天没有任务记录）",
+  "overview.sourceTaskCount": "{n} 个任务",
+  "overview.sourceSuccessRate": "成功率",
+  "overview.sourceAvgDuration": "平均耗时 {duration}",
+  "stats.sourceTrendTitle": "来源按天趋势",
+  "stats.sourceTrendDesc": "各来源每日任务量走势（随上方时间段选择联动）",
+  "stats.sourceTrendEmpty": "暂无任务数据（当前时间段内没有任务记录）",
+  "stats.sourceTrendAria": "{source} 每日任务量走势图",
+  "stats.sourceTrendPoint": "{date}：{n} 个任务"
 }

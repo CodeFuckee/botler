@@ -5149,3 +5149,73 @@ body:has(.drawer-overlay) {
   100% { box-shadow: none; }
 }
 .search-jump-highlight { animation: search-jump-flash 1.6s ease-out 2; }
+
+/* ============ 概览页「来源分布」统计卡片（issue #224） ============ */
+.overview-source-stats-section {
+  margin-top: var(--space-5);
+}
+.overview-source-stats-section h2 {
+  font-size: 16px;
+  margin: 0 0 var(--space-1);
+}
+.overview-source-stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.overview-source-stats-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.overview-source-stats-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.overview-source-stats-count {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.overview-source-stats-rate {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 2px;
+}
+.overview-source-stats-rate b {
+  font-size: 15px;
+}
+
+/* ============ 统计页「来源按天趋势」（issue #224） ============ */
+.stats-source-trend-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.stats-source-trend-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+.stats-source-trend-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.stats-source-trend-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 720px;
+}

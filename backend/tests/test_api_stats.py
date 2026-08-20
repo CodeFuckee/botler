@@ -342,3 +342,168 @@ class TestDashboardApi:
         r1 = client.get("/api/stats/dashboard?days=0").json()
         r2 = client.get("/api/stats/dashboard?days=0").json()
         assert r1 == r2
+
+
+# ---- issue #224：按来源×日趋势（by_source_daily） ----
+
+class TestSourceDailyTrend:
+    """_source_daily_trend 纯函数（issue #224 按天趋势）。
+
+    窗口语义：days>0 返回最近 N 天（UTC，以 today 为参考日）逐日序列，
+    窗口内出现过的每个来源零填充（无任务的日期 task_count=0，趋势图横轴
+    连续）；days=0 仅返回有任务的日期（不零填充）。
+    """
+
+    def test_empty_input(self):
+        from botler.database import _source_daily_trend
+        assert _source_daily_trend([], days=7) == []
+        assert _source_daily_trend([], days=0) == []
+
+    def test_days_zero_only_days_with_data(self, tmp_path):
+        from datetime import date
+        from botler.database import Database, _source_daily_trend
+        db = Database(str(tmp_path / "trend0.db"))
+        repo = _mk_repo(db, 1, "repo-a")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="webhook",
+                 created_at="2026-08-18 01:00:00",
+                 finished_at="2026-08-18 01:05:00")
+        _mk_task(db, repo, status=STATUS_FAILED, engine="hermes",
+                 triggered_by="manual",
+                 created_at="2026-08-19 02:00:00",
+                 finished_at="2026-08-19 02:02:00",
+                 error_message="测试失败")
+        res = _source_daily_trend(db.dashboard_task_rows(days=0), days=0,
+                                  today=date(2026, 8, 20))
+        dates = [r["date"] for r in res]
+        assert dates == ["2026-08-18", "2026-08-19"]
+        by = {(r["date"], r["source"]): r for r in res}
+        assert by[("2026-08-18", "webhook")]["task_count"] == 1
+        assert by[("2026-08-18", "webhook")]["success_rate"] == 1.0
+        assert by[("2026-08-18", "webhook")]["avg_duration_seconds"] == 300.0
+        assert by[("2026-08-19", "manual")]["task_count"] == 1
+        assert by[("2026-08-19", "manual")]["success_rate"] == 0.0
+        assert by[("2026-08-19", "manual")]["failed_count"] == 1
+
+    def test_days_window_zero_filled(self, tmp_path):
+        from datetime import date
+        from botler.database import Database, _source_daily_trend
+        db = Database(str(tmp_path / "trend7.db"))
+        repo = _mk_repo(db, 1, "repo-a")
+        # 8/18 有 webhook 任务，8/14-8/20 窗口内其余日期应零填充
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="webhook",
+                 created_at="2026-08-18 01:00:00",
+                 finished_at="2026-08-18 01:00:30")
+        res = _source_daily_trend(db.dashboard_task_rows(days=7), days=7,
+                                  today=date(2026, 8, 20))
+        # 7 天窗口：8/14 ~ 8/20，每天都有 webhook 行（无任务日为零填充）
+        assert [r["date"] for r in res] == [
+            "2026-08-14", "2026-08-15", "2026-08-16", "2026-08-17",
+            "2026-08-18", "2026-08-19", "2026-08-20",
+        ]
+        by = {(r["date"], r["source"]): r for r in res}
+        assert by[("2026-08-18", "webhook")]["task_count"] == 1
+        assert by[("2026-08-14", "webhook")]["task_count"] == 0
+        assert by[("2026-08-14", "webhook")]["success_rate"] is None
+        assert by[("2026-08-20", "webhook")]["avg_duration_seconds"] is None
+
+    def test_source_display_names(self, tmp_path):
+        from datetime import date
+        from botler.database import Database, _source_daily_trend
+        db = Database(str(tmp_path / "trendname.db"))
+        repo = _mk_repo(db, 1, "repo-a")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="reconcile",
+                 created_at="2026-08-18 01:00:00",
+                 finished_at="2026-08-18 01:00:30")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="",
+                 created_at="2026-08-18 02:00:00",
+                 finished_at="2026-08-18 02:00:30")
+        res = _source_daily_trend(db.dashboard_task_rows(days=0), days=0,
+                                  today=date(2026, 8, 20))
+        by_source = {r["source"]: r for r in res}
+        assert by_source["reconcile"]["name"] == "对账"
+        assert by_source[""]["name"] == "其他"
+
+    def test_invalid_created_at_skipped(self, tmp_path):
+        from datetime import date
+        from botler.database import Database, _source_daily_trend
+        db = Database(str(tmp_path / "trendbad.db"))
+        repo = _mk_repo(db, 1, "repo-a")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 created_at="not-a-date", finished_at="2026-08-18 01:00:30")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="webhook",
+                 created_at="2026-08-18 01:00:00",
+                 finished_at="2026-08-18 01:00:30")
+        res = _source_daily_trend(db.dashboard_task_rows(days=0), days=0,
+                                  today=date(2026, 8, 20))
+        assert [r["date"] for r in res] == ["2026-08-18"]
+
+    def test_days_zero_sorted_by_date_then_source(self, tmp_path):
+        from datetime import date
+        from botler.database import Database, _source_daily_trend
+        db = Database(str(tmp_path / "trendsort.db"))
+        repo = _mk_repo(db, 1, "repo-a")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="manual",
+                 created_at="2026-08-19 01:00:00",
+                 finished_at="2026-08-19 01:00:30")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="webhook",
+                 created_at="2026-08-18 01:00:00",
+                 finished_at="2026-08-18 01:00:30")
+        res = _source_daily_trend(db.dashboard_task_rows(days=0), days=0,
+                                  today=date(2026, 8, 20))
+        # 日期升序（days=0 不零填充，仅输出有数据的日期）
+        assert [r["date"] for r in res] == ["2026-08-18", "2026-08-19"]
+
+    def test_aggregate_dashboard_includes_by_source_daily(self, tmp_path):
+        from botler.database import Database, aggregate_dashboard
+        db = Database(str(tmp_path / "aggdaily.db"))
+        repo = _mk_repo(db, 1, "repo-a")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="webhook",
+                 created_at="2026-08-18 01:00:00",
+                 finished_at="2026-08-18 01:00:30")
+        # days=7 窗口（参考日 8/20）→ 8/18 有数据、其余 6 天零填充
+        res = aggregate_dashboard(db.dashboard_task_rows(days=7), days=7)
+        daily = res["by_source_daily"]
+        assert len(daily) == 7
+        assert daily[4]["date"] == "2026-08-18"
+        assert daily[4]["task_count"] == 1
+        assert daily[0]["task_count"] == 0
+        # 默认 days=0：仅返回有数据的日期
+        res0 = aggregate_dashboard(db.dashboard_task_rows(days=0))
+        assert [r["date"] for r in res0["by_source_daily"]] == ["2026-08-18"]
+
+    def test_empty_input_aggregate(self):
+        from botler.database import aggregate_dashboard
+        assert aggregate_dashboard([])["by_source_daily"] == []
+
+
+class TestDashboardApiBySourceDaily:
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        from botler.api import stats as stats_api
+        stats_api.clear_cache()
+        yield
+
+    def test_empty_db_returns_empty_trend(self, client):
+        body = client.get("/api/stats/dashboard?days=7").json()
+        assert body["by_source_daily"] == []
+
+    def test_with_data_returns_trend(self, api_app):
+        app, db = api_app
+        repo = _mk_repo(db, 1, "repo-a")
+        _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
+                 triggered_by="webhook",
+                 created_at="2026-08-18 01:00:00",
+                 finished_at="2026-08-18 01:03:00")
+        client = TestClient(app)
+        body = client.get("/api/stats/dashboard?days=7").json()
+        assert "by_source_daily" in body
+        assert isinstance(body["by_source_daily"], list)
+        assert any(r["task_count"] > 0 for r in body["by_source_daily"])

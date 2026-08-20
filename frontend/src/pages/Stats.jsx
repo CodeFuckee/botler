@@ -132,6 +132,71 @@ export function CompletionTrendChart({ trend, compact = false }) {
   )
 }
 
+// 按来源分组 by_source_daily（issue #224）：by_source_daily 为后端按
+// 来源×日期聚合的扁平序列 [{date, source, name, task_count, ...}]（日期
+// 升序，days>0 窗口内逐日零填充），按 source 分组为
+// [{source, name, series: [{date, task_count}]}]，组内保持日期升序。
+function groupSourceDaily(daily) {
+  const map = new Map()
+  for (const r of daily || []) {
+    let g = map.get(r.source)
+    if (!g) {
+      g = { source: r.source, name: r.name, series: [] }
+      map.set(r.source, g)
+    }
+    g.series.push({ date: r.date, task_count: r.task_count })
+  }
+  return [...map.values()]
+}
+
+// 来源按天趋势迷你折线图（issue #224）：各来源每日任务量走势——轻量
+// SVG 折线图（无第三方图表库依赖），横轴为日期（等距排布），纵轴为当日
+// 任务数；每个点带 <title> 悬浮提示（日期 / 任务数）。series 为空返回
+// null（不渲染）。复用 completion-trend-* 折线样式（线与点配色一致）。
+export function SourceDailyChart({ name, series, max }) {
+  const { tr } = useI18n()
+  if (!Array.isArray(series) || series.length === 0) return null
+  const W = 640
+  const H = 110
+  const PAD_L = 8
+  const PAD_R = 8
+  const PAD_T = 10
+  const PAD_B = 20
+  const n = series.length
+  const yMax = max > 0 ? max * 1.1 : 1
+  const innerW = W - PAD_L - PAD_R
+  const innerH = H - PAD_T - PAD_B
+  const px = (i) => (n === 1 ? PAD_L + innerW / 2 : PAD_L + (innerW * i) / (n - 1))
+  const py = (v) => H - PAD_B - (innerH * (Number(v) || 0)) / yMax
+  const points = series
+    .map((t, i) => `${px(i).toFixed(2)},${py(t.task_count).toFixed(2)}`)
+    .join(' ')
+  const first = series[0]
+  const last = series[n - 1]
+  return (
+    <div className="stats-source-trend-item">
+      <span className="stats-source-trend-name">{name || '—'}</span>
+      <svg className="stats-source-trend-chart"
+           viewBox={`0 0 ${W} ${H}`}
+           role="img" aria-label={tr('stats.sourceTrendAria', { source: name || '' })}>
+        <line className="completion-trend-axis" x1={PAD_L} y1={H - PAD_B}
+              x2={W - PAD_R} y2={H - PAD_B} />
+        <polyline className="completion-trend-line" points={points} fill="none" />
+        {series.map((t, i) => (
+          <circle key={t.date || i} className="completion-trend-dot"
+                  cx={px(i).toFixed(2)} cy={py(t.task_count).toFixed(2)} r="3">
+            <title>{tr('stats.sourceTrendPoint',
+                       { date: t.date, source: name || '', n: t.task_count })}</title>
+          </circle>
+        ))}
+        <text className="completion-trend-label" x={PAD_L} y={H - PAD_B + 16}>{first.date}</text>
+        <text className="completion-trend-label" x={W - PAD_R} y={H - PAD_B + 16}
+              textAnchor="end">{last.date}</text>
+      </svg>
+    </div>
+  )
+}
+
 export default function Stats() {
   const { tr } = useI18n()
   const storage = typeof localStorage !== 'undefined' ? localStorage : null
@@ -358,6 +423,25 @@ export default function Stats() {
                 ))}
               </tbody>
             </table>
+          </section>
+
+          {/* issue #224：来源按天趋势——各来源每日任务量走势（近 7/30 天
+              或全部），数据来自同一 dashboard 响应的 by_source_daily，
+              随上方时间段选择联动；days>0 时后端已逐日零填充（横轴连续） */}
+          <section className="stats-section">
+            <h2>{tr('stats.sourceTrendTitle')}</h2>
+            <p className="muted">{tr('stats.sourceTrendDesc')}</p>
+            {(data.by_source_daily || []).length === 0 ? (
+              <p className="muted">{tr('stats.sourceTrendEmpty')}</p>
+            ) : (
+              <div className="stats-source-trend-list">
+                {groupSourceDaily(data.by_source_daily).map((g) => (
+                  <SourceDailyChart key={g.source} name={g.name} series={g.series}
+                                    max={Math.max(1, ...(data.by_source_daily || [])
+                                      .map((r) => r.task_count))} />
+                ))}
+              </div>
+            )}
           </section>
 
           {/* 失败原因 Top 分布（与 #40 失败分类口径联动） */}

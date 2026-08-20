@@ -337,5 +337,16 @@
   "tasks.effectiveMaxRetries": "Effective max retries",
   "tasks.effectiveEngine": "Effective engine",
   "tasks.paramSourceRepo": "Repo override",
-  "tasks.paramSourceGlobal": "Inherit global"
+  "tasks.paramSourceGlobal": "Inherit global",
+  "overview.sourceStatsTitle": "Source Distribution",
+  "overview.sourceStatsDesc": "Task volume, success rate and avg duration by source (webhook / manual / reconcile) — last 30 days, auto-refresh every {seconds}s",
+  "overview.sourceStatsEmpty": "No task data (no tasks in the last 30 days)",
+  "overview.sourceTaskCount": "{n} tasks",
+  "overview.sourceSuccessRate": "Success rate",
+  "overview.sourceAvgDuration": "Avg duration {duration}",
+  "stats.sourceTrendTitle": "Source Daily Trend",
+  "stats.sourceTrendDesc": "Daily task volume per source (follows the range selector above)",
+  "stats.sourceTrendEmpty": "No task data (no tasks in the current period)",
+  "stats.sourceTrendAria": "Daily task volume trend for {source}",
+  "stats.sourceTrendPoint": "{date}: {n} tasks"
 }

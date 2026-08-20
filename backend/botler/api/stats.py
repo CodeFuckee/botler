@@ -36,8 +36,10 @@ def dashboard_stats(
 
     - days：0=全部时间段；7/30=最近 7/30 天（前端时间段选择持久化项）；
     - 返回 overview（总览卡片）+ by_engine / by_repo / by_source（分组
-      对比）+ failure_reasons（失败原因 Top 分布，与 #40 失败分类口径
-      联动：failed/interrupted 任务的 error_message 归一化后 Top 10）；
+      对比）+ by_source_daily（按来源×日期逐日趋势，issue #224——days>0
+      最近 N 天零填充、days=0 仅返回有数据日期）+ failure_reasons
+      （失败原因 Top 分布，与 #40 失败分类口径联动：failed/interrupted
+      任务的 error_message 归一化后 Top 10）；
     - 无任务数据时 overview 各计数为 0、success_rate 为 None、分组与
       失败原因为空数组（前端渲染空态不报错）。
     """

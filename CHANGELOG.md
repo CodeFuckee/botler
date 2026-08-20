@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+### Added
+- **任务来源维度统计：概览页来源分布卡片 + 统计页来源按天趋势（issue #224）**：
+  此前 `tasks.triggered_by` 已记录任务来源（webhook / manual / reconcile）但无
+  任何统计展示——issue #264 统计看板仅有按来源分组的汇总表，概览页与逐日趋势
+  仍缺失。本次补齐：
+  - **后端**：`backend/botler/database.py` 的 `aggregate_dashboard` 新增
+    `by_source_daily` 逐日趋势字段（新增模块级纯函数 `_source_daily_trend`）——
+    按来源×日期（UTC）聚合任务数/成功率/平均耗时，days>0 时最近 N 天窗口内
+    每个来源逐日零填充（趋势图横轴连续），days=0 时仅返回有数据的日期；
+    `days` 由 `dashboard_stats(days)` 透传，`GET /api/stats/dashboard` 响应
+    随时间段（近 7/30 天或全部）联动，无新增接口；
+  - **前端**：概览页新增「来源分布」统计卡片（`frontend/src/components/overview/
+    SourceStatsSection.jsx`，近 30 天，60 秒低频轮询，展示来源/任务量/成功率/
+    平均耗时，空态不报错）；统计页「来源分布」表下方新增「来源按天趋势」板块
+    （`Stats.jsx` 新增 `groupSourceDaily` 纯函数与 `SourceDailyChart` 轻量 SVG
+    折线图，随上方时间段选择联动，复用 completion-trend 折线样式，无第三方
+    图表库依赖）；
+  - **测试**：`backend/tests/test_api_stats.py` 新增 `TestSourceDailyTrend` 8 例
+    + `TestDashboardApiBySourceDaily` 2 例（7 天窗口零填充 / days=0 仅数据日 /
+    来源展示名 / 非法日期跳过 / 日期来源排序 / 空输入 / API 返回结构）；
+    `frontend/tests/stats-source-trend.test.mjs` 新增 5 例、
+    `frontend/tests/overview-source-stats.test.mjs` 新增 7 例；附带修复
+    主分支预存失败：`overview-issue-drag-align.test.mjs` 的脆弱断言
+    （`/\\.issue-drag-handle\\s*\\{/` 会误命中 issue #350 新增的粗指针
+    覆盖规则）改为行首锚定（`/^\\.issue-drag-handle\\s*\\{/m`）只匹配
+    基础规则，`overview-issue-task.test.mjs` 概览页板块顺序断言同步加入
+    「来源分布」，全量测试无 regression。
+
 ## [1.5.3] - 2026-08-20
 ### Added
 - **标记库页新增「一键同步全部」按钮，一次性把全部默认标签同步到所有仓库（issue #358）**：
