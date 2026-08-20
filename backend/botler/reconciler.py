@@ -13,7 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import ConfigManager
-from .database import Database, STATUS_FAILED, STATUS_SUCCEEDED, normalize_issue_created_at, normalize_issue_updated_at
+from .database import Database, STATUS_FAILED, STATUS_RUNNING, STATUS_SUCCEEDED, normalize_issue_created_at, normalize_issue_updated_at
 from .gitlab_client import GitLabClient, GitLabError
 from .git_remote import build_repo_client_with_username
 from .labels import CLAIM_SKIP_LABELS
@@ -235,6 +235,12 @@ class Reconciler:
         # issue 缺 bot-done/bot-failed 标签会被 webhook/对账重复领取。
         # 这里回看终态任务，issue 仍 open 且无终态标签时补打。
         self._backfill_terminal_labels(repo, cfg, client)
+        # 失败上报对账（issue #352）：上报 issue 只在失败收尾时由 executor
+        # 创建，收尾被打断 / 功能尚未部署 / 进程崩溃时失败上报永久缺失
+        # （任务 #505 失败于自动上报功能上线前，未生成上报 issue）。这里
+        # 回看最近任务，有失败分类且无上报标记的补建上报 issue（同 issue
+        # #40 的补打思路：收尾被打断由对账兜底恢复）。
+        self._backfill_failure_reports(repo, cfg, client)
         # 网页通知：队列状态（issue #21，节流由 notifier 负责）
         if not issues:
             self.notifier.queue_empty(repo["name"])
@@ -283,3 +289,103 @@ class Reconciler:
                 continue
             logger.info("终态标签对账：任务 %s（%s#%s）收尾被打断，已补打 %s",
                         task["id"], project_id, iid, want)
+
+    def _backfill_failure_reports(self, repo: dict, cfg, client) -> None:
+        """失败上报对账（issue #352）：补建漏报的任务失败上报 issue。
+
+        上报 issue 只在任务失败收尾时由 executor 创建（_finish_failed →
+        _emit_task_event → auto_issue 插件，issue #347）；收尾被打断 /
+        功能尚未部署 / 进程崩溃时失败上报永久缺失——任务 #505 失败于自动
+        上报功能上线前（2026-08-20 04:19 失败 vs 08:11 提交上线），issue
+        上只有 bot-failed 标签、没有上报 issue。这里回看最近
+        BACKFILL_TASKS_LIMIT 条任务：有失败分类（经历过失败终态，手动
+        重试重置状态后仍保留）且任务日志无上报标记的，补建上报 issue——
+        与 _backfill_terminal_labels（issue #40）同模式，失败不影响主
+        流程（下轮对账再试）。
+
+        client 为当前仓库生效的 GitLab 客户端（全局或 remote token 兜底），
+        调用遇 401/403 时同样尝试 remote token 兜底（issue #63）。跳过
+        执行中 / 最终成功的任务（失败已随重试解决，补报徒增噪音）；补建
+        成功后落与 auto_issue 插件相同的去重标记，保证幂等。
+        """
+        from .plugins.auto_issue import (
+            AUTO_ISSUE_LABELS, DEDUP_LOG_MARK,
+            build_issue_description, build_issue_title)
+        if not cfg.auto_issue_enabled:
+            return
+        tasks = self.db.list_tasks(
+            repo_id=repo["id"], limit=BACKFILL_TASKS_LIMIT)
+        for row in tasks:
+            task = dict(row)
+            task_id = int(task.get("id") or 0)
+            if task.get("status") in (STATUS_RUNNING, STATUS_SUCCEEDED):
+                continue  # 执行中 / 最终成功：失败已随重试解决，不补报
+            if not (task.get("failure_category") or ""):
+                continue  # 无失败分类 = 未经历过失败终态
+            project_id = int(task.get("project_id") or 0)
+            if not project_id:
+                continue
+            # 去重（与 auto_issue 插件同标记）：日志已有上报标记则跳过
+            try:
+                logs = self.db.list_logs(task_id) or []
+            except Exception:  # noqa: BLE001 日志查询失败不阻塞补建
+                logs = []
+            if any(DEDUP_LOG_MARK in (log["message"] or "")
+                   for log in logs):
+                continue
+            title = build_issue_title(task, repo_name=repo["name"])
+            description = build_issue_description(
+                task, self._failure_reason(task, task_id),
+                repo_name=repo["name"], repo_url=repo["url"],
+                gitlab_url=cfg.gitlab_url,
+                category=task.get("failure_category") or "",
+                detail=task.get("error_detail"))
+            # 负责人（issue #347）：解析失败 / 未配置时不指定，不阻塞补建
+            assignee_id = None
+            username = (cfg.auto_issue_assignee or "").strip()
+            if username:
+                try:
+                    uid, client = self._call_with_fallback(
+                        repo, cfg.verify_ssl, client,
+                        lambda c: c.get_user_id_by_username(username))
+                    assignee_id = int(uid) if uid else None
+                except (GitLabError, TypeError, ValueError):
+                    logger.warning("失败上报对账：解析负责人 %s 失败，"
+                                   "跳过指定负责人", username)
+                    assignee_id = None
+            try:
+                issue, client = self._call_with_fallback(
+                    repo, cfg.verify_ssl, client,
+                    lambda c: c.create_issue(
+                        project_id, title, description=description,
+                        assignee_id=assignee_id,
+                        labels=list(AUTO_ISSUE_LABELS)))
+            except GitLabError as e:
+                logger.warning("失败上报对账：任务 %s 创建上报 issue 失败: %s",
+                               task_id, e)
+                continue
+            iid = issue.get("iid") or ""
+            url = issue.get("web_url") or ""
+            try:
+                self.db.add_log(
+                    task_id, "info", f"{DEDUP_LOG_MARK} #{iid}（{url}）")
+            except Exception:  # noqa: BLE001 日志落库失败忽略
+                pass
+            logger.info("失败上报对账：任务 %s 补建失败上报 issue #%s",
+                        task_id, iid)
+
+    def _failure_reason(self, task: dict, task_id: int) -> str:
+        """从任务日志提取失败原因（补报场景没有收尾时的 reason 参数）。
+
+        失败收尾时 executor 会写「任务失败: <原因>」日志；对账补报优先
+        用它还原正文失败原因，缺失时回退任务 error_message，再兜底通用
+        文案（与 auto_issue 插件 build_issue_description 的兜底一致）。
+        """
+        try:
+            for log in reversed(list(self.db.list_logs(task_id) or [])):
+                msg = (log["message"] or "").strip()
+                if msg.startswith("任务失败:"):
+                    return msg.split(":", 1)[1].strip() or "（无失败原因）"
+        except Exception:  # noqa: BLE001
+            pass
+        return (task.get("error_message") or "").strip() or "（失败分类对账补报）"

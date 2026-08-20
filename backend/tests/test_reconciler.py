@@ -42,6 +42,8 @@ class StubGitLab:
         # 终态标签对账（issue #40）：(project_id, iid) → issue 详情桩
         self.issue_details: dict[tuple[int, int], dict] = {}
         self.labels_added: list[tuple[int, int, list[str]]] = []
+        # 失败上报对账（issue #352）：create_issue 调用记录
+        self.issues_created: list[dict] = []
 
     def get_bot_id(self):
         return BOT_ID
@@ -64,6 +66,20 @@ class StubGitLab:
     def add_labels(self, project_id, iid, labels):
         self.labels_added.append((project_id, iid, labels))
         return {"iid": iid}
+
+    def create_issue(self, project_id, title, description=None,
+                     assignee_id=None, labels=None):
+        """记录一次 create_issue 调用（失败上报对账测试用，issue #352）。"""
+        self.issues_created.append({
+            "project_id": project_id,
+            "title": title,
+            "description": description,
+            "assignee_id": assignee_id,
+            "labels": labels or [],
+        })
+        iid = 900 + len(self.issues_created)
+        return {"iid": iid,
+                "web_url": f"https://gitlab.example.com/demo/-/issues/{iid}"}
 
 
 def make_issue(iid: int, title: str = "测试 issue", labels: list[str] | None = None) -> dict:
@@ -584,3 +600,117 @@ class TestReconcileStoresIssueLabelsForPriority:
         assert result == {"scanned": 1, "enqueued": 1}
         task = ctx.db.find_active_task(42, 1)
         assert task["issue_updated_at"] == ""
+
+
+class TestReconcileBackfillsFailureReports:
+    """issue #352：任务失败但未生成上报 issue 时对账补建（失败上报对账）。
+
+    复现缺陷：上报 issue 只在任务失败收尾时由 executor 创建
+    （_finish_failed → _emit_task_event → auto_issue 插件）；收尾被打断 /
+    功能尚未部署 / 进程崩溃时失败上报永久缺失——任务 #505 失败于自动上报
+    功能上线前（2026-08-20 04:19 失败 vs 08:11 提交上线），issue 上只有
+    bot-failed 标签、没有上报 issue，用户据此上报「#509 实现的功能没有
+    成功运行」。对账应兜底补建：扫描最近任务，有失败分类且无上报标记的
+    补建上报 issue（bug + bot-failed 标签、负责人按配置，与 auto_issue
+    插件同格式），补建后在任务日志落去重标记。
+    """
+
+    @staticmethod
+    def _mk_failed_task(db, repo_id: int, issue_iid: int,
+                        status: str = "failed",
+                        category: str = "env") -> int:
+        """创建经历失败终态的任务（可模拟手动重试重置状态）。"""
+        task_id = db.create_task(repo_id, 42, issue_iid, f"失败任务 {issue_iid}")
+        db.set_task_status(task_id, status, failure_category=category)
+        return task_id
+
+    def test_backfills_report_for_failed_task(self, ctx):
+        """failed 终态任务无上报标记 → 对账补建上报 issue（bug+bot-failed）。"""
+        repo_id = _add_repo(ctx.db)
+        task_id = self._mk_failed_task(ctx.db, repo_id, 1, status="failed")
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert len(ctx.gitlab.issues_created) == 1
+        created = ctx.gitlab.issues_created[0]
+        assert f"任务 #{task_id}" in created["title"]
+        assert created["labels"] == ["bug", "bot-failed"]
+        # 落库去重标记，避免下一轮重复补建
+        logs = ctx.db.list_logs(task_id)
+        assert any("已自动提交失败上报 issue" in log["message"] for log in logs)
+
+    def test_backfills_report_for_retried_queued_task(self, ctx):
+        """失败后手动重试重置为 queued（保留失败分类）→ 仍补建（任务 #505 场景）。"""
+        repo_id = _add_repo(ctx.db)
+        task_id = self._mk_failed_task(ctx.db, repo_id, 2, status="queued")
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert len(ctx.gitlab.issues_created) == 1
+        assert f"任务 #{task_id}" in ctx.gitlab.issues_created[0]["title"]
+        # 原 issue 链接：按仓库 url 解析项目路径拼 GitLab 地址
+        desc = ctx.gitlab.issues_created[0]["description"]
+        assert "demo/-/issues/2" in desc
+
+    def test_skips_when_report_marker_exists(self, ctx):
+        """任务日志已有上报标记 → 幂等跳过（不重复补建）。"""
+        repo_id = _add_repo(ctx.db)
+        task_id = self._mk_failed_task(ctx.db, repo_id, 3)
+        ctx.db.add_log(task_id, "info", "已自动提交失败上报 issue #100")
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert ctx.gitlab.issues_created == []
+
+    def test_skips_succeeded_task_with_failure_history(self, ctx):
+        """任务曾失败但最终成功（保留失败分类）→ 不补建（避免噪音）。"""
+        repo_id = _add_repo(ctx.db)
+        self._mk_failed_task(ctx.db, repo_id, 4, status="succeeded",
+                             category="unknown")
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert ctx.gitlab.issues_created == []
+
+    def test_skips_running_task_with_failure_history(self, ctx):
+        """任务正在重试执行中（running）→ 不补建（可能即将成功）。"""
+        repo_id = _add_repo(ctx.db)
+        self._mk_failed_task(ctx.db, repo_id, 5, status="running")
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert ctx.gitlab.issues_created == []
+
+    def test_skips_task_without_failure_category(self, ctx):
+        """无失败分类（从未失败终态）→ 不补建。"""
+        repo_id = _add_repo(ctx.db)
+        _mk_terminal_task(ctx.db, repo_id, 6, "failed")
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert ctx.gitlab.issues_created == []
+
+    def test_disabled_skips(self, ctx):
+        """auto_issue.enabled=false：对账不补建上报 issue。"""
+        repo_id = _add_repo(ctx.db)
+        self._mk_failed_task(ctx.db, repo_id, 7)
+        ctx.config.update_section("auto_issue", {"enabled": False})
+
+        ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert ctx.gitlab.issues_created == []
+
+    def test_create_failure_does_not_block(self, ctx):
+        """补建失败（GitLab 报错）：不阻塞主流程，下轮对账重试。"""
+        repo_id = _add_repo(ctx.db)
+        self._mk_failed_task(ctx.db, repo_id, 8)
+
+        def fail_create(project_id, title, **kwargs):
+            raise GitLabError("模拟 GitLab API 故障")
+
+        ctx.gitlab.create_issue = fail_create
+        ctx.gitlab.issues_by_project = {42: [make_issue(9, labels=["bug"])]}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}

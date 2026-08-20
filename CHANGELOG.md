@@ -941,6 +941,25 @@
 
 ### Fixed
 
+- **任务失败自动上报漏报时对账兜底补建上报 issue（issue #352）**：
+  任务失败上报 issue 只在失败收尾时由 executor 创建（_finish_failed →
+  _emit_task_event → auto_issue 插件，issue #347）；收尾被打断 / 功能尚未
+  部署 / 进程崩溃时失败上报永久缺失——任务 #505 失败于自动上报功能上线前
+  （08-20 04:19 失败 vs 08:11 提交上线），issue 上只有 bot-failed 标签、
+  没有上报 issue，用户据此上报「#509 实现的功能没有成功运行」。本次新增
+  **失败上报对账**：reconciler 每次对账回看最近 20 条任务，有失败分类
+  （经历过失败终态，手动重试重置状态后仍保留）且任务日志无上报标记的，
+  补建上报 issue——标题/正文与 auto_issue 插件同格式（任务 id、原始 issue
+  链接、失败原因从日志提取、分类徽章、bug + bot-failed 标签、负责人按
+  auto_issue.assignee 解析），补建成功落与插件相同的去重标记保证幂等；
+  跳过执行中 / 最终成功的任务（失败已随重试解决，不补报噪音），
+  auto_issue.enabled=false 时不补建，创建失败仅记日志不阻塞主流程（下轮
+  对账重试，与 _backfill_terminal_labels issue #40 同模式）；
+  - **测试**：`backend/tests/test_reconciler.py` 新增
+    `TestReconcileBackfillsFailureReports` 8 例（failed 终态任务补建 /
+    失败后手动重试重置为 queued 仍补建（#505 场景）/ 已有上报标记幂等跳过 /
+    最终成功与执行中任务不补建 / 无失败分类不补建 / 关闭开关不补建 /
+    创建失败不阻塞主流程），修复前核心 2 例必失败，全量测试无 regression。
 - **概览页打开 issue 详情右边栏或流水线右边栏时双滚动条，改为只显示右边栏滚动条（issue #348）**：
   概览页打开 issue 详情右边栏或流水线右边栏时，页面同时出现两个竖直滚动条——
   主页面一个、右边栏一个。根因：`.drawer-overlay` 虽以 `position: fixed` 覆盖
