@@ -28,7 +28,8 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 
 调度器派发顺序：仓库优先级（数字小先）→ 同仓库队列内按 issue 标签优先级
 （默认 `bug` > `test` > `feature`，设置页可自定义），同优先级按 issue 创建时间升序
-（创建时间越早的 issue 越先处理）。
+（创建时间越早的 issue 越先处理）；带 `bot-issue` 标记的任务排在**所有任务之后**
+（除非设置页「issue 标签优先级」显式包含 `bot-issue` 自定义顺序，issue #360）。
 
 > 💡 **排队任务人工调优**（issue #242）：排队中的任务支持人工调整优先级
 > （`tasks.manual_priority` 字段，NULL = 按系统规则）——任务列表页排队任务
@@ -680,7 +681,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `repos[].timeout_seconds` | 空 | 仓库级任务超时（秒，1~7200；issue #237）。留空 = 继承全局 `worker.task_timeout_seconds`；仓库编辑弹窗「任务参数」分组可配置/清空，任务列表/详情展示该任务实际生效值与其来源（仓库覆盖 / 继承全局） |
 | `repos[].max_retries` | 空 | 仓库级任务重试次数（0~20；issue #237）。留空 = 继承全局 `worker.max_retries`（0 = 不重试）；其余同上 |
 | `repos[].engine` | 空 | 仓库级执行引擎（claude / hermes / dsh，插件注册表白名单；issue #237）。留空 = 继承全局 `worker.engine`；其余同上 |
-| `worker.issue_priority` | `["bug","test","feature"]` | issue 标签处理优先级（同仓库队列内按此顺序选任务派发，越靠前越先处理；未列出的标签排在最后，同优先级按 issue 创建时间升序（创建早的 issue 先处理）；设置页「任务调度」卡片可修改） |
+| `worker.issue_priority` | `["bug","test","feature"]` | issue 标签处理优先级（同仓库队列内按此顺序选任务派发，越靠前越先处理；未列出的标签排在最后，同优先级按 issue 创建时间升序（创建早的 issue 先处理）；带 `bot-issue` 标记的任务排在所有任务之后（配置未显式包含时，issue #360）；设置页「任务调度」卡片可修改） |
 | `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟）；可按仓库覆盖（`repos[].timeout_seconds`，issue #237） |
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试）；可按仓库覆盖（`repos[].max_retries`，issue #237） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |

@@ -4,11 +4,14 @@
 - 跨仓库并行，受 max_concurrent_repos 限制
 - 派发选择按仓库优先级（issue #51）：priority 数字小先派发，
   同优先级按队内最优任务排序键比较，再按 repo_id 兜底
-- 队内任务排序（issue #76 + #234）：按「issue 标签权重」选任务派发——
+- 队内任务排序（issue #76 + #234 + #360）：按「issue 标签权重」选任务派发——
   任务 issue_labels 在配置 worker.issue_priority 中首个命中的索引即权重
   （越靠前越先处理），未命中配置标签（或无标签）排最后；同权重按
   issue 创建时间升序（创建早的 issue 先处理，issue #234；创建时间缺失
   时按 issue 更新时间、再按任务提交时间 created_at 兜底）
+- bot-issue 标记（issue #360）：任务带 `bot-issue` 标记时排在所有任务之后
+  （权重 = len(issue_priority)+1，比未命中配置标签/无标签任务还靠后）；
+  用户若在配置中显式包含 bot-issue，则按配置顺序（允许自定义）
 - 状态机：queued → running → retrying → succeeded / failed
 - 重启恢复：queued 重新入队，running/retrying 标记 interrupted 后重新入队
 - 任务持久化在 SQLite，调度器线程只负责派发，执行在 worker 线程
@@ -24,6 +27,7 @@ from collections import defaultdict, deque
 from datetime import datetime
 
 from .config import ConfigManager
+from .labels import BOT_ISSUE_LABEL
 from .pause_window import in_pause_window
 from .database import Database, DEFAULT_PRIORITY, STATUS_QUEUED
 from .executor import ClaudeExecutor
@@ -195,12 +199,15 @@ class TaskScheduler:
         顺序——设置过手动顺序的 issue 优先派发（标记 0），按用户拖动后的
         位置升序；未设置手动顺序的 issue（标记 1，位置恒 0）按默认排序。
 
-        默认排序（issue #76 + #234）：权重 = issue_labels 在配置
+        默认排序（issue #76 + #234 + #360）：权重 = issue_labels 在配置
         issue_priority 列表中首个命中的索引；未命中任何配置标签（或无
-        标签）排最后（权重 = len(priority)）。同权重按 issue 创建时间
-        升序（issue #234：创建时间越早的 issue 越先处理；UTC 串可直接
-        比较；创建时间缺失的历史任务按 issue 更新时间、再按任务提交时间
-        created_at 兜底），task_id 兜底保证确定性。
+        标签）排最后（权重 = len(priority)）。带 bot-issue 标记（issue
+        #360）的任务排在所有任务之后（权重 = len(priority)+1），除非
+        用户在配置中显式包含 bot-issue（按配置索引，允许自定义）。
+        同权重按 issue 创建时间升序（issue #234：创建时间越早的 issue
+        越先处理；UTC 串可直接比较；创建时间缺失的历史任务按 issue
+        更新时间、再按任务提交时间 created_at 兜底），task_id 兜底保证
+        确定性。
         """
         priority = cfg.issue_priority_labels
         unlisted = len(priority)
@@ -209,10 +216,16 @@ class TaskScheduler:
             return (1, 0, 1, 0, unlisted, "", task_id)
         labels = self._decode_labels(task["issue_labels"])
         weight = unlisted
-        for i, name in enumerate(priority):
-            if name in labels:
-                weight = i
-                break
+        if BOT_ISSUE_LABEL in labels and BOT_ISSUE_LABEL not in priority:
+            # bot-issue 标记（issue #360）：排在所有任务之后（权重比未命中
+            # 配置标签的任务还靠后）；配置显式包含 bot-issue 时走下方循环
+            # 按配置索引（允许用户自定义顺序）
+            weight = unlisted + 1
+        else:
+            for i, name in enumerate(priority):
+                if name in labels:
+                    weight = i
+                    break
         created = (task["issue_created_at"] or task["issue_updated_at"]
                    or task["created_at"] or "")
         pos = self.db.get_manual_order_position(

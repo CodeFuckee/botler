@@ -1,6 +1,6 @@
 """标记库（issue #29）：默认标签清单 + 自定义标签校验。
 
-标记库规范见 docs/labels.md。默认 14 个标签为内置清单（不可删除），
+标记库规范见 docs/labels.md。默认 15 个标签为内置清单（不可删除），
 用户可通过 Web UI「标记库」页 / /api/labels 添加/删除自定义标签。
 """
 
@@ -26,12 +26,18 @@ DEFAULT_LABELS = [
     {"name": "blocked", "color": "#607d8b", "description": "等待补充信息/被阻塞"},
     {"name": "bot-done", "color": "#6699cc", "description": "bot 已完成开发，待用户确认后关闭"},
     {"name": "bot-failed", "color": "#6699cc", "description": "bot 处理失败，需人工介入"},
+    # 调度标签
+    {"name": "bot-issue", "color": "#6699cc", "description": "调度排最后（带此标记的任务在任务调度时排在所有任务之后）"},
 ]
 
 # bot 领取过滤标签（issue #30 / #41）：领取任务（webhook 入队、对账补入队）时
 # 跳过带这些标签的 issue。need-verify = 用户标记需人工验证，bot 不领取；
 # bot-done / bot-failed = 终态（已完成待确认 / 失败待介入）。
 CLAIM_SKIP_LABELS = ("bot-done", "bot-failed", "need-verify")
+
+# 调度排最后标记（issue #360）：任务带此标记时，调度器将其排在所有任务之后
+# （除非用户在配置 worker.issue_priority 中显式包含 bot-issue 自定义顺序）。
+BOT_ISSUE_LABEL = "bot-issue"
 
 # GitLab 标签名规则：字母/数字开头，可含字母、数字、空格、下划线、横线（≤ 60 字符）
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,59}$")

@@ -8,6 +8,11 @@
 更新时间、再按任务创建时间兜底）。
 
 此前同仓库队列纯 FIFO（入队顺序），本测试先行编写，实现前应全部失败。
+
+bot-issue 调度规则（issue #360）：标记库新增 `bot-issue` 默认标记，任务
+带 `bot-issue` 标记时排在**所有任务之后**（权重 = len(priority)+1，比未命中
+配置标签/无标签任务还靠后）；用户若在配置 worker.issue_priority 中显式包含
+`bot-issue`，则按配置顺序派发（允许自定义）。
 """
 
 import json
@@ -402,3 +407,114 @@ class TestDispatchIssueLabelPriority:
         # 同仓库仍 running：不应派发队列中剩余的 feature 任务
         sched._dispatch()
         assert executor.run_ids == [], "同仓库有 running 任务时不应派发同仓库下一任务"
+
+
+class TestDispatchBotIssueLabel:
+    """带 bot-issue 标记的任务排在所有任务之后（issue #360）。"""
+
+    def test_bot_issue_dispatched_after_unlisted_labels(self, config, db, executor):
+        """bot-issue 任务排在未命中配置标签（如 docs）的任务之后。"""
+        repo = _mk_repo(db, project_id=11)
+        t_bot = _mk_task(db, repo, project_id=11, issue_iid=1,
+                         issue_labels=["bot-issue"])
+        t_docs = _mk_task(db, repo, project_id=11, issue_iid=2,
+                          issue_labels=["docs"])
+
+        sched = _scheduler(config, db, executor)
+        sched.enqueue(t_bot)
+        sched.enqueue(t_docs)
+
+        _, done1 = executor.expect()
+        sched._dispatch()
+        assert done1.wait(timeout=2)
+        _, done2 = executor.expect()
+        sched._dispatch()
+        assert done2.wait(timeout=2)
+        assert executor.run_ids == [t_docs, t_bot], \
+            "bot-issue 任务应排在未命中配置标签的任务之后"
+
+    def test_bot_issue_dispatched_after_no_label(self, config, db, executor):
+        """无标签任务也排在 bot-issue 任务之前（bot-issue 严格排所有任务之后）。"""
+        repo = _mk_repo(db, project_id=11)
+        t_bot = _mk_task(db, repo, project_id=11, issue_iid=1,
+                         issue_labels=["bot-issue"])
+        t_none = _mk_task(db, repo, project_id=11, issue_iid=2, issue_labels=[])
+
+        sched = _scheduler(config, db, executor)
+        sched.enqueue(t_bot)
+        sched.enqueue(t_none)
+
+        _, done1 = executor.expect()
+        sched._dispatch()
+        assert done1.wait(timeout=2)
+        _, done2 = executor.expect()
+        sched._dispatch()
+        assert done2.wait(timeout=2)
+        assert executor.run_ids == [t_none, t_bot], \
+            "bot-issue 任务应排在无标签任务之后"
+
+    def test_bot_issue_with_bug_label_still_last(self, config, db, executor):
+        """bug + bot-issue 共存：只要带 bot-issue 就排所有任务之后。"""
+        repo = _mk_repo(db, project_id=11)
+        t_bug_bot = _mk_task(db, repo, project_id=11, issue_iid=1,
+                             issue_labels=["bug", "bot-issue"])
+        t_feature = _mk_task(db, repo, project_id=11, issue_iid=2,
+                             issue_labels=["feature"])
+
+        sched = _scheduler(config, db, executor)
+        sched.enqueue(t_bug_bot)
+        sched.enqueue(t_feature)
+
+        _, done1 = executor.expect()
+        sched._dispatch()
+        assert done1.wait(timeout=2)
+        _, done2 = executor.expect()
+        sched._dispatch()
+        assert done2.wait(timeout=2)
+        assert executor.run_ids == [t_feature, t_bug_bot], \
+            "带 bot-issue 的任务即使含 bug 也应排最后"
+
+    def test_bot_issue_configured_in_priority_uses_config_order(self, tmp_path, db, executor):
+        """配置 worker.issue_priority 显式包含 bot-issue 时按配置顺序（可自定义）。"""
+        cfg = _worker_config(tmp_path, ["bug", "bot-issue", "test"])
+        repo = _mk_repo(db, project_id=11)
+        t_test = _mk_task(db, repo, project_id=11, issue_iid=1,
+                          issue_labels=["test"])
+        t_bot = _mk_task(db, repo, project_id=11, issue_iid=2,
+                         issue_labels=["bot-issue"])
+
+        sched = _scheduler(cfg, db, executor)
+        sched.enqueue(t_test)
+        sched.enqueue(t_bot)
+
+        _, done1 = executor.expect()
+        sched._dispatch()
+        assert done1.wait(timeout=2)
+        _, done2 = executor.expect()
+        sched._dispatch()
+        assert done2.wait(timeout=2)
+        assert executor.run_ids == [t_bot, t_test], \
+            "配置显式包含 bot-issue 时应按配置索引派发"
+
+    def test_bot_issue_tasks_ordered_by_issue_created_at(self, config, db, executor):
+        """多个 bot-issue 任务：同权重按 issue 创建时间升序（创建早的先派发）。"""
+        repo = _mk_repo(db, project_id=11)
+        t_late = _mk_task(db, repo, project_id=11, issue_iid=1,
+                          issue_labels=["bot-issue"],
+                          issue_created_at="2026-08-14 12:00:00")
+        t_early = _mk_task(db, repo, project_id=11, issue_iid=2,
+                           issue_labels=["bot-issue"],
+                           issue_created_at="2026-08-14 08:00:00")
+
+        sched = _scheduler(config, db, executor)
+        sched.enqueue(t_late)
+        sched.enqueue(t_early)
+
+        _, done1 = executor.expect()
+        sched._dispatch()
+        assert done1.wait(timeout=2)
+        _, done2 = executor.expect()
+        sched._dispatch()
+        assert done2.wait(timeout=2)
+        assert executor.run_ids == [t_early, t_late], \
+            "bot-issue 任务之间按 issue 创建时间升序派发"

@@ -5,6 +5,23 @@
 ## [Unreleased]
 
 ### Added
+- **标记库新增 `bot-issue` 默认标记，任务调度时带该标记的任务排在所有任务之后（issue #360）**：
+  - **标记库**：`backend/botler/labels.py` 的 `DEFAULT_LABELS` 新增调度标签
+    `bot-issue`（并导出常量 `BOT_ISSUE_LABEL`），同步更新 `docs/labels.md`
+    （新增「调度标签」小节 + 优先级判定说明）与 `scripts/sync_labels.py`
+    （批量同步清单，标记库页「同步到所有仓库 / 一键同步全部」与新添加仓库
+    的默认标签补齐均自动覆盖新标签）；
+  - **任务调度**：`backend/botler/scheduler.py` 的 `_task_sort_key` 对带
+    `bot-issue` 标记的任务计算权重 `len(issue_priority)+1`——严格排在所有
+    任务之后（含未命中配置标签 / 无标签任务）；若用户在设置页「任务调度 →
+    issue 标签优先级」中显式包含 `bot-issue`，则按配置顺序派发（允许自定义）；
+    多标签任务（如 `bug` + `bot-issue`）只要带 `bot-issue` 即排最后；人工
+    优先级（issue #242 置顶/置底）与手动顺序（issue #287）仍优先于该规则；
+  - **测试**：`backend/tests/test_scheduler_issue_priority.py` 新增
+    `TestDispatchBotIssueLabel` 5 例（排在未命中配置标签/无标签任务之后、
+    与高优先级标签共存仍排最后、配置显式包含时按配置顺序、同权重按 issue
+    创建时间升序）；`backend/tests/test_api_labels.py` 默认标签数量断言
+    14 → 15；全量测试无 regression。
 - **概览页 issue 详情右边栏：标记活动展示真实用户名（issue #353）**：
   此前标记活动（issue #349 的「谁添加/移除了哪个标记」）对 bot/项目令牌用户
   展示脱敏星号——GitLab resource_label_events API 返回的 user.name 为

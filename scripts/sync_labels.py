@@ -38,6 +38,8 @@ LABELS = [
     {"name": "blocked",     "color": "#607d8b", "description": "等待补充信息/被阻塞"},
     {"name": "bot-done",    "color": "#6699cc", "description": "bot 已完成开发，待用户确认后关闭"},
     {"name": "bot-failed",  "color": "#6699cc", "description": "bot 处理失败，需人工介入"},
+    # 调度标签
+    {"name": "bot-issue",   "color": "#6699cc", "description": "调度排最后（带此标记的任务在任务调度时排在所有任务之后）"},
 ]
 
 
