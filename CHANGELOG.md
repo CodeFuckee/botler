@@ -965,6 +965,29 @@
 
 ### Fixed
 
+- **竖屏页面时概览页「开发 issue」组件中「其他」issue 的拖动手柄图标与 issue
+  标题不在同一高度、图标偏上（issue #350）**：
+  概览页开放 issue 列表「其他」分组（支持拖动排序，issue #287）的拖动手柄图标
+  （gripVertical）在竖屏页面（触屏设备）下与 issue 标题不在同一垂直高度、图标
+  偏上。根因：issue #343 用 `margin-top: calc((1.6em - 1em) / 2)` 让图标中心与
+  标题行中心重合，但该计算仅对桌面端（fine pointer）成立——触屏设备（pointer:
+  coarse）命中触控目标规则（`.issue-link { min-height: 44px }`），标题按钮盒被
+  撑高到 44px 且按钮内文本垂直居中（文本中心从 11.2px 降至 22px），手柄图标
+  中心仍停留在 11.2px——Chromium 实测（390×844 + hasTouch）偏差 10.8px。
+  修复：`@media (pointer: coarse)` 内新增高优先级规则
+  `.issue-item .issue-drag-handle { margin-top: 0; min-height: 44px }`——触屏下
+  手柄同样成为 44px 触控目标，图标（inline-flex 垂直居中）中心 22px 与标题
+  文本中心重合；桌面端（fine pointer）不受影响，保持 issue #343 的行高差对齐。
+  选择器双类提升优先级，避免被后声明的 calc 基础规则覆盖（实测修复后偏差
+  ≤2px）；
+  - **测试**：`frontend/e2e/tests/issue-drag-align-portrait.spec.js` 新增 2 例
+    E2E（竖屏触屏视口 390×844 + hasTouch/isMobile 测量图标中心与标题行中心
+    偏差 ≤2px，修复前偏差 10.8px 必失败；桌面视口 1280×720 保持 #343 对齐
+    不回归），`frontend/tests/overview-issue-drag-align-portrait.test.mjs` 新增
+    3 例单元测试（桌面基础规则保持行高差 calc / coarse 块存在双类覆盖规则 /
+    inline-flex 居中与顶部对齐不变量），全量前端单元测试与后端测试无
+    regression。
+
 - **任务失败自动上报漏报时对账兜底补建上报 issue（issue #352）**：
   任务失败上报 issue 只在失败收尾时由 executor 创建（_finish_failed →
   _emit_task_event → auto_issue 插件，issue #347）；收尾被打断 / 功能尚未

@@ -2284,6 +2284,17 @@ body:has(.drawer-overlay) {
     min-height: 44px;
   }
   .btn-mini, .btn-sm, .btn-small { min-height: 44px; }
+  /* issue #350：竖屏页面（触屏设备 pointer: coarse）下 .issue-link 因
+     触控目标 min-height: 44px 被撑高、按钮内文本垂直居中，标题文本中心
+     从 11.2px 降至 22px；手柄若仍按行高差 em 下移（4.2px）会停留在
+     11.2px，图标偏上约 10.8px（issue #343 仅覆盖桌面 fine pointer）。
+     触屏下让手柄同样成为 44px 触控目标并归零 margin-top——图标在
+     inline-flex 盒内垂直居中，中心 22px 与标题文本中心重合；桌面端
+     （fine pointer）不受影响，保持 issue #343 的行高差对齐。 */
+  .issue-item .issue-drag-handle {
+    margin-top: 0;
+    min-height: 44px;
+  }
 }
 
 /* 网页通知设置（issue #21） */
