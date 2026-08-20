@@ -220,14 +220,17 @@ class TestDshCredentials:
             tmp_path, dsh_extra="\n  api_key: sk-dsh\n  base_url: https://x/v1",
             ai_providers_extra=_AI_PROVIDERS_DEEPSEEK)
         ex = _mk_executor(tmp_path, config)
-        assert ex._dsh_credentials(config.get()) == ("sk-dsh", "https://x/v1")
+        # dsh 段显式配置 key/base_url → 模型 None（调用方透传 dsh.model）
+        assert ex._dsh_credentials(config.get()) == ("sk-dsh", "https://x/v1", None)
 
     def test_falls_back_to_ai_provider_deepseek(self, tmp_path):
         """dsh 段未配 → ai_providers 的 deepseek 项（enabled）回退。"""
         config = _mk_config(tmp_path, ai_providers_extra=_AI_PROVIDERS_DEEPSEEK)
         ex = _mk_executor(tmp_path, config)
+        # issue #397：dsh 段未显式配模型 → 模型跟随选中供应商（deepseek 项）
         assert ex._dsh_credentials(config.get()) == (
-            "sk-ai-provider-key", "https://api.deepseek.com/v1")
+            "sk-ai-provider-key", "https://api.deepseek.com/v1",
+            "deepseek-v4-flash")
 
     def test_ai_provider_fills_only_missing_fields(self, tmp_path):
         """dsh 段只配 base_url：api_key 回退、base_url 保留 dsh 段值。"""
@@ -236,7 +239,8 @@ class TestDshCredentials:
             ai_providers_extra=_AI_PROVIDERS_DEEPSEEK)
         ex = _mk_executor(tmp_path, config)
         assert ex._dsh_credentials(config.get()) == (
-            "sk-ai-provider-key", "https://self-host/v1")
+            "sk-ai-provider-key", "https://self-host/v1",
+            "deepseek-v4-flash")
 
     def test_disabled_ai_provider_skipped(self, tmp_path):
         """deepseek 项 enabled=false → 不回退（key 不可用）。"""
@@ -251,7 +255,7 @@ class TestDshCredentials:
   enabled: false
 """)
         ex = _mk_executor(tmp_path, config)
-        assert ex._dsh_credentials(config.get()) == (None, None)
+        assert ex._dsh_credentials(config.get()) == (None, None, None)
 
     def test_non_openai_compat_provider_skipped(self, tmp_path):
         """（issue #395）非 OpenAI 兼容协议 provider（anthropic）不回退——
@@ -267,14 +271,56 @@ class TestDshCredentials:
   enabled: true
 """)
         ex = _mk_executor(tmp_path, config)
-        assert ex._dsh_credentials(config.get()) == (None, None)
+        assert ex._dsh_credentials(config.get()) == (None, None, None)
 
     def test_none_when_no_source(self, tmp_path):
         """dsh 段与 ai_providers 均无 deepseek 凭据 → (None, None)（SDK 读环境）。"""
         config = _mk_config(tmp_path)
         ex = _mk_executor(tmp_path, config)
-        assert ex._dsh_credentials(config.get()) == (None, None)
+        assert ex._dsh_credentials(config.get()) == (None, None, None)
 
+
+
+    def test_provider_model_follows_credentials_chain(self, tmp_path):
+        """（issue #397）dsh 段未显式配置模型时，模型跟随凭据解析链选中的
+        AI 供应商。此前模型固定 dsh_model 默认 deepseek-v4-flash，
+        ai_providers 里配的模型（如越建科 deepseek-v4-pro）从未传给 dsh
+        引擎——任务 #581/#397「配置了 v4 pro 最终却调用 v4 flash」根因。
+        """
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: 越建科
+  provider: custom
+  base_url: https://new.s1.prod.gglohh.top/v1
+  api_key: sk-yuejianke
+  model: deepseek-v4-pro
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        api_key, base_url, model = ex._dsh_credentials(config.get())
+        assert (api_key, base_url, model) == (
+            "sk-yuejianke", "https://new.s1.prod.gglohh.top/v1",
+            "deepseek-v4-pro")
+
+    def test_explicit_dsh_model_wins_over_provider_model(self, tmp_path):
+        """dsh 段显式配置模型 → 供应商模型不覆盖（显式优先）。"""
+        config = _mk_config(
+            tmp_path,
+            dsh_extra="\n  model: deepseek-v4-flash",
+            ai_providers_extra="""
+- name: 越建科
+  provider: custom
+  base_url: https://new.s1.prod.gglohh.top/v1
+  api_key: sk-yuejianke
+  model: deepseek-v4-pro
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        api_key, base_url, model = ex._dsh_credentials(config.get())
+        assert (api_key, base_url) == (
+            "sk-yuejianke", "https://new.s1.prod.gglohh.top/v1")
+        assert model is None  # dsh 段显式模型由调用方透传
 
 class TestRunDshOnce:
     """_run_dsh_once：构造参数、工作区、环境、SDK 配置透传。"""
@@ -323,6 +369,31 @@ class TestRunDshOnce:
         kwargs = fake_runner.instances[0].kwargs
         assert kwargs["api_key"] == "sk-ai-provider-key"
         assert kwargs["base_url"] == "https://api.deepseek.com/v1"
+
+
+    def test_provider_model_passed_to_runner_when_not_explicit(
+            self, monkeypatch, tmp_path, fake_runner):
+        """issue #397：dsh 段未显式配置模型时，AI 供应商的模型名传给
+        DshRunner（此前固定 dsh_model 默认 deepseek-v4-flash——任务
+        #581/#397「配置了 deepseek-v4-pro 最终却调用 v4 flash」）。"""
+        config = _mk_config(
+            tmp_path, worker_extra="\n  engine: dsh\n  precheck_enabled: false",
+            ai_providers_extra="""
+- name: 越建科
+  provider: custom
+  base_url: https://new.s1.prod.gglohh.top/v1
+  api_key: sk-yuejianke
+  model: deepseek-v4-pro
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        _patch_workspace(monkeypatch, ex, tmp_path)
+        fake_runner.preset_lines = [_RESULT_LINE]
+        ex._run_dsh_once(1, _REPO, _ISSUE)
+        kwargs = fake_runner.instances[0].kwargs
+        assert kwargs["api_key"] == "sk-yuejianke"
+        assert kwargs["base_url"] == "https://new.s1.prod.gglohh.top/v1"
+        assert kwargs["model"] == "deepseek-v4-pro"
 
     def test_ai_provider_credentials_none_passed_as_none(
             self, dsh_executor, monkeypatch, tmp_path, fake_runner):
@@ -541,6 +612,71 @@ class TestRunDshOnce:
             json.dumps({"final_response": "", "finish_reason": "error",
                         "session_id": "x"}, ensure_ascii=False)) is False
         assert dsh_executor._dsh_collision(_RESULT_LINE) is False
+
+
+    # ---- issue #401：dsh 会话损坏（tool 消息缺 callId）续跑降级 ----
+    def _corrupt_lines(self, session_id: str) -> list[str]:
+        """会话损坏续跑错误输出形态（任务 #581/#582 日志）：
+        「回合结束: error（session event at seq N message must have tool
+        source）」——会话文件里持久化了空 callId 的 tool 消息，runtime
+        重放时无法还原工具来源，报 tool source 缺失。"""
+        return [
+            json.dumps({"event": "status", "message": "dsh 会话状态: running"}),
+            json.dumps({"event": "raw", "type": "turn/start"}),
+            json.dumps({"event": "status",
+                        "message": "回合结束: error（session event at seq 94 "
+                                   "message must have tool source）"}),
+            json.dumps({"event": "status", "message": "dsh 会话状态: idle"}),
+            json.dumps({"final_response": "", "finish_reason": "error",
+                        "session_id": session_id}),
+        ]
+
+    def test_corrupted_session_downgrades_to_fresh_session(
+            self, dsh_executor, monkeypatch, tmp_path, fake_runner):
+        """resume 撞会话损坏错误 → 换新 id + 全新提示词重跑并成功。
+
+        复现任务 #581/#582：dsh 模型流式输出工具调用时后续 chunk 的
+        name/id 为空串，runtime 合并后工具调用名称为空 → 全部工具调用
+        报 `unknown tool ""` → agent 死循环 → 会话文件持久化空 callId
+        的 tool 消息 → 断点续跑 runtime 重放报「message must have tool
+        source」。旧逻辑把该错误当普通失败交重试循环，重试仍用同一落库
+        id → 每次必报 → 重试耗尽 failed。修复后检测命中即降级全新会话
+        （新 id + 全新提示词）重跑，任务得以完成。
+        """
+        task_id = _mk_task(dsh_executor)
+        dsh_executor.db.set_task_status(task_id, None, dsh_session_id="old-sid")
+        _patch_workspace(monkeypatch, dsh_executor, tmp_path)
+        fake_runner.preset_queue = [
+            self._corrupt_lines("old-sid"),  # 第 1 轮：resume 撞会话损坏
+            [_RESULT_LINE],                  # 第 2 轮：全新会话成功
+        ]
+        code, output = dsh_executor._run_dsh_once(
+            task_id, _REPO, _ISSUE, resume_session="old-sid")
+        assert code == 0
+        assert dsh_executor._dsh_result(output) == "success"
+        # 两个 runner 实例：第 1 个 resume 旧 id，第 2 个全新 id + 全新提示词
+        assert len(fake_runner.instances) == 2
+        first, second = fake_runner.instances
+        assert first.kwargs["session_id"] == "old-sid"
+        assert second.kwargs["session_id"] != "old-sid"
+        assert second.kwargs["session_id"].startswith("botler-")
+        # 降级提示词如实说明对话历史丢失（不假装保留），且带进度账本交接
+        assert "对话历史已丢失" in second.kwargs["prompt"]
+        # 新 id 已落库（任务详情展示实际会话）
+        row = dsh_executor.db.get_task(task_id)
+        assert row["dsh_session_id"] == "dsh-sess-1"
+
+    def test_corrupted_session_detector(self, dsh_executor):
+        """_dsh_corrupted_session：tool source 缺失输出 → True；
+        普通错误/成功/collision → False（与 _dsh_collision 互斥）。"""
+        assert dsh_executor._dsh_corrupted_session(
+            "\n".join(self._corrupt_lines("x"))) is True
+        assert dsh_executor._dsh_corrupted_session(
+            json.dumps({"final_response": "", "finish_reason": "error",
+                        "session_id": "x"}, ensure_ascii=False)) is False
+        assert dsh_executor._dsh_corrupted_session(_RESULT_LINE) is False
+        assert dsh_executor._dsh_corrupted_session(
+            "\n".join(self._collision_lines("x"))) is False
 
     def test_sse_events_published_from_event_lines(
             self, dsh_executor, monkeypatch, tmp_path, fake_runner):
@@ -1075,8 +1211,9 @@ class TestDshCredentialsRelayFallback:
   enabled: true
 """)
         ex = _mk_executor(tmp_path, config)
+        # issue #397：中转站模型跟随凭据链
         assert ex._dsh_credentials(config.get()) == (
-            "sk-relay-12345", "https://relay.example.com/v1")
+            "sk-relay-12345", "https://relay.example.com/v1", "deepseek-chat")
 
     def test_falls_back_to_custom_relay(self, tmp_path):
         """（bug 复现）provider=custom 的中转站同样回退。"""
@@ -1092,7 +1229,7 @@ class TestDshCredentialsRelayFallback:
 """)
         ex = _mk_executor(tmp_path, config)
         assert ex._dsh_credentials(config.get()) == (
-            "sk-relay-999", "https://relay.example.com/v1")
+            "sk-relay-999", "https://relay.example.com/v1", "deepseek-chat")
 
     def test_deepseek_still_preferred_over_relay(self, tmp_path):
         """（issue #115 语义保持）deepseek 项与 openai 中转站并存 → 仍优先 deepseek。"""
@@ -1107,8 +1244,10 @@ class TestDshCredentialsRelayFallback:
   enabled: true
 """)
         ex = _mk_executor(tmp_path, config)
+        # deepseek 仍优先（issue #115 语义保持），模型取 deepseek 项
         assert ex._dsh_credentials(config.get()) == (
-            "sk-ai-provider-key", "https://api.deepseek.com/v1")
+            "sk-ai-provider-key", "https://api.deepseek.com/v1",
+            "deepseek-v4-flash")
 
     def test_disabled_relay_skipped(self, tmp_path):
         """中转站项 enabled=false → 不回退。"""
@@ -1123,7 +1262,7 @@ class TestDshCredentialsRelayFallback:
   enabled: false
 """)
         ex = _mk_executor(tmp_path, config)
-        assert ex._dsh_credentials(config.get()) == (None, None)
+        assert ex._dsh_credentials(config.get()) == (None, None, None)
 
     def test_gemini_still_not_fallback(self, tmp_path):
         """（边界）非 OpenAI 兼容协议 provider（gemini）不回退——dsh 需要
@@ -1139,4 +1278,4 @@ class TestDshCredentialsRelayFallback:
   enabled: true
 """)
         ex = _mk_executor(tmp_path, config)
-        assert ex._dsh_credentials(config.get()) == (None, None)
+        assert ex._dsh_credentials(config.get()) == (None, None, None)

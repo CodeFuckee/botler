@@ -588,14 +588,21 @@ class ProcessMixin:
     })
 
     # ---- dsh 引擎（issue #84）----
-    def _dsh_credentials(self, cfg) -> tuple[str | None, str | None]:
-        """dsh 引擎 API Key / Base URL 解析链，返回 (api_key, base_url)。
+    def _dsh_credentials(self, cfg) -> tuple[str | None, str | None, str | None]:
+        """dsh 引擎 API Key / Base URL / 模型解析链，返回 (api_key, base_url, model)。
 
         优先级：dsh 段显式配置 > 设置页「AI 供应商」中 provider=deepseek
         且 enabled 的项（issue #115）> 设置页「AI 供应商」中其他 OpenAI
         兼容 provider（openai / custom 等，issue #395）> 环境变量
         DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL（SDK 默认读取，botler 不
         覆盖，返回 None 即由 SDK 兜底）。
+
+        model 语义（issue #397）：dsh 段未显式配置 model 且凭据回退到
+        某个 AI 供应商时，返回该供应商配置的 model（此前模型固定取
+        dsh_model 默认 deepseek-v4-flash，ai_providers 里配的模型从未
+        传给 dsh 引擎——任务 #581/#397「配置了 deepseek-v4-pro 最终却
+        调用 deepseek-v4-flash」根因）；其余情况返回 None，调用方直接
+        透传 cfg.dsh_model（dsh 段显式模型优先）。
 
         issue #115 根因：任务 #194 #195 切 dsh 引擎后全部失败——用户
         只在设置页「AI 供应商」配过 DeepSeek key，dsh 段未配、部署机
@@ -613,6 +620,7 @@ class ProcessMixin:
         """
         api_key = cfg.dsh_api_key or None
         base_url = cfg.dsh_base_url or None
+        model = None  # issue #397：跟随供应商的模型（dsh 段显式模型由调用方透传）
         if api_key is None:
             # OpenAI 兼容 provider 白名单（issue #395）：deepseek 优先，
             # 其余（openai / custom / siliconflow 等）作为中转站回退源
@@ -634,7 +642,12 @@ class ProcessMixin:
                 api_key = str(provider.get("api_key", "")).strip() or None
                 base_url = base_url or (
                     str(provider.get("base_url", "") or "").strip() or None)
-        return api_key, base_url
+                # issue #397：dsh 段未显式配置模型时，模型名跟随选中
+                # 供应商（供应商未配 model 则保持 None，调用方回退默认）
+                if not getattr(cfg, "dsh_model_explicit", False):
+                    model = (str(provider.get("model", "") or "").strip()
+                             or None)
+        return api_key, base_url, model
     def _run_dsh_once(self, task_id: int, repo: dict, issue: dict,
                       resume_session: str | None = None) -> tuple[int, str]:
         """执行一次 dsh 引擎（deepseek-harness SDK 进程内调用）。返回 (exit_code, output)。
@@ -791,6 +804,12 @@ class ProcessMixin:
         # 内部在 worker 完成后聚合 usage；碰撞重跑后指向最新一轮 runner）
         last_runner: DshRunner | None = None
 
+        # issue #115/#395/#397：dsh 段未配 key 时回退设置页「AI 供应商」
+        # （deepseek 项优先，其余 OpenAI 兼容中转站兜底），模型跟随选中
+        # 供应商（issue #397：dsh 段未显式配置模型时不再固定默认 flash）
+        dsh_api_key, dsh_base_url, dsh_model = self._dsh_credentials(cfg)
+        runner_model = dsh_model or cfg.dsh_model
+
         def _run_round(session_id: str, round_prompt: str) -> tuple[int, bool, bool]:
             """跑一轮 dsh：构造 runner、启动、等待完成（停止/超时强制终止）。
 
@@ -799,12 +818,9 @@ class ProcessMixin:
             """
             nonlocal last_runner
             try:
-                # issue #115：dsh 段未配 key 时回退设置页「AI 供应商」的
-                # deepseek 项（用户已在该处配过 key，此前未被消费）
-                dsh_api_key, dsh_base_url = self._dsh_credentials(cfg)
                 runner = DshRunner(
                     prompt=round_prompt, session_id=session_id,
-                    provider=cfg.dsh_provider, model=cfg.dsh_model,
+                    provider=cfg.dsh_provider, model=runner_model,
                     max_tokens=cfg.dsh_max_tokens,
                     # 推理等级（issue #123）：dsh.reasoning_effort 经
                     # DshRunner 派生 Cordis 注入 SDK，空串 = 不设置
@@ -865,18 +881,37 @@ class ProcessMixin:
             # 任务失败（任务 #388/#390/#391）。降级不无限递归：新 id 无
             # 磁盘残留，重跑再撞则如实失败（防死循环）。
             output = "\n".join(lines)
+            # issue #291：SDK 会话 id collision → 降级全新会话；
+            # issue #401：会话文件损坏（tool 消息缺 callId）续跑重放报
+            # 「message must have tool source」→ 同样不可恢复，一并降级。
+            # 二者都不应交给重试循环反复 resume 同一坏会话（每次必报同样
+            # 错误，重试耗尽任务失败——任务 #388/#390/#391/#581/#582）。
+            collision = self._dsh_collision(output)
+            corrupted = self._dsh_corrupted_session(output)
             if (not stopped and not timed_out
-                    and self._dsh_collision(output)):
+                    and (collision or corrupted)):
                 old_sid = dsh_sid
                 dsh_sid = self._new_dsh_session_id(task_id)
                 self.db.set_task_status(
                     task_id, None, dsh_session_id=dsh_sid)
-                self.db.add_log(
-                    task_id, "warn",
-                    f"SDK 报告会话 {old_sid[:8]}… 无法恢复（id collision，"
-                    f"磁盘残留与 live 会话不匹配），降级为全新会话 "
-                    f"{dsh_sid[:8]}… 重跑（issue #291 诚实降级）")
-                prompt = (self._dsh_downgrade_prompt(repo, issue, task_id)
+                if corrupted:
+                    degrade_reason = (
+                        "会话文件损坏（tool 消息缺少 callId，续跑重放报 "
+                        "message must have tool source）")
+                    self.db.add_log(
+                        task_id, "warn",
+                        f"SDK 报告会话 {old_sid[:8]}… 无法恢复（tool source "
+                        f"缺失，会话文件损坏），降级为全新会话 "
+                        f"{dsh_sid[:8]}… 重跑（issue #401 诚实降级）")
+                else:
+                    degrade_reason = "id collision"
+                    self.db.add_log(
+                        task_id, "warn",
+                        f"SDK 报告会话 {old_sid[:8]}… 无法恢复（id collision，"
+                        f"磁盘残留与 live 会话不匹配），降级为全新会话 "
+                        f"{dsh_sid[:8]}… 重跑（issue #291 诚实降级）")
+                prompt = (self._dsh_downgrade_prompt(
+                              repo, issue, task_id, reason=degrade_reason)
                           + PROGRESS_REPORT_INSTRUCTION)
                 # 聊天记录重置为全新会话视角（首条 user 消息 = 新提示词）；
                 # 流式回复缓冲一并清空（碰撞轮无文本，防御性收口）
@@ -905,7 +940,7 @@ class ProcessMixin:
                 self._persist_engine_usage(  # issue #235
                     task_id, "dsh",
                     getattr(last_runner, "usage", None) if last_runner else None,
-                    model=cfg.dsh_model)
+                    model=runner_model)
                 return STOP_EXIT_CODE, output
 
             if timed_out:
@@ -915,7 +950,7 @@ class ProcessMixin:
                 self._persist_engine_usage(  # issue #235
                     task_id, "dsh",
                     getattr(last_runner, "usage", None) if last_runner else None,
-                    model=cfg.dsh_model)
+                    model=runner_model)
                 return 124, output  # 124 = timeout 约定退出码
 
             self.db.add_log(task_id, "info", f"dsh 引擎退出码: {exit_code}")
@@ -923,7 +958,7 @@ class ProcessMixin:
             self._persist_engine_usage(  # issue #235
                 task_id, "dsh",
                 getattr(last_runner, "usage", None) if last_runner else None,
-                model=cfg.dsh_model)
+                model=runner_model)
             return exit_code, output
         finally:
             log_f.close()
@@ -962,20 +997,37 @@ class ProcessMixin:
         data = self._last_json_object(output)
         return bool(data and not data.get("error")
                     and data.get("finish_reason") == "error")
-    def _dsh_downgrade_prompt(self, repo: dict, issue: dict,
-                              task_id: int) -> str:
-        """collision 降级后的全新会话提示词（issue #291 补充）：基础任务
-        提示词 + 进度账本交接单。
+    def _dsh_corrupted_session(self, output: str) -> bool:
+        """识别会话文件损坏导致续跑失败（issue #401）：结果行 error 且
+        输出含「message must have tool source」特征（runtime 重放会话时
+        发现 tool 消息缺 callId——任务 #581/#582 会话文件里持久化了空
+        callId 的 tool 消息）。
 
-        降级丢的只是对话历史（SDK id collision 无法恢复），task_progress
-        账本（运行中增量落库，跨会话持久化）与保留的工作区是可靠的——
-        如实说明后引导新会话按账本接续，禁止重做已标记 done 的步骤，
-        避免全新对话从头重复实现（issue #281 用户抱怨的原始痛点）。
+        命中即会话不可恢复（与 id collision 同性质），应降级全新会话，
+        不应交给重试循环反复 resume 同一损坏会话（每次必报同样错误，
+        重试耗尽任务失败）。
+        """
+        if "must have tool source" not in output:
+            return False
+        data = self._last_json_object(output)
+        return bool(data and not data.get("error")
+                    and data.get("finish_reason") == "error")
+    def _dsh_downgrade_prompt(self, repo: dict, issue: dict,
+                              task_id: int,
+                              reason: str = "id collision") -> str:
+        """会话不可恢复降级后的全新会话提示词（issue #291 补充，
+        issue #401 扩展 reason 描述）：基础任务提示词 + 进度账本交接单。
+
+        降级丢的只是对话历史（SDK id collision / 会话文件损坏无法
+        恢复），task_progress 账本（运行中增量落库，跨会话持久化）与
+        保留的工作区是可靠的——如实说明后引导新会话按账本接续，禁止
+        重做已标记 done 的步骤，避免全新对话从头重复实现（issue #281
+        用户抱怨的原始痛点）。reason 用于向新会话说明上次失败原因。
         """
         handoff = self._render_progress_handoff(task_id)
         return (self._build_prompt(repo, issue)
                 + "\n\n【会话恢复失败，全新会话接续】上次 dsh 会话因 SDK "
-                "限制无法恢复（id collision），对话历史已丢失；但平台进度"
+                f"限制无法恢复（{reason}），对话历史已丢失；但平台进度"
                 "账本与保留的工作区是可靠的，按以下记录直接接续：\n"
                 + handoff)
     def _new_dsh_session_id(self, task_id: int) -> str:

@@ -278,6 +278,9 @@ class Settings:
     # （或 dsh.base_url/dsh.api_key 显式配置），与 hermes 同模式。
     dsh_provider: str = "deepseek-official"
     dsh_model: str = "deepseek-v4-flash"
+    # issue #397：dsh 段是否显式配置了 model（True = 用户手动指定，引擎
+    # 直接透传；False = 未指定，模型跟随凭据解析链选中的 AI 供应商）
+    dsh_model_explicit: bool = False
     dsh_max_tokens: int | None = None
     # 推理等级（issue #123）：deepseek-harness SDK 支持 reasoningEffort
     # （off / high / max）。空串 = 不设置（SDK 默认 high）；dsh 引擎执行时
@@ -731,6 +734,7 @@ class ConfigManager:
                           if str(p).strip()],
             dsh_provider=str(dsh.get("provider", "deepseek-official")).strip() or "deepseek-official",
             dsh_model=str(dsh.get("model", "deepseek-v4-flash")).strip() or "deepseek-v4-flash",
+            dsh_model_explicit=bool(str(dsh.get("model", "") or "").strip()),
             dsh_max_tokens=dsh.get("max_tokens") if isinstance(dsh.get("max_tokens"), int) else None,
             dsh_reasoning_effort=str(dsh.get("reasoning_effort", "")).strip(),
             dsh_session_root=str(dsh.get("session_root", "")).strip(),

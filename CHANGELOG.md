@@ -129,6 +129,29 @@
 
 ### Fixed
 
+- **dsh 引擎：会话文件损坏续跑不再反复失败，模型名跟随 AI 供应商配置（issue #397/#401）**：
+  修复任务 #581/#582 失败根因——两条独立缺陷：
+  - **会话损坏续跑降级**（`backend/botler/executor/process.py`）：dsh 引擎模型流式输出
+    工具调用时后续 chunk 的 name/id 为空串，runtime 合并后工具调用名称为空 → 全部工具
+    调用报 `unknown tool ""` → agent 死循环 → 会话文件持久化空 callId 的 tool 消息 →
+    断点续跑 runtime 重放报「session event at seq N message must have tool source」。
+    旧逻辑把该错误当普通失败交给重试循环，重试仍复用同一损坏会话 → 每次必报同样错误
+    → 重试耗尽任务失败。本次新增 `_dsh_corrupted_session` 检测（与 issue #291 的
+    `_dsh_collision` 并列），命中即如实降级为全新会话（新 id + 全新提示词 + 进度账本
+    交接单）重跑，不再反复撞同一坏会话；
+  - **模型名跟随供应商**（`backend/botler/config.py` + `executor/process.py`）：此前
+    `_dsh_credentials` 只解析 api_key/base_url，模型始终取 `dsh_model` 默认
+    `deepseek-v4-flash`——设置页「AI 供应商」里配的模型（如越建科 `deepseek-v4-pro`）
+    从未传给 dsh 引擎（「配置了 v4 pro 最终却调用 v4 flash」根因）。本次扩展
+    `_dsh_credentials` 返回 `(api_key, base_url, model)`：dsh 段未显式配置模型时，
+    模型名跟随凭据解析链选中的 AI 供应商（新增 `dsh_model_explicit` 配置标志，dsh 段
+    显式模型优先）；「AI 供应商」deepseek 优先规则（issue #115）保持不变；
+  - **测试**：`backend/tests/test_executor_dsh.py` 新增 5 例——会话损坏续跑降级
+    （resume 撞 tool source 错误 → 换新 id + 全新提示词重跑成功、检测器与 collision
+    互斥）、模型跟随凭据链（供应商模型传给 runner / dsh 段显式模型优先）、原
+    `_dsh_credentials` 断言更新为三元组；全量后端测试无 regression。
+
+
 - **跨仓库调度：带 `bot-issue` 标记的任务现在严格排在所有不带该标记的任务之后（issue #363）**：
   此前 #360 只保证**同仓库队列内** bot-issue 任务排最后——`_repo_sort_key` 先按仓库
   优先级（issue #51，数字小先派发）选择仓库，再取该仓库队内最优任务派发；当 bot-issue
