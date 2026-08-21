@@ -1330,6 +1330,14 @@ class TestDshResultAbortDetection:
                  '该任务，等待用户补充信息。')
         assert executor._dsh_result(self._out(final)) == "failed"
 
+    def test_safe_termination_while_blocked_is_failure(self, executor):
+        """任务 #621：读取目标 Issue 受阻后安全终止，不能误判成功。"""
+        final = ('[PROGRESS] step=3 status=pending desc="等待恢复目标 Issue 的可访问性" '
+                 'evidence="projects/89/issues/14 返回 HTTP 404"\n\n'
+                 '任务已安全终止在需求读取阶段，未修改文件、未创建分支、未提交或推送。\n\n'
+                 '阻塞原因：无法读取目标 Issue 的标签、正文与评论。')
+        assert executor._dsh_result(self._out(final)) == "failed"
+
     def test_success_report_with_auth_word_is_not_false_positive(self, executor):
         """正常完成报告中提及「认证失败」诊断不应误判失败。"""
         final = ('已定位根因：认证失败源于 glab 1.36 对 4 段式 PAT 的误报，'

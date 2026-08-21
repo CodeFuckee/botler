@@ -48,6 +48,7 @@ ABORT_PATTERNS = [
     r"终止本会话",                                      # 同上（语序变体）
     r"本任务已终止",                                    # 当前任务主动终止（第一人称）
     r"任务已终止，未进行代码修改",                        # 终止 + 无产出（任务585原文）
+    r"任务已安全终止",                                  # 阻塞后安全退出（任务621）
 ]
 _ABORTED_RE = re.compile("|".join(ABORT_PATTERNS), re.IGNORECASE)
 

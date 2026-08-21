@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- **DSH agent 在阻塞后安全终止被误标成功（issue #426）**：任务 #621 因目标 GitLab 项目 API 返回 404，agent 已以“任务已安全终止”报告阻塞且未改动代码，但结果判定只识别旧的终止措辞，仍将 `finish_reason=completed` 的非空回复判为成功，导致错误打上 `bot-done`。现将该安全终止表述纳入 DSH/Hermes 共用中止识别，使其进入失败重试/阻塞处理而非成功收尾；新增任务 #621 的精准回归测试。
+
 - **dsh 模型用量限制错误误归类为未知（issue #421）**：任务 #611 的 dsh
   执行日志包含 `The usage limit has been reached`，此前默认失败分类规则未识别
   `usage limit` 文案，重试耗尽后自动上报会显示“未知类”。现将该模型供应商
