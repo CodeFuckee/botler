@@ -5,6 +5,12 @@
 ## [Unreleased]
 
 ### Fixed
+
+- **修复自定义 AI 供应商生成提示词时请求地址缺少操作路径（issue #413）**：
+  文本对话的 OpenAI 兼容请求此前将自定义 Base URL 原样 POST；当设置为
+  `https://new.s1.prod.gglohh.top/v1` 这类 API 前缀时，请求错误落到 `/v1` 并返回
+  HTTP 404 `Invalid URL (POST /v1)`。现对缺少 `/chat/completions` 的自定义地址自动补拼
+  操作路径，同时保持已填写完整操作地址的旧配置原样使用；新增对应后端回归测试。
 - **流水线详情右边栏查看报告误报“报告文件不存在或任务无该产物”（issue #406）**：
   GitLab jobs API 对 `sast` / `dependency_scanning` / `junit` 返回的是摄入后
   的内部文件名（如 `gl-sast-report.json`、`junit.xml.gz`），但 job 可下载

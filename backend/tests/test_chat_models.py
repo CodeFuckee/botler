@@ -110,6 +110,21 @@ class TestOpenAICompat:
             ],
         }
 
+    def test_custom_base_url_without_chat_completions_appends_path(self):
+        """custom Base URL 只填 API 前缀时自动补拼对话操作路径。"""
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["url"] = str(request.url)
+            return _ok_handler(request)
+
+        client = _make_client(
+            "custom", handler=handler,
+            base_url="https://new.s1.prod.gglohh.top/v1")
+        client.chat([{"role": "user", "content": "生成提示词"}])
+        assert seen["url"] == (
+            "https://new.s1.prod.gglohh.top/v1/chat/completions")
+
     def test_custom_base_url_no_path_appended(self):
         """自定义 Base URL 原样使用（不再拼接 /chat/completions）。"""
         seen = {}

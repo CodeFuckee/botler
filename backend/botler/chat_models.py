@@ -16,10 +16,10 @@ provider 分发到对应协议实现，返回模型文本回复。
 
 ``base_url`` 语义（与生图/识图模型一致，issue #150）：留空 / 等于预设
 默认 → 按官方接口在默认地址后拼接操作路径（``/chat/completions``、
-``/models/{model}:generateContent``、``/messages``）；自定义（不等于
-预设默认，如代理网关 ``https://api.example.com/v1/chat/completions``）
-→ 作为完整请求地址直接使用，不再拼接。custom 无默认地址，必须自填
-Base URL（由 :meth:`ChatModelClient` 构造时明确报错）。
+``/models/{model}:generateContent``、``/messages``）；自定义地址如果已
+包含操作路径则原样使用，否则按协议自动补拼操作路径（例如
+``https://api.example.com/v1`` → ``.../v1/chat/completions``）。custom
+无默认地址，必须自填 Base URL（由 :meth:`ChatModelClient` 构造时明确报错）。
 
 错误统一抛 :class:`ChatModelError`：缺 API Key / 缺 Base URL / 不支持的
 provider / 网络异常 / 非 2xx 响应 / 响应无文本等。
@@ -87,13 +87,17 @@ class ChatModelError(RuntimeError):
 
 
 def _resolve_request_url(base_url: str, default_base_url: str,
-                        api_path: str) -> str:
-    """解析对话请求地址（issue #150 语义）。
+                        api_path: str, *, append_if_missing: bool = False) -> str:
+    """解析对话请求地址（issue #150 / #413 语义）。
 
-    自定义 base_url（非空且不等于预设默认）→ 作为完整请求地址直接
-    使用，不再拼接操作路径；否则在默认地址后拼接操作路径。
+    自定义 base_url（非空且不等于预设默认）如果已经包含操作路径，
+    则原样使用；启用 ``append_if_missing`` 时，缺少操作路径的 API
+    前缀自动补拼，兼容只填写 ``https://.../v1`` 的自定义网关。
+    未配置 / 等于预设默认时，在默认地址后拼接操作路径。
     """
     if base_url and base_url != default_base_url:
+        if append_if_missing and not base_url.rstrip("/").endswith(api_path):
+            return f"{base_url.rstrip('/')}{api_path}"
         return base_url
     return f"{default_base_url}{api_path}"
 
@@ -210,7 +214,8 @@ class ChatModelClient:
     def _chat_openai_compat(self, messages: list[dict[str, str]]) -> str:
         payload = {"model": self.model, "messages": messages}
         url = _resolve_request_url(
-            self.base_url, DEFAULT_BASE_URLS[self.provider], "/chat/completions")
+            self.base_url, DEFAULT_BASE_URLS[self.provider],
+            "/chat/completions", append_if_missing=True)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
