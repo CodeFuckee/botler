@@ -53,6 +53,7 @@ export default function IssueListSection({
 }) {
   const { tr } = useI18n()
   const [selectedIssueKeys, setSelectedIssueKeys] = useState(() => new Set())
+  const [batchMode, setBatchMode] = useState(false)
   const [batchClosing, setBatchClosing] = useState(false)
   const [batchError, setBatchError] = useState('')
   const [batchResult, setBatchResult] = useState(null)
@@ -96,6 +97,20 @@ export default function IssueListSection({
   function toggleAll(checked) {
     setSelectedIssueKeys(checked ? new Set(visibleIssueKeys) : new Set())
     setBatchError('')
+  }
+
+  function enterBatchMode() {
+    setBatchMode(true)
+    setBatchError('')
+    setBatchResult(null)
+  }
+
+  function exitBatchMode() {
+    if (batchClosing) return
+    setBatchMode(false)
+    setSelectedIssueKeys(new Set())
+    setBatchError('')
+    setBatchResult(null)
   }
 
   async function handleBatchClose() {
@@ -206,7 +221,15 @@ export default function IssueListSection({
                 )}
               </div>
             )}
-            {hasAnyIssue && !addIssueRepo && (
+            {hasAnyIssue && !addIssueRepo && !batchMode && (
+              <div className="issue-batch-entry">
+                <button type="button" className="btn btn-small btn-danger batch-close-btn batch-close-enter-btn"
+                        onClick={enterBatchMode}>
+                  {tr('overview.batchClose')}
+                </button>
+              </div>
+            )}
+            {hasAnyIssue && !addIssueRepo && batchMode && (
               <div className="issue-batch-toolbar" role="toolbar" aria-label={tr('overview.batchCloseToolbar')}>
                 <label className="issue-select-all-label">
                   <input type="checkbox" className="issue-select-all"
@@ -222,6 +245,10 @@ export default function IssueListSection({
                 <button type="button" className="btn btn-small btn-danger batch-close-btn"
                         onClick={handleBatchClose} disabled={batchClosing}>
                   {batchClosing ? tr('overview.batchClosing') : tr('overview.batchClose')}
+                </button>
+                <button type="button" className="btn btn-small batch-close-cancel-btn"
+                        onClick={exitBatchMode} disabled={batchClosing}>
+                  {tr('common.cancel')}
                 </button>
                 {batchResult && (
                   <div className={batchResult.failed.length ? 'small batch-close-result batch-close-result-error' : 'small batch-close-result'}>
@@ -457,7 +484,7 @@ export default function IssueListSection({
                                         issue #114：issue 行（issue-row）与任务信息块
                                         纵向排布——任务板块删除后任务详情随项展示 */}
                                     <div className="issue-row">
-                                    {!addIssueRepo && (
+                                    {!addIssueRepo && batchMode && (
                                       <input type="checkbox" className="issue-select-checkbox"
                                              checked={selectedIssueKeys.has(issueKey({ ...i, project_id: i.project_id ?? repoProjectId }))}
                                              onChange={(e) => toggleIssue({ ...i, project_id: i.project_id ?? repoProjectId }, e.target.checked)}

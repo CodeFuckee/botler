@@ -5241,6 +5241,11 @@ body:has(.drawer-overlay) {
 }
 
 /* issue #412：概览页批量关闭工具条与选择框 */
+.issue-batch-entry {
+  display: flex;
+  justify-content: flex-end;
+  margin: var(--space-2) 0 var(--space-3);
+}
 .issue-batch-toolbar {
   display: flex;
   flex-wrap: wrap;

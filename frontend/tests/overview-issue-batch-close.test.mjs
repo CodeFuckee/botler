@@ -83,6 +83,13 @@ function batchButton(root) {
     && String(n.props.className || '').includes('batch-close-btn'))
 }
 
+async function enterBatchMode(root) {
+  await TestRenderer.act(async () => {
+    batchButton(root).props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  })
+}
+
 // ---- 测试先行：接口契约与边界 ----
 
 test('批量关闭实现应提供去重、异常参数和全量结算结果', () => {
@@ -123,6 +130,40 @@ test('批量关闭：空输入、null 和异常参数不应调用关闭函数', 
   assert.equal(calls, 0, '无效输入不应发起关闭请求')
 })
 
+test('概览页：默认不显示勾选框，点击批量关闭后才进入选择模式', async () => {
+  const { renderer, root } = await renderOverview()
+  try {
+    assert.equal(issueCheckboxes(root).length, 0, '默认不应显示每条 issue 的勾选框')
+    assert.ok(batchButton(root).props.className.includes('batch-close-enter-btn'), '默认应显示进入批量关闭模式的入口')
+    await enterBatchMode(root)
+    assert.equal(issueCheckboxes(root).length, 2, '进入批量关闭模式后应显示每条 issue 的勾选框')
+    assert.ok(root.find((n) => n.type === 'input' && n.props.className === 'issue-select-all'), '进入模式后应显示全选框')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('概览页：取消批量关闭会清空选择并恢复默认列表', async () => {
+  const { renderer, root } = await renderOverview()
+  try {
+    await enterBatchMode(root)
+    await TestRenderer.act(async () => {
+      issueCheckboxes(root)[0].props.onChange({ target: { checked: true } })
+    })
+    assert.equal(issueCheckboxes(root)[0].props.checked, true, '进入模式后可以选择 issue')
+    const cancel = root.find((n) => n.type === 'button'
+      && String(n.props.className || '').includes('batch-close-cancel-btn'))
+    await TestRenderer.act(async () => { cancel.props.onClick() })
+    assert.equal(issueCheckboxes(root).length, 0, '取消后不应保留逐项勾选框')
+    await enterBatchMode(root)
+    assert.equal(issueCheckboxes(root)[0].props.checked, false, '再次进入时不应保留上次选择')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
 test('概览页：全选后批量关闭应逐条调用单条关闭接口并刷新列表', async () => {
   const postMock = mock.method(api, 'post', async (pathname) => {
     assert.match(pathname, /^\/api\/issues\/42\/10[12]\/close$/)
@@ -130,6 +171,7 @@ test('概览页：全选后批量关闭应逐条调用单条关闭接口并刷�
   })
   const { renderer, root } = await renderOverview()
   try {
+    await enterBatchMode(root)
     const selectAll = root.find((n) => n.type === 'input'
       && n.props.type === 'checkbox'
       && n.props.className === 'issue-select-all')
@@ -159,6 +201,7 @@ let mockedIssueOverviewCalls = 0
 test('概览页：空选择点击批量关闭应提示先选择 issue', async () => {
   const { renderer, root } = await renderOverview()
   try {
+    await enterBatchMode(root)
     await TestRenderer.act(async () => {
       batchButton(root).props.onClick()
       await new Promise((resolve) => setTimeout(resolve, 10))
@@ -178,6 +221,7 @@ test('概览页：批量请求进行中禁止重复提交', async () => {
   }))
   const { renderer, root } = await renderOverview()
   try {
+    await enterBatchMode(root)
     const first = issueCheckboxes(root)[0]
     await TestRenderer.act(async () => {
       first.props.onChange({ target: { checked: true } })
