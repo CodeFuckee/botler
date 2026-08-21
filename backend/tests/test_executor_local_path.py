@@ -724,3 +724,140 @@ class TestPrepareWorkspaceCleanTolerant:
         monkeypatch.setattr(executor, "_git", fake_git)
         with pytest.raises(ExecutorError):
             executor.prepare_workspace(_repo_dict(str(repo)))
+
+
+# ---- issue #416：工作区 origin 仓库路径与配置大小写不一致 → agent 仓库锁定误判 ----
+
+class TestPrepareWorkspaceOriginNormalize:
+    """issue #416（诊断任务 #605）：local_path 工作区 origin 的仓库路径与配置
+    url 大小写不一致（chenkaidi/Graph2plan vs chenkaidi/graph2plan）时，注入
+    agent 提示词的仓库锁定自检是严格字符串比较（模板注入配置路径），GitLab
+    项目路径实际大小写不敏感 → agent 误判「仓库不一致」终止任务，重试耗尽
+    failed。prepare_workspace 应把 origin 的 path 规范化为配置 url 的 path
+    （保留凭据与 host），保证自检通过；路径真实不同（不同仓库）不修改，
+    留给 agent 自检按原规则拦截（安全护栏）。
+    """
+
+    @staticmethod
+    def _origin_url(repo: Path) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), "config", "--get", "remote.origin.url"],
+            capture_output=True, text=True, check=True).stdout.strip()
+
+    @staticmethod
+    def _skip_network_git(executor, monkeypatch) -> None:
+        """fetch/pull/reset/checkout/clean 变 no-op（测试 remote 不可达），其余原样。"""
+        real_git = executor._git
+
+        def fake_git(workdir, *args, env=None, timeout=300):
+            if args and args[0] in ("fetch", "pull", "reset", "checkout", "clean"):
+                return None
+            return real_git(workdir, *args, env=env, timeout=timeout)
+
+        monkeypatch.setattr(executor, "_git", fake_git)
+
+    @staticmethod
+    def _skip_remote_probe(monkeypatch) -> None:
+        """ls-remote / git remote show 探测返回失败（远端不可达），其余命令透传。
+
+        避免测试真实连网 gitlab.example.com（DNS 超时拖慢用例），默认分支
+        解析降级走本地跟踪引用。
+        """
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git":
+                if "ls-remote" in cmd or (len(cmd) >= 3
+                                          and cmd[1] == "remote" and cmd[2] == "show"):
+                    return subprocess.CompletedProcess(
+                        cmd, 128, "",
+                        "fatal: unable to access 'https://gitlab.example.com/': "
+                        "Could not resolve host")
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def test_origin_case_mismatch_normalized_to_config_path(self, executor, tmp_path,
+                                                            monkeypatch):
+        """origin 大写 vs 配置小写：prepare 后 origin 规范化为配置路径，凭据保留。"""
+        repo = _make_local_repo(tmp_path)
+        d = _repo_dict(str(repo))
+        d["url"] = "https://gitlab.example.com/group/graph2plan.git"
+        subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin",
+                        "https://agent:tok@gitlab.example.com/group/Graph2plan.git"],
+                       check=True)
+        self._skip_network_git(executor, monkeypatch)
+        self._skip_remote_probe(monkeypatch)
+        executor.prepare_workspace(d)
+        assert self._origin_url(repo) == \
+            "https://agent:tok@gitlab.example.com/group/graph2plan.git"
+
+    def test_origin_path_already_match_not_rewritten(self, executor, tmp_path,
+                                                     monkeypatch):
+        """origin 与配置路径完全一致：不修改 origin。"""
+        repo = _make_local_repo(tmp_path)
+        d = _repo_dict(str(repo))
+        d["url"] = "https://gitlab.example.com/group/graph2plan.git"
+        subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin",
+                        "https://agent:tok@gitlab.example.com/group/graph2plan.git"],
+                       check=True)
+        self._skip_network_git(executor, monkeypatch)
+        self._skip_remote_probe(monkeypatch)
+        executor.prepare_workspace(d)
+        assert self._origin_url(repo) == \
+            "https://agent:tok@gitlab.example.com/group/graph2plan.git"
+
+    def test_origin_different_repo_path_not_rewritten(self, executor, tmp_path,
+                                                      monkeypatch):
+        """origin 指向不同仓库（真实不一致）：不修改，留给 agent 自检拦截。"""
+        repo = _make_local_repo(tmp_path)
+        d = _repo_dict(str(repo))
+        d["url"] = "https://gitlab.example.com/group/graph2plan.git"
+        subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin",
+                        "https://agent:tok@gitlab.example.com/group/other.git"],
+                       check=True)
+        self._skip_network_git(executor, monkeypatch)
+        self._skip_remote_probe(monkeypatch)
+        executor.prepare_workspace(d)
+        assert self._origin_url(repo) == \
+            "https://agent:tok@gitlab.example.com/group/other.git"
+
+    def test_origin_ssh_form_skipped(self, executor, tmp_path, monkeypatch):
+        """scp-like / ssh 形态 origin：跳过规范化，原样保留。"""
+        repo = _make_local_repo(tmp_path)
+        d = _repo_dict(str(repo))
+        d["url"] = "https://gitlab.example.com/group/graph2plan.git"
+        subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin",
+                        "git@gitlab.example.com:group/Graph2plan.git"], check=True)
+        self._skip_network_git(executor, monkeypatch)
+        self._skip_remote_probe(monkeypatch)
+        executor.prepare_workspace(d)
+        assert self._origin_url(repo) == "git@gitlab.example.com:group/Graph2plan.git"
+
+    def test_origin_without_credentials_normalized(self, executor, tmp_path,
+                                                   monkeypatch):
+        """origin 无凭据：规范化 path 后仍不带 userinfo 段。"""
+        repo = _make_local_repo(tmp_path)
+        d = _repo_dict(str(repo))
+        d["url"] = "https://gitlab.example.com/group/graph2plan.git"
+        subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin",
+                        "https://gitlab.example.com/group/Graph2plan.git"], check=True)
+        self._skip_network_git(executor, monkeypatch)
+        self._skip_remote_probe(monkeypatch)
+        executor.prepare_workspace(d)
+        assert self._origin_url(repo) == \
+            "https://gitlab.example.com/group/graph2plan.git"
+
+    def test_origin_host_mismatch_skipped(self, executor, tmp_path, monkeypatch):
+        """origin host 与配置 host 不同：跳过规范化（不越权修改）。"""
+        repo = _make_local_repo(tmp_path)
+        d = _repo_dict(str(repo))
+        d["url"] = "https://gitlab.example.com/group/graph2plan.git"
+        subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin",
+                        "https://agent:tok@other.example.com/group/Graph2plan.git"],
+                       check=True)
+        self._skip_network_git(executor, monkeypatch)
+        self._skip_remote_probe(monkeypatch)
+        executor.prepare_workspace(d)
+        assert self._origin_url(repo) == \
+            "https://agent:tok@other.example.com/group/Graph2plan.git"

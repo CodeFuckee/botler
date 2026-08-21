@@ -6,6 +6,19 @@
 
 ### Fixed
 
+- **工作区 origin 仓库路径大小写与配置不一致导致 agent 仓库锁定误判终止任务（issue #416）**：
+  以本地文件夹方式添加的仓库，其工作区 origin 可能是用户手工 clone / 历史
+  遗留的 URL，仓库路径大小写与平台配置 url 不一致（如 `chenkaidi/Graph2plan`
+  vs `chenkaidi/graph2plan`）；注入 agent 提示词的仓库锁定自检是严格字符串
+  比较（模板注入配置路径），GitLab 项目路径实际大小写不敏感，但 agent 会
+  误判「仓库不一致」直接终止任务，重试耗尽 failed（任务 #605 三次尝试均为
+  此原因，13 秒即失败）。现于 `prepare_workspace` 每次执行前增加 origin
+  规范化：工作区 origin 与配置 url 的 host 相同、仓库路径仅大小写不一致时，
+  将 origin 的 path 对齐为配置 url 的 path（保留 origin 原有凭据与 host）；
+  路径真实不同（不同仓库）、host 不同、ssh/scp-like 形态一律不修改，留给
+  agent 自检按原规则拦截（安全护栏）；读取 origin 失败静默跳过不阻塞任务。
+  `backend/tests/test_executor_local_path.py` 新增 6 个用例覆盖规范化、已
+  一致不重写、不同仓库不越权、ssh 形态跳过、无凭据、host 不一致等场景。
 - **修复自定义 AI 供应商生成提示词时请求地址缺少操作路径（issue #413）**：
   文本对话的 OpenAI 兼容请求此前将自定义 Base URL 原样 POST；当设置为
   `https://new.s1.prod.gglohh.top/v1` 这类 API 前缀时，请求错误落到 `/v1` 并返回

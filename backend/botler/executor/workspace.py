@@ -35,6 +35,31 @@ def _on_rmtree_error(func, path, exc_info) -> None:
         pass
 
 
+def _split_https_remote_url(url: str | None) -> dict | None:
+    """拆分 https remote URL 为 {scheme, userinfo, host, path}。
+
+    userinfo 为 scheme:// 与最后一个 @ 之间的原始段（可能为空）；
+    path 为 host 之后第一个 / 起的部分（含 .git 后缀，未做 URL 解码）。
+    scp-like / ssh 形态（无 ://）、非 http(s) scheme、解析失败返回 None
+    （调用方跳过规范化）。独立为纯函数便于单元测试。
+    """
+    value = (url or "").strip()
+    if "://" not in value:
+        return None
+    scheme, rest = value.split("://", 1)
+    if scheme not in ("http", "https"):
+        return None
+    userinfo = ""
+    if "@" in rest:
+        userinfo, rest = rest.rsplit("@", 1)
+    if "/" not in rest:
+        return None
+    host, path = rest.split("/", 1)
+    if not host or not path:
+        return None
+    return {"scheme": scheme, "userinfo": userinfo, "host": host, "path": path}
+
+
 class WorkspaceMixin:
     """git 工作区准备与管理（依赖 ClaudeExecutor 实例状态）。"""
 
@@ -129,6 +154,60 @@ class WorkspaceMixin:
         git_env["GIT_CONFIG_SYSTEM"] = os.devnull
         return git_env
 
+    def _normalize_origin_url(self, workdir: Path, repo: dict, remote: str,
+                              git_env: dict) -> None:
+        """工作区 origin 仓库路径与配置 url 仅大小写不一致时规范化为配置路径。
+
+        issue #416（任务 #605 根因）：local_path 工作区由用户手工 clone /
+        历史遗留，origin URL 的仓库路径与平台配置 url 大小写不一致
+        （chenkaidi/Graph2plan vs chenkaidi/graph2plan），而注入 agent 提示
+        词的仓库锁定自检是严格字符串比较（模板注入配置路径）→ agent 误判
+        「仓库不一致」终止任务，重试耗尽 failed。GitLab 项目路径本身大小写
+        不敏感，这里把 origin 的 path 对齐配置 url 的 path（保留 origin 原有
+        凭据与 host），保证自检通过。
+
+        防护：仅处理「路径大小写不敏感相等」的差异——路径真实不同（不同
+        仓库）、host 不同、ssh/scp-like 形态一律不修改，留给 agent 自检按
+        原规则拦截；读取 origin 失败（git 异常等）静默跳过不阻塞任务。
+        """
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workdir), "config", "--get",
+                 f"remote.{remote}.url"],
+                capture_output=True, text=True, timeout=30)
+        except Exception:  # git 缺失/异常时跳过，agent 自检兜底
+            logger.debug("读取 origin URL 失败，跳过 origin 路径规范化",
+                         exc_info=True)
+            return
+        if result.returncode != 0:
+            return
+        origin = _split_https_remote_url(result.stdout.strip())
+        config_url = _split_https_remote_url(_row_get(repo, "url") or "")
+        if not origin or not config_url:
+            return  # ssh/scp-like 或解析失败：不修改
+        if origin["host"] != config_url["host"]:
+            return  # host 不同：不越权修改
+        origin_path = origin["path"]
+        if origin_path.endswith(".git"):
+            origin_path = origin_path[:-4]
+        config_path = config_url["path"]
+        if config_path.endswith(".git"):
+            config_path = config_path[:-4]
+        if origin_path == config_path:
+            return  # 已一致
+        if origin_path.casefold() != config_path.casefold():
+            return  # 真实不同仓库：不修改，agent 自检按原规则拦截
+        userinfo = origin["userinfo"]
+        prefix = f"{origin['scheme']}://"
+        if userinfo:
+            prefix += f"{userinfo}@"
+        new_url = f"{prefix}{origin['host']}/{config_url['path']}"
+        logger.warning(
+            "%s: origin 仓库路径大小写与配置不一致（%s vs %s），"
+            "规范化 origin 为配置路径",
+            workdir, origin["path"], config_url["path"])
+        self._git(workdir, "remote", "set-url", remote, new_url, env=git_env)
+
     def prepare_workspace(self, repo: dict, resume: bool = False) -> tuple[Path, dict]:
         """确保工作区存在且干净，返回 (workdir, git_env)。
 
@@ -163,6 +242,7 @@ class WorkspaceMixin:
         # 自行执行（节省 token）。
         # remote_name 记录本地方式添加时用户选中的 remote（老数据缺省为 origin）
         remote = _row_get(repo, "remote_name") or "origin"
+        self._normalize_origin_url(workdir, repo, remote, git_env)
         self._git(workdir, "fetch", remote, "--prune", env=git_env)
         if not resume:
             # 1) 解析远端默认主分支名：优先 ls-remote --symref 的服务端权威
