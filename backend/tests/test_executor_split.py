@@ -24,7 +24,9 @@ from botler.executor import (
 )
 from botler.executor.common import ExecutorError
 from botler.executor.process import ProcessMixin
-from botler.executor.prompt import _decode_escapes, _strip_credential_sections
+from botler.executor.prompt import (
+    PromptMixin, _decode_escapes, _strip_credential_sections,
+)
 from botler.executor.session import (
     _first_user_line_index, _truncate_text,
 )
@@ -257,6 +259,29 @@ class TestConflictHandoffInstructions:
         assert "先手工解决" in text
         assert "git rebase --continue" in text
         assert "push --force" in text
+
+
+# ---------------- prompt.py：平台认领说明注入（issue #417） ----------------
+
+class TestClaimGuardNote:
+    """平台注入的认领说明：防止 agent 用执行环境绑定账号（项目机器人）
+    与 issue assignee（逻辑认领人）做相等性比对而误判「越权」秒退
+    （issue #417 任务 #608 三次尝试全部因此 15 秒内终止）。"""
+
+    def test_forbids_claim_check(self):
+        text = PromptMixin._claim_guard_note()
+        assert "认领" in text
+        assert "禁止" in text
+
+    def test_explains_account_model(self):
+        text = PromptMixin._claim_guard_note()
+        assert "项目机器人" in text
+        assert "越权" in text
+
+    def test_mentions_glab_account_comparison(self):
+        text = PromptMixin._claim_guard_note()
+        assert "glab api user" in text
+        assert "账号" in text
 
 
 # ---------------- process.py：输出解析与结果判定 ----------------

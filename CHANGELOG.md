@@ -6,6 +6,23 @@
 
 ### Fixed
 
+- **agent 误把执行环境项目机器人账号与 issue assignee 比较，误判「越权」秒退终止任务（issue #417）**：
+  任务 #608 三次尝试均在 15 秒左右终止，根因是注入提示词的全局模板含
+  「认领判定：分配人为 Agent 绑定 GitLab 用户」「越权防护：只处理分配给
+  绑定账号的任务」规则，agent 用 `glab api user` 返回的执行环境绑定账号
+  （平台项目机器人 `project_XXX_bot_XXX`，凭据随仓库配置）与 issue
+  assignee（平台配置的逻辑认领人）做相等性比对——两者本就是不同概念、
+  必然不匹配，agent 误判「越权」直接终止，issue 状态无任何变化被判失败。
+  修复分两层：① `PromptMixin._build_prompt` / `_resume_prompt` 渲染模板后
+  固定追加平台注入的「执行账号说明」段（任务下发即代表认领、绑定账号与
+  assignee 不一致属正常架构、禁止账号名比对判越权），不依赖模板自我修正，
+  即使用户模板仍保留旧规则也以平台说明为准；② 生产 config.yaml 全局模板
+  的「认领判定」「越权防护」两条规则同步改为与平台说明一致的措辞。另在
+  `failure_classify` 的 unsolvable 规则补充「认领校验未通过 / 越权防护」
+  模式，同类误判的失败任务自动归类为无法解决类并带处理建议。
+  `backend/tests/test_executor.py` / `test_executor_split.py` /
+  `test_failure_classify.py` 新增 8 个用例覆盖说明段追加、模板不可绕过、
+  恢复提示词与失败分类场景。
 - **工作区 origin 仓库路径大小写与配置不一致导致 agent 仓库锁定误判终止任务（issue #416）**：
   以本地文件夹方式添加的仓库，其工作区 origin 可能是用户手工 clone / 历史
   遗留的 URL，仓库路径大小写与平台配置 url 不一致（如 `chenkaidi/Graph2plan`

@@ -1643,10 +1643,11 @@ class TestResumePromptTemplate:
         assert "https://gitlab.example.com/x/-/issues/7" in prompt  # {issue_url}
 
     def test_resume_prompt_uses_configured_template(self, executor):
-        """配置自定义恢复模版后渲染使用自定义文本。"""
+        """配置自定义恢复模版后渲染使用自定义文本（末尾追加平台认领说明）。"""
         executor.config.update_section("templates", {"resume": "恢复 {repo_name} #{issue_iid}，继续。"})
         prompt = executor._resume_prompt(_REPO, _issue_dict())
-        assert prompt == "恢复 demo #7，继续。"
+        assert prompt.startswith("恢复 demo #7，继续。")
+        assert "【平台执行账号说明】" in prompt
 
     def test_resume_prompt_blank_config_falls_back_to_builtin(self, executor):
         """自定义被清空后回退内置默认。"""
@@ -1654,6 +1655,41 @@ class TestResumePromptTemplate:
         executor.config.update_section("templates", {"resume": "   "})
         prompt = executor._resume_prompt(_REPO, _issue_dict())
         assert "继续处理（中断恢复）" in prompt
+
+
+# ---- issue #417：任务 #608 因模板认领规则误判「越权」秒退 ----
+
+class TestBuildPromptClaimGuard:
+    """_build_prompt / _resume_prompt 渲染后追加平台认领说明（issue #417）。
+
+    任务 #608：生产模板含「认领判定/越权防护」规则，agent 用 glab api user
+    返回的项目机器人账号与 issue assignee（逻辑认领人）做相等性比对，
+    两者本就是不同概念、必然不匹配 → 误判「越权」秒退（三次尝试均在
+    15 秒左右终止，issue 状态无任何变化被判失败）。平台在模板渲染后
+    追加不可绕过的账号说明段，防同类误判复发。
+    """
+
+    def test_build_prompt_appends_guard_note(self, executor):
+        repo = {"name": "demo", "prompt_template": "处理 {issue_iid} 任务",
+                "local_path": None}
+        prompt = executor._build_prompt(repo, _issue_dict())
+        assert "处理 7 任务" in prompt
+        assert "【平台执行账号说明】" in prompt
+
+    def test_guard_note_not_bypassable_by_template(self, executor):
+        """含旧认领/越权规则的模板，平台说明仍追加（不依赖模板自我修正）。"""
+        repo = {"name": "demo",
+                "prompt_template": "认领判定：分配人为 Agent 绑定 GitLab 用户。\n"
+                                   "越权防护：只处理分配给绑定账号的任务。",
+                "local_path": None}
+        prompt = executor._build_prompt(repo, _issue_dict())
+        assert "【平台执行账号说明】" in prompt
+        assert "禁止" in prompt
+
+    def test_resume_prompt_appends_guard_note(self, executor):
+        prompt = executor._resume_prompt(_REPO, _issue_dict())
+        assert "继续处理（中断恢复）" in prompt
+        assert "【平台执行账号说明】" in prompt
 
 
 class TestCaptureEnvSnapshot:

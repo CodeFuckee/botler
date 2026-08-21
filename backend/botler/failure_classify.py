@@ -58,6 +58,9 @@ DEFAULT_RULES: dict[str, list[str]] = {
         r"unable to (resolve|complete|solve)",
         r"cannot (resolve|complete|solve)",
         r"需要用户决策", r"等待用户回复",
+        # 模板认领规则误判（issue #417 任务 #608）：agent 因执行环境绑定
+        # 账号（项目机器人）与 assignee 不一致误判「越权」而自终止
+        r"认领校验未通过", r"越权防护",
     ],
     CATEGORY_ENV: [
         r"超时", r"timeout", r"timed\s*out", r"time\s*out",

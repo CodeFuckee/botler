@@ -87,6 +87,16 @@ class TestTypicalFailures:
             "Claude Code 报告无法解决该 issue",
             "Traceback: requests 401") == CATEGORY_UNSOLVABLE
 
+    @pytest.mark.parametrize("text", [
+        "任务认领校验未通过，已停止处理：glab api user 返回当前绑定账号为 "
+        "project_123_bot_xxx，但 Issue #414 分配给 @agent",
+        "越权防护规则触发：Issue 未分配给绑定的 Agent 账号，已按越权防护规则终止本次任务",
+    ])
+    def test_claim_check_misjudge_is_unsolvable(self, text):
+        """模板认领规则误判（issue #417 任务 #608）：agent 因账号名不一致
+        误判「越权」秒退——agent 明确报告停止处理，归 unsolvable。"""
+        assert classify_failure(text) == CATEGORY_UNSOLVABLE
+
 
 class TestUnknownFallback:
     """验收标准 3：分类错误时兜底 unknown 不报错。"""

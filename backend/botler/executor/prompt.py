@@ -114,11 +114,37 @@ _TRANSCRIPT_MAX_TEXT = 5000
 class PromptMixin:
     """提示词构建与任务环境注入（依赖 ClaudeExecutor 实例状态）。"""
 
+    @staticmethod
+    def _claim_guard_note() -> str:
+        """平台注入的认领说明（issue #417）：模板渲染后追加，不可绕过。
+
+        任务 #608：生产模板含「认领判定：分配人为 Agent 绑定 GitLab 用户」
+        「越权防护：只处理分配给绑定账号的任务」规则，agent 用 glab api
+        user 返回的执行环境绑定账号（平台项目机器人 project_XXX_bot_XXX，
+        凭据随仓库配置）与 issue assignee（平台配置的逻辑认领人）做相等性
+        比对——两者本就是不同概念、必然不匹配 → agent 误判「越权」秒退
+        （三次尝试均在 15 秒左右终止，issue 无任何变化被判失败）。
+        此段固定追加，即使用户模板仍保留旧认领规则也以平台说明为准。
+        """
+        return (
+            "\n\n【平台执行账号说明】（平台注入，优先级高于模板中的认领/越权规则）\n"
+            "1. 本任务由平台调度器下发，下发即代表该 Issue 已完成认领（assignee 为\n"
+            "   平台配置的逻辑认领人），agent 无需也不得再自行做「认领校验」。\n"
+            "2. 执行环境绑定的 GitLab 账号是平台项目机器人（project_XXX_bot_XXX，\n"
+            "   凭据随仓库配置），与 Issue assignee 显示的逻辑认领人不是同一概念；\n"
+            "   两者不一致属平台正常架构，不是越权信号。\n"
+            "3. 禁止用 `glab api user` / `/api/v4/user` 返回的账号名与 assignee 做\n"
+            "   相等性比对，禁止以「账号不一致」为由判定越权并终止任务。\n"
+            "4. 越权防护的正确范围：仅处理平台下发的当前任务（Issue iid 与注入变量\n"
+            "   一致），仓库锁定以运行时自检为准，不主动认领/处理其他 Issue。"
+        )
+
     def _build_prompt(self, repo: dict, issue: dict) -> str:
         template = self.renderer.resolve_template(repo)
         variables = self.renderer.build_variables(
             repo["name"], issue, repo_url=_row_get(repo, "url") or "")
         prompt = self.renderer.render(template, variables)
+        prompt += self._claim_guard_note()
         if self._repo_workdir(repo) in self._pull_conflict_workdirs:
             prompt += self._conflict_handoff_instructions()
         return prompt
@@ -187,6 +213,7 @@ class PromptMixin:
             repo["name"], issue, repo_url=_row_get(repo, "url") or "")
         variables["progress_summary"] = self._render_progress_handoff(task_id)
         prompt = self.renderer.render(template, variables)
+        prompt += self._claim_guard_note()
         if self._repo_workdir(repo) in self._pull_conflict_workdirs:
             prompt += self._conflict_handoff_instructions()
         return prompt
