@@ -37,7 +37,6 @@ OWNER_TOKEN_GUIDE_PATH = (
 
 class WorkerPatch(BaseModel):
     max_concurrent_repos: int | None = None
-    task_timeout_seconds: int | None = None
     max_retries: int | None = None
     reconcile_interval_seconds: int | None = None
     # 任务执行引擎（issue #113）：设置页切换后端编写代码的 agent
@@ -72,7 +71,6 @@ def get_settings(request: Request):
         },
         "worker": {
             "max_concurrent_repos": s.max_concurrent_repos,
-            "task_timeout_seconds": s.task_timeout_seconds,
             "max_retries": s.max_retries,
             "reconcile_interval_seconds": s.reconcile_interval_seconds,
             # issue 标签处理优先级（issue #76）：同仓库队列内按此顺序
@@ -765,8 +763,6 @@ def _validate_worker(patch: dict) -> None:
                 raise HTTPException(400, f"{key} 必须是正整数")
             if key == "max_concurrent_repos" and val > 16:
                 raise HTTPException(400, "max_concurrent_repos 过大（上限 16）")
-            if key == "task_timeout_seconds" and val > 7200:
-                raise HTTPException(400, "task_timeout_seconds 过大（上限 7200s）")
 
 
 def _validate_issue_priority(val) -> list[str]:

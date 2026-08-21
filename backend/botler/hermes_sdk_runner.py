@@ -3,7 +3,7 @@
 与旧 hermes_runner.py（独立子进程 + stdin/stdout NDJSON，经部署机独立
 hermes venv 的 python 运行）不同，本模块把 hermes-agent SDK
 （run_agent.AIAgent）集成进 botler 自身进程：worker 线程跑
-``run_conversation()``，主循环轮询停止/超时，``stop()`` 经
+``run_conversation()``，主循环轮询人工停止，``stop()`` 经
 ``AIAgent.interrupt()`` 请求中断（跨线程安全，conversation loop 多处
 检查中断标志提前退出，并通知进行中的工具提前终止——语义等价旧模式的
 SIGKILL 进程组）。集成方式与 dsh 引擎（deepseek-harness SDK，issue #84）
@@ -373,7 +373,7 @@ class HermesSdkRunner:
             self._emit_result("", [], "", error=self._error)
             return
         if result.get("interrupted") is True:
-            # 用户停止/超时中断：不视为失败（executor 按 STOP/124 收尾），
+            # 用户停止中断：不视为失败（executor 按 STOP 收尾），
             # 结果行带中断说明，便于日志与断点续跑数据观察
             self._error = "任务被用户停止"
             self._emit_result("", [], "", error=self._error)

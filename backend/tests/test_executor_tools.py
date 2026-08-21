@@ -131,7 +131,7 @@ class TestRunClaudeInject:
         monkeypatch.setattr(executor, "_persist_claude_usage",
                             lambda tid, out: None)
         monkeypatch.setattr(executor, "_drain_process_output",
-                            lambda *a, **k: (False, False, ['{"result":"ok"}']))
+                            lambda *a, **k: (False, ['{"result":"ok"}']))
 
         executor._run_claude_once(1, {"name": "demo", "prompt_template": None},
                                   {"project_id": 42, "iid": 7})

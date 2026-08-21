@@ -191,7 +191,6 @@ class RepoConfig:
     remote_username: str | None = None  # 仓库用户（issue #153）：remote url userinfo 用户名
     priority: int = 100  # 调度优先级（issue #51）：1~999，数字越小越优先
     # 仓库级任务参数覆盖（issue #237）：None = 继承全局 worker 段对应配置
-    timeout_seconds: int | None = None  # 任务超时（秒），覆盖 worker.task_timeout_seconds
     max_retries: int | None = None  # 任务最大重试次数，覆盖 worker.max_retries
     engine: str | None = None  # 执行引擎，覆盖 worker.engine
 
@@ -209,7 +208,8 @@ class Settings:
     # 流水线操作。空串 = 未配置，编辑 issue 沿用原链路。
     gitlab_owner_token: str = ""
     max_concurrent_repos: int = 3
-    task_timeout_seconds: int = 1800
+    # issue #424：执行引擎不设时限；保留字段仅兼容历史调用方。
+    task_timeout_seconds: int | None = None
     max_retries: int = 2
     reconcile_interval_seconds: int = 300
     # issue 标签处理优先级（issue #76）：同仓库队列内按此顺序选任务派发，
@@ -439,7 +439,7 @@ class Settings:
 # settings API 可写字段（写回 config.yaml 用）
 KNOWN_FIELDS = {
     "gitlab": {"owner_token"},
-    "worker": {"max_concurrent_repos", "task_timeout_seconds", "max_retries",
+    "worker": {"max_concurrent_repos", "max_retries",
                "reconcile_interval_seconds", "ci_wait_detect_seconds",
                "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
                "engine", "plugin_paths", "issue_priority",
@@ -698,11 +698,7 @@ class ConfigManager:
                 remote_name=r.get("remote_name"),
                 remote_username=r.get("remote_username"),
                 priority=int(r.get("priority", 100)),
-                # issue #237：仓库级任务参数覆盖（config.yaml 手工配置 →
-                # 启动同步 DB；None/空 = 继承全局）
-                timeout_seconds=(int(r["timeout_seconds"])
-                                 if r.get("timeout_seconds") not in (None, "")
-                                 else None),
+                # issue #424：忽略历史仓库 timeout_seconds，执行引擎不限时。
                 max_retries=(int(r["max_retries"])
                              if r.get("max_retries") not in (None, "")
                              else None),
@@ -721,7 +717,8 @@ class ConfigManager:
             verify_ssl=bool(gitlab.get("verify_ssl", True)),
             gitlab_owner_token=gitlab.get("owner_token", ""),
             max_concurrent_repos=int(worker.get("max_concurrent_repos", 3)),
-            task_timeout_seconds=int(worker.get("task_timeout_seconds", 1800)),
+            # issue #424：忽略历史 task_timeout_seconds，三个执行引擎均无限时。
+            task_timeout_seconds=None,
             max_retries=int(worker.get("max_retries", 2)),
             reconcile_interval_seconds=int(worker.get("reconcile_interval_seconds", 300)),
             issue_priority_labels=_issue_priority_labels(worker),
@@ -1002,10 +999,7 @@ class ConfigManager:
             d["remote_name"] = repo.remote_name
         if repo.remote_username:
             d["remote_username"] = repo.remote_username
-        # issue #237：仓库级任务参数覆盖——仅非空值写回 config.yaml
-        # （空 = 继承全局，不落盘，回读与 DB 口径一致）
-        if repo.timeout_seconds is not None:
-            d["timeout_seconds"] = repo.timeout_seconds
+        # issue #424：历史 timeout_seconds 不再写回配置，执行引擎始终不限时。
         if repo.max_retries is not None:
             d["max_retries"] = repo.max_retries
         if repo.engine:

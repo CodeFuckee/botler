@@ -129,8 +129,8 @@ function TaskDrawer({ task, onClose }) {
             {/* issue #237：任务实际生效参数与来源（仓库级覆盖 or 继承全局） */}
             <tr><th>{tr('tasks.effectiveTimeout')}</th><td>
               {task.timeout_seconds != null
-                ? `${task.timeout_seconds} 秒（${tr('tasks.paramSource' + paramSourceKey(task.timeout_source))}）`
-                : '—'}
+                ? `${task.timeout_seconds} 秒`
+                : '未限制'}
             </td></tr>
             <tr><th>{tr('tasks.effectiveMaxRetries')}</th><td>
               {task.max_retries != null

@@ -373,8 +373,8 @@ export default function TaskDetail() {
             {/* issue #237：任务实际生效参数与来源（仓库级覆盖 or 继承全局） */}
             <tr><th>生效超时</th><td>
               {task.timeout_seconds != null
-                ? `${task.timeout_seconds} 秒（${task.timeout_source === 'repo' ? '仓库覆盖' : '继承全局'}）`
-                : '—'}
+                ? `${task.timeout_seconds} 秒`
+                : '未限制'}
             </td></tr>
             <tr><th>生效重试</th><td>
               {task.max_retries != null

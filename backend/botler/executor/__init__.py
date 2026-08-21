@@ -4,7 +4,7 @@
 1. 准备干净工作区（fetch / 切回默认主分支 / reset --hard / clean -fd / git pull --rebase）
 2. 渲染提示词（全局/仓库模版 + 变量）
 3. 注入环境变量（GITLAB_TOKEN 等只走子进程 env，不进提示词 transcript）
-4. subprocess 跑 `claude -p --output-format json`，带超时
+4. subprocess 跑 `claude -p --output-format json`，持续运行至完成或人工停止
 5. 结果判定：exit 0 且 issue 已关闭 → 成功；否则重试（最多 max_retries）
 6. 收尾：仍失败 → issue 留失败评论 + 打 bot-failed 标签
 
@@ -154,9 +154,9 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         # _build_prompt / _resume_prompt 据此追加「先手工解决冲突」指引，
         # 由 agent 完成合并，而不是让任务在准备阶段直接失败
         self._pull_conflict_workdirs: set[Path] = set()
-        # issue #237：任务级生效配置覆盖表——run_task 领取任务后按
-        # 「仓库级 > 全局」解析（超时/重试/引擎）暂存，_run_* 引擎执行 /
-        # 超时控制 / 环境快照经 _effective_cfg(task_id) 读取；任务收尾
+        # issue #237/#424：任务级生效配置覆盖表——run_task 领取任务后按
+        # 「仓库级 > 全局」解析重试/引擎暂存，_run_* 引擎执行与环境快照
+        # 经 _effective_cfg(task_id) 读取；任务收尾
         # （含失败/停止路径）时清理。key 为 task_id，多仓库并行安全。
         self._task_cfg_overrides: dict[int, object] = {}
     # ---- GitLab 调用兜底 ----
@@ -367,9 +367,9 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
     def run_task(self, task_id: int) -> None:
         """任务主流程：单次或重试执行，写状态机与收尾评论。
 
-        issue #237：领取任务后按「仓库级 > 全局」解析生效配置（超时/
-        重试/引擎）——仓库字段留空时与全局完全一致；生效配置暂存
-        _task_cfg_overrides 供引擎执行 / 超时控制取值，收尾后清理。
+        issue #237/#424：领取任务后按「仓库级 > 全局」解析生效配置
+        （重试/引擎）；执行引擎始终不限时。生效配置暂存于
+        _task_cfg_overrides 供引擎执行取值，收尾后清理。
         """
         task = self.db.get_task(task_id)
         if task is None:

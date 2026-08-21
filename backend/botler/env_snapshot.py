@@ -36,7 +36,7 @@ SNAPSHOT_ERROR_MARKER = "环境快照获取失败"
 
 # config 关键项 hash 覆盖的字段（执行行为相关配置，变化会导致执行差异）
 CONFIG_HASH_KEYS = [
-    "engine", "claude_command", "claude_args", "task_timeout_seconds",
+    "engine", "claude_command", "claude_args",
     "max_retries", "max_concurrent_repos", "issue_priority_labels",
     "dsh_provider", "dsh_model", "dsh_reasoning_effort", "dsh_max_tokens",
     "default_template", "resume_template", "pause_windows", "pause_weekdays",

@@ -16,8 +16,7 @@ import { api } from '../api.js'
  * 灵感组件「添加 Issue」时的默认分配人（后端在提交时按用户名解析）。
  * 仓库用户只读展示（来源是 remote url，不做手填，防止填错账号）。
  *
- * issue #237：新增「任务参数」区——仓库级任务超时（秒）/ 最大重试次数 /
- * 执行引擎三个可选字段，留空 = 继承全局（设置页「任务调度」卡片配置），
+ * issue #237：新增「任务参数」区——最大重试次数 / 执行引擎两个可选字段，
  * 保存时提交 null 清空；提示文案展示全局默认值（来自 /api/settings）。
  */
 export default function RepoEditModal({ repo, onClose, onSaved }) {
@@ -30,8 +29,6 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
   const [remoteUsername, setRemoteUsername] = useState(repo.remote_username || '')
   const [readingRemote, setReadingRemote] = useState(false)
   // issue #237：仓库级任务参数覆盖——空串 = 继承全局（保存提交 null 清空）
-  const [timeoutSeconds, setTimeoutSeconds] = useState(
-    repo.timeout_seconds != null ? String(repo.timeout_seconds) : '')
   const [maxRetries, setMaxRetries] = useState(
     repo.max_retries != null ? String(repo.max_retries) : '')
   const [engine, setEngine] = useState(repo.engine || '')
@@ -75,15 +72,6 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
       return
     }
     // issue #237：任务参数校验——留空继承全局；非空时校验取值范围与引擎白名单
-    let timeout = null
-    if (timeoutSeconds.trim() !== '') {
-      const t = Number(timeoutSeconds)
-      if (!Number.isInteger(t) || t < 1 || t > 7200) {
-        setError('任务超时需为 1~7200 之间的整数（秒）')
-        return
-      }
-      timeout = t
-    }
     let retries = null
     if (maxRetries.trim() !== '') {
       const r = Number(maxRetries)
@@ -107,7 +95,6 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
         name: trimmedName,
         enabled,
         priority: num,
-        timeout_seconds: timeout,
         max_retries: retries,
         engine: eng,
       })
@@ -119,7 +106,6 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
     }
   }
 
-  const globalTimeout = globalWorker?.task_timeout_seconds
   const globalRetries = globalWorker?.max_retries
   const globalEngine = globalWorker?.engine || 'claude'
 
@@ -174,19 +160,6 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
         {/* issue #237：仓库级任务参数覆盖——留空 = 继承全局（设置页「任务调度」卡片） */}
         <div className="edit-field-group">
           <div className="muted small edit-group-title">任务参数（留空 = 继承全局）</div>
-
-          <label className="edit-field">
-            任务超时（秒）
-            <input
-              className="input"
-              placeholder={globalTimeout != null ? `留空继承全局（${globalTimeout}s）` : '留空继承全局'}
-              value={timeoutSeconds}
-              onChange={(e) => setTimeoutSeconds(e.target.value)}
-            />
-          </label>
-          <div className="muted small">
-            1~7200 之间的整数；留空继承全局（当前 {globalTimeout ?? '—'} 秒），大仓库可单独调大
-          </div>
 
           <label className="edit-field">
             最大重试次数

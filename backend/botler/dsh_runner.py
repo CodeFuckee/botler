@@ -2,7 +2,7 @@
 
 与 hermes_runner.py（独立子进程 + stdin/stdout NDJSON）不同：SDK 在 botler
 进程内运行（stdio JSON-RPC 驱动捆绑运行时），运行中无法从外部 SIGKILL，
-因此采用「工作线程跑 harness.run() + 主循环轮询停止/超时 + close() 强制
+因此采用「工作线程跑 harness.run() + 主循环轮询人工停止 + close() 强制
 终止运行时」模型（close 终止运行时子进程后 run 抛 TransportClosedError，
 语义等价现有引擎的 SIGKILL 进程组）。
 
@@ -524,7 +524,7 @@ class DshRunner:
         except Exception as exc:  # noqa: BLE001 运行失败统一产 error 结果行
             if self._stopping.is_set():
                 # stop() 关闭运行时触发（语义等价 SIGKILL）：executor 按
-                # 停止/超时收尾（退出码 125/124），这里仅落 stopped 行
+                # 人工停止收尾（退出码 125），这里仅落 stopped 行
                 self._coalescer.flush()
                 self.on_line(build_result_line(
                     None, None, self.session_id, error="stopped"))

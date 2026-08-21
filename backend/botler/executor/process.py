@@ -1,7 +1,7 @@
 """引擎子进程执行 / 结果判定 / CI 流水线等待（issue #192 拆分）。
 
 从原 executor.py 拆出的进程职责：claude CLI 子进程生命周期（启动/停止/
-超时/输出 drain）、hermes/dsh SDK 进程内执行、停止请求管理、引擎输出
+输出 drain）、hermes/dsh SDK 进程内执行、停止请求管理、引擎输出
 JSON 解析与结果判定、CI 流水线等待。
 """
 
@@ -71,7 +71,7 @@ class ProcessMixin:
     """引擎进程执行与结果判定（依赖 ClaudeExecutor 实例状态）。"""
 
     def _kill_process_group(self, proc) -> None:
-        """向进程组发 SIGKILL（超时与手动停止共用，issue #35 抽取）。"""
+        """向进程组发 SIGKILL（人工停止时使用，issue #35 抽取）。"""
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
@@ -108,27 +108,18 @@ class ProcessMixin:
         engine = str(getattr(cfg, "engine", "") or "claude").strip().lower()
         return engine if has_plugin(PluginKind.EXECUTOR, engine) else "claude"
     def _drain_process_output(self, proc, task_id: int, log_path: Path,
-                              deadline: float, on_chunk=None) -> tuple[bool, bool, list[str]]:
-        """边读子进程 stdout 边写日志文件，返回 (timed_out, stopped, chunks)。
+                              on_chunk=None) -> tuple[bool, list[str]]:
+        """边读 Claude 子进程 stdout 边写日志，返回 (stopped, chunks)。
 
-        issue #47 从 _run_once 抽取，claude 与 hermes 两引擎共用：
-        - 每轮检查停止请求（readline 阻塞时外部 request_stop 已 SIGKILL
-          进程组 → readline 返回 EOF 自然退出，此处兜底长期无输出时感知）
-        - 超时由调用方 kill 进程组后收尾（返回 timed_out=True）
-        - on_chunk：每读到一个 chunk 回调（claude 引擎用于运行中实时落
-          session_id，issue #20；hermes 引擎无此需求传 None）
+        issue #424：执行引擎不设 deadline；循环持续读取直到进程退出或
+        收到人工停止请求。on_chunk 用于实时落库 Claude 会话 id 与 SSE。
         """
         chunks: list[str] = []
-        timed_out = False
         stopped = False
         with open(log_path, "w", encoding="utf-8", errors="replace") as f:
             while not stopped:
                 if self._stop_requested(task_id) and proc.poll() is None:
                     stopped = True
-                    break
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    timed_out = True
                     break
                 try:
                     chunk = proc.stdout.readline() if proc.stdout else b""
@@ -145,11 +136,8 @@ class ProcessMixin:
                         chunks.pop(0)
                     if on_chunk is not None:
                         on_chunk(chunk)
-                if time.time() >= deadline and proc.poll() is None:
-                    timed_out = True
-                    break
                 time.sleep(0.05)
-        return timed_out, stopped, chunks
+        return stopped, chunks
     def _capture_env_snapshot(self, task_id: int, workdir: Path) -> None:
         """任务首次执行开始时采集环境快照（issue #276）落库 tasks.environment。
 
@@ -249,7 +237,7 @@ class ProcessMixin:
         except Exception as e:  # noqa: BLE001 落库失败不影响任务收尾
             self.db.add_log(task_id, "warn", f"token 用量落库失败: {e}")
     def _persist_claude_usage(self, task_id: int, output: str) -> None:
-        """从 claude 输出解析用量并落库（执行结束/停止/超时路径共用）。
+        """从 claude 输出解析用量并落库（执行结束或人工停止路径共用）。
 
         结果行（type=result）含 usage 字段（stream-json 与单行
         --output-format json 同构），modelUsage 提供模型名；解析失败
@@ -268,7 +256,7 @@ class ProcessMixin:
         工作区保留）；执行后解析 JSON 输出中的 session_id 落库。本方法由
         ClaudeEnginePlugin（botler.plugins.executors）委托调用。
         """
-        # issue #237：仓库级任务参数覆盖——超时等取任务生效配置
+        # issue #237/#424：仓库级任务参数覆盖——仅取重试/引擎生效配置
         # （仓库级 > 全局，run_task 解析暂存，无覆盖时等价全局）
         cfg = self._effective_cfg(task_id)
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
@@ -283,11 +271,11 @@ class ProcessMixin:
             self.db.add_log(
                 task_id, "info",
                 f"恢复上次会话 {resume_session[:8]}… 继续执行"
-                f"（工作区保留，超时 {cfg.task_timeout_seconds}s）")
+                "（工作区保留，不设执行超时）")
         else:
             prompt = self._build_prompt(repo, issue)
             self.db.add_log(task_id, "info",
-                            f"执行 claude -p（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
+                            f"执行 claude -p（工作区 {workdir}，不设执行超时）")
         env = self._build_env(repo, issue)
 
         log_path = self._log_file(task_id)
@@ -319,7 +307,6 @@ class ProcessMixin:
         with self._proc_lock:
             self._procs[task_id] = proc
         try:
-            deadline = time.time() + cfg.task_timeout_seconds
             session_known = False
 
             # 停止请求先于进程创建到达（worker 准备阶段收到 stop）→ 立即终止
@@ -336,10 +323,10 @@ class ProcessMixin:
                 self._publish_stream_line(task_id, chunk, parse_claude_stream_line)
 
             if not stopped:
-                timed_out, stopped, chunks = self._drain_process_output(
-                    proc, task_id, log_path, deadline, _on_chunk)
+                stopped, chunks = self._drain_process_output(
+                    proc, task_id, log_path, _on_chunk)
             else:
-                timed_out, chunks = False, []
+                chunks = []
 
             if stopped:
                 self._kill_process_group(proc)
@@ -350,16 +337,6 @@ class ProcessMixin:
                 self._persist_session_id(task_id, output)
                 self._persist_claude_usage(task_id, output)  # issue #235
                 return STOP_EXIT_CODE, output
-
-            if timed_out:
-                self._kill_process_group(proc)
-                proc.wait(timeout=10)
-                output = "".join(chunks)
-                self.db.add_log(task_id, "error",
-                                f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止进程组")
-                self._persist_session_id(task_id, output)
-                self._persist_claude_usage(task_id, output)  # issue #235
-                return 124, output  # 124 = timeout 约定退出码
 
             exit_code = proc.wait(timeout=30)
             output = "".join(chunks)
@@ -496,8 +473,8 @@ class ProcessMixin:
         issue #171：集成方式从「子进程 + 部署机独立 hermes venv
         （hermes.command/hermes.args）」改为「hermes agent SDK 进程内
         集成」（对齐 dsh 引擎的 SDK 方式，issue #84）：worker 线程跑
-        HermesSdkRunner（run_agent.AIAgent），主循环轮询停止请求与超时；
-        停止/超时通过 runner.stop()（AIAgent.interrupt()，跨线程安全）
+        HermesSdkRunner（run_agent.AIAgent），主循环仅轮询人工停止请求；
+        停止时通过 runner.stop()（AIAgent.interrupt()，跨线程安全）
         请求中断并通知进行中的工具提前终止，语义等价旧模式的 SIGKILL
         进程组。输出协议不变（事件行 + 结果行），SSE 解析
         （parse_hermes_event_line）与结果判定（_hermes_result）、会话
@@ -507,7 +484,7 @@ class ProcessMixin:
         from botler.executor import (  # 动态取包级符号：测试 monkeypatch botler.executor.<名> 才能生效
             HermesSdkRunner, HermesSdkNotInstalledError,
         )
-        # issue #237：仓库级任务参数覆盖——超时等取任务生效配置
+        # issue #237/#424：仓库级任务参数覆盖——仅取重试/引擎生效配置
         cfg = self._effective_cfg(task_id)
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_history))
         self._capture_env_snapshot(task_id, workdir)
@@ -517,11 +494,11 @@ class ProcessMixin:
             self.db.add_log(
                 task_id, "info",
                 f"恢复上次 hermes 会话（{len(resume_history)} 条历史）… 继续执行"
-                f"（工作区保留，超时 {cfg.task_timeout_seconds}s）")
+                "（工作区保留，不设执行超时）")
         else:
             prompt = self._build_prompt(repo, issue)
             self.db.add_log(task_id, "info",
-                            f"执行 hermes 引擎（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
+                            f"执行 hermes 引擎（工作区 {workdir}，不设执行超时）")
         env = self._build_env(repo, issue)
 
         log_path = self._log_file(task_id)
@@ -551,16 +528,10 @@ class ProcessMixin:
             except HermesSdkNotInstalledError as e:
                 raise ExecutorError(str(e))
 
-            deadline = time.time() + cfg.task_timeout_seconds
-            timed_out = False
             stopped = False
             while not runner.done():
                 if self._stop_requested(task_id):
                     stopped = True
-                    runner.stop()
-                    break
-                if time.time() >= deadline:
-                    timed_out = True
                     runner.stop()
                     break
                 time.sleep(0.05)
@@ -578,14 +549,6 @@ class ProcessMixin:
                     task_id, "hermes", getattr(runner, "usage", None),
                     model=getattr(runner, "model", ""))
                 return STOP_EXIT_CODE, output
-
-            if timed_out:
-                self.db.add_log(task_id, "error",
-                                f"任务超时（>{cfg.task_timeout_seconds}s），已请求 hermes 中断")
-                self._persist_engine_usage(  # issue #235
-                    task_id, "hermes", getattr(runner, "usage", None),
-                    model=getattr(runner, "model", ""))
-                return 124, output  # 124 = timeout 约定退出码
 
             self.db.add_log(task_id, "info", f"hermes 引擎退出码: {exit_code}")
             self._persist_engine_usage(  # issue #235
@@ -671,17 +634,17 @@ class ProcessMixin:
         """执行一次 dsh 引擎（deepseek-harness SDK 进程内调用）。返回 (exit_code, output)。
 
         与 claude/hermes 不同，SDK 在 botler 进程内运行：worker 线程跑
-        harness.run()（DshRunner），本循环轮询停止请求与超时；停止/超时
+        harness.run()（DshRunner），本循环仅轮询人工停止请求；停止时
         通过 runner.stop() 关闭运行时强制终止（语义等价 SIGKILL 进程组）。
         输出协议与 hermes 对齐（事件行 + 结果行），SSE 解析
         （parse_hermes_event_line）与结果判定（_dsh_result）复用。
-        会话 id 执行后落库 dsh_session_id（断点续跑，含停止/超时路径）。
+        会话 id 执行后落库 dsh_session_id（断点续跑，含停止路径）。
         """
 
         from botler.executor import (  # 动态取包级符号：测试 monkeypatch botler.executor.<名> 才能生效
             DshRunner, DshSdkNotInstalledError,
         )
-        # issue #237：仓库级任务参数覆盖——超时等取任务生效配置
+        # issue #237/#424：仓库级任务参数覆盖——仅取重试/引擎生效配置
         cfg = self._effective_cfg(task_id)
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         self._capture_env_snapshot(task_id, workdir)
@@ -716,11 +679,11 @@ class ProcessMixin:
             self.db.add_log(
                 task_id, "info",
                 f"恢复上次 dsh 会话 {resume_session[:8]}… 继续执行"
-                f"（工作区保留，超时 {cfg.task_timeout_seconds}s）")
+                "（工作区保留，不设执行超时）")
         else:
             prompt = self._build_prompt(repo, issue)
             self.db.add_log(task_id, "info",
-                            f"执行 dsh 引擎（工作区 {workdir}，超时 {cfg.task_timeout_seconds}s）")
+                            f"执行 dsh 引擎（工作区 {workdir}，不设执行超时）")
         # issue #281 §4.1：dsh 提示词追加「进度上报约定」节（Phase 1 仅
         # dsh 引擎解析落库 [PROGRESS] 里程碑，claude/hermes 不受影响）。
         prompt += PROGRESS_REPORT_INSTRUCTION
@@ -829,10 +792,9 @@ class ProcessMixin:
         runner_model = dsh_model or cfg.dsh_model
 
         def _run_round(session_id: str, round_prompt: str) -> tuple[int, bool, bool]:
-            """跑一轮 dsh：构造 runner、启动、等待完成（停止/超时强制终止）。
+            """跑一轮 dsh：构造 runner、启动、等待完成或人工停止。
 
-            返回 (exit_code, stopped, timed_out)；SDK 未安装抛
-            ExecutorError（run_task 捕获重试）。
+            返回 (exit_code, stopped)；SDK 未安装抛 ExecutorError（run_task 捕获重试）。
             """
             nonlocal last_runner
             try:
@@ -855,20 +817,14 @@ class ProcessMixin:
             except DshSdkNotInstalledError as e:
                 raise ExecutorError(str(e))
 
-            deadline = time.time() + cfg.task_timeout_seconds
-            round_timed_out = False
             round_stopped = False
             while not runner.done():
                 if self._stop_requested(task_id):
                     round_stopped = True
                     runner.stop()
                     break
-                if time.time() >= deadline:
-                    round_timed_out = True
-                    runner.stop()
-                    break
                 time.sleep(0.05)
-            return runner.finish(), round_stopped, round_timed_out
+            return runner.finish(), round_stopped
 
         # issue #302：dsh runtime 会话持久化默认 zstd 压缩，且启动时会做
         # 根级编码检查——会话根目录残留旧版部署遗留的明文 session.jsonl
@@ -889,7 +845,7 @@ class ProcessMixin:
                 f"dsh 会话根目录编码归一化失败（继续执行）: {e}")
 
         try:
-            exit_code, stopped, timed_out = _run_round(dsh_sid, prompt)
+            exit_code, stopped = _run_round(dsh_sid, prompt)
             # issue #291：SDK 会话 id collision（磁盘残留与 live 会话不
             # 匹配）→ 会话实际不可恢复，如实降级为全新会话重跑一次。
             # 背景：dsh SDK 0.1.0rc6 的 runtime 要求跨进程 resume 的输入
@@ -906,8 +862,7 @@ class ProcessMixin:
             # 错误，重试耗尽任务失败——任务 #388/#390/#391/#581/#582）。
             collision = self._dsh_collision(output)
             corrupted = self._dsh_corrupted_session(output)
-            if (not stopped and not timed_out
-                    and (collision or corrupted)):
+            if not stopped and (collision or corrupted):
                 old_sid = dsh_sid
                 dsh_sid = self._new_dsh_session_id(task_id)
                 self.db.set_task_status(
@@ -938,7 +893,7 @@ class ProcessMixin:
                     "role": "user", "text": prompt,
                     "ts": _dsh_utc_ts(), "truncated": False}]
                 self._persist_dsh_transcript(task_id, prompt, dsh_messages)
-                exit_code, stopped, timed_out = _run_round(dsh_sid, prompt)
+                exit_code, stopped = _run_round(dsh_sid, prompt)
 
             # issue #119：事件行拼接必须保留换行分隔（与日志落盘 line + "\n"
             # 一致）。DshRunner 的 on_line 回调行尾无换行，若用 ''.join 拼接，
@@ -949,7 +904,7 @@ class ProcessMixin:
             # （任务 #198 #199 日志：引擎 exit 0、结果行 completed 仍失败）。
             output = "\n".join(lines)
             _dsh_flush_pending()  # 收口最后一段回复
-            _dsh_persist()  # 最终落库（停止/超时/正常共用）
+            _dsh_persist()  # 最终落库（停止或正常完成共用）
 
             if stopped:
                 self.db.add_log(task_id, "warn",
@@ -960,16 +915,6 @@ class ProcessMixin:
                     getattr(last_runner, "usage", None) if last_runner else None,
                     model=runner_model)
                 return STOP_EXIT_CODE, output
-
-            if timed_out:
-                self.db.add_log(task_id, "error",
-                                f"任务超时（>{cfg.task_timeout_seconds}s），已强制终止 dsh 运行时")
-                self._persist_dsh_session_id(task_id, output)
-                self._persist_engine_usage(  # issue #235
-                    task_id, "dsh",
-                    getattr(last_runner, "usage", None) if last_runner else None,
-                    model=runner_model)
-                return 124, output  # 124 = timeout 约定退出码
 
             self.db.add_log(task_id, "info", f"dsh 引擎退出码: {exit_code}")
             self._persist_dsh_session_id(task_id, output)
@@ -1072,7 +1017,7 @@ class ProcessMixin:
             return True
         return Path(root).is_dir()
     def _persist_dsh_session_id(self, task_id: int, output: str) -> None:
-        """执行结束后把 dsh 会话 id 落库（停止/超时/失败均落，供断点续跑）。
+        """执行结束后把 dsh 会话 id 落库（停止/失败均落，供断点续跑）。
 
         结果行缺 session_id 或输出非法时保持旧值；落库失败不影响任务收尾。
         """

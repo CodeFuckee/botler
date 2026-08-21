@@ -13,7 +13,6 @@ import { useI18n } from '../i18n.jsx'
 // 任务调度数字字段的中文标签（与后端 worker 段字段一一对应）
 export const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
-  task_timeout_seconds: '单任务超时（秒）',
   max_retries: '失败重试次数',
   reconcile_interval_seconds: '对账扫描间隔（秒）',
   // 引擎降级阈值（issue #236）：连续 N 次「引擎类」失败（命令缺失 / API key

@@ -133,9 +133,8 @@ def _sync_config_repos_to_db(ctx: AppContext) -> None:
                 enabled=repo.enabled,
                 local_path=repo.local_path, remote_name=repo.remote_name,
                 remote_username=repo.remote_username,
-                # issue #237：仓库级任务参数覆盖——config.yaml 手工配置
-                # 同步到 DB（None = 继承全局）
-                timeout_seconds=repo.timeout_seconds,
+                # issue #237/#424：仅同步仍有效的仓库级任务参数。
+                # 历史 timeout_seconds 由数据库兼容保留，但不再参与执行。
                 max_retries=repo.max_retries,
                 engine=repo.engine,
             )
@@ -145,7 +144,6 @@ def _sync_config_repos_to_db(ctx: AppContext) -> None:
                 prompt_template=repo.prompt_template, enabled=repo.enabled,
                 local_path=repo.local_path, remote_name=repo.remote_name,
                 remote_username=repo.remote_username,
-                timeout_seconds=repo.timeout_seconds,
                 max_retries=repo.max_retries,
                 engine=repo.engine)
     logger.info("config.yaml → db 同步完成（%s 个仓库）", len(ctx.config.get().repos))

@@ -1046,44 +1046,43 @@ class TestExportTasks:
 class TestEffectiveTaskParamsInTaskList:
     """任务列表/详情返回实际生效参数与来源（issue #237）。
 
-    timeout_seconds / max_retries / effective_engine 为按「仓库级 > 全局」
-    解析的生效值，timeout_source / max_retries_source / engine_source 为
-    来源（repo=仓库覆盖 / global=继承全局），前端据此展示「继承 or 覆盖」。
+    timeout_seconds 恒为 null（执行引擎不限时）；max_retries / effective_engine
+    按「仓库级 > 全局」解析，来源字段供前端展示「继承 or 覆盖」。
     """
 
     def test_repo_override_shown_in_list(self, client):
         """仓库配置了覆盖 → 列表返回仓库级生效值与来源 repo。"""
         tc, db = client
         repo_id = _mk_repo(db)
-        db.update_repo(repo_id, timeout_seconds=600, max_retries=5, engine="dsh")
+        db.update_repo(repo_id, max_retries=5, engine="dsh")
         task_id = _mk_task(db, repo_id)
         resp = tc.get("/api/tasks")
         assert resp.status_code == 200
         task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
-        assert task["timeout_seconds"] == 600 and task["timeout_source"] == "repo"
+        assert task["timeout_seconds"] is None and task["timeout_source"] is None
         assert task["max_retries"] == 5 and task["max_retries_source"] == "repo"
         assert task["effective_engine"] == "dsh" and task["engine_source"] == "repo"
 
     def test_no_override_inherits_global(self, client):
-        """仓库未配置 → 继承全局（worker 默认 1800s / 2 次 / claude）。"""
+        """仓库未配置 → 引擎不限时，重试/引擎继承全局。"""
         tc, db = client
         repo_id = _mk_repo(db)
         task_id = _mk_task(db, repo_id)
         resp = tc.get("/api/tasks")
         task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
-        assert task["timeout_seconds"] == 1800 and task["timeout_source"] == "global"
+        assert task["timeout_seconds"] is None and task["timeout_source"] is None
         assert task["max_retries"] == 2 and task["max_retries_source"] == "global"
         assert task["effective_engine"] == "claude" and task["engine_source"] == "global"
 
     def test_partial_override_mixes_sources(self, client):
-        """只配超时 → 超时 repo 覆盖，重试/引擎仍继承全局。"""
+        """历史仓库超时不影响任务，其他参数仍继承全局。"""
         tc, db = client
         repo_id = _mk_repo(db)
         db.update_repo(repo_id, timeout_seconds=300)
         task_id = _mk_task(db, repo_id)
         resp = tc.get("/api/tasks")
         task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
-        assert task["timeout_seconds"] == 300 and task["timeout_source"] == "repo"
+        assert task["timeout_seconds"] is None and task["timeout_source"] is None
         assert task["max_retries_source"] == "global"
         assert task["engine_source"] == "global"
 
@@ -1091,12 +1090,12 @@ class TestEffectiveTaskParamsInTaskList:
         """清空（NULL）后 → 继承全局（与未配置一致）。"""
         tc, db = client
         repo_id = _mk_repo(db)
-        db.update_repo(repo_id, timeout_seconds=600, max_retries=5, engine="dsh")
+        db.update_repo(repo_id, max_retries=5, engine="dsh")
         db.update_repo(repo_id, timeout_seconds=None, max_retries=None, engine=None)
         task_id = _mk_task(db, repo_id)
         resp = tc.get("/api/tasks")
         task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
-        assert task["timeout_source"] == "global"
+        assert task["timeout_source"] is None
         assert task["max_retries_source"] == "global"
         assert task["engine_source"] == "global"
 
@@ -1104,12 +1103,12 @@ class TestEffectiveTaskParamsInTaskList:
         """任务详情同样返回生效参数与来源。"""
         tc, db = client
         repo_id = _mk_repo(db)
-        db.update_repo(repo_id, timeout_seconds=900, max_retries=3, engine="hermes")
+        db.update_repo(repo_id, max_retries=3, engine="hermes")
         task_id = _mk_task(db, repo_id)
         resp = tc.get(f"/api/tasks/{task_id}")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["timeout_seconds"] == 900 and data["timeout_source"] == "repo"
+        assert data["timeout_seconds"] is None and data["timeout_source"] is None
         assert data["max_retries"] == 3 and data["max_retries_source"] == "repo"
         assert data["effective_engine"] == "hermes" and data["engine_source"] == "repo"
 
@@ -1117,7 +1116,6 @@ class TestEffectiveTaskParamsInTaskList:
         """全局 worker 自定义（非默认）时继承值为自定义值。"""
         config_path = tmp_path / "config.yaml"
         config_path.write_text(CONFIG_TEXT.replace("worker: {}", """worker:
-  task_timeout_seconds: 3600
   max_retries: 4
   engine: dsh"""), encoding="utf-8")
         config = ConfigManager(str(config_path))
@@ -1131,6 +1129,6 @@ class TestEffectiveTaskParamsInTaskList:
         task_id = _mk_task(db, repo_id)
         resp = tc.get("/api/tasks")
         task = next(t for t in resp.json()["tasks"] if t["id"] == task_id)
-        assert task["timeout_seconds"] == 3600 and task["timeout_source"] == "global"
+        assert task["timeout_seconds"] is None and task["timeout_source"] is None
         assert task["max_retries"] == 4 and task["max_retries_source"] == "global"
         assert task["effective_engine"] == "dsh" and task["engine_source"] == "global"

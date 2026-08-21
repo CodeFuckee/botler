@@ -10,7 +10,7 @@ SDK，进程内调用 `run_agent.AIAgent`）与 **dsh**（deepseek-harness SDK�
 > editable 安装进 **botler 自身 venv**，`HermesSdkRunner`
 > （`backend/botler/hermes_sdk_runner.py`）在 botler 进程内 worker 线程
 > 调用 `run_agent.AIAgent`（对齐 dsh 引擎的 SDK 集成方式，issue #84）。
-> 停止/超时经 `AIAgent.interrupt()` 跨线程中断（语义等价旧模式的
+> 人工停止经 `AIAgent.interrupt()` 跨线程中断（语义等价旧模式的
 > SIGKILL 进程组）。输出协议不变（事件行 + 结果行），SSE 实时输出 /
 > 断点续跑（`hermes_history` 落库）与 claude/dsh 引擎共享的设施全部复用。
 > 旧的 `hermes.command` / `hermes.args` 配置键已移除，不再需要挂载
@@ -114,4 +114,4 @@ hermes 引擎与 claude 引擎等价支持断点续跑：每次执行结束后 r
 | 安装脚本报「hermes-agent 源码不存在」 | `HERMES_SOURCE_DIR` 指向不对，或部署机未安装 hermes-agent |
 | 任务反复重试、日志尾部是 runner 的 error JSON | 用 `<venv>/bin/python -c "import run_agent"` 验证 SDK 可导入；LLM 配置是否在 hermes 侧 `~/.hermes` 就绪 |
 | hermes 不操作工作区文件 | 检查 `register_task_env_overrides` / `TERMINAL_CWD`（HermesSdkRunner 自动按任务 id 注册工作区 cwd），与容器内路径可达性 |
-| 停止/超时不生效（任务卡住） | `AIAgent.interrupt()` 依赖 conversation loop 的中断检查点与工具级中断信号；极端卡死的非中断点工具调用会等到工具自身超时（与 dsh 的 close() 强制终止不同，属 SDK 进程内模式的已知边界） |
+| 人工停止不生效（任务卡住） | `AIAgent.interrupt()` 依赖 conversation loop 的中断检查点与工具级中断信号；极端卡死的非中断点工具调用会等到工具自身超时（与 dsh 的 close() 强制终止不同，属 SDK 进程内模式的已知边界） |

@@ -8,8 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..repo_params import (
-    MAX_RETRIES_MAX, MAX_RETRIES_MIN, TIMEOUT_MAX, TIMEOUT_MIN,
-    engine_choices, normalize_engine,
+    MAX_RETRIES_MAX, MAX_RETRIES_MIN, engine_choices, normalize_engine,
 )
 
 from ..config import RepoConfig
@@ -37,10 +36,6 @@ class RepoCreate(BaseModel):
         description="调度优先级（issue #51）：1~999 整数，数字越小越优先，缺省 100")
     webhook_url: str | None = Field(
         default=None, description="webhook 回调地址覆盖（默认用当前请求的 base_url）")
-    # 仓库级任务参数覆盖（issue #237）：None/留空 = 继承全局 worker 配置
-    timeout_seconds: int | None = Field(
-        default=None, ge=TIMEOUT_MIN, le=TIMEOUT_MAX,
-        description="任务超时（秒）：1~7200，留空继承全局 worker.task_timeout_seconds")
     max_retries: int | None = Field(
         default=None, ge=MAX_RETRIES_MIN, le=MAX_RETRIES_MAX,
         description="任务最大重试次数：0~20，留空继承全局 worker.max_retries")
@@ -85,10 +80,6 @@ class RepoUpdate(BaseModel):
     priority: int | None = Field(
         default=None, ge=1, le=999,
         description="调度优先级（issue #51）：1~999 整数，数字越小越优先")
-    # 仓库级任务参数覆盖（issue #237）：None = 清空继承全局；前端留空提交 null
-    timeout_seconds: int | None = Field(
-        default=None, ge=TIMEOUT_MIN, le=TIMEOUT_MAX,
-        description="任务超时（秒）：1~7200，留空继承全局 worker.task_timeout_seconds")
     max_retries: int | None = Field(
         default=None, ge=MAX_RETRIES_MIN, le=MAX_RETRIES_MAX,
         description="任务最大重试次数：0~20，留空继承全局 worker.max_retries")
@@ -108,8 +99,6 @@ def _repo_row_to_dict(row) -> dict:
         "prompt_template": row["prompt_template"],
         "enabled": bool(row["enabled"]),
         "priority": row["priority"],
-        # issue #237：仓库级任务参数覆盖（None = 继承全局，编辑弹窗展示/清空用）
-        "timeout_seconds": row["timeout_seconds"],
         "max_retries": row["max_retries"],
         "engine": row["engine"] or None,
         # issue #188：仓库 logo 元信息（「生成图标」生成后写入；前端按
@@ -181,7 +170,6 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
         remote_username=repo_dict.get("remote_username"),
         priority=repo_dict["priority"],
         # issue #237：仓库级任务参数覆盖（None = 继承全局，不写 config.yaml）
-        timeout_seconds=repo_dict.get("timeout_seconds"),
         max_retries=repo_dict.get("max_retries"),
         engine=repo_dict.get("engine"),
     ))
@@ -320,7 +308,7 @@ def add_repo(request: Request, body: RepoCreate):
         local_path=local_path, remote_name=remote_name,
         remote_username=remote_username,
         priority=body.priority if body.priority is not None else DEFAULT_PRIORITY,
-        timeout_seconds=body.timeout_seconds, max_retries=body.max_retries,
+        max_retries=body.max_retries,
         engine=body.engine)
     _sync_repo_to_config(request.app, _repo_row_to_dict(c.db.get_repo(repo_id)))
 

@@ -1,7 +1,6 @@
 """仓库级任务参数覆盖（issue #237）：按「仓库级 > 全局」优先级解析任务参数。
 
 repos 表新增三个可选字段（NULL / 空串 = 继承全局，行为与现状完全一致）：
-- timeout_seconds：任务超时（秒），覆盖 worker.task_timeout_seconds
 - max_retries：任务最大重试次数，覆盖 worker.max_retries
 - engine：执行引擎，覆盖 worker.engine（claude / hermes / dsh 等，未知回退 claude）
 
@@ -18,8 +17,7 @@ from types import SimpleNamespace
 SOURCE_REPO = "repo"      # 仓库级覆盖
 SOURCE_GLOBAL = "global"  # 继承全局
 
-# 仓库级参数取值范围（与设置页全局校验一致：超时上限 7200s；
-# 重试允许 0 = 不重试，上限 20 防手滑配置爆炸）
+# 历史超时常量仅保留供兼容导入；执行引擎不再读取仓库级超时配置（issue #424）。
 TIMEOUT_MIN = 1
 TIMEOUT_MAX = 7200
 MAX_RETRIES_MIN = 0
@@ -69,31 +67,28 @@ def effective_task_params(repo, settings) -> dict:
     """按「仓库级 > 全局」解析任务参数。
 
     :param repo: repos 行 dict（可为 None——仓库未知/已删除时按全局）。
-        三个覆盖字段（timeout_seconds / max_retries / engine）为
-        None 或空串表示继承全局。
+        max_retries / engine 为 None 或空串表示继承全局；历史
+        timeout_seconds 不参与解析。
     :param settings: 全局 Settings（config.get()，worker 段）。
 
     :return: dict——
-        - timeout_seconds / max_retries：生效整数值
+        - timeout_seconds：恒为 None（执行引擎不限时）
+        - max_retries：生效整数值
         - engine：生效引擎（归一化小写；空回退 claude，与 executor._engine 同口径）
-        - timeout_source / max_retries_source / engine_source：来源
+        - max_retries_source / engine_source：来源
           （SOURCE_REPO=仓库覆盖 / SOURCE_GLOBAL=继承全局）
     """
     repo = _as_repo_dict(repo)
-    timeout = None
     max_retries = None
     engine = None
     if repo:
-        timeout = repo.get("timeout_seconds")
         max_retries = repo.get("max_retries")
         engine = normalize_engine(repo.get("engine"))
 
-    if timeout is not None:
-        timeout_value = int(timeout)
-        timeout_source = SOURCE_REPO
-    else:
-        timeout_value = settings.task_timeout_seconds
-        timeout_source = SOURCE_GLOBAL
+    # issue #424：Claude / Hermes / DSH 均不设执行时限。数据库中的历史
+    # timeout_seconds 只保留迁移兼容，不能恢复任何引擎的 deadline。
+    timeout_value = None
+    timeout_source = None
 
     if max_retries is not None:
         max_retries_value = int(max_retries)
@@ -119,7 +114,7 @@ def effective_task_params(repo, settings) -> dict:
     }
 
 
-def settings_with_overrides(settings, *, timeout_seconds: int,
+def settings_with_overrides(settings, *, timeout_seconds: int | None,
                             max_retries: int, engine: str):
     """生成带仓库级覆盖的生效配置副本（issue #237）。
 
@@ -128,12 +123,12 @@ def settings_with_overrides(settings, *, timeout_seconds: int,
     SimpleNamespace 时退化为普通属性复制（仅测试路径，行为一致）。
     """
     try:
-        return replace(settings, task_timeout_seconds=timeout_seconds,
+        return replace(settings, task_timeout_seconds=None,
                        max_retries=max_retries, engine=engine)
     except TypeError:
         return SimpleNamespace(**{
             **vars(settings),
-            "task_timeout_seconds": timeout_seconds,
+            "task_timeout_seconds": None,
             "max_retries": max_retries,
             "engine": engine,
         })

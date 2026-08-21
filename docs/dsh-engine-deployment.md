@@ -123,11 +123,11 @@ botler 基于内置默认 Cordis 组合（或自定义 `cordis` 文件）自动�
 dsh 引擎执行时作为 `cordis` 传给 SDK——无需手工维护 cordis 文件。
 自定义 `cordis` 文件缺失或未包含 `llm-deepseek` 条目时任务报错提示。
 
-## 4. 停止 / 超时语义（与子进程引擎的差异）
+## 4. 人工停止语义（与子进程引擎的差异）
 
 claude / hermes 引擎由 botler spawn 子进程（可 SIGKILL 进程组）；dsh 的
-SDK 在 botler 进程内运行，停止与超时通过「关闭运行时」实现：任务停止
-或超时时 botler 终止 SDK 运行时子进程（等价 SIGKILL 语义），已完成回合
+SDK 在 botler 进程内运行，人工停止通过「关闭运行时」实现：人工停止任务时
+botler 终止 SDK 运行时子进程（等价 SIGKILL 语义）。执行引擎本身不设时限，已完成回合
 的会话数据已增量落盘（`session_root`），下次可断点续跑恢复。
 
 ## 5. 断点续跑

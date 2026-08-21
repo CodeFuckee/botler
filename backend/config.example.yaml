@@ -20,7 +20,7 @@ gitlab:
 
 worker:
   max_concurrent_repos: 3             # 跨仓库并行上限
-  task_timeout_seconds: 1800          # 单任务超时 30 分钟
+  # 执行引擎不设时限；任务会持续运行，直到完成或由人工停止（issue #424）
   max_retries: 2                      # 失败重试次数（"无法解决"不重试）
   reconcile_interval_seconds: 300     # 对账兜底扫描间隔
   issue_priority: ["bug", "test", "feature"]
@@ -382,7 +382,7 @@ sso:
   verify_ssl: true                  # 群晖为自签名证书时设 false
 
 # 仓库列表（在 Web UI 添加仓库时会自动写入这里）
-# 仓库级任务参数覆盖（issue #237）：timeout_seconds / max_retries / engine
+# 仓库级任务参数覆盖（issue #237）：max_retries / engine
 # 均为可选字段，留空 = 继承全局 worker 段对应配置（仓库编辑弹窗「任务参数」
 # 分组可配置/清空；任务列表/详情展示实际生效值与来源——仓库覆盖 or 继承全局）
 # repos:
@@ -391,7 +391,6 @@ sso:
 #     url: https://gitlab.example.com/group/botler.git
 #     enabled: true
 #     priority: 100
-#     timeout_seconds: 600        # 任务超时（秒，1~7200），留空继承全局
 #     max_retries: 5              # 失败重试次数（0~20），留空继承全局
 #     engine: dsh                 # 执行引擎（claude/hermes/dsh），留空继承全局
 repos: []

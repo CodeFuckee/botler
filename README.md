@@ -20,7 +20,7 @@ UI 优化参考与同类开源项目调研见 [`docs/ui-design-reference.md`](do
 Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库并行）
         ▲                 │
         │                 ▼
-对账兜底调度器 ◄──── Claude Code 执行器（自动切回默认主分支 + 干净工作区 + 模版渲染 + 超时/重试）
+对账兜底调度器 ◄──── Claude Code 执行器（自动切回默认主分支 + 干净工作区 + 模版渲染 + 人工停止/重试）
 （每 5 分钟扫漏网 issue）   │
                           ├─► git push 到 main（Claude 自己执行）
                           └─► 调 GitLab API 关闭 issue（Claude 自己执行）
@@ -92,13 +92,13 @@ backend/
     gitlab_client.py GitLab REST API 封装（webhook 注册、issue 评论等）
     webhook.py       webhook 接收器（secret 校验 + assignee 判定 + 去重）
     scheduler.py     任务调度器（每仓库串行、跨仓库并行、按仓库优先级派发；同仓库队列内按 issue 标签优先级排序，默认 bug 最优先）
-    executor.py      执行器（引擎分发走插件体系，任务开始自动切回默认主分支 + git pull（拉取冲突保留现场交由 agent 手工合并）/ 超时 / 重试 / 失败评论）
+    executor.py      执行器（引擎分发走插件体系，任务开始自动切回默认主分支 + git pull（拉取冲突保留现场交由 agent 手工合并）/ 人工停止 / 重试 / 失败评论）
     plugins/         插件体系（issue #140）：base（PluginKind / PluginRegistry 注册表）/
                      executors（执行引擎插件 claude / hermes / dsh）/ models（大模型供应商
                      插件 gemini / openai）/ notifiers（任务消息通道插件 webhook / in_app）；
                      支持 worker.plugin_paths 外部加载新插件
     hermes_sdk_runner.py hermes 引擎 SDK runner（进程内调用 run_agent.AIAgent，issue #171，原 hermes_runner.py 子进程方式已移除）
-    dsh_runner.py    dsh 引擎 runner（deepseek-harness SDK 进程内调用，线程运行 + 停止/超时关闭运行时）
+    dsh_runner.py    dsh 引擎 runner（deepseek-harness SDK 进程内调用，线程运行 + 人工停止时关闭运行时）
     reconciler.py    对账兜底（APScheduler 定时扫描补漏）
     image_models.py  生图模型调用接口封装（Gemini Nano Banana Pro / GPT Image 2，统一 ImageModelClient，issue #135/#137，含配置可用性测试端点）
     vision_models.py 识图模型调用接口封装（Gemini 视觉 / OpenAI 视觉 / 自定义 OpenAI 兼容视觉，统一 VisionModelClient，issue #152，含测试端点：上传图片调用模型描述图片；issue #163 起支持图片先哈希上传 MinIO、识图请求传 http URL；issue #164 起 OpenAI 兼容识图模型禁止 base64 内联，未启用 MinIO 时明确报错引导）
@@ -685,11 +685,10 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `gitlab.webhook_secret` | — | webhook 校验 secret |
 | `worker.max_concurrent_repos` | 3 | 跨仓库并行上限 |
 | `repos[].priority` | 100 | 仓库调度优先级（1~999 整数，数字越小越优先；多个仓库同时有排队任务时按优先级派发，同优先级按任务提交时间排序） |
-| `repos[].timeout_seconds` | 空 | 仓库级任务超时（秒，1~7200；issue #237）。留空 = 继承全局 `worker.task_timeout_seconds`；仓库编辑弹窗「任务参数」分组可配置/清空，任务列表/详情展示该任务实际生效值与其来源（仓库覆盖 / 继承全局） |
 | `repos[].max_retries` | 空 | 仓库级任务重试次数（0~20；issue #237）。留空 = 继承全局 `worker.max_retries`（0 = 不重试）；其余同上 |
 | `repos[].engine` | 空 | 仓库级执行引擎（claude / hermes / dsh，插件注册表白名单；issue #237）。留空 = 继承全局 `worker.engine`；其余同上 |
 | `worker.issue_priority` | `["bug","test","feature"]` | issue 标签处理优先级（同仓库队列内按此顺序选任务派发，越靠前越先处理；未列出的标签排在最后，同优先级按 issue 创建时间升序（创建早的 issue 先处理）；带 `bot-issue` 标记的任务排在所有任务之后（配置未显式包含时，issue #360）；设置页「任务调度」卡片可修改） |
-| `worker.task_timeout_seconds` | 1800 | 单任务超时（30 分钟）；可按仓库覆盖（`repos[].timeout_seconds`，issue #237） |
+| 执行引擎任务时限 | 无 | Claude / Hermes / DSH 不设运行时限；任务仅在完成或人工停止时结束（issue #424） |
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试）；可按仓库覆盖（`repos[].max_retries`，issue #237） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
 | `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（hermes-agent SDK，进程内调用，issue #171）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84/#171）；设置页「任务调度」卡片可切换（issue #113）；可按仓库覆盖（`repos[].engine`，issue #237） |

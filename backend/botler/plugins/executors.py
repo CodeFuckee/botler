@@ -50,7 +50,7 @@ class HermesEnginePlugin(ExecutorPlugin):
     """hermes-agent SDK 引擎（issue #171：SDK 进程内集成，原 issue #47）。
 
     进程内调用 run_agent.AIAgent（经 botler/hermes_sdk_runner.py，worker
-    线程 + AIAgent.interrupt() 停止/超时，对齐 dsh 引擎的 SDK 方式）。
+    线程 + AIAgent.interrupt() 人工停止，对齐 dsh 引擎的 SDK 方式）。
     断点续跑：resume_history 为上次会话历史（工作区保留），显式传入优先；
     未传入时从任务落库的 hermes_history 解析（含会话 id），等价
     Q3-B conversation_history 落库断点续跑。

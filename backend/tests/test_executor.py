@@ -442,7 +442,7 @@ class TestRepoLevelTaskParamsOverride(TestRunTaskSuccessCriteria):
         """任务执行中 _effective_cfg(task_id) 返回仓库级生效配置（超时覆盖）。"""
         db = executor.db
         repo_id = _mk_repo(db)
-        db.update_repo(repo_id, timeout_seconds=600, max_retries=1, engine="hermes")
+        db.update_repo(repo_id, max_retries=1, engine="hermes")
         task_id = _mk_task(db, repo_id)
         output = json.dumps({"result": "ok"}, ensure_ascii=False)
         captured = {}
@@ -458,10 +458,10 @@ class TestRepoLevelTaskParamsOverride(TestRunTaskSuccessCriteria):
                       run_once=fake_run_once, issue_state="opened")
         executor.run_task(task_id)
 
-        assert captured["timeout"] == 600
+        assert captured["timeout"] is None
         assert captured["retries"] == 1
         assert captured["engine"] == "hermes"
-        assert executor._effective_cfg(task_id).task_timeout_seconds == 1800, "收尾后回退全局"
+        assert executor._effective_cfg(task_id).task_timeout_seconds is None, "收尾后保持不限时"
 
 
 # ---- issue #8 会话断点续跑 ----

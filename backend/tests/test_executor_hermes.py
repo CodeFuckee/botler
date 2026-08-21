@@ -248,18 +248,18 @@ class TestRunHermesOnce:
         assert code == 125
         assert fake_runner.instances[0].stop_calls == 1  # stop 被调用（请求中断）
 
-    def test_timeout_returns_124_and_calls_stop(
+    def test_legacy_timeout_config_does_not_stop_hermes(
             self, hermes_executor, monkeypatch, tmp_path, fake_runner):
+        """历史 task_timeout_seconds 不得再给 hermes 引擎添加运行时限。"""
         _patch_workspace(monkeypatch, hermes_executor, tmp_path)
-        fake_runner.preset_done = False
-        # 超时秒数设为 0：进入轮询循环第一轮即超时（get 触发 load 后改内存值）
+        fake_runner.preset_done = True
         hermes_executor.config.get().task_timeout_seconds = 0
         try:
             code, _ = hermes_executor._run_hermes_once(1, _REPO, _ISSUE, None)
         finally:
-            hermes_executor.config.get().task_timeout_seconds = 1800
-        assert code == 124
-        assert fake_runner.instances[0].stop_calls == 1
+            hermes_executor.config.get().task_timeout_seconds = None
+        assert code == 0
+        assert fake_runner.instances[0].stop_calls == 0
 
     def test_sdk_missing_raises_executor_error(
             self, hermes_executor, monkeypatch, tmp_path, fake_runner):

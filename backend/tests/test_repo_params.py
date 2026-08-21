@@ -24,21 +24,21 @@ class TestEffectiveTaskParams:
     def test_repo_none_falls_back_to_global(self):
         """repo 为 None（仓库未知/已删除）→ 全部继承全局。"""
         eff = effective_task_params(None, GLOBAL)
-        assert eff["timeout_seconds"] == 1800 and eff["timeout_source"] == SOURCE_GLOBAL
+        assert eff["timeout_seconds"] is None and eff["timeout_source"] is None
         assert eff["max_retries"] == 2 and eff["max_retries_source"] == SOURCE_GLOBAL
         assert eff["engine"] == "claude" and eff["engine_source"] == SOURCE_GLOBAL
 
     def test_empty_repo_dict_falls_back_to_global(self):
         """空 dict / 缺字段 repo → 全部继承全局（兼容旧调用方只传 name/url）。"""
         eff = effective_task_params({"name": "demo", "url": "https://x/demo.git"}, GLOBAL)
-        assert eff["timeout_seconds"] == 1800 and eff["timeout_source"] == SOURCE_GLOBAL
+        assert eff["timeout_seconds"] is None and eff["timeout_source"] is None
         assert eff["engine"] == "claude" and eff["engine_source"] == SOURCE_GLOBAL
 
     def test_full_override(self):
         """仓库三字段全配置 → 全部仓库级覆盖。"""
         repo = {"timeout_seconds": 600, "max_retries": 5, "engine": "dsh"}
         eff = effective_task_params(repo, GLOBAL)
-        assert eff["timeout_seconds"] == 600 and eff["timeout_source"] == SOURCE_REPO
+        assert eff["timeout_seconds"] is None and eff["timeout_source"] is None
         assert eff["max_retries"] == 5 and eff["max_retries_source"] == SOURCE_REPO
         assert eff["engine"] == "dsh" and eff["engine_source"] == SOURCE_REPO
 
@@ -46,7 +46,7 @@ class TestEffectiveTaskParams:
         """只配超时 → 仅超时覆盖，重试/引擎继承全局（不互相污染）。"""
         repo = {"timeout_seconds": 300}
         eff = effective_task_params(repo, GLOBAL)
-        assert eff["timeout_seconds"] == 300 and eff["timeout_source"] == SOURCE_REPO
+        assert eff["timeout_seconds"] is None and eff["timeout_source"] is None
         assert eff["max_retries"] == 2 and eff["max_retries_source"] == SOURCE_GLOBAL
         assert eff["engine"] == "claude" and eff["engine_source"] == SOURCE_GLOBAL
 
@@ -54,7 +54,7 @@ class TestEffectiveTaskParams:
         """仓库字段显式 NULL（清空后落库）→ 继承全局。"""
         repo = {"timeout_seconds": None, "max_retries": None, "engine": None}
         eff = effective_task_params(repo, GLOBAL)
-        assert eff["timeout_source"] == SOURCE_GLOBAL
+        assert eff["timeout_source"] is None
         assert eff["max_retries_source"] == SOURCE_GLOBAL
         assert eff["engine_source"] == SOURCE_GLOBAL
 
@@ -85,7 +85,7 @@ class TestEffectiveTaskParams:
         conn.execute("INSERT INTO t VALUES (900, 4, 'hermes')")
         row = conn.execute("SELECT * FROM t").fetchone()
         eff = effective_task_params(row, GLOBAL)
-        assert eff["timeout_seconds"] == 900 and eff["timeout_source"] == SOURCE_REPO
+        assert eff["timeout_seconds"] is None and eff["timeout_source"] is None
         assert eff["max_retries"] == 4 and eff["max_retries_source"] == SOURCE_REPO
         assert eff["engine"] == "hermes" and eff["engine_source"] == SOURCE_REPO
 
@@ -103,7 +103,7 @@ class TestSettingsWithOverrides:
         """返回新对象且覆盖字段生效，原对象不变（frozen Settings 语义）。"""
         eff_cfg = settings_with_overrides(
             GLOBAL, timeout_seconds=600, max_retries=0, engine="dsh")
-        assert eff_cfg.task_timeout_seconds == 600
+        assert eff_cfg.task_timeout_seconds is None
         assert eff_cfg.max_retries == 0
         assert eff_cfg.engine == "dsh"
         assert GLOBAL.task_timeout_seconds == 1800, "原全局配置不应被修改"
@@ -113,7 +113,7 @@ class TestSettingsWithOverrides:
         ns = SimpleNamespace(task_timeout_seconds=1800, max_retries=2, engine="claude")
         eff_cfg = settings_with_overrides(
             ns, timeout_seconds=300, max_retries=1, engine="hermes")
-        assert eff_cfg.task_timeout_seconds == 300
+        assert eff_cfg.task_timeout_seconds is None
         assert eff_cfg.max_retries == 1
         assert eff_cfg.engine == "hermes"
         assert ns.task_timeout_seconds == 1800, "原 mock 配置不应被修改"
