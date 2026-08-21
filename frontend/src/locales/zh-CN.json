@@ -348,5 +348,17 @@
   "stats.sourceStatsEmpty": "暂无任务数据（近 30 天没有任务记录）",
   "stats.sourceTaskCount": "{n} 个任务",
   "stats.sourceSuccessRate": "成功率",
-  "stats.sourceAvgDuration": "平均耗时 {duration}"
+  "stats.sourceAvgDuration": "平均耗时 {duration}",
+  "overview.batchCloseToolbar": "批量关闭开放 issue",
+  "overview.selectAllIssues": "全选当前列表",
+  "overview.selectIssue": "选择 issue #{iid}",
+  "overview.selectedIssueCount": "已选择 {n} 个",
+  "overview.batchClose": "批量关闭",
+  "overview.batchClosing": "关闭中…",
+  "overview.batchCloseEmpty": "请先选择需要关闭的 issue",
+  "overview.batchCloseConfirm": "确定要关闭选中的 {n} 个 issue 吗？关闭后可在 GitLab 中重新打开。",
+  "overview.batchCloseSuccess": "成功关闭 {n} 个 issue",
+  "overview.batchClosePartial": "{n} 个 issue 关闭失败，请检查下方失败原因",
+  "overview.batchCloseFailed": "批量关闭失败",
+  "overview.batchCloseFailureDetail": "Issue #{iid}：{msg}"
 }

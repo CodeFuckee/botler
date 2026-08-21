@@ -5239,3 +5239,29 @@ body:has(.drawer-overlay) {
   height: auto;
   max-width: 720px;
 }
+
+/* issue #412：概览页批量关闭工具条与选择框 */
+.issue-batch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-soft);
+  border-radius: var(--radius);
+}
+.issue-select-all-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.issue-select-checkbox {
+  flex: none;
+  margin: 0 var(--space-2) 0 0;
+  accent-color: var(--primary);
+}
+.batch-close-result-error { color: var(--err); }

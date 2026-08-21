@@ -348,5 +348,17 @@
   "stats.sourceStatsEmpty": "No task data (no tasks in the last 30 days)",
   "stats.sourceTaskCount": "{n} tasks",
   "stats.sourceSuccessRate": "Success rate",
-  "stats.sourceAvgDuration": "Avg duration {duration}"
+  "stats.sourceAvgDuration": "Avg duration {duration}",
+  "overview.batchCloseToolbar": "Batch close open issues",
+  "overview.selectAllIssues": "Select all in current list",
+  "overview.selectIssue": "Select issue #{iid}",
+  "overview.selectedIssueCount": "{n} selected",
+  "overview.batchClose": "Batch close",
+  "overview.batchClosing": "Closing…",
+  "overview.batchCloseEmpty": "Select at least one issue to close",
+  "overview.batchCloseConfirm": "Close the selected {n} issues? They can be reopened in GitLab.",
+  "overview.batchCloseSuccess": "Successfully closed {n} issues",
+  "overview.batchClosePartial": "{n} issues failed to close; check the error details below",
+  "overview.batchCloseFailed": "Batch close failed",
+  "overview.batchCloseFailureDetail": "Issue #{iid}: {msg}"
 }

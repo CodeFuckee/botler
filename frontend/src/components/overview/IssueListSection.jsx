@@ -2,9 +2,12 @@
 // 第一大板块——过滤条、仓库卡片、分组折叠、issue 列表项，以及对账 /
 // 自省 / 发掘结果组件；数据与处理器由 useOverviewData hook 注入
 // （组件只接数据）。
+import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n.jsx'
 import { Icon } from '../Icon.jsx'
-import { STATUS_META, fmtAgo } from '../../api.js'
+import { api, STATUS_META, fmtAgo } from '../../api.js'
+import { confirmDialog } from '../../dialog.js'
+import { closeIssuesInBatch } from '../../lib/batchCloseIssues.js'
 import {
   ISSUE_GROUPS,
   BOT_STATUS_META,
@@ -20,6 +23,12 @@ import {
   tasksForIssue,
 } from '../../lib/overview.jsx'
 
+function issueKey(issue) {
+  if (!issue || !Number.isInteger(issue.project_id) || issue.project_id <= 0
+      || !Number.isInteger(issue.iid) || issue.iid <= 0) return ''
+  return `${issue.project_id}:${issue.iid}`
+}
+
 export default function IssueListSection({
   hasAnyIssue,
   issueFilter, setIssueFilter,
@@ -33,16 +42,91 @@ export default function IssueListSection({
   introspectRepo, introspectResults,
   discoverRepo, discoverResults,
   reconcileRepo, reconcileResults,
-  setAddIssueRepo,
+  setAddIssueRepo, addIssueRepo,
   manualErrors, setManualErrors,
   collapsedGroups, setCollapsedGroups,
   manualOrders, manualSaving,
   dragFrom, setDragFrom, dragOverIndex, setDragOverIndex,
   commitManualReorder,
   runningKeys, pinIssue,
-  tasks, liveLines, setSelectedIssue,
+  tasks, liveLines, setSelectedIssue, loadIssues,
 }) {
   const { tr } = useI18n()
+  const [selectedIssueKeys, setSelectedIssueKeys] = useState(() => new Set())
+  const [batchClosing, setBatchClosing] = useState(false)
+  const [batchError, setBatchError] = useState('')
+  const [batchResult, setBatchResult] = useState(null)
+
+  // 当前列表是批量操作范围：过滤/排序后的所有仓库卡片内的开放 issue。
+  const visibleIssues = useMemo(() => filteredRepoIssues.flatMap((repo) => {
+    const projectId = repo.project_id ?? (repo.issues[0] && repo.issues[0].project_id)
+    return (repo.issues || []).map((issue) => ({
+      ...issue,
+      project_id: issue.project_id ?? projectId,
+      repo_name: repo.repo_name,
+    }))
+  }), [filteredRepoIssues])
+  const visibleIssueKeys = useMemo(
+    () => new Set(visibleIssues.map((issue) => issueKey(issue)).filter(Boolean)),
+    [visibleIssues])
+  const selectedIssues = visibleIssues.filter((issue) => selectedIssueKeys.has(issueKey(issue)))
+  const allVisibleSelected = visibleIssues.length > 0
+    && selectedIssues.length === visibleIssues.length
+
+  // 轮询/刷新后移除已经不在当前列表中的选择，避免统计与实际操作对象不一致。
+  useEffect(() => {
+    setSelectedIssueKeys((prev) => {
+      const next = new Set([...prev].filter((key) => visibleIssueKeys.has(key)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [visibleIssueKeys])
+
+  function toggleIssue(issue, checked) {
+    const key = issueKey(issue)
+    if (!key) return
+    setSelectedIssueKeys((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(key)
+      else next.delete(key)
+      return next
+    })
+    setBatchError('')
+  }
+
+  function toggleAll(checked) {
+    setSelectedIssueKeys(checked ? new Set(visibleIssueKeys) : new Set())
+    setBatchError('')
+  }
+
+  async function handleBatchClose() {
+    if (batchClosing) return
+    if (selectedIssues.length === 0) {
+      setBatchError(tr('overview.batchCloseEmpty'))
+      setBatchResult(null)
+      return
+    }
+    const confirmed = await confirmDialog({
+      message: tr('overview.batchCloseConfirm', { n: selectedIssues.length }),
+      danger: true,
+    })
+    if (!confirmed || batchClosing) return
+    setBatchClosing(true)
+    setBatchError('')
+    setBatchResult(null)
+    try {
+      const result = await closeIssuesInBatch(selectedIssues, (issue) =>
+        api.post(`/api/issues/${issue.project_id}/${issue.iid}/close`))
+      setBatchResult(result)
+      setSelectedIssueKeys(new Set(result.failed.map(({ issue }) => issueKey(issue)).filter(Boolean)))
+      if (result.succeeded.length > 0) await loadIssues()
+    } catch (e) {
+      // 纯函数已归集单条失败，这里仅兜底处理未知错误，避免按钮永久锁定。
+      setBatchError(e.message || tr('overview.batchCloseFailed'))
+    } finally {
+      setBatchClosing(false)
+    }
+  }
+
   return (
           <section className="issues-section">
             <h2>{tr('overview.issuesTitle')}</h2>
@@ -120,6 +204,43 @@ export default function IssueListSection({
                     {tr('overview.clearFilter')}
                   </button>
                 )}
+              </div>
+            )}
+            {hasAnyIssue && !addIssueRepo && (
+              <div className="issue-batch-toolbar" role="toolbar" aria-label={tr('overview.batchCloseToolbar')}>
+                <label className="issue-select-all-label">
+                  <input type="checkbox" className="issue-select-all"
+                         checked={allVisibleSelected}
+                         ref={(input) => {
+                           if (input) input.indeterminate = selectedIssues.length > 0 && !allVisibleSelected
+                         }}
+                         onChange={(e) => toggleAll(e.target.checked)}
+                         disabled={batchClosing || visibleIssues.length === 0} />
+                  {tr('overview.selectAllIssues')}
+                </label>
+                <span className="muted small">{tr('overview.selectedIssueCount', { n: selectedIssues.length })}</span>
+                <button type="button" className="btn btn-small btn-danger batch-close-btn"
+                        onClick={handleBatchClose} disabled={batchClosing}>
+                  {batchClosing ? tr('overview.batchClosing') : tr('overview.batchClose')}
+                </button>
+                {batchResult && (
+                  <div className={batchResult.failed.length ? 'small batch-close-result batch-close-result-error' : 'small batch-close-result'}>
+                    <div>
+                      {tr('overview.batchCloseSuccess', { n: batchResult.succeeded.length })}
+                      {batchResult.failed.length > 0 && `；${tr('overview.batchClosePartial', { n: batchResult.failed.length })}`}
+                    </div>
+                    {batchResult.failed.map(({ issue, error }) => (
+                      <div key={issueKey(issue)}>
+                        {tr('overview.batchCloseFailureDetail', { iid: issue.iid, msg: error.message })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {batchError && (
+              <div className="alert alert-error batch-close-error" role="alert" onClick={() => setBatchError('')}>
+                {batchError}
               </div>
             )}
             {ownerTokenOk === false && (
@@ -336,6 +457,13 @@ export default function IssueListSection({
                                         issue #114：issue 行（issue-row）与任务信息块
                                         纵向排布——任务板块删除后任务详情随项展示 */}
                                     <div className="issue-row">
+                                    {!addIssueRepo && (
+                                      <input type="checkbox" className="issue-select-checkbox"
+                                             checked={selectedIssueKeys.has(issueKey({ ...i, project_id: i.project_id ?? repoProjectId }))}
+                                             onChange={(e) => toggleIssue({ ...i, project_id: i.project_id ?? repoProjectId }, e.target.checked)}
+                                             disabled={batchClosing}
+                                             aria-label={tr('overview.selectIssue', { iid: i.iid })} />
+                                    )}
                                     {/* issue #287：「其他」分组拖动排序手柄——
                                         装饰性图标（gripVertical），li 整体可拖，
                                         图标只是视觉提示与抓取点 */}

@@ -165,8 +165,10 @@ function OverviewBody({ location, navigate }) {
 
       {/* 开放 Issue 板块（含过滤条 / 仓库卡片 / 分组 / issue 项） */}
       <IssueListSection {...data}
+                        addIssueRepo={addIssueRepo}
                         setSelectedIssue={setSelectedIssue}
-                        setAddIssueRepo={setAddIssueRepo} />
+                        setAddIssueRepo={setAddIssueRepo}
+                        loadIssues={loadIssues} />
 
       {/* 灵感板块（含 AI 对话右侧抽屉） */}
       <InspirationSection {...data} />
