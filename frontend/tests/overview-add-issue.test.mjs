@@ -308,7 +308,7 @@ test('校验：成员不含 agent 且未手动选择 → 提示分配人必填',
 
 // ---- 提交 ----
 
-test('提交成功：POST 参数正确、弹窗关闭、立即重新拉取 overview', async () => {
+test('提交成功：创建后自动对账对应仓库，再关闭弹窗并刷新 overview', async () => {
   const { renderer, renderError, getCalls } = await renderOverview()
   try {
     assert.equal(renderError, null)
@@ -316,7 +316,9 @@ test('提交成功：POST 参数正确、弹窗关闭、立即重新拉取 overv
     const postCalls = []
     mock.method(api, 'post', async (pathname, body) => {
       postCalls.push({ pathname, body })
-      return { iid: 99, title: body.title }
+      if (pathname === '/api/issues') return { iid: 99, title: body.title }
+      if (pathname === '/api/repos/1/reconcile') return { ok: true, scanned: 1, enqueued: 1 }
+      throw new Error('unexpected ' + pathname)
     })
 
     await fillForm(renderer, '新 issue 标题', true)
@@ -325,18 +327,52 @@ test('提交成功：POST 参数正确、弹窗关闭、立即重新拉取 overv
       await new Promise((resolve) => setTimeout(resolve, 30))
     })
 
-    assert.equal(postCalls.length, 1, '应发起一次 POST')
-    assert.equal(postCalls[0].pathname, '/api/issues')
+    assert.deepEqual(postCalls.map((call) => call.pathname),
+      ['/api/issues', '/api/repos/1/reconcile'],
+      '创建成功后应串行对账被创建 issue 所在的仓库')
     assert.equal(postCalls[0].body.repo_id, 1, 'repo_id 应对应被点击的仓库')
     assert.equal(postCalls[0].body.title, '新 issue 标题')
     assert.equal(postCalls[0].body.assignee_id, 20, '分配人应传 agent 的 user_id')
     assert.deepEqual(postCalls[0].body.labels, ['bug'], '标签应传选中的标签名')
-    // 弹窗关闭 + 列表刷新（挂载时 1 次 + 创建成功后 1 次）
     const modals = renderer.root.findAll(
       (n) => String(n.props.className || '').includes('modal add-issue'))
     assert.equal(modals.length, 0, '创建成功后弹窗应关闭')
     const overviewCalls = getCalls.filter((p) => p === '/api/issues/overview')
-    assert.equal(overviewCalls.length, 2, '创建成功后应重新拉取 overview')
+    assert.equal(overviewCalls.length, 2, '创建和对账完成后应重新拉取 overview')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('边界：创建成功但自动对账失败时保留创建结果、提示失败并刷新列表', async () => {
+  const { renderer, renderError, getCalls } = await renderOverview()
+  try {
+    assert.equal(renderError, null)
+    await openAddIssueModal(renderer, 0)
+    const postCalls = []
+    mock.method(api, 'post', async (pathname, body) => {
+      postCalls.push(pathname)
+      if (pathname === '/api/issues') return { iid: 99, title: body.title }
+      if (pathname === '/api/repos/1/reconcile') throw new Error('自动对账失败：网络暂不可用')
+      throw new Error('unexpected ' + pathname)
+    })
+
+    await fillForm(renderer, '对账失败仍已创建', true)
+    await TestRenderer.act(async () => {
+      findSubmit(renderer).props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+
+    assert.deepEqual(postCalls, ['/api/issues', '/api/repos/1/reconcile'],
+      '创建已成功后仍应尝试一次指定仓库的自动对账')
+    assert.equal(renderer.root.findAll(
+      (n) => String(n.props.className || '').includes('modal add-issue')).length, 0,
+    '对账失败不应把已创建的 issue 误报为创建失败')
+    assert.ok(errorText(renderer).includes('自动对账失败：网络暂不可用'),
+      '应在仓库卡片提示自动对账失败')
+    const overviewCalls = getCalls.filter((p) => p === '/api/issues/overview')
+    assert.equal(overviewCalls.length, 2, '对账失败也应刷新列表以展示已创建的 issue')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

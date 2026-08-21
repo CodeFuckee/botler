@@ -607,7 +607,7 @@ export function useOverviewData() {
     repoIssues, issueErrors, issueError, ownerTokenOk,
     selectedIssue, setSelectedIssue,
     addIssueRepo, setAddIssueRepo,
-    reconcileResults, introspectResults, discoverResults,
+    reconcileResults, setReconcileResults, introspectResults, discoverResults,
     inspirationRepos, inspirationError,
     newInspirationDrafts, setNewInspirationDrafts,
     editingInspiration, setEditingInspiration,

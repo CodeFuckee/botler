@@ -92,6 +92,7 @@ function OverviewBody({ location, navigate }) {
     setSelectedIssue,
     setSelectedPipeline,
     setAddIssueRepo,
+    setReconcileResults,
     loadIssues,
     ...data
   } = useOverviewData()
@@ -203,8 +204,16 @@ function OverviewBody({ location, navigate }) {
       {addIssueRepo && (
         <AddIssueModal repo={addIssueRepo}
                        onClose={() => setAddIssueRepo(null)}
-                       onCreated={() => {
+                       onCreated={({ reconcileError } = {}) => {
                          setAddIssueRepo(null)
+                         // issue #425：创建已成功时，无论后续自动对账是否失败都
+                         // 刷新列表；失败只展示可手动重试的提示，避免误报创建失败。
+                         if (reconcileError) {
+                           setReconcileResults((prev) => ({
+                             ...prev,
+                             [addIssueRepo.repo_id]: { error: `已创建 Issue，但自动对账失败：${reconcileError}` },
+                           }))
+                         }
                          loadIssues()
                        }} />
       )}

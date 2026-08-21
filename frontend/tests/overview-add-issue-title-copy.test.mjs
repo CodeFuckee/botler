@@ -134,7 +134,9 @@ async function submit(renderer) {
   const postCalls = []
   mock.method(api, 'post', async (pathname, body) => {
     postCalls.push({ pathname, body })
-    return { iid: 99, title: body.title }
+    if (pathname === '/api/issues') return { iid: 99, title: body.title }
+    if (pathname === '/api/repos/1/reconcile') return { ok: true, scanned: 1, enqueued: 1 }
+    throw new Error('unexpected ' + pathname)
   })
   await TestRenderer.act(async () => {
     findSubmit(renderer).props.onClick()
@@ -193,7 +195,9 @@ test('提交：只输标题直接提交 → POST description 等于标题', asyn
     await setTitle(renderer, '只有标题')
     await checkFirstLabel(renderer)
     const postCalls = await submit(renderer)
-    assert.equal(postCalls.length, 1, '应发起一次 POST')
+    assert.deepEqual(postCalls.map((call) => call.pathname),
+      ['/api/issues', '/api/repos/1/reconcile'],
+      '创建成功后应继续对账当前仓库')
     assert.equal(postCalls[0].body.title, '只有标题')
     assert.equal(postCalls[0].body.description, '只有标题',
                  '描述为空时 POST 应兜底复制标题')

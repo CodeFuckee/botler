@@ -18,7 +18,8 @@
 // - 打开时加载 /api/issues/form-meta/{repo_id}（项目成员 + 项目标签），
 //   成员含 agent 时分配人默认选中 agent（用户确认的默认值）；
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键；
-// - 提交成功回调 onCreated（关闭弹窗并立即刷新 issue 列表）。
+// - 提交成功后同步对账当前仓库；对账失败不回滚已创建的 issue，
+//   而是经 onCreated 通知概览页提示，随后仍刷新 issue 列表。
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon.jsx'
 import { api } from '../api.js'
@@ -188,7 +189,16 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
         assignee_id: Number(assigneeId),
         labels: selectedLabels,
       })
-      onCreated()
+      // issue #425：Issue 创建成功后立刻对账当前仓库，使刚分配给 bot
+      // 且没有活跃任务的 Issue 无需等待定时扫描即可进入任务队列。创建
+      // 已是不可回滚的成功操作，故对账失败仅作为提示，不误报为创建失败。
+      let reconcileError = ''
+      try {
+        await api.post(`/api/repos/${repo.repo_id}/reconcile`)
+      } catch (reconcileFailure) {
+        reconcileError = reconcileFailure.message || '自动对账失败，请手动重试'
+      }
+      onCreated({ reconcileError })
     } catch (e) {
       setError(e.message)
     } finally {
