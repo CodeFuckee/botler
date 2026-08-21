@@ -76,6 +76,15 @@ class TestTypicalFailures:
     def test_api_key_invalid_is_engine(self, text):
         assert classify_failure(text) == CATEGORY_ENGINE
 
+    @pytest.mark.parametrize("text", [
+        "The usage limit has been reached",
+        "模型调用失败: usage limit exceeded",
+        "DeepSeek API error: Usage limits exceeded",
+    ])
+    def test_usage_limit_is_engine(self, text):
+        """issue #421：模型用量限制应归为引擎类，而非未知类。"""
+        assert classify_failure(text) == CATEGORY_ENGINE
+
     def test_combined_texts(self):
         """多段文本综合分类：原因 + 错误详情 + 输出。"""
         # 原因无关键词，但错误详情里有 401 → env
@@ -86,6 +95,13 @@ class TestTypicalFailures:
         assert classify_failure(
             "Claude Code 报告无法解决该 issue",
             "Traceback: requests 401") == CATEGORY_UNSOLVABLE
+        # 无法解决仍高于用量限制；引擎类用量限制高于环境类网络错误。
+        assert classify_failure(
+            "无法解决：需要人工评估",
+            "The usage limit has been reached") == CATEGORY_UNSOLVABLE
+        assert classify_failure(
+            "network unreachable",
+            "The usage limit has been reached") == CATEGORY_ENGINE
 
     @pytest.mark.parametrize("text", [
         "任务认领校验未通过，已停止处理：glab api user 返回当前绑定账号为 "

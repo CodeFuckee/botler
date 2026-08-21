@@ -250,6 +250,29 @@ class TestStructuredFailureComment:
         assert "> **失败分类：环境类（env）**" in body
         assert "请检查仓库 token 与网络配置后点重试" in body
 
+    def test_usage_limit_failure_is_engine_and_persisted(self, executor, tmp_path):
+        """issue #421：模型用量限制应落库并报告为引擎类。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = []
+        executor.gitlab = SimpleNamespace(
+            add_comment=lambda pid, iid, body: comments.append((pid, iid, body)),
+            add_labels=lambda *a, **k: None)
+        executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
+        db.claim_task(task_id)
+
+        executor._finish_failed(
+            task_id, "重试耗尽（2 次）后仍失败，最后退出码 0",
+            "模型调用失败: The usage limit has been reached",
+            repo=db.get_repo(repo_id))
+
+        assert db.get_task(task_id)["failure_category"] == "engine"
+        assert len(comments) == 1
+        _, _, body = comments[0]
+        assert "> **失败分类：引擎类（engine）**" in body
+        assert "请检查执行引擎配置（命令 / API Key）后点重试，或切换引擎" in body
+
     def test_failure_comment_hides_files_without_diff(self, executor, tmp_path):
         """失败但无 diff（无基线/无工作区）：相关文件段落隐藏，不报错。"""
         db = executor.db
