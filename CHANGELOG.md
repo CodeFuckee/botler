@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Fixed
+- **流水线详情右边栏查看报告误报“报告文件不存在或任务无该产物”（issue #406）**：
+  GitLab jobs API 对 `sast` / `dependency_scanning` / `junit` 返回的是摄入后
+  的内部文件名（如 `gl-sast-report.json`、`junit.xml.gz`），但 job 可下载
+  ZIP 归档内保留的是 `.gitlab-ci.yml` 配置的原始路径（如
+  `backend/bandit-report.sarif`、`backend/junit.xml`）；后端此前直接用内部
+  文件名请求单文件产物，GitLab 返回 404，导致前端稳定报错。现于
+  `backend/botler/api/pipelines.py` 在单文件下载 404 时回退下载该 job 的 ZIP
+  归档，按报告类型、扩展名与报告语义文件名定位并解析原始报告，同时限制
+  单文件大小、对损坏归档返回 502、归档无匹配报告保持明确 404；直接可下载
+  的既有路径仍走原快速路径。`backend/tests/test_api_pipelines.py` 新增 SAST、
+  依赖扫描、JUnit 三类内部文件名回退及无匹配文件、损坏 ZIP 边界用例；并将
+  `test_aggregate_dashboard_includes_by_source_daily` 的固定日期改为相对日期，
+  避免自然日推进后全量测试因窗口索引漂移而失败。
+
 ### Added
 - **概览页「来源分布」统计卡片迁入统计页（issue #361）**：
   概览页底部任务来源分布卡片（来源/任务量/成功率/平均耗时，近 30 天，issue

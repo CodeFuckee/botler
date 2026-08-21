@@ -461,23 +461,26 @@ class TestSourceDailyTrend:
         assert [r["date"] for r in res] == ["2026-08-18", "2026-08-19"]
 
     def test_aggregate_dashboard_includes_by_source_daily(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
         from botler.database import Database, aggregate_dashboard
         db = Database(str(tmp_path / "aggdaily.db"))
         repo = _mk_repo(db, 1, "repo-a")
+        # 使用相对今天前 2 天的数据，确保测试跨日期运行时仍稳定落在
+        # 7 天窗口索引 4；此前固定 2026-08-18 会随自然日推进而失效。
+        task_day = datetime.now(timezone.utc).date() - timedelta(days=2)
         _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
                  triggered_by="webhook",
-                 created_at="2026-08-18 01:00:00",
-                 finished_at="2026-08-18 01:00:30")
-        # days=7 窗口（参考日 8/20）→ 8/18 有数据、其余 6 天零填充
+                 created_at=f"{task_day} 01:00:00",
+                 finished_at=f"{task_day} 01:00:30")
         res = aggregate_dashboard(db.dashboard_task_rows(days=7), days=7)
         daily = res["by_source_daily"]
         assert len(daily) == 7
-        assert daily[4]["date"] == "2026-08-18"
+        assert daily[4]["date"] == str(task_day)
         assert daily[4]["task_count"] == 1
         assert daily[0]["task_count"] == 0
         # 默认 days=0：仅返回有数据的日期
         res0 = aggregate_dashboard(db.dashboard_task_rows(days=0))
-        assert [r["date"] for r in res0["by_source_daily"]] == ["2026-08-18"]
+        assert [r["date"] for r in res0["by_source_daily"]] == [str(task_day)]
 
     def test_empty_input_aggregate(self):
         from botler.database import aggregate_dashboard

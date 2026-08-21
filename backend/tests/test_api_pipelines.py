@@ -13,7 +13,9 @@ GitLab CI/CD 风格展示：
 每条结果带 enabled 字段供前端标注未启用仓库。
 """
 
+import io
 import time
+import zipfile
 from types import SimpleNamespace
 
 import httpx
@@ -1014,10 +1016,72 @@ class TestReportView:
         assert "仓库不存在" in resp.json()["detail"]
         assert not any(c.startswith("artifact-file:") for c in stub.calls)
 
+    @pytest.mark.parametrize(("metadata_name", "file_type", "archive_name",
+                              "content", "kind"), [
+        ("gl-sast-report.json", "sast", "backend/bandit-report.sarif",
+         SARIF_SAMPLE, "sast"),
+        ("gl-dependency-scanning-report.json", "dependency_scanning",
+         "backend/deps-python-report.json", DEPS_SAMPLE, "deps"),
+        ("junit.xml.gz", "junit", "backend/junit.xml", JUNIT_SAMPLE, "test"),
+    ])
+    def test_report_metadata_filename_falls_back_to_archive_path(
+            self, client, metadata_name, file_type, archive_name, content, kind):
+        """jobs API 的内部报告名 404 时，从 ZIP 归档定位 CI 原始报告。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr(archive_name, content)
+        stub.artifact_bytes = {(42, 5): archive.getvalue()}
+
+        resp = tc.get(
+            f"/api/pipelines/{repo_id}/report",
+            params={"job_id": 5, "file": metadata_name,
+                    "file_type": file_type})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["filename"] == archive_name
+        assert data["report"]["kind"] == kind
+        assert f"artifact-file:42:5:{metadata_name}" in stub.calls
+        assert "artifacts:42:5" in stub.calls
+
+    def test_report_archive_has_no_matching_file_maps_404(self, client):
+        """回退归档存在但没有对应类型报告时，仍返回明确的 404。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("dist/index.html", "ok")
+        stub.artifact_bytes = {(42, 5): archive.getvalue()}
+
+        resp = tc.get(
+            f"/api/pipelines/{repo_id}/report",
+            params={"job_id": 5, "file": "junit.xml.gz",
+                    "file_type": "junit"})
+
+        assert resp.status_code == 404
+        assert "报告文件" in resp.json()["detail"]
+
+    def test_report_corrupt_archive_maps_502(self, client):
+        """单文件名 404 且 ZIP 归档损坏时，报告为上游产物异常。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_bytes = {(42, 5): b"not-a-zip"}
+
+        resp = tc.get(
+            f"/api/pipelines/{repo_id}/report",
+            params={"job_id": 5, "file": "gl-sast-report.json",
+                    "file_type": "sast"})
+
+        assert resp.status_code == 502
+        assert "归档" in resp.json()["detail"]
+
     def test_gitlab_404_maps_404(self, client):
         tc, stub, db, tmp_path = client
         repo_id = _add_repo(db, project_id=42, name="demo")
         stub.fail_artifact_files = {5: GitLabError("报告文件不存在（404）", 404)}
+        stub.fail_artifacts = {5: GitLabError("任务无产物（404）", 404)}
         resp = tc.get(f"/api/pipelines/{repo_id}/report",
                       params={"job_id": 5, "file": "nope.sarif", "file_type": "sast"})
         assert resp.status_code == 404

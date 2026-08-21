@@ -20,9 +20,11 @@ GET /api/pipelines/overview：遍历所有配置仓库（含未启用，issue #3
 
 from __future__ import annotations
 
+import io
 import logging
 import threading
 import time
+import zipfile
 from datetime import datetime, timezone
 
 import httpx
@@ -266,6 +268,79 @@ _REPORT_TYPES = {"sast", "dependency_scanning", "junit"}
 _REPORT_EXT_TYPES = {".sarif": "sast", ".json": "dependency_scanning",
                      ".xml": "junit"}
 
+# jobs API 的报告条目 filename 是 GitLab 摄入后的内部文件名（例如
+# gl-sast-report.json / junit.xml.gz），并不一定是 artifacts:paths 归档内
+# 的 CI 原始路径。单文件下载内部名会 404，因此需要从 job 的 ZIP 归档
+# 中按报告类型寻找原始文件。限制单文件大小，避免异常归档占用过多内存。
+_REPORT_ARCHIVE_MAX_FILE_SIZE = 50 * 1024 * 1024
+_REPORT_ARCHIVE_SUFFIXES = {
+    "sast": (".sarif", ".json"),
+    "dependency_scanning": (".json",),
+    "junit": (".xml",),
+}
+_REPORT_ARCHIVE_KEYWORDS = {
+    "sast": ("sast", "sarif", "bandit", "semgrep", "gitleaks"),
+    "dependency_scanning": ("depend", "deps", "audit", "vulnerab"),
+    "junit": ("junit", "test", "report"),
+}
+
+
+def _response_content(resp: httpx.Response) -> bytes:
+    """读取响应字节并确保连接归还连接池。"""
+    try:
+        return resp.content
+    finally:
+        resp.close()
+
+
+def _archive_report_candidates(zf: zipfile.ZipFile, requested: str,
+                               file_type: str) -> list[zipfile.ZipInfo]:
+    """按报告类型筛选并排序 ZIP 内候选文件。"""
+    suffixes = _REPORT_ARCHIVE_SUFFIXES[file_type]
+    keywords = _REPORT_ARCHIVE_KEYWORDS[file_type]
+    requested_name = requested.rsplit("/", 1)[-1].lower()
+    if requested_name.endswith(".gz"):
+        requested_name = requested_name[:-3]
+
+    ranked: list[tuple[int, str, zipfile.ZipInfo]] = []
+    for info in zf.infolist():
+        if info.is_dir() or info.file_size > _REPORT_ARCHIVE_MAX_FILE_SIZE:
+            continue
+        name = info.filename.replace("\\", "/")
+        basename = name.rsplit("/", 1)[-1].lower()
+        if not basename.endswith(suffixes):
+            continue
+        # JSON/XML 归档常同时包含 package.json、coverage.xml 等无关文件；
+        # 除精确同名外，仅保留名称带报告语义的候选，避免误解析为空报告。
+        exact = basename == requested_name
+        keyword_match = any(word in basename for word in keywords)
+        if not exact and not keyword_match and not basename.endswith(".sarif"):
+            continue
+        rank = 0 if exact else (1 if basename.endswith(".sarif") else 2)
+        ranked.append((rank, name, info))
+    return [item[2] for item in sorted(ranked, key=lambda item: (item[0], item[1]))]
+
+
+def _report_from_archive(content: bytes, requested: str,
+                         file_type: str) -> tuple[str, dict] | None:
+    """从 job ZIP 归档定位并解析报告；无候选返回 None。"""
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            candidates = _archive_report_candidates(zf, requested, file_type)
+            if not candidates:
+                return None
+            parse_errors: list[str] = []
+            for info in candidates:
+                try:
+                    text = zf.read(info).decode("utf-8", errors="replace")
+                    return info.filename, parse_report(file_type, text)
+                except (ValueError, RuntimeError, zipfile.BadZipFile) as e:
+                    parse_errors.append(str(e))
+    except zipfile.BadZipFile as e:
+        raise ValueError("任务产物归档不是有效 ZIP 文件") from e
+    detail = parse_errors[0] if parse_errors else "未知格式"
+    raise ValueError(f"任务产物归档内的报告无法解析: {detail}")
+
 
 def _report_file_type(file: str, file_type: str) -> str | None:
     """确定报告类型：显式 file_type 优先，其次按扩展名推导；都不支持返回 None。"""
@@ -299,20 +374,42 @@ def pipeline_report(repo_id: int, job_id: int, request: Request,
     if row is None:
         raise HTTPException(404, "仓库不存在")
     client = _repo_client(c, row) or c.gitlab
+    actual_file = file
     try:
         resp = client.download_job_artifact_file(
             row["gitlab_project_id"], job_id, file)
+        content = _response_content(resp)
     except GitLabError as e:
-        if e.status_code == 404:
+        if e.status_code != 404:
+            raise HTTPException(502, f"GitLab 报告下载失败: {e}") from e
+        # GitLab jobs API 返回的报告 filename 是摄入后的内部名，不一定
+        # 存在于可下载归档；内部名 404 时回退下载 ZIP 并定位 CI 原始路径。
+        try:
+            archive_resp = client.download_job_artifacts(
+                row["gitlab_project_id"], job_id)
+            archive_content = _response_content(archive_resp)
+        except GitLabError as archive_error:
+            if archive_error.status_code == 404:
+                raise HTTPException(404, "报告文件不存在或任务无该产物") \
+                    from archive_error
+            raise HTTPException(
+                502, f"GitLab 报告归档下载失败: {archive_error}") from archive_error
+        try:
+            archived = _report_from_archive(archive_content, file, ftype)
+        except ValueError as archive_error:
+            raise HTTPException(502, f"报告归档解析失败: {archive_error}") \
+                from archive_error
+        if archived is None:
             raise HTTPException(404, "报告文件不存在或任务无该产物") from e
-        raise HTTPException(502, f"GitLab 报告下载失败: {e}") from e
+        actual_file, report = archived
+        return {"job_id": job_id, "filename": actual_file,
+                "file_type": ftype, "report": report}
     try:
-        text = resp.content.decode("utf-8", errors="replace")
-        resp.close()
+        text = content.decode("utf-8", errors="replace")
         report = parse_report(ftype, text)
     except ValueError as e:
         raise HTTPException(502, f"报告解析失败: {e}") from e
-    return {"job_id": job_id, "filename": file, "file_type": ftype,
+    return {"job_id": job_id, "filename": actual_file, "file_type": ftype,
             "report": report}
 
 
