@@ -484,8 +484,6 @@ class ProcessMixin:
         from botler.executor import (  # 动态取包级符号：测试 monkeypatch botler.executor.<名> 才能生效
             HermesSdkRunner, HermesSdkNotInstalledError,
         )
-        # issue #237/#424：仓库级任务参数覆盖——仅取重试/引擎生效配置
-        cfg = self._effective_cfg(task_id)
         workdir, _git_env = self.prepare_workspace(repo, resume=bool(resume_history))
         self._capture_env_snapshot(task_id, workdir)
         self._capture_base_sha(task_id, workdir, _git_env)
