@@ -16,7 +16,7 @@ from ..token_expiry import evaluate_expiry
 from ..database import DEFAULT_PRIORITY
 from ..gitlab_client import GitLabError
 from ..labels import DEFAULT_LABELS
-from ..git_remote import build_client_from_url, mask_url_token, parse_remote_url
+from ..git_remote import build_client_from_url, mask_url_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/repos", tags=["repos"])
