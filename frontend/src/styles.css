@@ -828,18 +828,10 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
-.settings-nav-search-icon {
-  /* 图标作为 flex 项占据实际空间，不能绝对定位覆盖输入框文字。 */
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
-  opacity: 0.6;
-  pointer-events: none;
-}
 .settings-nav-input {
   flex: 1;
   min-width: 0;
-  /* 复用 .input 的 12px 左内边距；图标间距由容器 gap 明确保证。 */
+  /* 复用 .input 的 12px 左内边距；无搜索图标，输入框占满整行。 */
   padding-left: 12px;
   padding-right: 30px;
 }

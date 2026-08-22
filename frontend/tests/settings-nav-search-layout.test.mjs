@@ -1,7 +1,6 @@
-// 设置导航搜索框真实布局回归测试（issue #441）：
-// 先前实现把图标绝对定位并仅靠 input 左内边距预留文字起点。用户反馈在
-// 实际页面仍发生图标与 placeholder 重叠，因此搜索框必须改为由 flex 容器
-// 管理图标、输入框和清除按钮的水平布局，不能继续让图标覆盖在输入区域上。
+// 设置导航搜索框真实布局回归测试（issue #441 修复 + issue #442 去图标）：
+// 搜索框由 flex 容器管理水平布局；issue #442 移除放大镜图标后，输入框
+// 直接占满容器整行（flex:1），不再有图标占位与图标相关样式规则。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -18,21 +17,18 @@ function ruleBlock(selector) {
   return found[1]
 }
 
-test('设置导航搜索框用 flex 显式分隔图标与输入文字', () => {
+test('设置导航搜索框：输入框占满整行、无图标占位（issue #442）', () => {
   const search = ruleBlock('.settings-nav-search')
-  const icon = ruleBlock('.settings-nav-search-icon')
   const input = ruleBlock('.settings-nav-input')
 
   assert.match(search, /display:\s*flex\s*;/,
-    '搜索框容器应使用 flex 布局，图标和输入框应是相邻项目而非覆盖关系')
+    '搜索框容器应使用 flex 布局，输入框占满整行')
   assert.match(search, /align-items:\s*center\s*;/,
-    '搜索框图标和输入框应在同一行垂直居中')
-  assert.match(search, /gap:\s*(?:var\(--space-[^)]+\)|\d+px)\s*;/,
-    '图标与输入框之间应由明确间距控制')
-  assert.doesNotMatch(icon, /position:\s*absolute\s*;/,
-    '搜索图标不得绝对定位覆盖输入文字区域')
-  assert.match(icon, /flex:\s*0\s+0\s+16px\s*;/,
-    '搜索图标应占用固定的 16px 布局宽度')
+    '输入框应在容器内垂直居中')
   assert.match(input, /flex:\s*1\s*;/,
-    '输入框应占用图标之后的剩余水平空间')
+    '输入框应占满容器剩余宽度（不再为图标让位）')
+  assert.match(input, /padding-left:\s*12px\s*;/,
+    '输入框应保留与 .input 一致的 12px 左内边距')
+  assert.doesNotMatch(styles, /\.settings-nav-search-icon\s*\{/,
+    '不应再存在搜索图标样式规则')
 })

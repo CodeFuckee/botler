@@ -4,19 +4,18 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('设置页左侧导航搜索框', () => {
-  test('搜索图标与提示文字之间保留清晰间距', async ({ page }) => {
+  test('搜索框已移除搜索图标（issue #442），搜索功能保持可用', async ({ page }) => {
     await page.goto('/settings')
     const input = page.locator('.settings-nav-input')
-    const icon = page.locator('.settings-nav-search-icon')
     await expect(input).toBeVisible()
-    await expect(icon).toBeVisible()
-
-    const [inputBox, iconBox] = await Promise.all([input.boundingBox(), icon.boundingBox()])
-    expect(inputBox).not.toBeNull()
-    expect(iconBox).not.toBeNull()
-    // 图标与输入框是独立 flex 项：输入框左缘必须位于图标右缘之后，
-    // 并保持至少 8px 的容器间距，避免 placeholder 与图标重叠。
-    expect(inputBox.x - (iconBox.x + iconBox.width)).toBeGreaterThanOrEqual(8)
+    // 放大镜图标不再渲染（只去图标，不砍搜索功能）
+    await expect(page.locator('.settings-nav-search-icon')).toHaveCount(0)
+    // 输入关键词后导航子项正常过滤命中
+    await input.fill('备份')
+    await expect(page.locator('a[href="#settings-backup"]')).toBeVisible()
+    // 清空后恢复全部分组
+    await input.fill('')
+    await expect(page.locator('a[href="#settings-sso"]')).toBeVisible()
   })
 })
 

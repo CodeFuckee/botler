@@ -236,7 +236,6 @@ export default function SettingsNav() {
           </div>
         </div>
         <div className="settings-nav-search">
-          <span className="settings-nav-search-icon" aria-hidden="true"><Icon name="search" /></span>
           <input
             className="input settings-nav-input"
             type="search"
