@@ -769,3 +769,13 @@ test('styles.css 提供报告视图样式（.pipeline-detail-report-btn / .pipel
   assert.match(styles, /\.pipeline-report\s*\{/, '应有报告视图容器样式')
   assert.match(styles, /\.pipeline-report-item\s*\{/, '应有报告明细条目样式')
 })
+
+// issue #433：报告明细应跟随流水线详情抽屉全局纵向滚动，不能再形成局部滚动区。
+test('测试报告明细不创建局部纵向滚动，滚动由流水线详情抽屉统一承担', () => {
+  const match = styles.match(/\.pipeline-report-list\s*\{([^}]*)\}/s)
+  assert.ok(match, '应存在 .pipeline-report-list 样式规则')
+  assert.doesNotMatch(match[1], /max-height\s*:/,
+    '报告明细列表不应限制高度，否则会形成局部滚动区')
+  assert.doesNotMatch(match[1], /overflow-y\s*:/,
+    '报告明细列表不应设置纵向滚动，滚动应由 .drawer 统一承担')
+})

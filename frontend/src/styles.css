@@ -2923,6 +2923,7 @@ body:has(.drawer-overlay) {
   color: var(--muted);
 }
 /* 报告明细列表 */
+/* 报告明细随 .drawer 的全局纵向滚动，避免测试报告形成局部滚动区。 */
 .pipeline-report-list {
   list-style: none;
   margin: 0;
@@ -2930,8 +2931,6 @@ body:has(.drawer-overlay) {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  max-height: 55vh;
-  overflow-y: auto;
 }
 .pipeline-report-item {
   border: 1px solid var(--border);
