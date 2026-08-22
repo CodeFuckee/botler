@@ -1,4 +1,4 @@
-// pm2 配置：部署到 10.0.0.122 后，在项目根目录执行
+// pm2 配置：部署到 your-server.example.com 后，在项目根目录执行
 //   pm2 start deploy/botler.config.cjs && pm2 save
 // 注意：ANTHROPIC_* / GITLAB_BOT_TOKEN 等凭据由 .env 或环境变量提供，
 //       通过 --env 或在 pm2 之前 export 均可；不要在配置里写明文。

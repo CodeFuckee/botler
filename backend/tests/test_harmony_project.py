@@ -71,8 +71,8 @@ class TestJson5Parser:
 
     def test_comment_like_text_inside_string_preserved(self, vh):
         """字符串字面量里的 // 与引号不应被当作注释/字符串边界。"""
-        text = r'''{ "url": "http://10.0.0.122:8000", 'note': "it's ok" }'''
-        assert vh.parse_json5(text) == {'url': 'http://10.0.0.122:8000', 'note': "it's ok"}
+        text = r'''{ "url": "http://your-server.example.com:8000", 'note': "it's ok" }'''
+        assert vh.parse_json5(text) == {'url': 'http://your-server.example.com:8000', 'note': "it's ok"}
 
     def test_invalid_json5_raises(self, vh):
         """语法错误应抛出 ValueError 而非静默失败。"""
@@ -120,7 +120,7 @@ class TestMissingConfigDetected:
         proj = copy_project(tmp_path)
         target = proj / 'entry/src/main/ets/common/AppConfig.ets'
         text = target.read_text(encoding='utf-8').replace(
-            "export const WEB_URL: string = 'http://10.0.0.122:8000';", '')
+            "export const WEB_URL: string = 'http://your-server.example.com:8000';", '')
         target.write_text(text, encoding='utf-8')
         errors = vh.validate_project(proj)
         assert any('WEB_URL' in e for e in errors), errors
@@ -130,7 +130,7 @@ class TestMissingConfigDetected:
         proj = copy_project(tmp_path)
         target = proj / 'entry/src/main/ets/common/AppConfig.ets'
         text = target.read_text(encoding='utf-8').replace(
-            "'http://10.0.0.122:8000'", "'ftp://10.0.0.122:8000'")
+            "'http://your-server.example.com:8000'", "'ftp://your-server.example.com:8000'")
         target.write_text(text, encoding='utf-8')
         errors = vh.validate_project(proj)
         assert any('http(s)' in e for e in errors), errors

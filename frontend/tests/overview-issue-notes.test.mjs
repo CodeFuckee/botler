@@ -339,8 +339,8 @@ test('projectUrlFromIssueWebUrl：work_items / issues 两种 URL 均能推导项
   const { projectUrlFromIssueWebUrl } = mod
   assert.equal(
     projectUrlFromIssueWebUrl(
-      'https://home.chenkaidi.top:509/chenkaidi/botler/-/work_items/181'),
-    'https://home.chenkaidi.top:509/chenkaidi/botler')
+      'https://gitlab.example.com/chenkaidi/botler/-/work_items/181'),
+    'https://gitlab.example.com/chenkaidi/botler')
   assert.equal(
     projectUrlFromIssueWebUrl(
       'https://gitlab.example.com/chenkaidi/botler/-/issues/97'),

@@ -113,7 +113,7 @@ class TestProjectPathPlaceholder:
         r = self._renderer(tmp_path)
         tpl = "项目: `{project_path}`；API: {project_path_encoded}"
         v = r.build_variables("botler", self.ISSUE,
-                              repo_url="https://home.chenkaidi.top:509/chenkaidi/botler.git")
+                              repo_url="https://gitlab.example.com/chenkaidi/botler.git")
         rendered = r.render(tpl, v)
         assert "chenkaidi/botler" in rendered
         assert "chenkaidi%2Fbotler" in rendered
@@ -144,7 +144,7 @@ class TestProjectPathPlaceholder:
                "\"{gitlab_url}/api/v4/projects/{project_path_encoded}/issues\"\n"
                "export GITLAB_HOST={gitlab_host}")
         v = r.build_variables("botler", self.ISSUE,
-                              repo_url="https://home.chenkaidi.top:509/chenkaidi/botler.git")
+                              repo_url="https://gitlab.example.com/chenkaidi/botler.git")
         rendered = r.render(tpl, v)
         assert "chenkaidi/botler" in rendered
         assert "chenkaidi%2Fbotler" in rendered

@@ -46,15 +46,15 @@ test('decodeMessage 解析二进制消息并容错非法输入', () => {
 })
 
 test('buildWsUrl 构造同源反向代理地址（http→ws / https→wss + token）', () => {
-  const httpLoc = { protocol: 'http:', host: '10.0.0.122:8000' }
+  const httpLoc = { protocol: 'http:', host: 'your-server.example.com:8000' }
   assert.equal(
     buildWsUrl(httpLoc, '终端 1', 'tok-1'),
-    'ws://10.0.0.122:8000/api/terminal/ws/%E7%BB%88%E7%AB%AF%201?token=tok-1',
+    'ws://your-server.example.com:8000/api/terminal/ws/%E7%BB%88%E7%AB%AF%201?token=tok-1',
   )
-  const httpsLoc = { protocol: 'https:', host: 'home.chenkaidi.top:509' }
+  const httpsLoc = { protocol: 'https:', host: 'gitlab.example.com' }
   assert.equal(
     buildWsUrl(httpsLoc, 't1', ''),
-    'wss://home.chenkaidi.top:509/api/terminal/ws/t1',
+    'wss://gitlab.example.com/api/terminal/ws/t1',
   )
 })
 

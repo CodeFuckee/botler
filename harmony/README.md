@@ -69,12 +69,12 @@ ls entry/build/default/outputs/default/*.hap
 
 ## 修改 Web 加载地址（WEB_URL）
 
-默认加载地址为部署机内网地址 `http://10.0.0.122:8000`（pm2 部署，ZeroTier 内网）。
+默认加载地址为部署机内网地址 `http://your-server.example.com:8000`（pm2 部署，ZeroTier 内网）。
 按实际部署环境修改 `entry/src/main/ets/common/AppConfig.ets`：
 
 ```typescript
 // 鸿蒙端加载的 Botler Web 前端地址（支持 http/https）
-export const WEB_URL: string = 'http://10.0.0.122:8000';
+export const WEB_URL: string = 'http://your-server.example.com:8000';
 ```
 
 ## 使用 DevEco Studio 打开 / 真机运行

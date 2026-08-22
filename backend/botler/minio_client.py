@@ -21,7 +21,7 @@ MINIO_ROOT_USER / MINIO_ROOT_PASSWORD，与部署写入 data/backend/.env
                                         #   自动设为公开只读，识图模型可匿名取图）
       public_base_url: ""               # 识图模型取图的 http(s) 前缀（建议经
                                         #   nginx 代理 MinIO 桶，如
-                                        #   https://home.chenkaidi.top:509/minio-public），
+                                        #   https://gitlab.example.com/minio-public），
                                         #   对象 URL =
                                         #   public_base_url/bucket/<sha256 哈希>
       verify_ssl: true                  # endpoint 证书校验（自签证书设 false）

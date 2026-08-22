@@ -74,7 +74,7 @@ PTY 会话（每个标签一个，NamedTermManager 按 name 隔离）
 
 ## 6. 部署
 
-### 6.1 pm2（CI 自动部署，10.0.0.122）
+### 6.1 pm2（CI 自动部署，your-server.example.com）
 
 - `deploy/botler.config.cjs` 新增 `botler-terminal` 进程（
   `backend/terminal_service.py`，监听 `127.0.0.1:8765`）；

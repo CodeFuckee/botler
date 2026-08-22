@@ -3462,7 +3462,7 @@
   - **鸿蒙工程（`harmony/`，Stage 模型）**：`AppScope`（bundleName
     `com.botler.app` / 版本 / 图标）+ `entry` 模块（`module.json5` 声明
     INTERNET 权限与 EntryAbility；`Index.ets` 用 Web 组件加载
-    `common/AppConfig.ets` 的 `WEB_URL`（默认 `http://10.0.0.122:8000`，
+    `common/AppConfig.ets` 的 `WEB_URL`（默认 `http://your-server.example.com:8000`，
     部署机内网地址，按环境可改），原生壳补充加载动画（LoadingProgress）/
     加载失败提示与重试（onErrorReceive + controller.refresh()）/ 返回键
     历史回退（onBackPress + accessBackward）；目标 SDK HarmonyOS 6.1.1
@@ -3551,7 +3551,7 @@
   - **启用运行实例**：部署机 `data/backend/config.yaml` 写入 minio 段——
     `enabled: true`、endpoint `127.0.0.1:9000`、凭据 minioadmin（与
     `data/backend/.env` 的 MINIO_ROOT_USER / MINIO_ROOT_PASSWORD 同源）、
-    `bucket: public`、`public_base_url: https://home.chenkaidi.top:509/minio-public`
+    `bucket: public`、`public_base_url: https://gitlab.example.com/minio-public`
     （nginx 代理 MinIO public 桶地址，配置参考 `deploy/nginx-minio-public.conf`，
     issue #164）；已端到端验证：图片字节上传 public 桶成功、返回
     `public_base_url/bucket/<sha256 哈希>` 对象 URL；
@@ -7345,7 +7345,7 @@
     build 通过。
 - **全局模板写死单仓库路径，任务收到错误指令**（issue #18 诊断发现）：用户
   `data/backend/config.yaml` 的全局模板采用跨会话 issue-agent 模式，但模板
-  硬编码 `chenkaidi/shipyard`、`https://home.chenkaidi.top:509`、共享进度文件
+  硬编码 `chenkaidi/shipyard`、`https://gitlab.example.com`、共享进度文件
   ——botler 对任意仓库执行任务时 Claude 收到「处理 shipyard 队列」指令，
   不处理当前指派的 issue（exit 0 但 issue 不关，任务反复失败）。修复：
   - `backend/botler/templates.py`：新增 `{project_path}`（group/repo，从仓库
@@ -7650,7 +7650,7 @@
   同调用路径的端到端复现）。
 - 修复添加仓库时 webhook 注册报错「注册 webhook 失败: GitLab API 错误 422: Invalid url given」
   （webhook_url 留空时必现，URL 方式添加同样受影响）：根因是 Botler 部署在内网
-  （10.0.0.122），GitLab 默认禁止向本地/私有网络地址注册 webhook（SSRF 防护，
+  （your-server.example.com），GitLab 默认禁止向本地/私有网络地址注册 webhook（SSRF 防护，
   `allow_local_requests_from_web_hooks_and_services` 默认 false）。修复方案：
   ① GitLab 侧在 Admin → Settings → Network → Outbound requests 勾选「Allow requests
   to the local network from webhooks and integrations」；② Botler 侧

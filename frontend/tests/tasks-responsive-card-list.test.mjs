@@ -126,7 +126,7 @@ function mkTask(overrides = {}) {
     repo_name: 'chenkaidi/botler', status: 'succeeded',
     attempt_count: 1, triggered_by: 'webhook', resumed: false,
     error_message: null, error_detail: null, commit_sha: 'abc1234',
-    commit_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/commit/abc1234',
+    commit_url: 'https://gitlab.example.com/chenkaidi/botler/-/commit/abc1234',
     created_at: '2026-08-13 09:50:00', finished_at: '2026-08-13 10:30:00',
     ...overrides,
   }
