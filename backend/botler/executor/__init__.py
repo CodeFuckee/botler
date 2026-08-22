@@ -242,7 +242,13 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         return plugin.run(self, task_id, repo, issue,
                           resume_session, resume_history)
     def _log_file(self, task_id: int) -> Path:
-        base = Path(__file__).resolve().parents[2] / "logs"
+        # 部署环境把执行日志集中到持久化 data/logs（issue #204）；本地开发
+        # 保持 backend/logs 默认路径，避免未配置数据目录时改变既有行为。
+        configured = os.environ.get("BOTLER_LOG_DIR")
+        data_dir = os.environ.get("BOTLER_DATA_DIR")
+        base = (Path(configured) if configured else
+                Path(data_dir) / "logs" if data_dir else
+                Path(__file__).resolve().parents[2] / "logs")
         base.mkdir(parents=True, exist_ok=True)
         return base / f"task_{task_id}.log"
 

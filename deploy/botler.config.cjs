@@ -54,6 +54,7 @@ module.exports = {
         BOTLER_CONFIG: path.join(DATA_DIR, 'backend/config.yaml'),
         BOTLER_DB: path.join(DATA_DIR, 'backend/botler.db'),
         BOTLER_BACKUP_DIR: path.join(DATA_DIR, 'backups'),
+        BOTLER_LOG_DIR: path.join(DATA_DIR, 'logs'),
         // 脚本方式执行 uvicorn 时 sys.path 不含项目目录，
         // 必须显式把 backend 加入 PYTHONPATH 才能 import botler
         PYTHONPATH: path.join(ROOT, 'backend'),

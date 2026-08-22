@@ -261,6 +261,12 @@ CREATE TABLE IF NOT EXISTS notification_events (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_task
   ON notification_events(task_id) WHERE task_id IS NOT NULL;
 
+-- 数据保留清理按创建时间筛选，索引避免全表扫描（issue #204）
+CREATE INDEX IF NOT EXISTS idx_notification_events_created_at
+  ON notification_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_finished_status
+  ON tasks(finished_at, status);
+
 -- 灵感（issue #131）：概览页「灵感」板块——按仓库随手记录新功能灵感，
 -- 仅保存在 Botler 本地数据库，不提交到 GitLab issue。repo_id 引用
 -- repos 表（软删除仍保留行，灵感记录不随仓库删除而丢失）。
@@ -1607,6 +1613,37 @@ class Database:
                     """UPDATE tasks SET status='queued', started_at=NULL, finished_at=NULL
                        WHERE id=?""", (task_id,))
         return restored
+
+    # ---- 数据保留清理（issue #204） ----
+
+    def expired_task_log_paths(self, cutoff: str) -> list[str]:
+        """返回过期终态任务的日志路径；任务摘要行不会删除。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT log_path FROM tasks
+                   WHERE finished_at IS NOT NULL AND finished_at < ?
+                     AND status IN (?, ?, ?, ?) AND log_path IS NOT NULL AND log_path != ''""",
+                (cutoff, STATUS_SUCCEEDED, STATUS_FAILED, STATUS_INTERRUPTED, STATUS_CANCELED),
+            ).fetchall()
+        return [str(row["log_path"]) for row in rows]
+
+    def prune_task_logs(self, cutoff: str) -> int:
+        """删除过期终态任务的明细日志，保留 tasks 中的执行摘要。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                """DELETE FROM task_logs WHERE task_id IN (
+                     SELECT id FROM tasks WHERE finished_at IS NOT NULL AND finished_at < ?
+                       AND status IN (?, ?, ?, ?)
+                   )""",
+                (cutoff, STATUS_SUCCEEDED, STATUS_FAILED, STATUS_INTERRUPTED, STATUS_CANCELED),
+            )
+            return cur.rowcount
+
+    def prune_notification_events(self, cutoff: str) -> int:
+        """删除指定时间之前的通知事件。"""
+        with self._conn(write=True) as conn:
+            return conn.execute(
+                "DELETE FROM notification_events WHERE created_at < ?", (cutoff,)).rowcount
 
     # ---- task_logs ----
 

@@ -561,6 +561,15 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
   `data/backups/` 外请一并迁移 `data/minio/data`（MinIO 数据目录），或直接
   用备份包恢复。
 
+## 运行数据保留（issue #204）
+
+`retention` 配置默认启用：每天 **04:00 Asia/Shanghai** 清理超过保留期的
+`task_logs` 明细（默认 90 天）、`notification_events`（默认 30 天）与
+`task_<id>.log` 执行日志（默认 90 天）；`tasks` 表的 succeeded / failed 等任务摘要
+不会删除。设置页「数据备份」可调整保留天数并手动执行清理，接口为
+`POST /api/retention/cleanup`。PM2 的 `pm2-*.log` 超过默认 10 MiB 时会压缩归档并
+截断活动文件，避免常驻进程日志无限增长。
+
 ## 插件体系（issue #140）
 
 平台把三类能力统一为**插件**，注册进全局插件注册表（`botler.plugins.PluginRegistry`），

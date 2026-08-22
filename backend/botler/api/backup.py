@@ -35,6 +35,13 @@ def list_backups(request: Request):
             "enabled": s.backup_enabled,
             "retention_days": s.backup_retention_days,
         },
+        "retention": {
+            "enabled": s.retention_enabled,
+            "task_logs_days": s.retention_task_logs_days,
+            "notification_events_days": s.retention_notification_events_days,
+            "log_files_days": s.retention_log_files_days,
+            "pm2_max_log_size_mb": s.retention_pm2_max_log_size_mb,
+        },
     }
 
 

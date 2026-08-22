@@ -33,6 +33,7 @@ from .executor import ClaudeExecutor
 from .gitlab_client import GitLabClient, configure_default_rate_limiter
 from .log_redact import install_redact_filter, register_config_secrets
 from .reconciler import Reconciler
+from .retention import RetentionManager
 from .scheduler import TaskScheduler
 from .templates import TemplateRenderer
 from .health import build_deps_report, deps_critical_failed
@@ -87,6 +88,7 @@ class AppContext:
     reconciler: Reconciler
     webhook: WebhookHandler
     backup: BotlerBackup
+    retention: RetentionManager
     sso: SsoAuth
     config_path: str = ""
 
@@ -116,12 +118,15 @@ def build_context(config_path: str | None = None) -> AppContext:
     scheduler = TaskScheduler(config, db, executor)
     reconciler = Reconciler(config, db, gitlab, scheduler)
     webhook = WebhookHandler(config, db, gitlab, scheduler)
+    retention = RetentionManager(db, config)
     backup = BotlerBackup(config.path, db.path, config=config)
+    # 手动与定时备份都先按 retention 策略收缩运行数据，降低备份成本。
+    backup.pre_backup_cleanup = retention.cleanup
     sso = SsoAuth(config)
     return AppContext(
         config=config, db=db, gitlab=gitlab, renderer=renderer,
         executor=executor, scheduler=scheduler, reconciler=reconciler,
-        webhook=webhook, backup=backup, sso=sso, config_path=config.path,
+        webhook=webhook, backup=backup, retention=retention, sso=sso, config_path=config.path,
     )
 
 
@@ -172,11 +177,13 @@ async def lifespan(app: FastAPI):
     ctx.scheduler.start()
     ctx.reconciler.start()
     ctx.backup.start_scheduler()
+    ctx.retention.start_scheduler()
     logger.info("Botler 启动完成")
     yield
     ctx.scheduler.stop()
     ctx.reconciler.stop()
     ctx.backup.stop_scheduler()
+    ctx.retention.stop_scheduler()
     logger.info("Botler 已停止")
 
 

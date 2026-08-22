@@ -40,6 +40,7 @@ services:
       # 后端启动时读取（config.py / database.py 均支持环境变量覆盖）
       BOTLER_CONFIG: /app/backend/config.yaml
       BOTLER_DB: /app/backend/botler.db
+      BOTLER_LOG_DIR: /app/logs
       PYTHONPATH: /app/backend
       # 部署时区固定为亚洲/上海（镜像内已装 tzdata，TZ 环境变量即时生效）
       TZ: Asia/Shanghai

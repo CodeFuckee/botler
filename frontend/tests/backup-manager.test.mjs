@@ -43,6 +43,7 @@ after(() => vite.close())
 const BACKUP_DATA = {
   backups: [{ name: 'botler-2026-08-14.tar.gz', size: 2048, created_at: '2026-08-14 03:00:00' }],
   config: { enabled: true, retention_days: 7 },
+  retention: { enabled: true, task_logs_days: 90, notification_events_days: 30, log_files_days: 90, pm2_max_log_size_mb: 10 },
 }
 
 // 各 api 方法调用记录
@@ -173,8 +174,10 @@ test('取消勾选后保存：提交 enabled 布尔值与 retention_days 数字'
 
   findButtons(renderer, '保存配置')[0].props.onClick()
   await TestRenderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
-  assert.deepEqual(calls.put[0], ['/api/settings', { backup: { enabled: false, retention_days: 7 } }],
-    '应提交 backup 段且 enabled 为布尔 false')
+  assert.deepEqual(calls.put[0], ['/api/settings', {
+    backup: { enabled: false, retention_days: 7 },
+    retention: { enabled: true, task_logs_days: 90, notification_events_days: 30, log_files_days: 90, pm2_max_log_size_mb: 10 },
+  }], '应提交备份与数据保留配置，enabled 为布尔 false')
   assert.match(textOf(renderer.root), /备份配置已保存（写回 config\.yaml）/, '应显示保存成功提示')
   assert.equal(calls.get.length, 2, '保存成功后应重新加载列表（初始 + 重载）')
 })
@@ -326,4 +329,10 @@ test('首次加载失败应展示错误提示而非永久「加载中…」', as
   assert.equal(alerts.length, 1, '加载失败应渲染错误提示')
   assert.match(textOf(alerts[0]), /备份列表加载失败/)
   assert.doesNotMatch(textOf(renderer.root), /加载中…/, '不应停留在加载中状态')
+})
+
+test('运行数据保留：保存配置并提供手动清理入口', () => {
+  assert.match(bmSrc, /retention:\s*\{/, '保存请求应包含 retention 配置')
+  assert.match(bmSrc, /api\.post\('\/api\/retention\/cleanup'\)/, '立即清理应调用保留清理 API')
+  assert.match(bmSrc, /立即清理过期数据/, '应提供可见的手动清理按钮')
 })

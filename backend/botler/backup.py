@@ -122,6 +122,8 @@ class BotlerBackup:
         self.db_path = db_path
         self.backup_dir = backup_dir
         self.config = config
+        # 应用入口注入数据保留清理回调（issue #204）；独立使用/既有测试保持可选。
+        self.pre_backup_cleanup = None
         self._aps = BackgroundScheduler(timezone=SCHEDULE_TIMEZONE)
 
     # ---- 配置读取 ----
@@ -149,7 +151,12 @@ class BotlerBackup:
     # ---- 创建 / 列表 / 删除 ----
 
     def create_backup(self, trigger: str = "manual") -> dict:
-        """创建备份包并返回信息。创建后按保留策略清理旧备份。"""
+        """创建备份包并返回信息。创建后按保留策略清理旧备份。
+
+        快照前先执行数据保留清理，避免备份包重新携带已过期的运行明细。
+        """
+        if self.pre_backup_cleanup is not None:
+            self.pre_backup_cleanup()
         for path in (self.config_path, self.db_path):
             if not os.path.isfile(path):
                 raise BackupError(f"待备份文件不存在: {path}（备份中止）")

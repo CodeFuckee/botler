@@ -148,6 +148,13 @@ def get_settings(request: Request):
             "enabled": s.backup_enabled,
             "retention_days": s.backup_retention_days,
         },
+        "retention": {
+            "enabled": s.retention_enabled,
+            "task_logs_days": s.retention_task_logs_days,
+            "notification_events_days": s.retention_notification_events_days,
+            "log_files_days": s.retention_log_files_days,
+            "pm2_max_log_size_mb": s.retention_pm2_max_log_size_mb,
+        },
         "ui": {
             # 页面时间显示时区（IANA 名，空 = 跟随浏览器本机时区）
             "timezone": s.ui_timezone,
@@ -349,6 +356,11 @@ def update_settings(request: Request, body: dict):
     if backup is not None:
         _validate_backup(backup)
         c.config.update_section("backup", backup)
+
+    retention = body.get("retention")
+    if retention is not None:
+        _validate_retention(retention)
+        c.config.update_section("retention", retention)
 
     ui = body.get("ui")
     if ui is not None:
@@ -858,6 +870,21 @@ def _validate_backup(patch: dict) -> None:
         val = patch["retention_days"]
         if not isinstance(val, int) or isinstance(val, bool) or not 1 <= val <= 365:
             raise HTTPException(400, "backup.retention_days 必须是 1~365 的整数（天）")
+
+
+def _validate_retention(patch: dict) -> None:
+    """校验 retention 段：开关与各类保留天数/PM2 日志大小。"""
+    if "enabled" in patch and not isinstance(patch["enabled"], bool):
+        raise HTTPException(400, "retention.enabled 必须是布尔值")
+    for key in ("task_logs_days", "notification_events_days", "log_files_days"):
+        if key in patch:
+            val = patch[key]
+            if not isinstance(val, int) or isinstance(val, bool) or not 1 <= val <= 3650:
+                raise HTTPException(400, f"retention.{key} 必须是 1~3650 的整数（天）")
+    if "pm2_max_log_size_mb" in patch:
+        val = patch["pm2_max_log_size_mb"]
+        if not isinstance(val, int) or isinstance(val, bool) or not 1 <= val <= 1024:
+            raise HTTPException(400, "retention.pm2_max_log_size_mb 必须是 1~1024 的整数（MiB）")
 
 
 def _validate_ui(patch: dict) -> None:

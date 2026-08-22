@@ -23,6 +23,9 @@ export default function BackupManager() {
   const setConfigField = (key, val) =>
     setData((d) => ({ ...d, config: { ...d.config, [key]: val } }))
 
+  const setRetentionField = (key, val) =>
+    setData((d) => ({ ...d, retention: { ...(d.retention || {}), [key]: val } }))
+
   const saveConfig = async () => {
     setBusy(true); setError(''); setNote('')
     try {
@@ -31,9 +34,25 @@ export default function BackupManager() {
           enabled: !!data.config.enabled,
           retention_days: Number(data.config.retention_days),
         },
+        retention: {
+          enabled: data.retention?.enabled !== false,
+          task_logs_days: Number(data.retention?.task_logs_days ?? 90),
+          notification_events_days: Number(data.retention?.notification_events_days ?? 30),
+          log_files_days: Number(data.retention?.log_files_days ?? 90),
+          pm2_max_log_size_mb: Number(data.retention?.pm2_max_log_size_mb ?? 10),
+        },
       })
       setNote('备份配置已保存（写回 config.yaml）')
       await load()
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  const cleanupNow = async () => {
+    if (!(await confirmDialog({ message: '将立即按当前保留策略删除过期任务明细、通知和日志文件；任务摘要不会删除。确定继续？', danger: true }))) return
+    setBusy(true); setError(''); setNote('')
+    try {
+      const result = await api.post('/api/retention/cleanup')
+      setNote(`清理完成：任务日志 ${result.task_logs} 条、通知 ${result.notification_events} 条、日志文件 ${result.log_files} 个`)
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
@@ -136,12 +155,41 @@ export default function BackupManager() {
         </tbody>
       </table>
 
+      <h3>运行数据保留</h3>
+      <table className="table kv">
+        <tbody>
+          <tr>
+            <th>启用清理 <code>retention.enabled</code></th>
+            <td><label className="checkbox-label"><input type="checkbox" checked={data.retention?.enabled !== false} onChange={(e) => setRetentionField('enabled', e.target.checked)} /> 每天 04:00 自动清理（Asia/Shanghai）</label></td>
+          </tr>
+          <tr>
+            <th>任务明细</th>
+            <td><input className="input num-input" type="number" min={1} max={3650} value={data.retention?.task_logs_days ?? 90} onChange={(e) => setRetentionField('task_logs_days', e.target.value)} /> <span className="muted small"> 天；仅清理终态任务的 task_logs，任务摘要保留</span></td>
+          </tr>
+          <tr>
+            <th>执行日志文件</th>
+            <td><input className="input num-input" type="number" min={1} max={3650} value={data.retention?.log_files_days ?? 90} onChange={(e) => setRetentionField('log_files_days', e.target.value)} /> <span className="muted small"> 天；清理过期的 task_&lt;id&gt;.log</span></td>
+          </tr>
+          <tr>
+            <th>通知事件</th>
+            <td><input className="input num-input" type="number" min={1} max={3650} value={data.retention?.notification_events_days ?? 30} onChange={(e) => setRetentionField('notification_events_days', e.target.value)} /> <span className="muted small"> 天</span></td>
+          </tr>
+          <tr>
+            <th>PM2 日志轮转</th>
+            <td><input className="input num-input" type="number" min={1} max={1024} value={data.retention?.pm2_max_log_size_mb ?? 10} onChange={(e) => setRetentionField('pm2_max_log_size_mb', e.target.value)} /> <span className="muted small"> MiB；超过阈值压缩归档</span></td>
+          </tr>
+        </tbody>
+      </table>
+
       <div className="form-row">
         <button className="btn btn-primary" disabled={busy} onClick={saveConfig}>
           {busy ? '保存中…' : '保存配置'}
         </button>
         <button className="btn" disabled={busy} onClick={backupNow}>
           {busy ? '备份中…' : '立即备份'}
+        </button>
+        <button className="btn" disabled={busy} onClick={cleanupNow}>
+          {busy ? '清理中…' : '立即清理过期数据'}
         </button>
         <label className="btn btn-upload">
           上传备份恢复

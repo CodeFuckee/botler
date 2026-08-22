@@ -286,6 +286,15 @@ backup:
   enabled: true            # 定时备份开关（每天 03:00 Asia/Shanghai 自动备份）
   retention_days: 30       # 保留策略：只保留最近 N 天的备份（清理更旧的）
 
+retention:
+  # 运行数据保留（issue #204）：终态任务摘要始终保留，只删除明细和日志文件。
+  enabled: true
+  task_logs_days: 90             # succeeded / failed 等终态任务的 task_logs 明细保留天数
+  notification_events_days: 30   # 前端游标通知事件保留天数
+  log_files_days: 90             # task_<id>.log 执行日志文件保留天数
+  pm2_max_log_size_mb: 10        # pm2-*.log 超过此大小时压缩归档并截断活动文件
+  # 每天 04:00 Asia/Shanghai 自动清理；也可在设置页点击「立即清理」。
+
 ui:
   # 界面显示（issue #142）：灵感板块 / CI/CD 流水线板块是否显示未启用项目。
   # true = 显示（未启用仓库带「未启用」徽章，默认）；false = 两个板块只展示

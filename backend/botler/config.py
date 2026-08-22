@@ -323,6 +323,12 @@ class Settings:
     browse_default_path: str | None = None
     backup_enabled: bool = True
     backup_retention_days: int = 30
+    # 数据保留（issue #204）：仅删除终态任务明细和执行日志，任务摘要保留。
+    retention_enabled: bool = True
+    retention_task_logs_days: int = 90
+    retention_notification_events_days: int = 30
+    retention_log_files_days: int = 90
+    retention_pm2_max_log_size_mb: int = 10
     ui_timezone: str = ""  # 页面显示时区（IANA 名，空 = 跟随浏览器本机时区；issue #14）
     # 灵感 / CI/CD 页面是否显示未启用项目（issue #142）：默认 true = 显示
     # （未启用仓库带「未启用」徽章，保持现状）；false = 两个板块只展示
@@ -460,6 +466,7 @@ KNOWN_FIELDS = {
                   "raw_body_in_prompt", "body_max_chars"},
     "browse": {"default_path"},
     "backup": {"enabled", "retention_days"},
+    "retention": {"enabled", "task_logs_days", "notification_events_days", "log_files_days", "pm2_max_log_size_mb"},
     "ui": {"timezone", "show_disabled_repos", "theme"},
     "notifications": {"enabled", "task_needs_interaction", "issue_completed",
                       "queue_empty", "queue_no_work"},
@@ -520,6 +527,7 @@ SECTION_SCHEMAS: dict[str, SectionSchema] = {
                                blank_means_default=("resume", "comment")),
     "browse": SectionSchema(fields=tuple(KNOWN_FIELDS["browse"])),
     "backup": SectionSchema(fields=tuple(KNOWN_FIELDS["backup"])),
+    "retention": SectionSchema(fields=tuple(KNOWN_FIELDS["retention"])),
     "ui": SectionSchema(fields=tuple(KNOWN_FIELDS["ui"])),
     "notifications": SectionSchema(fields=tuple(KNOWN_FIELDS["notifications"])),
     "webhook": SectionSchema(fields=tuple(KNOWN_FIELDS["webhook"]),
@@ -677,6 +685,7 @@ class ConfigManager:
         tpl = data.get("templates", {})
         browse = data.get("browse", {})
         backup = data.get("backup", {})
+        retention = data.get("retention", {}) or {}
         ui = data.get("ui", {})
         notify = data.get("notifications", {})
         webhook = data.get("webhook", {}) or {}
@@ -776,6 +785,11 @@ class ConfigManager:
             browse_default_path=browse.get("default_path") or None,
             backup_enabled=bool(backup.get("enabled", True)),
             backup_retention_days=int(backup.get("retention_days", 30)),
+            retention_enabled=bool(retention.get("enabled", True)),
+            retention_task_logs_days=max(1, int(retention.get("task_logs_days", 90))),
+            retention_notification_events_days=max(1, int(retention.get("notification_events_days", 30))),
+            retention_log_files_days=max(1, int(retention.get("log_files_days", 90))),
+            retention_pm2_max_log_size_mb=max(1, int(retention.get("pm2_max_log_size_mb", 10))),
             ui_timezone=(ui.get("timezone") or "").strip(),
             ui_show_disabled_repos=_ui_default(ui, "show_disabled_repos", True),
             ui_theme=_ui_theme(ui),
