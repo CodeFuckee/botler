@@ -347,3 +347,56 @@ test('回复失败：错误信息展示、回复框保留、输入内容保留',
     mock.restoreAll()
   }
 })
+
+test('评论输入区提供图片附件选择、移除与上传后 Markdown 同步路径', () => {
+  assert.match(drawerSrc, /type="file"/, '应提供文件选择控件')
+  assert.match(drawerSrc, /accept="image\/png,image\/jpeg,image\/gif,image\/webp"/,
+    '文件选择器只能选择受支持的图片格式')
+  assert.match(drawerSrc, /选择图片/, '应显示选择图片按钮')
+  assert.match(drawerSrc, /移除图片/, '选择后应允许移除图片')
+  assert.match(drawerSrc, /\/attachments/, '提交前应调用图片附件上传接口')
+  assert.match(drawerSrc, /markdown/, '应使用后端返回的 GitLab Markdown 图片引用')
+})
+
+test('添加带图片的评论：先上传附件，再将 GitLab Markdown 与正文一并发表', async () => {
+  const image = new Blob(['png-bytes'], { type: 'image/png' })
+  Object.defineProperty(image, 'name', { value: '截图.png' })
+  const postMock = mock.method(api, 'post', async (pathname, body) => {
+    if (pathname === '/api/issues/42/97/attachments') {
+      assert.ok(body instanceof FormData, '附件请求应使用 multipart FormData')
+      assert.ok(body.get('image') instanceof Blob, '应以 multipart 图片字段上传')
+      assert.equal(body.get('image').type, 'image/png')
+      return { markdown: '![截图.png](/uploads/hash/截图.png)' }
+    }
+    assert.equal(pathname, '/api/issues/42/97/comments')
+    assert.deepEqual(body, {
+      body: '请查看截图\n\n![截图.png](/uploads/hash/截图.png)',
+    })
+    return {
+      note: { id: 303, body: body.body, system: false,
+        author: { name: 'code01' }, created_at: '2026-08-16 13:00:00' },
+    }
+  })
+  const { renderer, root } = await renderDrawer(OPEN_ISSUE, [], postMock)
+  try {
+    await TestRenderer.act(async () => {
+      findComposer(root)[0].props.onChange({ target: { value: '请查看截图' } })
+    })
+    const imageInput = root.findAll(
+      (n) => n.type === 'input' && n.props.type === 'file')[0]
+    await TestRenderer.act(async () => {
+      imageInput.props.onChange({ target: { files: [image], value: 'selected' } })
+    })
+    await TestRenderer.act(async () => {
+      findPostBtn(root)[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    assert.equal(postMock.mock.calls.length, 2, '应依次上传附件、发表评论')
+    assert.ok(drawerText(root).includes('截图.png'),
+      '本地即时评论应渲染 GitLab 图片引用')
+    assert.equal(findComposer(root)[0].props.value, '', '成功后应清空评论正文')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})

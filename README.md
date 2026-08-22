@@ -215,6 +215,8 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > （类似 GitLab issue 时间线，左侧竖线 + 节点圆点，评论为卡片节点、活动为文本节点），
 > 标记活动（谁添加/移除了哪个标记）同样并入时间线按时间交错（issue #351），不再单独成区；
 > 评论的回复/添加评论交互与活动的提交链接均保留；切换即时生效、刷新保持。
+
+> 💡 **Issue 评论图片附件**（issue #432）：概览页 Issue 详情右边栏的评论输入区可点击「选择图片」上传 PNG、JPEG、GIF 或 WebP（单张最大 10 MiB）。发布时 Botler 会先把图片上传到对应 GitLab 项目，再将 GitLab 返回的 Markdown 图片引用和评论正文一并提交，因此两侧的 Issue 评论同步展示同一张图片；可只发图片，也可附带文字，提交前可移除已选图片。
 >
 > 标记活动（issue #349）：概览页 issue 详情右边栏展示谁在什么时间添加/移除了哪个标记
 > （如「chenkaidi 添加了标记 feature」「code01 移除了标记 ui」），数据源为 GitLab

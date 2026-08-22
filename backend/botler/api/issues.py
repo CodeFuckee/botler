@@ -50,7 +50,7 @@ import threading
 import time
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from ..database import (_parse_db_ts, normalize_issue_created_at,
@@ -1012,6 +1012,73 @@ def _create_comment(request: Request, project_id: int, iid: int,
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
     clear_issue_cache()
     return {"note": _trim_note(note)}
+
+
+# Issue 评论附件只接受 GitLab 能稳定预览的常见格式；限制 10 MiB，避免
+# 浏览器误选大文件后占用应用内存和 GitLab 上传配额。
+_COMMENT_IMAGE_MIME_TYPES = {
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+}
+_COMMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _is_supported_comment_image(data: bytes, mime_type: str) -> bool:
+    """校验声明 MIME 与文件签名，拒绝伪装成图片的任意文件。"""
+    if mime_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if mime_type == "image/webp":
+        return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+    return False
+
+
+def _markdown_image(alt: str, url: str) -> str:
+    """生成安全的 GitLab Markdown 图片引用，仅接受 GitLab 上传相对路径。"""
+    if not isinstance(url, str) or not url.startswith("/uploads/"):
+        raise HTTPException(502, "GitLab 图片上传未返回有效地址")
+    # Markdown alt 文本不允许换行、反斜杠或方括号影响语法结构。
+    safe_alt = re.sub(r"[\\\[\]\r\n]", "_", alt or "图片")
+    return f"![{safe_alt}]({url})"
+
+
+@router.post("/{project_id}/{iid}/attachments", status_code=201)
+async def upload_issue_attachment(request: Request, project_id: int, iid: int,
+                                  image: UploadFile = File(...)):
+    """上传一张待发布到 Issue 评论的图片（issue #432）。
+
+    文件先写入目标 GitLab 项目，响应返回可直接拼入评论的 Markdown；前端
+    随后把它和文本正文一次提交到 comments API，避免 Botler 本地存储与
+    GitLab 内容不同步。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    mime_type = (image.content_type or "").lower().strip()
+    if mime_type not in _COMMENT_IMAGE_MIME_TYPES:
+        raise HTTPException(400, "仅支持 PNG、JPEG、GIF、WebP 图片")
+    data = await image.read()
+    if not data:
+        raise HTTPException(400, "图片内容为空")
+    if len(data) > _COMMENT_IMAGE_MAX_BYTES:
+        raise HTTPException(400, "图片不能超过 10 MiB")
+    if not _is_supported_comment_image(data, mime_type):
+        raise HTTPException(400, "图片格式与文件内容不匹配")
+    filename = (image.filename or "图片").strip() or "图片"
+    try:
+        uploaded = _issue_edit_call(
+            c, row, lambda cl: cl.upload_issue_attachment(
+                project_id, filename, data, mime_type))
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "仓库不存在") from e
+        raise HTTPException(502, f"GitLab 图片上传失败: {e}") from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    return {"markdown": _markdown_image(filename, (uploaded or {}).get("url"))}
 
 
 @router.post("/{project_id}/{iid}/comments", status_code=201)

@@ -1816,6 +1816,28 @@ body:has(.drawer-overlay) {
   padding: var(--space-2);
   background: var(--bg);
 }
+.comment-attachment-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.comment-image-input {
+  display: none;
+}
+.comment-image-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.comment-image-remove {
+  padding: 1px 6px;
+}
 .comment-composer-actions {
   display: flex;
   justify-content: flex-end;

@@ -1076,3 +1076,25 @@ class TestGitLabRequestRateLimit:
         assert client.test_connection() == {"id": 1}
         assert len(calls) == 2
         assert len(acquires) == 2
+
+class TestUploadIssueAttachment:
+    """Issue 评论图片上传：先上传项目文件，再由评论引用 GitLab URL。"""
+
+    def test_upload_image_posts_multipart_and_returns_relative_url(self):
+        client = make_client()
+        captured = {}
+
+        def fake_request(method, path, **kwargs):
+            captured['method'] = method
+            captured['path'] = path
+            captured['files'] = kwargs['files']
+            return {'alt': '截图.png', 'url': '/uploads/hash/截图.png'}
+
+        client._request = fake_request
+        result = client.upload_issue_attachment(
+            42, '截图.png', b'png-bytes', 'image/png')
+
+        assert result == {'alt': '截图.png', 'url': '/uploads/hash/截图.png'}
+        assert captured['method'] == 'POST'
+        assert captured['path'] == '/projects/42/uploads'
+        assert captured['files']['file'] == ('截图.png', b'png-bytes', 'image/png')

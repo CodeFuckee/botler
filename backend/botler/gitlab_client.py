@@ -712,6 +712,20 @@ class GitLabClient:
                                limit=limit, **params)
         return self._paged(f"/projects/{project_id}/issues", **params)
 
+    def upload_issue_attachment(self, project_id: int, filename: str,
+                                data: bytes, mime_type: str) -> dict:
+        """上传 Issue 评论图片至 GitLab 项目（issue #432）。
+
+        GitLab ``POST /projects/:id/uploads`` 接收 multipart 文件并返回
+        项目内相对 URL。调用方把该 URL 组装为 Markdown 图片，再作为
+        Issue note 正文提交，确保 Botler 与 GitLab 评论使用同一资源。
+        """
+        uploaded = self._request(
+            "POST", f"/projects/{project_id}/uploads",
+            files={"file": (filename, data, mime_type)})
+        assert isinstance(uploaded, dict)
+        return uploaded
+
     def add_comment(self, project_id: int, iid: int, body: str) -> dict:
         """添加 issue 评论（issue #125：概览页右边栏「添加评论」）。
 

@@ -131,6 +131,10 @@ class StubGitLab:
         # reply_calls 记录 (project_id, iid, note_id, body)；
         # reply_errors[(project_id, iid)] 注入异常；reply_result 配置
         # 返回对象
+        # issue #432：评论图片上传桩——记录项目、文件名、字节和 MIME。
+        self.upload_calls: list[tuple[int, str, bytes, str]] = []
+        self.upload_result: dict | None = None
+        self.upload_errors: dict[int, Exception] = {}
         self.add_comment_calls: list[tuple[int, int, str]] = []
         self.add_comment_errors: dict[tuple[int, int], Exception] = {}
         self.add_comment_result: dict | None = None
@@ -258,6 +262,15 @@ class StubGitLab:
             "description": None, "author": None, "milestone": None,
             "assignees": [], "user_notes_count": 0,
         }))
+
+    def upload_issue_attachment(self, project_id, filename, data, mime_type):
+        """图片上传桩（issue #432）。"""
+        self.upload_calls.append((project_id, filename, data, mime_type))
+        err = self.upload_errors.get(project_id)
+        if err is not None:
+            raise err
+        return self.upload_result or {
+            "alt": filename, "url": f"/uploads/{filename}"}
 
     def add_comment(self, project_id, iid, body):
         """添加评论桩（issue #125）：记录参数，可注入异常、可配置返回。"""
@@ -3278,3 +3291,49 @@ class TestCompletionStats:
         assert body["repos"][1] == {
             "repo_id": repo_b, "repo_name": "beta", "completed_count": 0,
             "avg_seconds": None, "trend": []}
+
+class TestIssueImageAttachments:
+    """评论图片附件必须先进入 GitLab，再以 Markdown 同步到评论。"""
+
+    PNG = b'\x89PNG\r\n\x1a\nimage'
+
+    def test_upload_image_success_returns_gitlab_markdown(self, client_edit):
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name='demo')
+        stub.upload_result = {
+            'alt': '截图.png',
+            'url': '/uploads/-/system/project/42/hash/截图.png',
+        }
+
+        resp = tc.post('/api/issues/42/64/attachments', files={
+            'image': ('截图.png', self.PNG, 'image/png'),
+        })
+
+        assert resp.status_code == 201
+        assert stub.upload_calls == [(42, '截图.png', self.PNG, 'image/png')]
+        assert resp.json() == {
+            'markdown': '![截图.png](/uploads/-/system/project/42/hash/截图.png)'}
+
+    def test_upload_rejects_non_image_and_does_not_call_gitlab(self, client_edit):
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name='demo')
+
+        resp = tc.post('/api/issues/42/64/attachments', files={
+            'image': ('not-image.txt', b'plain text', 'text/plain'),
+        })
+
+        assert resp.status_code == 400
+        assert '图片' in resp.json()['detail']
+        assert stub.upload_calls == []
+
+    def test_upload_rejects_empty_image_and_does_not_call_gitlab(self, client_edit):
+        tc, stub, db, _ = client_edit
+        _add_repo(db, project_id=42, name='demo')
+
+        resp = tc.post('/api/issues/42/64/attachments', files={
+            'image': ('empty.png', b'', 'image/png'),
+        })
+
+        assert resp.status_code == 400
+        assert '为空' in resp.json()['detail']
+        assert stub.upload_calls == []

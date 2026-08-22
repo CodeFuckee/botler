@@ -46,7 +46,7 @@
 // - 列表项本身不再直接跳转 GitLab，跳转统一走抽屉右上角
 //   「在 GitLab 中打开」按钮（web_url 新窗口）；
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键。
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon.jsx'
 import { api, fmtTime, fmtSeconds } from '../api.js'
 import { confirmDialog } from '../dialog.js'
@@ -200,6 +200,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // replyText 回复输入内容；replying 回复提交中；replyErr 回复失败
   // 信息；localNotesCount 本次会话新增评论数（评论行计数 = 快照 + 新增）
   const [commentText, setCommentText] = useState('')
+  // issue #432：单张图片作为待提交附件；文件仅在发表时上传 GitLab，
+  // 成功后以 GitLab Markdown 同步写入该条评论，不在浏览器本地持久化。
+  const [commentImage, setCommentImage] = useState(null)
+  const commentImageInputRef = useRef(null)
   const [posting, setPosting] = useState(false)
   const [postErr, setPostErr] = useState('')
   const [replyingTo, setReplyingTo] = useState(null)
@@ -662,20 +666,53 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 隐藏输入区，避免对不可知目标发言）
   const canComment = hasDetail && !detailErr && notes !== null
 
-  // 添加评论：POST /comments 提交正文（去空白非空才可提交）；成功后
-  // 本地追加返回的评论并清空输入框（无需重拉详情）；失败保留输入
-  // 内容可重试
+  // 选择图片时在前端先按与服务端一致的 MIME 白名单拦截，服务端仍会
+  // 复核文件签名和大小，不能绕过。
+  function handleCommentImageChange(event) {
+    const image = event.target.files && event.target.files[0]
+    if (!image) return
+    if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(image.type)) {
+      setPostErr('仅支持 PNG、JPEG、GIF、WebP 图片')
+      event.target.value = ''
+      return
+    }
+    if (image.size > 10 * 1024 * 1024) {
+      setPostErr('图片不能超过 10 MiB')
+      event.target.value = ''
+      return
+    }
+    setCommentImage(image)
+    setPostErr('')
+  }
+
+  function removeCommentImage() {
+    setCommentImage(null)
+    if (commentImageInputRef.current) commentImageInputRef.current.value = ''
+  }
+
+  // 添加评论：若有图片，先传到同一 GitLab 项目取得 Markdown，再与正文
+  // 一次性调用 comments 接口，因此 GitLab Issue 评论可直接展示该图片。
   async function handlePostComment() {
     const text = commentText.trim()
-    if (!text || posting) return
+    if ((!text && !commentImage) || posting) return
     setPosting(true)
     setPostErr('')
     try {
-      const d = await api.post(`/api/issues/${i.project_id}/${i.iid}/comments`,
-                               { body: text })
+      let imageMarkdown = ''
+      if (commentImage) {
+        const form = new FormData()
+        form.append('image', commentImage)
+        const uploaded = await api.post(
+          `/api/issues/${i.project_id}/${i.iid}/attachments`, form)
+        imageMarkdown = uploaded && uploaded.markdown ? uploaded.markdown : ''
+        if (!imageMarkdown) throw new Error('图片上传未返回 GitLab 引用')
+      }
+      const body = [text, imageMarkdown].filter(Boolean).join(text && imageMarkdown ? '\n\n' : '')
+      const d = await api.post(`/api/issues/${i.project_id}/${i.iid}/comments`, { body })
       if (d && d.note) {
         setNotes((prev) => [...(prev || []), d.note])
         setCommentText('')
+        removeCommentImage()
         bumpNotesCount()
       }
     } catch (e) {
@@ -854,12 +891,25 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                   placeholder="写下你的评论…"
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)} />
+        <div className="comment-attachment-actions">
+          <input ref={commentImageInputRef} className="comment-image-input"
+                 type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+                 onChange={handleCommentImageChange} />
+          <button type="button" className="btn btn-small"
+                  onClick={() => commentImageInputRef.current?.click()}
+                  disabled={posting}> <Icon name="upload" /> 选择图片</button>
+          {commentImage && <span className="comment-image-name" title={commentImage.name}>
+            {commentImage.name}
+            <button type="button" className="btn btn-small comment-image-remove"
+                    onClick={removeCommentImage} disabled={posting}>移除图片</button>
+          </span>}
+        </div>
         {postErr && (
           <div className="issue-drawer-error" role="alert">{postErr}</div>
         )}
         <div className="comment-composer-actions">
           <button type="button" className="btn btn-small btn-primary"
-                  disabled={posting || !commentText.trim()}
+                  disabled={posting || (!commentText.trim() && !commentImage)}
                   onClick={handlePostComment}>
             {posting ? '发表中…' : '发表评论'}
           </button>
