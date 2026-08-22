@@ -3,13 +3,91 @@
 > Bot + Butler，机器人管家
 
 运行在服务器上的自动化平台：统一配置多个 GitLab 仓库，通过 webhook 实时监控 issue，
-当 issue 被指派给 bot 账号时，自动调用 **Claude Code CLI（无头模式）** 处理并推送修复到 main，最后关闭 issue。
+当 issue 被指派给 bot 账号时，自动调用 **Claude Code CLI（无头模式）** 处理并推送修复到 main，追加开发结果评论和 `bot-done` 标签，Issue 由人工确认后关闭。
 执行引擎可切换为 **hermes-agent**（hermes agent SDK 进程内集成，见 [docs/hermes-engine-deployment.md](docs/hermes-engine-deployment.md)）
 或 **deepseek-harness**（Python SDK 进程内调用，见 [docs/dsh-engine-deployment.md](docs/dsh-engine-deployment.md)）；
 切换入口在 Web 设置页「任务调度」卡片的 `worker.engine` 设置项（issue #113）。
 
 完整设计见 [`docs/设计方案.md`](docs/设计方案.md)；
 UI 优化参考与同类开源项目调研见 [`docs/ui-design-reference.md`](docs/ui-design-reference.md)（issue #121 调研产出）。
+
+## 定位与核心能力
+
+Botler 面向需要持续维护多个 GitLab 仓库的团队，将「Issue → AI 开发 → 代码验证 →
+人工确认」串成可观测的自动化工作流。它不是代码托管平台的替代品：GitLab 仍是 Issue、
+代码和 CI 的事实来源，Botler 负责接收事件、编排执行任务并展示进度。
+
+- **多仓库调度**：通过 webhook 实时接收 Issue 事件，并以定时对账补齐漏网事件；同仓库
+  串行、跨仓库并行，支持按仓库和标签优先级排队。
+- **可切换 AI 执行引擎**：支持 Claude Code、hermes-agent 和 deepseek-harness（DSH），
+  可配置备用引擎，在主引擎不可用时降级重试。
+- **端到端可观测性**：在 Web 界面查看任务、日志、GitLab 流水线、统计数据、失败分类和
+  通知；支持手动执行、重试、暂停窗口和数据保留策略。
+- **安全的协作闭环**：凭据通过环境变量注入；执行完成后保留结果评论与 `bot-done` 标签，
+  Issue 是否关闭始终由人工确认并操作。
+
+## 典型使用流程
+
+1. 管理员在 Botler 中添加一个 GitLab 仓库，平台为其注册 webhook。
+2. 开发者创建 Issue 并指派给配置的 bot 账号（也可从 Botler 界面手动执行）。
+3. Botler 将任务按优先级入队，执行器在仓库默认主分支同步代码、实现改动并运行测试。
+4. 执行器推送通过验证的提交；Botler 展示 GitLab CI 结果，并在 Issue 追加开发摘要、标记
+   `bot-done`。
+5. 团队成员审阅变更和 CI，人工验证后决定是否关闭 Issue。
+
+## 运行环境与前置条件
+
+- Linux/macOS/Windows（Docker 部署推荐 Linux），Python **3.11+**、Node.js **18+**；
+  本地开发还需要 Git 与 npm。
+- 可从运行 Botler 的机器访问 GitLab；若使用 webhook，GitLab 还必须能访问 Botler 的
+  `/webhook/gitlab` 地址。
+- 一个 GitLab bot 账号及 Personal Access Token（PAT），至少授予 `api` 与
+  `write_repository` scope，并为目标项目授予 Maintainer 权限。
+- 一个可用的执行引擎：默认 Claude Code 读取 `ANTHROPIC_*` 配置；也可以在设置页选择
+  hermes 或 DSH。只配置 Botler Web 界面时不需要把任何 API Key 写进仓库。
+
+## 最小可运行示例
+
+以下示例以本地开发模式启动 Botler。所有密钥仅存放在未纳入 Git 的
+`backend/.env`，`backend/config.yaml` 通过 `${ENV_VAR}` 引用它们。
+
+```bash
+# 1. 安装后端依赖并复制本地配置
+cd backend
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.lock.txt
+cp config.example.yaml config.yaml
+cp .env.example .env
+
+# 2. 编辑 backend/.env，至少填写 GitLab 凭据与执行引擎 API Key
+# GITLAB_BOT_TOKEN=glpat-<你的 GitLab PAT>
+# WEBHOOK_SECRET=<使用 openssl rand -hex 32 生成的随机字符串>
+# ANTHROPIC_API_KEY=<Claude 或兼容服务的 API Key>
+
+# 3. 启动 FastAPI 后端（终端 A）
+.venv/bin/uvicorn botler.main:app --reload --host 0.0.0.0 --port 8000
+
+# 4. 启动前端（终端 B）
+cd ../frontend
+npm install
+npm run dev
+```
+
+浏览器访问 <http://localhost:5173>，在「仓库」页添加 GitLab 项目后创建或选择一个
+Issue 执行。后端健康检查可用 `curl http://localhost:8000/api/health` 验证。生产环境可
+直接使用 [Docker 部署](#docker-部署)；完整配置项见[配置说明](#配置说明)。
+
+## 参与开发
+
+开发前请先阅读下方[目录结构](#目录结构)了解后端、前端和文档的边界。修改后至少运行：
+
+```bash
+cd backend && .venv/bin/python -m pytest tests/ -q -n auto
+cd frontend && npm test && npm run lint
+```
+
+提交前请同步更新 `CHANGELOG.md` 和相关文档；完整测试、质量门禁与 E2E 命令见下方的
+[测试](#测试)和「代码质量门禁」章节。项目以 MIT 许可证发布，详见 [LICENSE](LICENSE)。
 
 ## 工作原理
 
@@ -23,7 +101,7 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
 对账兜底调度器 ◄──── Claude Code 执行器（自动切回默认主分支 + 干净工作区 + 模版渲染 + 人工停止/重试）
 （每 5 分钟扫漏网 issue）   │
                           ├─► git push 到 main（Claude 自己执行）
-                          └─► 调 GitLab API 关闭 issue（Claude 自己执行）
+                          └─► 追加结果评论并标记 bot-done（人工决定是否关闭 Issue）
 ```
 
 > 💡 **概览页创建 Issue 自动对账**（issue #425）：从概览页仓库卡片的「添加 Issue」弹窗成功创建 Issue 后，页面会立即对该仓库执行一次对账，令分配给 bot 且尚无活跃任务的 Issue 无需等待定时扫描即可入队。若对账请求失败，Issue 仍视为已创建并刷新列表，卡片会显示失败提示，用户可点击「对账」手动重试。
@@ -473,7 +551,7 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 > CI 变量生成）。
 
 冒烟测试：浏览器打开 `http://10.0.0.122:8000` → 添加仓库（自动注册 webhook）→
-在 GitLab 建一个测试 issue 指派给 bot → 观察任务列表，验证代码推上 main、issue 自动关闭。
+在 GitLab 建一个测试 issue 指派给 bot → 观察任务列表，验证代码推上 main、Issue 已追加结果评论并标记 `bot-done`；人工验证后再决定是否关闭。
 
 ## Docker 部署
 
