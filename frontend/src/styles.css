@@ -3148,6 +3148,14 @@ body:has(.drawer-overlay) {
   font-family: inherit;
 }
 
+/* issue #437：添加 Issue 弹窗附件输入沿用评论上传的隐藏文件控件与名称徽章。 */
+.add-issue-image-input {
+  display: none;
+}
+.add-issue-attachment .comment-attachment-actions {
+  margin-top: 0;
+}
+
 
 /* issue #165：标题语音输入——输入框与语音按钮横向排列（按钮不挤压输入框），
    语音错误提示小号红字紧贴输入行下方 */

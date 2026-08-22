@@ -167,6 +167,12 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 标题，无需后端接口；支持 Chrome / Edge / Safari，Firefox 等不支持时会给出
 > 中文提示，识别中再次点击按钮可停止。
 
+> 💡 **添加 Issue 支持图片附件**（issue #437）：弹窗的描述下方提供「选择图片」
+> 按钮，支持 PNG、JPEG、GIF、WebP，单张最大 10 MiB。创建时图片会先上传至目标
+> GitLab 项目，再将 GitLab 返回的 Markdown 图片引用与 Issue 描述一并创建；因此
+> 图片可在 Botler 与 GitLab Issue 中同步展示。格式或大小不合法会在前端提示，服务端
+> 还会复核文件签名；上传失败不会创建半成品 Issue，已填写表单和待上传图片均保留以便重试。
+
 > 概览页「灵感」板块位于「开放 Issue」板块下方（issue #293：灵感组件还是和
 > 原来一样，放在开放 issue 组件的下方；issue #184 曾改为右侧常驻边栏，本次
 > 回退该布局调整），每条灵感提供「对话」按钮（issue #166）：点击后以右侧

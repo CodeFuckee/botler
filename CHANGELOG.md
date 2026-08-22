@@ -10,6 +10,8 @@
 
 ### Added
 
+- **概览页添加 Issue 支持上传图片附件（issue #437）**：描述下方新增「选择图片」按钮，支持 PNG、JPEG、GIF、WebP（单张最大 10 MiB）。创建前先将图片上传到对应 GitLab 项目，成功后把 GitLab 返回的 Markdown 图片引用与 Issue 正文一并创建，确保 Botler 与 GitLab Issue 同步展示；前后端双重校验 MIME、文件签名和大小，上传失败不会创建半成品 Issue，且保留表单内容与待上传图片供重试。
+
 - **运行数据保留与清理策略（issue #204）**：新增 `retention` 配置，默认保留终态任务 `task_logs` 明细与执行日志 90 天、`notification_events` 30 天，同时永久保留任务摘要行。应用每天 04:00（Asia/Shanghai）自动清理，也可通过设置页和 `POST /api/retention/cleanup` 手动触发；PM2 输出日志超过默认 10 MiB 时压缩归档并截断活动文件。执行日志目录现随部署统一落在持久化 `data/logs`，避免代码目录轮换后遗失。
 
 - **概览页 Issue 详情支持手动执行（issue #431）**：所有开放且当前没有 `queued`、`running`、`retrying` 活跃任务的 Issue 在右侧详情栏显示“执行”按钮。确认后调用独立的执行接口创建一条 `manual` 来源的新任务并立即交给现有调度器入队；已关闭 Issue、已有活跃任务和请求成功后的当前抽屉会隐藏按钮，后端也对关闭状态、活跃任务与并发创建逐层校验，避免重复执行。失败任务原有“重试”语义保持不变，仍用于续用历史任务会话。

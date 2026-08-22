@@ -1088,19 +1088,13 @@ def _markdown_image(alt: str, url: str) -> str:
     return f"![{safe_alt}]({url})"
 
 
-@router.post("/{project_id}/{iid}/attachments", status_code=201)
-async def upload_issue_attachment(request: Request, project_id: int, iid: int,
-                                  image: UploadFile = File(...)):
-    """上传一张待发布到 Issue 评论的图片（issue #432）。
+async def _upload_project_image(request: Request, row, image: UploadFile) -> dict:
+    """上传图片到指定仓库的 GitLab 项目并返回可嵌入 Issue 的 Markdown。
 
-    文件先写入目标 GitLab 项目，响应返回可直接拼入评论的 Markdown；前端
-    随后把它和文本正文一次提交到 comments API，避免 Botler 本地存储与
-    GitLab 内容不同步。
+    创建 Issue 与发表评论必须共用同一校验、owner token 和 GitLab 上传链路，
+    确保图片不落本地、也不会出现 Botler 与 GitLab 内容不同步。
     """
     c = request.app.state.ctx
-    row = _enabled_repo_by_project_id(c, project_id)
-    if row is None:
-        raise HTTPException(404, "仓库不存在或未启用")
     mime_type = (image.content_type or "").lower().strip()
     if mime_type not in _COMMENT_IMAGE_MIME_TYPES:
         raise HTTPException(400, "仅支持 PNG、JPEG、GIF、WebP 图片")
@@ -1112,6 +1106,7 @@ async def upload_issue_attachment(request: Request, project_id: int, iid: int,
     if not _is_supported_comment_image(data, mime_type):
         raise HTTPException(400, "图片格式与文件内容不匹配")
     filename = (image.filename or "图片").strip() or "图片"
+    project_id = row["gitlab_project_id"]
     try:
         uploaded = _issue_edit_call(
             c, row, lambda cl: cl.upload_issue_attachment(
@@ -1123,6 +1118,32 @@ async def upload_issue_attachment(request: Request, project_id: int, iid: int,
     except httpx.HTTPError as e:
         raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
     return {"markdown": _markdown_image(filename, (uploaded or {}).get("url"))}
+
+
+@router.post("/{repo_id}/attachments", status_code=201)
+async def upload_create_issue_attachment(request: Request, repo_id: int,
+                                         image: UploadFile = File(...)):
+    """上传添加 Issue 弹窗选择的图片（issue #437）。
+
+    先上传至目标 GitLab 项目，前端拿到 Markdown 后再创建 Issue，以便图片
+    与 Issue 正文在 GitLab 中同步展示；上传失败时不会创建半成品 Issue。
+    """
+    row = request.app.state.ctx.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    if not row["enabled"]:
+        raise HTTPException(400, "仓库未启用")
+    return await _upload_project_image(request, row, image)
+
+
+@router.post("/{project_id}/{iid}/attachments", status_code=201)
+async def upload_issue_attachment(request: Request, project_id: int, iid: int,
+                                  image: UploadFile = File(...)):
+    """上传一张待发布到 Issue 评论的图片（issue #432）。"""
+    row = _enabled_repo_by_project_id(request.app.state.ctx, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    return await _upload_project_image(request, row, image)
 
 
 @router.post("/{project_id}/{iid}/comments", status_code=201)

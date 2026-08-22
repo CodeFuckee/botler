@@ -35,11 +35,14 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
   const [loadError, setLoadError] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // issue #437：创建前先上传到 GitLab，返回的 Markdown 与正文一起创建。
+  const [image, setImage] = useState(null)
   // issue #165：标题语音输入状态——listening 识别中、speechError 错误提示
   const [listening, setListening] = useState(false)
   const [speechError, setSpeechError] = useState('')
   const titleRef = useRef('')          // 最新标题（描述联动判断用，避免闭包过期）
   const recognitionRef = useRef(null)  // 当前 SpeechRecognition 实例
+  const imageInputRef = useRef(null)
 
   // issue #103：标题→描述联动统一入口——描述为空、或描述仍是上次自动
   // 复制的旧标题时跟随新标题；用户手写描述不被覆盖。键盘输入与语音输入
@@ -156,6 +159,29 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
     else startListening()
   }
 
+  // 与评论图片相同：前端仅作快速提示，后端仍校验 MIME、签名和大小。
+  const handleImageChange = (event) => {
+    const selected = event.target.files && event.target.files[0]
+    if (!selected) return
+    if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(selected.type)) {
+      setError('仅支持 PNG、JPEG、GIF、WebP 图片')
+      event.target.value = ''
+      return
+    }
+    if (selected.size > 10 * 1024 * 1024) {
+      setError('图片不能超过 10 MiB')
+      event.target.value = ''
+      return
+    }
+    setImage(selected)
+    setError('')
+  }
+
+  const removeImage = () => {
+    setImage(null)
+    if (imageInputRef.current) imageInputRef.current.value = ''
+  }
+
   const toggleLabel = (name) => {
     setSelectedLabels((prev) => (prev.includes(name)
       ? prev.filter((n) => n !== name)
@@ -182,10 +208,20 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
       // issue #103：描述为空时兜底复制标题，保证「只输入标题」创建的
       // issue 描述等于标题；描述非空时保留用户输入。
       const trimmedDesc = description.trim()
+      let imageMarkdown = ''
+      if (image) {
+        const form = new FormData()
+        form.append('image', image)
+        const uploaded = await api.post(`/api/issues/${repo.repo_id}/attachments`, form)
+        imageMarkdown = uploaded && uploaded.markdown ? uploaded.markdown : ''
+        if (!imageMarkdown) throw new Error('图片上传未返回 GitLab 引用')
+      }
+      const issueDescription = [trimmedDesc || trimmedTitle, imageMarkdown]
+        .filter(Boolean).join(imageMarkdown ? '\n\n' : '')
       await api.post('/api/issues', {
         repo_id: repo.repo_id,
         title: trimmedTitle,
-        description: trimmedDesc || trimmedTitle,
+        description: issueDescription,
         assignee_id: Number(assigneeId),
         labels: selectedLabels,
       })
@@ -261,6 +297,25 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
                 onChange={(e) => setDescription(e.target.value)}
               />
             </label>
+
+            <div className="edit-field add-issue-attachment">
+              图片附件
+              <div className="comment-attachment-actions">
+                <input ref={imageInputRef} className="add-issue-image-input"
+                       type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+                       onChange={handleImageChange} />
+                <button type="button" className="btn btn-small"
+                        onClick={() => imageInputRef.current?.click()} disabled={busy}>
+                  <Icon name="upload" /> 选择图片
+                </button>
+                {image && <span className="comment-image-name" title={image.name}>
+                  {image.name}
+                  <button type="button" className="btn btn-small comment-image-remove"
+                          onClick={removeImage} disabled={busy}>移除图片</button>
+                </span>}
+              </div>
+              <span className="muted small">选填 · 支持 PNG、JPEG、GIF、WebP，最大 10 MiB</span>
+            </div>
 
             <label className="edit-field">
               分配人

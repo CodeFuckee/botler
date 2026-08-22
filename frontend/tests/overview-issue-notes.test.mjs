@@ -340,7 +340,7 @@ test('切换 issue：props 变化重新拉取对应 detail', async () => {
 test('切换 issue 后：旧请求的延迟响应不能覆盖新详情', async () => {
   const other = { ...OPEN_ISSUE, iid: 98, title: '另一个 issue' }
   let resolveFirst
-  const getMock = mock.method(api, 'get', (pathname) => {
+  mock.method(api, 'get', (pathname) => {
     if (pathname === '/api/issues/42/97/detail') {
       return new Promise((resolve) => { resolveFirst = resolve })
     }

@@ -3410,6 +3410,35 @@ class TestIssueImageAttachments:
         assert '图片' in resp.json()['detail']
         assert stub.upload_calls == []
 
+    def test_create_form_upload_returns_gitlab_markdown(self, client_edit):
+        """添加 Issue 弹窗上传图片：按 Botler repo_id 定位项目并返回 Markdown。"""
+        tc, stub, db, _ = client_edit
+        repo_id = _add_repo(db, project_id=42, name='demo')
+        stub.upload_result = {
+            'alt': '创建截图.png',
+            'url': '/uploads/-/system/project/42/hash/创建截图.png',
+        }
+
+        resp = tc.post(f'/api/issues/{repo_id}/attachments', files={
+            'image': ('创建截图.png', self.PNG, 'image/png'),
+        })
+
+        assert resp.status_code == 201
+        assert stub.upload_calls == [(42, '创建截图.png', self.PNG, 'image/png')]
+        assert resp.json() == {
+            'markdown': '![创建截图.png](/uploads/-/system/project/42/hash/创建截图.png)'}
+
+    def test_create_form_upload_unknown_repo_does_not_call_gitlab(self, client_edit):
+        """边界：不存在的 Botler 仓库不能上传，且不应访问 GitLab。"""
+        tc, stub, db, _ = client_edit
+
+        resp = tc.post('/api/issues/999/attachments', files={
+            'image': ('截图.png', self.PNG, 'image/png'),
+        })
+
+        assert resp.status_code == 404
+        assert stub.upload_calls == []
+
     def test_upload_rejects_empty_image_and_does_not_call_gitlab(self, client_edit):
         tc, stub, db, _ = client_edit
         _add_repo(db, project_id=42, name='demo')

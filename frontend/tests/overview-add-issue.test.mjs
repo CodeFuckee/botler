@@ -23,6 +23,7 @@ function textOf(node) {
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { File } from 'node:buffer'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { createServer } from 'vite'
@@ -300,6 +301,103 @@ test('校验：成员不含 agent 且未手动选择 → 提示分配人必填',
 
     assert.ok(errorText(renderer).includes('请选择分配人'), '应提示分配人必填')
     assert.equal(postCalled, false, '校验失败不应发起 POST')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// ---- 图片附件（issue #437）----
+
+function findAddIssueImageInput(renderer) {
+  return renderer.root.find(
+    (n) => n.type === 'input' && n.props.className === 'add-issue-image-input')
+}
+
+test('创建 Issue：先上传图片，再把 GitLab Markdown 合入描述后创建', async () => {
+  const { renderer, renderError } = await renderOverview()
+  try {
+    assert.equal(renderError, null)
+    await openAddIssueModal(renderer, 0)
+    const image = new File(['png-data'], '创建截图.png', { type: 'image/png' })
+    const postCalls = []
+    mock.method(api, 'post', async (pathname, body) => {
+      postCalls.push({ pathname, body })
+      if (pathname === '/api/issues/1/attachments') {
+        assert.ok(body instanceof FormData, '图片应以 multipart/form-data 上传')
+        assert.equal(body.get('image'), image, '应上传用户选择的原始文件')
+        return { markdown: '![创建截图.png](/uploads/hash/创建截图.png)' }
+      }
+      if (pathname === '/api/issues') return { iid: 99, title: body.title }
+      if (pathname === '/api/repos/1/reconcile') return { ok: true }
+      throw new Error('unexpected ' + pathname)
+    })
+
+    await fillForm(renderer, '带图 Issue', true)
+    await TestRenderer.act(async () => {
+      findAddIssueImageInput(renderer).props.onChange({ target: { files: [image], value: '' } })
+    })
+    assert.ok(JSON.stringify(renderer.toJSON()).includes('创建截图.png'),
+              '选择后应展示待上传的图片名称')
+    await TestRenderer.act(async () => {
+      findSubmit(renderer).props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+
+    assert.deepEqual(postCalls.map((call) => call.pathname), [
+      '/api/issues/1/attachments', '/api/issues', '/api/repos/1/reconcile'],
+    '必须在创建 Issue 前上传图片，并在创建后对账')
+    assert.equal(postCalls[1].body.description,
+      '带图 Issue\n\n![创建截图.png](/uploads/hash/创建截图.png)',
+      'GitLab 图片 Markdown 应与 Issue 描述一并提交')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('图片选择校验：非图片立即拒绝且不发起上传', async () => {
+  const { renderer } = await renderOverview()
+  try {
+    await openAddIssueModal(renderer, 0)
+    let postCalled = false
+    mock.method(api, 'post', async () => { postCalled = true })
+    const invalidFile = new File(['text'], '说明.txt', { type: 'text/plain' })
+    await TestRenderer.act(async () => {
+      findAddIssueImageInput(renderer).props.onChange({ target: { files: [invalidFile], value: '' } })
+    })
+    assert.ok(errorText(renderer).includes('仅支持 PNG、JPEG、GIF、WebP 图片'),
+              '非图片应立即显示可理解的错误')
+    assert.equal(postCalled, false, '选择无效图片时不应立即发起上传请求')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('图片上传失败：保留选择与表单内容，且不创建半成品 Issue', async () => {
+  const { renderer } = await renderOverview()
+  try {
+    await openAddIssueModal(renderer, 0)
+    const image = new File(['png-data'], '重试.png', { type: 'image/png' })
+    const postMock = mock.method(api, 'post', async (pathname) => {
+      assert.equal(pathname, '/api/issues/1/attachments')
+      throw new Error('GitLab 图片上传失败: 网络暂不可用')
+    })
+    await fillForm(renderer, '上传失败保留', true)
+    await TestRenderer.act(async () => {
+      findAddIssueImageInput(renderer).props.onChange({ target: { files: [image], value: '' } })
+    })
+    await TestRenderer.act(async () => {
+      findSubmit(renderer).props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    assert.equal(postMock.mock.calls.length, 1)
+    assert.ok(errorText(renderer).includes('GitLab 图片上传失败'), '应展示上传失败原因')
+    assert.ok(modalOf(renderer), '上传失败时弹窗应保留供用户重试')
+    assert.ok(JSON.stringify(renderer.toJSON()).includes('重试.png'), '应保留待上传图片')
+    const title = renderer.root.find((n) => n.props.className === 'input add-issue-title')
+    assert.equal(title.props.value, '上传失败保留', '应保留已填写标题')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
