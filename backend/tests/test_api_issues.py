@@ -1459,8 +1459,9 @@ class TestIssueFormMeta:
     # 行为），成员按 username 查 /users 补齐用户 id，下拉不再为空 ----
 
     def test_members_without_user_id_resolved_by_username(self, client):
-        """复现 issue #93：成员对象只有顶层 id（成员关系 id）与 username，
-        无 user_id——按 username 查 /users 补齐真实用户 id。"""
+        """issue #452：成员对象无 user_id 时直接用 members/all 顶层 id
+        （实测即用户 id，可作 assignee_ids），不再逐个调 /users 补齐
+        （消除 N+1 串行查询——添加 issue 对话框慢的根源之一）。"""
         tc, stub, db, tmp_path = client
         _add_repo(db, project_id=42, name="a")
         stub.members_by_project = {42: [
@@ -1478,10 +1479,12 @@ class TestIssueFormMeta:
             {"id": 1, "username": "chenkaidi", "name": "chenkaidi"},
             {"id": 3, "username": "agent", "name": "agent"},
         ]
-        assert stub.user_id_lookups == ["chenkaidi", "agent"]
+        # 顶层 id 即用户 id，无需按 username 补查（修复前为 2 次查询）
+        assert stub.user_id_lookups == []
 
     def test_members_without_user_id_unresolvable_filtered(self, client):
-        """边界：username 查不到（用户已删除）的成员剔除，不 500、不影响其余。"""
+        """边界：既无 user_id 也无顶层 id、且 username 查不到（用户已
+        删除）的成员剔除，不 500、不影响其余。"""
         tc, stub, db, tmp_path = client
         _add_repo(db, project_id=42, name="a")
         stub.members_by_project = {42: [
@@ -1493,8 +1496,11 @@ class TestIssueFormMeta:
         resp = tc.get("/api/issues/form-meta/1")
 
         assert resp.status_code == 200
+        # ghost 顶层 id=9 即用户 id，直接保留（新行为）；agent 同理
         assert resp.json()["members"] == [
-            {"id": 3, "username": "agent", "name": "agent"}]
+            {"id": 9, "username": "ghost", "name": "Ghost"},
+            {"id": 3, "username": "agent", "name": "agent"},
+        ]
 
     def test_members_with_user_id_skip_username_lookup(self, client):
         """user_id 存在的成员不发起 /users 查询（避免无谓的 N+1 请求）。"""
@@ -2540,12 +2546,34 @@ class TestIssueMembers:
         ]
 
     def test_members_user_id_completed_by_username(self, client):
-        """issue #93：members/all 返回项缺 user_id 时按 username 查
-        /users 补齐真实用户 id（与添加 issue 弹窗成员处理一致）。"""
+        """issue #452：members/all 返回项缺 user_id 时直接用顶层 id
+        （实测即用户 id），不再逐个调 /users 补齐（消除 N+1）；仅当
+        顶层 id 也缺失时才按 username 查 /users 兜底。"""
         tc, stub, db, _ = client
         _add_repo(db, project_id=42, name="demo")
         stub.members_by_project = {42: [
             {"id": 10, "username": "agent", "name": "agent"},  # 无 user_id
+            {"id": 11, "user_id": 7, "username": "dev", "name": "dev"},
+        ]}
+        stub.users_by_username = {"agent": 3}
+
+        resp = tc.get("/api/issues/42/members")
+
+        assert resp.status_code == 200
+        # 顶层 id=10 即用户 id，直接复用，不触发 /users 查询
+        assert stub.user_id_lookups == []
+        assert resp.json()["members"] == [
+            {"id": 10, "username": "agent", "name": "agent"},
+            {"id": 7, "username": "dev", "name": "dev"},
+        ]
+
+    def test_members_user_id_completed_by_username_when_no_top_id(self, client):
+        """兜底路径（issue #93）：成员对象既无 user_id 也无顶层 id 时，
+        按 username 查 /users 补齐真实用户 id。"""
+        tc, stub, db, _ = client
+        _add_repo(db, project_id=42, name="demo")
+        stub.members_by_project = {42: [
+            {"username": "agent", "name": "agent"},  # 无 user_id 无顶层 id
             {"id": 11, "user_id": 7, "username": "dev", "name": "dev"},
         ]}
         stub.users_by_username = {"agent": 3}
@@ -2560,12 +2588,12 @@ class TestIssueMembers:
         ]
 
     def test_members_user_id_lookup_missing_filtered(self, client):
-        """用户 id 查询失败（用户已删除等）→ 成员剔除，下拉不出现
-        无法分配的条目。"""
+        """兜底路径（issue #93）：既无 user_id 也无顶层 id 且 username
+        查不到（用户已删除）→ 成员剔除，下拉不出现无法分配的条目。"""
         tc, stub, db, _ = client
         _add_repo(db, project_id=42, name="demo")
         stub.members_by_project = {42: [
-            {"id": 10, "username": "ghost", "name": "ghost"},
+            {"username": "ghost", "name": "ghost"},  # 无 user_id 无顶层 id
             {"id": 11, "user_id": 7, "username": "dev", "name": "dev"},
         ]}
         stub.users_by_username = {"ghost": None}

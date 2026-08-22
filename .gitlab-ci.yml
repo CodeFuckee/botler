@@ -71,6 +71,7 @@ stages:
   - build
   - deploy
   - e2e
+  - performance
   - sync
   - release
 
@@ -1309,6 +1310,175 @@ e2e:screenshots:
       # 全页面多尺寸截图（含 index.html 索引页），流水线产物可离线浏览
       - frontend/screenshots/
     expire_in: 30 days
+
+
+
+# ================================================================
+# Stage: performance —— 接口与页面性能测试门禁（issue #452）
+# 在 e2e 功能测试通过之后、sync/release 之前执行性能测试：
+#   - performance:backend   后端接口性能测试（pytest）——form-meta
+#     （添加 issue 弹窗成员/标签）与 issue detail（详情右边栏评论/
+#     活动）接口在慢 GitLab 上游下的总耗时预算（并发拉取后 ≈ 单次
+#     最慢调用，N+1 查询已消除）；测试文件 tests/test_api_issues_perf.py
+#     用注入延迟的 StubGitLab 复现「十几秒加载」场景并断言预算。
+#   - performance:frontend  前端页面性能测试（Playwright）——真实
+#     浏览器 + mock 注入上游延迟，测量「添加 Issue 对话框」与
+#     「issue 详情右边栏」从操作到内容渲染完成的总耗时，断言在
+#     预算内（前端不再出现数秒级白屏/卡死）。
+# 门禁：性能测试失败 → 后续 sync/release 不执行（on_success 传播，
+# 与 e2e 门禁一致）——「性能不达标不同步/不发版」。
+# ================================================================
+
+# ----------------------------------------------------------------
+# Stage: performance —— 后端接口性能测试（issue #452）
+# 复用 backend:test 的 uv 环境模式，只运行性能测试文件（快，数秒）。
+# ----------------------------------------------------------------
+performance:backend:
+  extends: [.backend_setup, .docs_only_skip]
+  stage: performance
+  tags:
+    - linux
+    - code01
+  timeout: 15m
+  cache:
+    key: uv-cache-${CI_COMMIT_REF_SLUG}
+    paths:
+      - backend/.uv-cache/
+    policy: pull-push
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
+
+      echo "=== 1. 确保 uv 可用 ==="
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+      echo "uv: $(uv --version)"
+
+      echo "=== 2. 创建/复用虚拟环境 ==="
+      if [ ! -x .venv/bin/python ]; then
+        rm -rf .venv
+        uv venv .venv
+      fi
+      PYTHON=".venv/bin/python"
+
+      echo "=== 3. 安装项目依赖 ==="
+      uv pip install -r requirements.lock.txt -i ${PIP_INDEX_URL}
+
+      echo "=== 4. 运行后端接口性能测试 ==="
+      echo "→ 测试文件: tests/test_api_issues_perf.py（issue #452）"
+      ulimit -n 65535 2>/dev/null || echo "⚠️ 无法提升 ulimit -n"
+      PYTEST_BASETEMP="/tmp/botler-perf-${CI_PIPELINE_ID:-local}-${CI_JOB_ID:-local}"
+      rm -rf "$PYTEST_BASETEMP"
+      mkdir -p "$PYTEST_BASETEMP"
+      $PYTHON -m pytest tests/test_api_issues_perf.py -v --tb=short \
+        --basetemp="$PYTEST_BASETEMP" \
+        --junitxml=junit-perf.xml
+
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [performance:backend] 总用时: ${DURATION} 秒"
+      echo "========================================="
+  artifacts:
+    when: always
+    paths:
+      - backend/junit-perf.xml
+    reports:
+      junit: backend/junit-perf.xml
+    expire_in: 7 days
+
+# ----------------------------------------------------------------
+# Stage: performance —— 前端页面性能测试（issue #452）
+# 复用 e2e:playwright 的完整环境（真实后端 uvicorn + 前端构建产物
+# vite preview + Playwright 真浏览器），只运行性能 spec
+# frontend/e2e/tests/performance.spec.js。
+# ----------------------------------------------------------------
+performance:frontend:
+  extends: [.docs_only_skip]
+  stage: performance
+  tags:
+    - linux
+    - code01
+  timeout: 25m
+  dependencies:
+    - frontend:build
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+      prefix: frontend-npm
+    paths:
+      - frontend/node_modules/
+    policy: pull
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      export PATH="$HOME/.local/bin:$HOME/miniconda3/bin:$HOME/.cargo/bin:$PATH"
+      export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}"
+
+      STEP1_START=$(date +%s)
+      echo "=== 1. 后端依赖（uv 安装，与 e2e:playwright 同模式）==="
+      cd backend
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      if [ ! -x .venv/bin/python ]; then
+        rm -rf .venv
+        uv venv .venv
+      fi
+      uv pip install -r requirements.lock.txt -i ${PIP_INDEX_URL}
+      cd ..
+      STEP1_END=$(date +%s)
+      echo "⏱️  步骤1 (后端依赖) 用时: $((STEP1_END - STEP1_START)) 秒"
+
+      STEP2_START=$(date +%s)
+      echo "=== 2. 前端依赖 + Playwright 浏览器 ==="
+      cd frontend
+      npm ci --registry=${NPM_REGISTRY_URL}
+      npx playwright install chromium
+      cd ..
+      STEP2_END=$(date +%s)
+      echo "⏱️  步骤2 (前端依赖) 用时: $((STEP2_END - STEP2_START)) 秒"
+
+      STEP3_START=$(date +%s)
+      echo "=== 3. 启动 uvicorn + vite preview 并运行前端性能测试 ==="
+      echo "性能 spec: frontend/e2e/tests/performance.spec.js（issue #452）"
+      E2E_PY="$PWD/backend/.venv/bin/python"
+      if [ -z "${E2E_BACKEND_PORT:-}" ]; then
+        E2E_BACKEND_PORT=$("$E2E_PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+      fi
+      if [ -z "${E2E_FRONTEND_PORT:-}" ]; then
+        E2E_FRONTEND_PORT=$("$E2E_PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+      fi
+      export E2E_BACKEND_PORT E2E_FRONTEND_PORT
+      echo "[performance:frontend] 动态端口: backend=$E2E_BACKEND_PORT frontend=$E2E_FRONTEND_PORT"
+      bash frontend/e2e/scripts/start-servers.sh e2e/tests/performance.spec.js
+      STEP3_END=$(date +%s)
+      echo "⏱️  步骤3 (性能测试运行) 用时: $((STEP3_END - STEP3_START)) 秒"
+
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [performance:frontend] 总用时: ${DURATION} 秒"
+      echo "========================================="
+  artifacts:
+    when: always
+    paths:
+      - frontend/playwright-report/
+      - frontend/test-results/
+      - frontend/junit.xml
+    reports:
+      junit: frontend/junit.xml
+    expire_in: 7 days
 
 
 # ================================================================

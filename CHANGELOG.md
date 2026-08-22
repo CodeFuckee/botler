@@ -6,6 +6,20 @@
 
 ### Added
 
+- **前端页面与后端接口性能测试 + CI 性能测试环节（issue #452）**：
+  - 后端接口性能测试 `backend/tests/test_api_issues_perf.py`：用注入延迟的
+    StubGitLab 模拟慢 GitLab 上游，覆盖「添加 Issue 对话框」（`GET
+    /api/issues/form-meta/{repo_id}`）与「issue 详情右边栏」（`GET
+    /api/issues/{project_id}/{iid}/detail`）两个用户报告慢场景，断言接口
+    总耗时在预算内（成员/标签、notes/label_events 并发拉取后 ≈ 单次最慢
+    调用），并验证成员 id 不再触发按 username 的 N+1 串行补查；
+  - 前端页面性能测试 `frontend/e2e/tests/performance.spec.js`：真实浏览器
+    + mock 注入上游延迟，测量「添加 Issue 对话框」与「issue 详情右边栏」
+    从操作到内容渲染完成的总耗时，断言在预算内（不再出现数秒级卡死）；
+  - CI 新增 `performance` stage（e2e 之后、sync/release 之前）：
+    `performance:backend`（pytest 性能测试）与 `performance:frontend`
+    （Playwright 性能测试）双 job 门禁——性能不达标不同步/不发版。
+
 - **CI/CD 全页面多尺寸截图（issue #445）**：新增 `e2e:screenshots` 流水线作业，在 E2E 阶段用 Playwright 对应用每个页面（概览 / 仓库 / 任务列表 / 任务详情 / 统计 / 模板 / 标签 / 插件 / 技能 / 工具 / 设置 / 终端共 12 个路由）在 7 种屏幕尺寸与宽高比（1920×1080、1440×900、1366×768、1024×768、768×1024、375×667、320×568，覆盖 16:9 / 16:10 / 4:3 / 3:4 / 9:16）下整页截图，输出 `frontend/screenshots/`（含 `index.html` 索引页）并作为 artifacts 上传供人工离线浏览各视口真实渲染。页面与视口清单集中在 `frontend/e2e/screenshots/screenshot-config.mjs`，配套单元测试保证清单覆盖 App.jsx 全部路由与需求要求的尺寸比例；截图复用 E2E 基础设施（真实后端 + vite preview + GitLab 接口浏览器级 mock），不依赖真实 GitLab 与已部署环境。本地运行：`npm run test:screenshots`（frontend/ 下）。
 
 - **GitLab Wiki 与 GitHub Wiki 自动同步（issue #175）**：补充项目概览、快速开始、配置、使用、架构、开发测试、CI/CD、运维与安全等 GitLab Wiki 页面；新增 `sync_wiki_to_github` CI 作业，在 `main` 推送通过部署和 E2E 门禁后以 GitLab Wiki 为唯一来源同步全部页面和附件至 `CodeFuckee/botler` 的 GitHub Wiki。同步使用普通提交和 push 保留 GitHub Wiki 历史，未配置 `GITHUB_PUSH_TOKEN` 或未启用目标 Wiki 时明确失败，避免静默丢失文档。
@@ -14,6 +28,17 @@
 - 设置页、仓库管理页展示 token 到期状态与更新 GitLab PAT 指引（issue #279）。
 
 ### Fixed
+
+- **修复「添加 Issue」对话框与 issue 详情右边栏加载缓慢（issue #452）**：
+  - 根因一：`_project_members` 对每个缺 `user_id` 的成员串行调用
+    `/users?username=` 补查（N+1 查询）——实测 GitLab 19 的 members/all
+    返回项顶层 `id` 即用户 id，`_trim_member` 现在直接复用顶层 id，
+    消除逐成员串行补查；
+  - 根因二：`form-meta` 的成员与标签、`detail` 的 notes 与 label_events
+    均为串行 GitLab API 调用，上游慢时耗时翻倍——现用
+    `ThreadPoolExecutor` 并发拉取，总耗时 ≈ 单次最慢调用；
+  - 错误映射与降级语义不变（form-meta 任一查询失败 502 不降级；detail
+    的 label_events 失败静默降级为空列表）。
 
 - **`sync_wiki_to_github` 不再阻断流水线（issue #445 收尾）**：目标 GitHub 仓库 `CodeFuckee/botler` 尚未启用 Wiki（wiki Git 端点不存在，实测 `Repository not found`，流水线 #1353/#1354 均因此失败），该失败属外部依赖、需人工在 GitHub 仓库 Settings > Features 启用 Wiki 后恢复。作业改为 `allow_failure: true`：仍照常运行并以红名显示失败（不静默），避免每次 main push 因外部依赖整体全红；人工启用 GitHub Wiki 后作业自动转绿。
 
