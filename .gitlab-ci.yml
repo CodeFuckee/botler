@@ -987,16 +987,22 @@ backend:test:
 
       STEP4_START=$(date +%s)
       echo "=== 4. 运行测试（pytest-xdist 并行 + pytest-cov 覆盖率，issue #210/#211）==="
-      # Shell executor 的工作目录位于共享文件系统。尽管测试使用 tmp_path
-      # 隔离 SQLite 文件，xdist 多进程仍可能在文件锁协商时触发
-      # sqlite3.OperationalError: locking protocol（流水线 #1351）。默认串行
-      # 可保证稳定性；需要诊断并行问题时，维护者仍可显式设置 PYTEST_WORKERS 覆盖。
+      # Shell executor 的工作目录位于共享文件系统。pytest 默认将 tmp_path
+      # 建在项目目录下，SQLite 即使在单 worker 时也可能在该文件系统的锁
+      # 协商中触发 sqlite3.OperationalError: locking protocol（流水线 #1352）。
+      # 每个作业改用本机 /tmp 的独立 basetemp，确保所有测试临时数据库落在
+      # 本地文件系统；默认仍串行执行，需要诊断并行问题时可显式覆盖 worker。
       ulimit -n 65535 2>/dev/null || echo "⚠️ 无法提升 ulimit -n，继续使用系统默认值"
       echo "→ 当前文件描述符上限 ulimit -n: $(ulimit -n)"
       PYTEST_WORKERS="${PYTEST_WORKERS:-1}"
+      PYTEST_BASETEMP="/tmp/botler-pytest-${CI_PIPELINE_ID:-local}-${CI_JOB_ID:-local}"
+      rm -rf "$PYTEST_BASETEMP"
+      mkdir -p "$PYTEST_BASETEMP"
       if [ -d tests ]; then
+        echo "→ pytest 临时目录: ${PYTEST_BASETEMP}"
         echo "→ pytest-xdist 并行 worker 数: ${PYTEST_WORKERS}（CPU 核数: $(nproc)）"
         $PYTHON -m pytest tests/ -v --tb=short -n "${PYTEST_WORKERS}" \
+          --basetemp="$PYTEST_BASETEMP" \
           --cov=botler --cov-report=term-missing --cov-report=xml \
           --cov-fail-under=70 \
           --junitxml=junit.xml

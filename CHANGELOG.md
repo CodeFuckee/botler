@@ -51,7 +51,7 @@
 
 ### Fixed
 
-- **后端 CI 并行 SQLite 锁协议异常（issue #175）**：共享文件系统上的 `pytest-xdist` 多进程执行偶发触发 `sqlite3.OperationalError: locking protocol`，导致流水线 #1351 在 2990 项通过后失败。`backend:test` 现默认使用单 worker 串行执行，仍允许通过 `PYTEST_WORKERS` 显式覆盖以便诊断。
+- **后端 CI SQLite 锁协议异常（issue #175）**：shell runner 的共享工作目录会使 pytest `tmp_path` 下的 SQLite 在锁协商时触发 `sqlite3.OperationalError: locking protocol`，流水线 #1351、#1352 均在 2990 项通过后失败。`backend:test` 现为每个作业将 pytest 临时目录隔离至本机 `/tmp`，并默认使用单 worker 串行执行；维护者仍可通过 `PYTEST_WORKERS` 显式覆盖以诊断并行行为。
 
 - **设置页导航搜索框图标仍覆盖占位文字（issue #441）**：此前仅通过绝对定位图标与输入框左内边距推算间距，实际渲染仍可能重叠。现将搜索容器改为 flex 布局，使 16px 图标占据独立布局空间、输入框填充剩余宽度，并以明确 `gap` 分隔；新增真实布局与浏览器几何回归测试。
 
