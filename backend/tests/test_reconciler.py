@@ -714,3 +714,35 @@ class TestReconcileBackfillsFailureReports:
         result = ctx.reconciler.reconcile_once(repo_id=repo_id)
 
         assert result == {"scanned": 1, "enqueued": 1}
+
+class TestReconcileRestartsManuallyStoppedIssues:
+    """issue #430：手动停止后，后续对账应能重新补入队。"""
+
+    def test_enqueues_issue_when_last_bot_note_belongs_to_manually_stopped_task(self, ctx):
+        """手动停止的旧任务留下 bot 评论时，不能永久阻断后续对账调度。"""
+        repo_id = _add_repo(ctx.db)
+        original_task_id = ctx.db.create_task(repo_id, 42, 430, "被停止的 issue")
+        assert ctx.db.stop_task(original_task_id) == "ok"
+        ctx.gitlab.issues_by_project = {42: [make_issue(430, labels=["bug"])]}
+        ctx.gitlab.last_author_by_issue = {430: BOT_ID}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        active = ctx.db.find_active_task(42, 430)
+        assert active is not None
+        assert active["id"] != original_task_id
+        assert active["status"] == "queued"
+
+    def test_keeps_skipping_bot_last_note_after_non_manual_interruption(self, ctx):
+        """非人工停止的中断任务仍应遵循 bot 最后发言过滤，避免重复领取。"""
+        repo_id = _add_repo(ctx.db)
+        task_id = ctx.db.create_task(repo_id, 42, 431, "平台中断的 issue")
+        ctx.db.set_task_status(task_id, "interrupted", error_message="平台重启导致中断")
+        ctx.gitlab.issues_by_project = {42: [make_issue(431, labels=["bug"])]}
+        ctx.gitlab.last_author_by_issue = {431: BOT_ID}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 0}
+        assert ctx.db.find_active_task(42, 431) is None

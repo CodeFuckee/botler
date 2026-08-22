@@ -209,9 +209,22 @@ class Reconciler:
                 errors.append(f"仓库 {repo['name']} issue #{issue['iid']}: {e}")
                 continue
             if last_author is not None and last_author in bot_ids:
-                logger.info("对账跳过最后发言人为 bot 的 issue %s#%s",
+                # issue #430：人工停止任务后，issue 的最后评论通常仍是 bot
+                # 的受理/进度消息。若不区分这种终态，后续手动或定时对账会
+                # 永久跳过该 issue，无法重新调度。仅对明确由人工停止的最近
+                # 任务放行；其他场景仍保留原有过滤，避免 bot 提问后重复领取。
+                latest = self.db.find_latest_task(
+                    repo["gitlab_project_id"], issue["iid"])
+                manually_stopped = (
+                    latest is not None
+                    and latest["status"] == "interrupted"
+                    and (latest["error_message"] or "").startswith("用户手动停止"))
+                if not manually_stopped:
+                    logger.info("对账跳过最后发言人为 bot 的 issue %s#%s",
+                                repo["gitlab_project_id"], issue["iid"])
+                    continue
+                logger.info("对账恢复人工停止的 issue %s#%s",
                             repo["gitlab_project_id"], issue["iid"])
-                continue
             if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
                 active_count += 1  # 已有活跃任务（含排队中）
                 continue
