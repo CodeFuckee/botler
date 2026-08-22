@@ -56,6 +56,7 @@ from pydantic import BaseModel
 from ..database import (_parse_db_ts, normalize_issue_created_at,
                             normalize_issue_updated_at)
 from ..gitlab_client import GitLabClient, GitLabError
+from ..token_expiry import evaluate_expiry
 from .pipelines import _commit_time_utc, _repo_client
 from .tasks import _task_to_dict  # issue #167：任务执行详情右边栏复用任务序列化
 
@@ -201,6 +202,8 @@ def _collect(c) -> dict:
             continue  # 需求：只读已启用的仓库（未启用/已删除不出现）
         entry = {"repo_id": row["id"], "repo_name": row["name"],
                  "priority": row["priority"], "issues": [],
+                 # issue #279：概览仓库卡片同步展示 token 到期徽章状态。
+                 "token_expiry": evaluate_expiry(row["token_expires_at"]),
                  # issue #287：透传 GitLab project_id（手动调度顺序接口
                  # 定位仓库用）与该仓库手动调度顺序（iid 按 position 升序，
                  # 从未拖动过为空列表，前端据此渲染拖动后的顺序）

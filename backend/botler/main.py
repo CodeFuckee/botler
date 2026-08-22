@@ -146,6 +146,7 @@ def _sync_config_repos_to_db(ctx: AppContext) -> None:
                 # 历史 timeout_seconds 由数据库兼容保留，但不再参与执行。
                 max_retries=repo.max_retries,
                 engine=repo.engine,
+                token_expires_at=repo.token_expires_at,
             )
         else:
             ctx.db.upsert_repo(
@@ -154,7 +155,8 @@ def _sync_config_repos_to_db(ctx: AppContext) -> None:
                 local_path=repo.local_path, remote_name=repo.remote_name,
                 remote_username=repo.remote_username,
                 max_retries=repo.max_retries,
-                engine=repo.engine)
+                engine=repo.engine,
+                token_expires_at=repo.token_expires_at)
     logger.info("config.yaml → db 同步完成（%s 个仓库）", len(ctx.config.get().repos))
 
 

@@ -193,6 +193,7 @@ class RepoConfig:
     # 仓库级任务参数覆盖（issue #237）：None = 继承全局 worker 段对应配置
     max_retries: int | None = None  # 任务最大重试次数，覆盖 worker.max_retries
     engine: str | None = None  # 执行引擎，覆盖 worker.engine
+    token_expires_at: str | None = None  # issue #279：仓库 PAT 到期日（YYYY-MM-DD）
 
 
 @dataclass
@@ -207,6 +208,8 @@ class Settings:
     # 严禁用于 git 推送（推送凭据走 _askpass_script 的 bot token）与
     # 流水线操作。空串 = 未配置，编辑 issue 沿用原链路。
     gitlab_owner_token: str = ""
+    # issue #279：owner token 到期日（YYYY-MM-DD，空=未记录）。
+    gitlab_owner_token_expires_at: str = ""
     max_concurrent_repos: int = 3
     # issue #424：执行引擎不设时限；保留字段仅兼容历史调用方。
     task_timeout_seconds: int | None = None
@@ -441,6 +444,7 @@ class Settings:
     alert_queue_backlog_threshold: int = 5
     alert_queue_stall_minutes: int = 30
     alert_token_invalid: bool = True
+    alert_token_expiry: bool = True
     alert_disk_low: bool = True
     alert_disk_min_free_mb: int = 512
     alert_throttle_seconds: int = 3600
@@ -449,7 +453,7 @@ class Settings:
 
 # settings API 可写字段（写回 config.yaml 用）
 KNOWN_FIELDS = {
-    "gitlab": {"owner_token"},
+    "gitlab": {"owner_token", "owner_token_expires_at"},
     "worker": {"max_concurrent_repos", "max_retries",
                "reconcile_interval_seconds", "gitlab_api_requests_per_second",
                "reconcile_jitter_min_seconds", "reconcile_jitter_max_seconds", "ci_wait_detect_seconds",
@@ -485,7 +489,7 @@ KNOWN_FIELDS = {
     "alerts": {"enabled", "notify_failure_rate", "failure_rate_threshold",
                "failure_rate_window", "notify_queue_backlog",
                "queue_backlog_threshold", "queue_stall_minutes",
-               "notify_token_invalid", "notify_disk_low",
+               "notify_token_invalid", "notify_token_expiry", "notify_disk_low",
                "disk_min_free_mb", "throttle_seconds"},
 }
 # 配置段写回 schema（issue #193 泛化 update_*）：settings API 写回 config.yaml
@@ -720,6 +724,9 @@ class ConfigManager:
                 engine=(str(r["engine"]).strip()
                         if r.get("engine") not in (None, "")
                         else None),
+                token_expires_at=(str(r["token_expires_at"]).strip()
+                                  if r.get("token_expires_at") not in (None, "")
+                                  else None),
             ))
 
         bot_id = gitlab.get("bot_id")
@@ -731,6 +738,7 @@ class ConfigManager:
             bot_username=gitlab.get("bot_username"),
             verify_ssl=bool(gitlab.get("verify_ssl", True)),
             gitlab_owner_token=gitlab.get("owner_token", ""),
+            gitlab_owner_token_expires_at=str(gitlab.get("owner_token_expires_at") or "").strip(),
             max_concurrent_repos=int(worker.get("max_concurrent_repos", 3)),
             # issue #424：忽略历史 task_timeout_seconds，三个执行引擎均无限时。
             task_timeout_seconds=None,
@@ -873,6 +881,7 @@ class ConfigManager:
             alert_queue_backlog_threshold=max(1, int(alerts.get("queue_backlog_threshold", 5))),
             alert_queue_stall_minutes=max(1, int(alerts.get("queue_stall_minutes", 30))),
             alert_token_invalid=bool(alerts.get("notify_token_invalid", True)),
+            alert_token_expiry=bool(alerts.get("notify_token_expiry", True)),
             alert_disk_low=bool(alerts.get("notify_disk_low", True)),
             alert_disk_min_free_mb=max(1, int(alerts.get("disk_min_free_mb", 512))),
             alert_throttle_seconds=max(60, int(alerts.get("throttle_seconds", 3600))),
@@ -1029,5 +1038,7 @@ class ConfigManager:
             d["max_retries"] = repo.max_retries
         if repo.engine:
             d["engine"] = repo.engine
+        if repo.token_expires_at:
+            d["token_expires_at"] = repo.token_expires_at
         return d
 

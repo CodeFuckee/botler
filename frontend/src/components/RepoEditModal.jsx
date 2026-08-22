@@ -32,6 +32,7 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
   const [maxRetries, setMaxRetries] = useState(
     repo.max_retries != null ? String(repo.max_retries) : '')
   const [engine, setEngine] = useState(repo.engine || '')
+  const [tokenExpiresAt, setTokenExpiresAt] = useState(repo.token_expires_at || '')
   // 全局默认值（提示「留空继承全局」时展示，来自设置页 worker 段）
   const [globalWorker, setGlobalWorker] = useState(null)
 
@@ -91,13 +92,18 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
     }
     setBusy(true)
     try {
-      await api.put(`/api/repos/${repo.id}`, {
+      const patch = {
         name: trimmedName,
         enabled,
         priority: num,
         max_retries: retries,
         engine: eng,
-      })
+      }
+      // 未变更时不携带到期日，保持旧接口调用和局部更新语义。
+      if (tokenExpiresAt !== (repo.token_expires_at || '')) {
+        patch.token_expires_at = tokenExpiresAt || null
+      }
+      await api.put(`/api/repos/${repo.id}`, patch)
       onSaved()
     } catch (e) {
       setError(e.message)
@@ -187,6 +193,18 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
             claude / hermes / dsh 之一；留空继承全局（当前 {globalEngine || '—'}）
           </div>
         </div>
+
+        <label className="edit-field">
+          仓库 Token 到期日
+          <input className="input" type="date" value={tokenExpiresAt}
+                 onChange={(e) => setTokenExpiresAt(e.target.value)} />
+          <span className="muted small">可手动填写；添加仓库时有内嵌 token 则优先自动探测。</span>
+        </label>
+        {repo.token_expiry?.level && repo.token_expiry.level !== 'unknown' && (
+          <p className={`badge token-expiry-${repo.token_expiry.level}`}>
+            Token 到期状态：{repo.token_expiry.level}（剩余 {repo.token_expiry.days_remaining} 天）
+          </p>
+        )}
 
         <label className="edit-checkbox">
           <input

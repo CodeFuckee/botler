@@ -15,7 +15,7 @@ export default function Repos() {
 
   // 添加表单（method: 'url' = GitLab URL 方式，'local' = 本地文件夹方式；默认本地文件夹方式）
   const [method, setMethod] = useState('local')
-  const [form, setForm] = useState({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '', priority: '100' })
+  const [form, setForm] = useState({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '', priority: '100', token_expires_at: '' })
   const [remotes, setRemotes] = useState([])
   const [addError, setAddError] = useState('')
   // 服务器目录选择对话框
@@ -73,8 +73,9 @@ export default function Repos() {
         name: form.name.trim() || undefined,
         webhook_url: form.webhook_url.trim() || undefined,
         priority,
+        token_expires_at: form.token_expires_at || undefined,
       })
-      setForm({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '', priority: '100' })
+      setForm({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '', priority: '100', token_expires_at: '' })
       setRemotes([])
       await load()
     } catch (e) {
@@ -274,6 +275,11 @@ export default function Repos() {
             onChange={(e) => setForm({ ...form, priority: e.target.value })}
           />
         </div>
+        <div className="form-row">
+          <input className="input grow" type="date" value={form.token_expires_at}
+                 onChange={(e) => setForm({ ...form, token_expires_at: e.target.value })} />
+          <span className="muted small">仓库 Token 到期日（可选；有内嵌 token 时自动探测优先）</span>
+        </div>
         <div className="form-row center">
           <button className="btn btn-primary btn-wide" disabled={busy} onClick={addRepo}>
             {busy ? '添加中…' : '添加'}
@@ -333,6 +339,11 @@ export default function Repos() {
                 </span>
               </div>
               <div className="muted small">{repo.url} · project_id={repo.gitlab_project_id}</div>
+              {repo.token_expiry?.level && repo.token_expiry.level !== 'unknown' && (
+                <span className={`badge token-expiry-${repo.token_expiry.level}`}>
+                  Token {repo.token_expiry.days_remaining < 0 ? '已到期' : `剩余 ${repo.token_expiry.days_remaining} 天`}
+                </span>
+              )}
               {repo.local_path && (
                 <div className="muted small">本地工作区: {repo.local_path}</div>
               )}

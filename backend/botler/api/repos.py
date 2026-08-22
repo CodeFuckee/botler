@@ -12,10 +12,11 @@ from ..repo_params import (
 )
 
 from ..config import RepoConfig
+from ..token_expiry import evaluate_expiry
 from ..database import DEFAULT_PRIORITY
 from ..gitlab_client import GitLabError
 from ..labels import DEFAULT_LABELS
-from ..git_remote import build_client_from_url, mask_url_token
+from ..git_remote import build_client_from_url, mask_url_token, parse_remote_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/repos", tags=["repos"])
@@ -41,6 +42,8 @@ class RepoCreate(BaseModel):
         description="任务最大重试次数：0~20，留空继承全局 worker.max_retries")
     engine: str | None = Field(
         default=None, description="执行引擎（claude / hermes / dsh，插件注册表），留空继承全局 worker.engine")
+    token_expires_at: str | None = Field(
+        default=None, description="仓库 token 到期日（YYYY-MM-DD）；未填时尝试从 GitLab 自动探测")
 
 
 class LocalPathBody(BaseModel):
@@ -85,6 +88,8 @@ class RepoUpdate(BaseModel):
         description="任务最大重试次数：0~20，留空继承全局 worker.max_retries")
     engine: str | None = Field(
         default=None, description="执行引擎（claude / hermes / dsh，插件注册表），留空继承全局 worker.engine")
+    token_expires_at: str | None = Field(
+        default=None, description="仓库 token 到期日（YYYY-MM-DD）；留空清除记录")
 
 
 def _repo_row_to_dict(row) -> dict:
@@ -107,6 +112,8 @@ def _repo_row_to_dict(row) -> dict:
         "logo_path": row["logo_path"],
         "logo_updated_at": row["logo_updated_at"],
         "logo_mime": row["logo_mime"],
+        "token_expires_at": row["token_expires_at"],
+        "token_expiry": evaluate_expiry(row["token_expires_at"]),
         "created_at": row["created_at"],
     }
 
@@ -119,6 +126,15 @@ def _masked_repo_row(row) -> dict:
     d = _repo_row_to_dict(row)
     d["url"] = mask_url_token(d["url"])
     return d
+
+
+def _detect_token_expiry(client) -> str | None:
+    """尽力读取 PAT self 的 expires_at；旧 GitLab 或无权限时保留手填值。"""
+    try:
+        expires_at = client.get_personal_access_token_self().get("expires_at")
+    except (AttributeError, GitLabError):
+        return None
+    return expires_at if evaluate_expiry(expires_at)["expires_at"] else None
 
 
 def _sync_default_labels(client, project_id: int) -> list[str]:
@@ -172,6 +188,7 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
         # issue #237：仓库级任务参数覆盖（None = 继承全局，不写 config.yaml）
         max_retries=repo_dict.get("max_retries"),
         engine=repo_dict.get("engine"),
+        token_expires_at=repo_dict.get("token_expires_at"),
     ))
     config.update_section("repos", [config.repo_to_config_dict(r) for r in kept])
 
@@ -302,6 +319,15 @@ def add_repo(request: Request, body: RepoCreate):
     from ..git_remote import parse_remote_url
     remote_username = parse_remote_url(remote_url)["username"]
 
+    submitted_expiry = body.token_expires_at
+    if submitted_expiry is not None and submitted_expiry.strip() \
+            and evaluate_expiry(submitted_expiry.strip())["expires_at"] is None:
+        raise HTTPException(400, "token_expires_at 必须是有效的 YYYY-MM-DD 日期")
+    # 仓库 URL 含独立 PAT 时必须优先探测它，不能误把全局 bot token 的
+    # 到期日记到仓库；无内嵌凭据才回退当前全局客户端。
+    expiry_client = (build_client_from_url(remote_url, config.verify_ssl)
+                     or fallback_client or temp_client)
+    detected_expiry = _detect_token_expiry(expiry_client)
     repo_id = c.db.upsert_repo(
         project_id=project_id, name=name, url=url,
         prompt_template=body.prompt_template, enabled=body.enabled,
@@ -309,7 +335,8 @@ def add_repo(request: Request, body: RepoCreate):
         remote_username=remote_username,
         priority=body.priority if body.priority is not None else DEFAULT_PRIORITY,
         max_retries=body.max_retries,
-        engine=body.engine)
+        engine=body.engine,
+        token_expires_at=(submitted_expiry.strip() if submitted_expiry else detected_expiry))
     _sync_repo_to_config(request.app, _repo_row_to_dict(c.db.get_repo(repo_id)))
 
     source = f"local_path={local_path}" if local_path else f"url={url}"
@@ -336,6 +363,12 @@ def update_repo(request: Request, repo_id: int, body: RepoUpdate):
         fields["remote_username"] = parse_remote_url(fields["url"])["username"]
     # issue #237：仓库级引擎——strip + 小写归一，空串视为清空（继承全局），
     # 非法引擎名 400（与设置页 worker.engine 白名单同源：插件注册表）
+    if "token_expires_at" in fields:
+        expires_at = fields["token_expires_at"]
+        if expires_at is not None and expires_at.strip() \
+                and evaluate_expiry(expires_at.strip())["expires_at"] is None:
+            raise HTTPException(400, "token_expires_at 必须是有效的 YYYY-MM-DD 日期")
+        fields["token_expires_at"] = expires_at.strip() if expires_at else None
     if "engine" in fields:
         engine = normalize_engine(fields.get("engine"))
         if engine is not None and engine not in engine_choices():

@@ -113,6 +113,9 @@ class Reconciler:
         # 设置页可配置。检测失败仅记日志，不影响对账结果（告警内部容错）。
         try:
             self.alerts.check()
+            # issue #279：复用对账循环检测 owner / 仓库 token 到期时间。
+            from .token_expiry import TokenExpiryChecker
+            TokenExpiryChecker(self.db, self.notifier, self.config).check()
         except Exception:  # noqa: BLE001
             logger.exception("聚合告警检测失败")
         return result

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+- owner token 与仓库 token 支持录入或通过 GitLab `/personal_access_tokens/self` 自动探测到期日；对账巡检按 30 / 7 / 3 天及到期状态经网页通知与 Webhook 分级提醒，并对每个阈值去重（issue #279）。
+- 设置页、仓库管理页展示 token 到期状态与更新 GitLab PAT 指引（issue #279）。
+
 ### Changed
 
 - **结果评论模板默认内容可编辑（issue #438）**：`templates.comment` 未配置或清空后，设置接口改为返回内置结构化结果评论模板，模板页会直接展示结果摘要、改动文件、测试摘要、提交和用时等默认内容供编辑；任务收尾原有运行时兜底与“清空恢复默认”语义保持不变。

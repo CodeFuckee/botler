@@ -310,6 +310,12 @@ export default function IssueListSection({
                       <span className="badge badge-muted" title={tr('overview.repoPriorityTitle')}>
                         优先级 {r.priority ?? 100}
                       </span>
+                      {r.token_expiry?.level && r.token_expiry.level !== 'unknown' && (
+                        <span className={`badge token-expiry-${r.token_expiry.level}`}
+                              title="请前往 GitLab 新建 Personal Access Token 后，在仓库管理页更新到期日">
+                          Token {r.token_expiry.days_remaining < 0 ? '已到期' : `剩余 ${r.token_expiry.days_remaining} 天`}
+                        </span>
+                      )}
                       <span className="muted" title={issueFilterActive
                         ? '当前过滤条件下匹配的开放 issue 数量'
                         : '该仓库开放 issue 总数'}>

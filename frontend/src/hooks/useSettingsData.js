@@ -220,6 +220,18 @@ export function useSettingsData() {
   // 保存（saveAlerts）一次性提交，不影响其他设置
   const setAlertField = (key, val) =>
     setSettings((s) => ({ ...s, alerts: { ...s.alerts, [key]: val } }))
+  const setOwnerTokenExpiry = (value) =>
+    setSettings((s) => ({ ...s, gitlab: { ...s.gitlab, owner_token_expires_at: value } }))
+  const saveOwnerTokenExpiry = async () => {
+    setOwnerBusy(true); setError(''); setOwnerSaved(false)
+    try {
+      await api.put('/api/settings', { gitlab: {
+        owner_token_expires_at: settings.gitlab?.owner_token_expires_at || '',
+      } })
+      setOwnerSaved(true)
+      setTimeout(() => setOwnerSaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setOwnerBusy(false) }
+  }
 
   const setSsoField = (key, val) =>
     setSettings((s) => ({ ...s, sso: { ...s.sso, [key]: val } }))
@@ -477,7 +489,7 @@ export function useSettingsData() {
     buildMinioPatch, saveMinio,
     ownerTokenInput, setOwnerTokenInput, ownerBusy, setOwnerBusy, ownerSaved, setOwnerSaved,
     ownerGuide, ownerGuideError, ownerGuideOpen, setOwnerGuideOpen, setOwnerGuideError,
-    saveOwnerToken,
+    setOwnerTokenExpiry, saveOwnerTokenExpiry, saveOwnerToken,
     pauseWindowsInput, setPauseWindowsInput, setWorkerField, setIssuePriority,
     setFallbackEngines, setPauseWindowsText, togglePauseWeekday, save, reconcileNow,
     t, lang, setLang, shortcutsEnabled, setShortcutsEnabled,

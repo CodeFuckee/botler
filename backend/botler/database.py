@@ -112,6 +112,7 @@ class RepoRow(TypedDict):
     logo_path: str | None
     logo_updated_at: str | None
     logo_mime: str | None
+    token_expires_at: str | None
     created_at: str | None
 
 
@@ -156,6 +157,7 @@ CREATE TABLE IF NOT EXISTS repos (
   logo_path TEXT,
   logo_updated_at TEXT,
   logo_mime TEXT,
+  token_expires_at TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -730,6 +732,14 @@ class Database:
             if "precheck_result" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN precheck_result TEXT")
             conn.execute("PRAGMA user_version = 24")
+            ver = 24
+        if ver < 25:
+            # issue #279：仓库 token 到期日独立存储，避免 API URL 脱敏后丢失。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+            if "token_expires_at" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN token_expires_at TEXT")
+            conn.execute("PRAGMA user_version = 25")
+            ver = 25
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1011,11 +1021,12 @@ class Database:
                     priority: int = DEFAULT_PRIORITY,
                     timeout_seconds: int | None = None,
                     max_retries: int | None = None,
-                    engine: str | None = None) -> int:
+                    engine: str | None = None,
+                    token_expires_at: str | None = None) -> int:
         with self._conn(write=True) as conn:
             conn.execute(
-                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, remote_username, priority, timeout_seconds, max_retries, engine)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, remote_username, priority, timeout_seconds, max_retries, engine, token_expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(gitlab_project_id) DO UPDATE SET
                      name=excluded.name, url=excluded.url,
                      prompt_template=excluded.prompt_template,
@@ -1026,10 +1037,11 @@ class Database:
                      timeout_seconds=excluded.timeout_seconds,
                      max_retries=excluded.max_retries,
                      engine=excluded.engine,
+                     token_expires_at=COALESCE(excluded.token_expires_at, repos.token_expires_at),
                      deleted_at=NULL""",
                 (project_id, name, url, prompt_template, 1 if enabled else 0,
                  local_path, remote_name, remote_username, priority,
-                 timeout_seconds, max_retries, engine),
+                 timeout_seconds, max_retries, engine, token_expires_at),
             )
             # 冲突更新路径 lastrowid 不可靠（issue #62：重新添加已删除仓库），
             # 按唯一键 project_id 反查
@@ -1076,7 +1088,7 @@ class Database:
                    WHERE id=?""", (repo_id,))
 
     def update_repo(self, repo_id: int, **fields) -> None:
-        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "priority", "timeout_seconds", "max_retries", "engine", "logo_path", "logo_updated_at", "logo_mime"}
+        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "priority", "timeout_seconds", "max_retries", "engine", "logo_path", "logo_updated_at", "logo_mime", "token_expires_at"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return
@@ -1084,6 +1096,10 @@ class Database:
         with self._conn(write=True) as conn:
             conn.execute(f"UPDATE repos SET {cols} WHERE id=?",  # nosec B608
                          (*sets.values(), repo_id))
+
+    def set_repo_token_expiry(self, repo_id: int, expires_at: str | None) -> None:
+        """保存仓库 token 的 ISO 到期日；None 表示尚未获知。"""
+        self.update_repo(repo_id, token_expires_at=expires_at)
 
     def delete_repo(self, repo_id: int) -> None:
         with self._conn(write=True) as conn:

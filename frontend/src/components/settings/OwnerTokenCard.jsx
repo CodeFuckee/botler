@@ -9,7 +9,7 @@ import Markdown from '../Markdown.jsx'
 export default function OwnerTokenCard({
   settings, ownerTokenInput, setOwnerTokenInput, ownerBusy, saveOwnerToken,
   ownerSaved, ownerGuide, ownerGuideError, ownerGuideOpen,
-  setOwnerGuideOpen, setOwnerGuideError,
+  setOwnerGuideOpen, setOwnerGuideError, setOwnerTokenExpiry, saveOwnerTokenExpiry,
 }) {
   return (
     <div className="card">
@@ -36,13 +36,27 @@ export default function OwnerTokenCard({
         </tbody>
       </table>
       <div className="form-row">
+        <label className="edit-field grow">
+          到期日 <code>owner_token_expires_at</code>
+          <input className="input" type="date" value={settings.gitlab?.owner_token_expires_at || ''}
+                 onChange={(e) => setOwnerTokenExpiry?.(e.target.value)} />
+          <span className="muted small">留空表示未记录；可由 GitLab token 信息自动回填。</span>
+        </label>
         <button className="btn btn-primary" disabled={ownerBusy} onClick={saveOwnerToken}>
           {ownerBusy ? '保存中…' : '保存 Owner Token'}
+        </button>
+        <button className="btn" disabled={ownerBusy} onClick={saveOwnerTokenExpiry}>
+          保存到期日
         </button>
         {ownerSaved && (
           <span className="saved-hint"><Icon name="check" /> Owner token 已保存（已写回 config.yaml）</span>
         )}
       </div>
+      {settings.gitlab?.owner_token_expiry?.level && settings.gitlab.owner_token_expiry.level !== 'unknown' && (
+        <p className={`badge token-expiry-${settings.gitlab.owner_token_expiry.level}`}>
+          Token 到期状态：{settings.gitlab.owner_token_expiry.level}（剩余 {settings.gitlab.owner_token_expiry.days_remaining} 天）
+        </p>
+      )}
       <p className="muted small">
         <Icon name="lock" /> <strong>隔离状态</strong>：该 token 已由系统架构隔离，<strong>所有 Agent
         均不可使用</strong>——Agent 处理 issue 时只能使用自己仓库的认证 token 进行

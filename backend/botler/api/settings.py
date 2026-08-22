@@ -23,6 +23,7 @@ from ..gitlab_client import GitLabClient, GitLabError
 from ..labels import validate_label
 from ..pause_window import in_pause_window, normalize_window, parse_window
 from ..report import DEFAULT_COMMENT_TEMPLATE
+from ..token_expiry import evaluate_expiry
 from ..templates import PLACEHOLDERS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -68,6 +69,8 @@ def get_settings(request: Request):
             "bot_username": s.bot_username,
             "bot_token_masked": _mask(s.gitlab_token),
             "owner_token_masked": _mask(s.gitlab_owner_token),
+            "owner_token_expires_at": s.gitlab_owner_token_expires_at,
+            "owner_token_expiry": evaluate_expiry(s.gitlab_owner_token_expires_at),
             "webhook_secret_masked": _mask(s.webhook_secret),
             "verify_ssl": s.verify_ssl,
         },
@@ -260,6 +263,7 @@ def get_settings(request: Request):
             "queue_backlog_threshold": s.alert_queue_backlog_threshold,
             "queue_stall_minutes": s.alert_queue_stall_minutes,
             "notify_token_invalid": s.alert_token_invalid,
+            "notify_token_expiry": s.alert_token_expiry,
             "notify_disk_low": s.alert_disk_low,
             "disk_min_free_mb": s.alert_disk_min_free_mb,
             "throttle_seconds": s.alert_throttle_seconds,
@@ -427,7 +431,20 @@ def update_settings(request: Request, body: dict):
         token_val = gitlab_patch.get("owner_token")
         if isinstance(token_val, str) and token_val.strip() \
                 and "*" not in token_val:
-            _validate_owner_token_scope(c.config.get(), token_val.strip())
+            token_info = _validate_owner_token_scope(c.config.get(), token_val.strip())
+            # 新 token 优先使用校验阶段已取得的 self 信息自动回填；GitLab
+            # 旧版本回退校验 /user 时没有 expires_at，保留用户手填即可。
+            detected = (token_info or {}).get("expires_at")
+            if "owner_token_expires_at" not in gitlab_patch \
+                    and evaluate_expiry(detected)["expires_at"]:
+                gitlab_patch["owner_token_expires_at"] = detected
+        expires_at = gitlab_patch.get("owner_token_expires_at")
+        if expires_at is not None:
+            if not isinstance(expires_at, str):
+                raise HTTPException(400, "owner_token_expires_at 必须是 YYYY-MM-DD 字符串")
+            if expires_at.strip() and evaluate_expiry(expires_at.strip())["expires_at"] is None:
+                raise HTTPException(400, "owner_token_expires_at 必须是有效的 YYYY-MM-DD 日期")
+            gitlab_patch["owner_token_expires_at"] = expires_at.strip()
         c.config.update_section("gitlab", gitlab_patch)
 
     return get_settings(request)
@@ -981,7 +998,7 @@ def _validate_owner_token_scope(cfg, token: str) -> None:
                     400,
                     f"Owner token 无效或已过期（{e2.status_code}）：请重新生成 "
                     "GitLab Personal Access Token（glpat-xxxx）后保存") from e2
-            return
+            return None
         if e.status_code == 401:
             raise HTTPException(
                 400, "Owner token 无效或已过期（401）：请重新生成 "
@@ -1000,6 +1017,7 @@ def _validate_owner_token_scope(cfg, token: str) -> None:
             + "）：只有 api scope 才能写评论/编辑 issue，read_api 等只读 "
             "scope 不够。请在 GitLab 用户设置 → Access Tokens 重新生成 "
             "token，Scopes 勾选 api 后保存")
+    return info
 
 
 def _validate_gitlab(patch: dict) -> None:

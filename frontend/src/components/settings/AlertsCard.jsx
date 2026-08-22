@@ -121,6 +121,15 @@ export default function AlertsCard({
             </td>
           </tr>
           <tr>
+            <th>Token 到期预警 <code>notify_token_expiry</code></th>
+            <td>
+              <input type="checkbox" className="check-input"
+                     checked={a.notify_token_expiry !== false}
+                     onChange={(e) => setAlertField('notify_token_expiry', e.target.checked)} />
+              <span className="muted small"> 在 30 / 7 / 3 天阈值及到期后分级提醒，不重复刷屏</span>
+            </td>
+          </tr>
+          <tr>
             <th>磁盘空间告警 <code>notify_disk_low</code></th>
             <td>
               <input

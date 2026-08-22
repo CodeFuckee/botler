@@ -821,6 +821,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `auto_issue.enabled` | true | 任务失败自动上报总开关（issue #347）：任务失败收尾时自动在任务所属项目创建失败上报 issue（标题含任务 id、`bug` + `bot-failed` 标签、负责人按 assignee）；设置页「任务失败自动上报」卡片可配置，独立「保存自动上报配置」按钮 |
 | `auto_issue.assignee` | agent | 上报 issue 负责人用户名（GitLab 用户名，创建时解析为用户 id 指定；未配置 / 解析失败时不指定负责人，不阻塞上报） |
 | `alerts.enabled` | true | 聚合告警总开关（issue #229）：平台异常主动通知（网页通知 in_app + webhook 推送），替代「用户打开页面才发现」；关闭 = 全部告警不检测不通知。检测并入对账循环（reconciler 定时扫描），设置页「聚合告警」卡片可配置阈值，独立「保存告警配置」按钮（issue #229） |
+| `alerts.notify_token_expiry` | true | Token 到期预警开关（issue #279）：owner / 仓库 PAT 到期日在 30 / 7 / 3 天、到期时分级通知；各 token/阈值只发送一次，更新 token 后可在设置页或仓库管理页重新填写到期日。 |
 | `alerts.notify_failure_rate` / `failure_rate_threshold` / `failure_rate_window` | true / 50 / 3600 | 任务失败率告警：近 `failure_rate_window` 秒（默认 1 小时）终态任务失败率超过 `failure_rate_threshold`%（默认 50）→ 通知（`alert_failure_rate` 事件） |
 | `alerts.notify_queue_backlog` / `queue_backlog_threshold` / `queue_stall_minutes` | true / 5 / 30 | 队列堆积告警：活跃任务（排队中 + 运行中）超过 `queue_backlog_threshold` 条且 `queue_stall_minutes` 分钟内无任何任务收尾（无进度）→ 通知（`alert_queue_backlog` 事件） |
 | `alerts.notify_token_invalid` | true | GitLab token 失效告警：启动/对账时探测到 GitLab 返回 401/403（token 过期/被吊销）→ 立即通知（`alert_token_invalid` 事件）；传输层故障不算 token 失效，不误报 |
