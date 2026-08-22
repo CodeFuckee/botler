@@ -693,6 +693,8 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | 执行引擎任务时限 | 无 | Claude / Hermes / DSH 不设运行时限；任务仅在完成或人工停止时结束（issue #424） |
 | `worker.max_retries` | 2 | 失败重试次数（「无法解决」不重试）；可按仓库覆盖（`repos[].max_retries`，issue #237） |
 | `worker.reconcile_interval_seconds` | 300 | 对账兜底扫描间隔 |
+| `worker.gitlab_api_requests_per_second` | 10 | 进程内所有 GitLab API 调用共用的匀速上限（请求/秒）；webhook、定时和手动对账均经过同一通道，防止集中爆发（issue #195） |
+| `worker.reconcile_jitter_min_seconds` / `worker.reconcile_jitter_max_seconds` | 0.5 / 2.0 | 全量对账在相邻启用仓库间加入的随机抖动范围（秒）；单仓库手动对账不额外等待（issue #195） |
 | `worker.engine` | `claude` | 任务执行引擎（插件体系，issue #140）：`claude`（Claude Code CLI）/ `hermes`（hermes-agent SDK，进程内调用，issue #171）/ `dsh`（deepseek-harness SDK）；引擎名对应执行引擎插件，非法值回退 `claude`（issue #47/#84/#171）；设置页「任务调度」卡片可切换（issue #113）；可按仓库覆盖（`repos[].engine`，issue #237） |
 | `worker.fallback_engines` | `[]` | 备用引擎降级（issue #236）：主引擎健康探测不可用或连续 `fallback_after_failures` 次「引擎类」失败（命令缺失 / API key 无效 / SDK 错误）时，按此顺序自动降级到备用引擎重试任务，并在任务记录与 issue 评论注明「引擎 X 不可用，已降级 Y 执行」；空列表 = 不降级（保持旧行为）。每次任务开始前做轻量健康探测（claude 检查 `claude --version`、hermes 检查 runner 可加载、dsh 检查 SDK 导入），探测结果展示在设置页「任务调度」卡片与插件管理页（引擎状态徽章）；引擎恢复后下一任务自动回到主引擎。设置页「任务调度」卡片可编辑 |
 | `worker.fallback_after_failures` | `2` | 连续引擎类失败降级阈值（issue #236）：正整数；任务级失败（代码改不对）不累计不降级 |

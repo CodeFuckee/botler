@@ -402,3 +402,37 @@ class TestFallbackEnginesConfig:
         s = ConfigManager(str(path)).load()
         assert s.fallback_after_failures == 1
 
+
+class TestGitLabApiRateLimitSettings:
+    """issue #195：限速与抖动配置应可读取、写回且安全归一化。"""
+
+    def test_worker_rate_limit_and_jitter_round_trip(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        _write_config(path)
+        cm = ConfigManager(str(path))
+
+        settings = cm.update_section("worker", {
+            "gitlab_api_requests_per_second": 6.5,
+            "reconcile_jitter_min_seconds": 1.5,
+            "reconcile_jitter_max_seconds": 3.0,
+        })
+
+        assert settings.gitlab_api_requests_per_second == 6.5
+        assert settings.reconcile_jitter_min_seconds == 1.5
+        assert settings.reconcile_jitter_max_seconds == 3.0
+        assert _read(path)["worker"]["gitlab_api_requests_per_second"] == 6.5
+
+    def test_invalid_or_reversed_values_keep_protection_and_valid_range(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        _write_config(path, extra=(
+            "worker:\n"
+            "  gitlab_api_requests_per_second: 0\n"
+            "  reconcile_jitter_min_seconds: -1\n"
+            "  reconcile_jitter_max_seconds: -2\n"))
+        cm = ConfigManager(str(path))
+
+        settings = cm.get()
+
+        assert settings.gitlab_api_requests_per_second == 0.1
+        assert settings.reconcile_jitter_min_seconds == 0.0
+        assert settings.reconcile_jitter_max_seconds == 0.0

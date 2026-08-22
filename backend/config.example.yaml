@@ -23,6 +23,11 @@ worker:
   # 执行引擎不设时限；任务会持续运行，直到完成或由人工停止（issue #424）
   max_retries: 2                      # 失败重试次数（"无法解决"不重试）
   reconcile_interval_seconds: 300     # 对账兜底扫描间隔
+  # GitLab API 全局匀速上限（所有 webhook、定时及手动对账共用，建议不高于 10）
+  gitlab_api_requests_per_second: 10
+  # 全量对账时相邻启用仓库的随机抖动范围（秒）；单仓库手动对账不等待
+  reconcile_jitter_min_seconds: 0.5
+  reconcile_jitter_max_seconds: 2.0
   issue_priority: ["bug", "test", "feature"]
                                       # issue 标签处理优先级（issue #76）：
                                       #   同仓库队列内按此顺序派发，越靠前越先

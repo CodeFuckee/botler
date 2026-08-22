@@ -30,7 +30,7 @@ from .backup import BotlerBackup
 from .config import ConfigManager
 from .database import Database
 from .executor import ClaudeExecutor
-from .gitlab_client import GitLabClient
+from .gitlab_client import GitLabClient, configure_default_rate_limiter
 from .log_redact import install_redact_filter, register_config_secrets
 from .reconciler import Reconciler
 from .scheduler import TaskScheduler
@@ -104,6 +104,9 @@ def build_context(config_path: str | None = None) -> AppContext:
     if loaded:
         logger.info("外部插件加载完成（%s 个模块）", len(loaded))
     db = Database()
+    # 启动即应用配置，保证首次 webhook/手动对账前所有 GitLab API
+    # 请求也使用用户设定的共享限速；Reconciler 每轮再刷新以支持热重载。
+    configure_default_rate_limiter(settings.gitlab_api_requests_per_second)
     gitlab = GitLabClient(
         settings.gitlab_url, settings.gitlab_token,
         verify_ssl=settings.verify_ssl,

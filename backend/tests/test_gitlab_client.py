@@ -1033,3 +1033,46 @@ class TestDownloadJobArtifactFile:
         with pytest.raises(GitLabError) as ei:
             client.download_job_artifact_file(42, 7, "a.sarif")
         assert ei.value.status_code == 500
+
+class TestGitLabRequestRateLimit:
+    """issue #195：所有经同一客户端发出的 GitLab API 请求必须限速。"""
+
+    def test_rate_limiter_spaces_consecutive_requests(self, monkeypatch):
+        """速率为 2 req/s 时，紧邻的两次请求至少间隔 0.5 秒。"""
+        from botler.gitlab_client import GitLabRateLimiter
+
+        clock = [100.0]
+        sleeps: list[float] = []
+        monkeypatch.setattr("botler.gitlab_client.time.monotonic", lambda: clock[0])
+        monkeypatch.setattr("botler.gitlab_client.time.sleep", sleeps.append)
+        limiter = GitLabRateLimiter(requests_per_second=2)
+
+        limiter.acquire()
+        limiter.acquire()
+
+        assert sleeps == [0.5]
+
+    def test_each_retry_attempt_also_passes_through_rate_limiter(self, monkeypatch):
+        """429 重试的每次实际请求同样占用限速配额，不能绕过全局通道。"""
+        from botler.gitlab_client import GitLabRateLimiter
+
+        client = GitLabClient("https://gitlab.example.com", "test-token",
+                              verify_ssl=False, retry_max_attempts=2,
+                              rate_limiter=GitLabRateLimiter(10))
+        responses = [TestTransientRequestRetry._resp(429, "Too Many Requests"),
+                     TestTransientRequestRetry._resp(200, json_data={"id": 1})]
+        calls: list[tuple[str, str]] = []
+        acquires: list[bool] = []
+
+        class FakeHttp:
+            def request(self, method, path, **kwargs):
+                calls.append((method, path))
+                return responses.pop(0)
+
+        client._http = FakeHttp()
+        client.rate_limiter.acquire = lambda: acquires.append(True)
+        monkeypatch.setattr("botler.gitlab_client.time.sleep", lambda _: None)
+
+        assert client.test_connection() == {"id": 1}
+        assert len(calls) == 2
+        assert len(acquires) == 2

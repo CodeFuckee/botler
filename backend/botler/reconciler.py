@@ -8,13 +8,15 @@
 from __future__ import annotations
 
 import logging
+import random
+import time
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import ConfigManager
 from .database import Database, STATUS_FAILED, STATUS_RUNNING, STATUS_SUCCEEDED, normalize_issue_created_at, normalize_issue_updated_at
-from .gitlab_client import GitLabClient, GitLabError
+from .gitlab_client import GitLabClient, GitLabError, configure_default_rate_limiter
 from .git_remote import build_repo_client_with_username
 from .labels import CLAIM_SKIP_LABELS
 from .scheduler import TaskScheduler
@@ -74,6 +76,8 @@ class Reconciler:
         错误信息记入返回值 errors 列表，由 API 层转成 HTTP 错误。
         """
         cfg = self.config.get()
+        # 配置可热重载：在本轮的首个 bot 身份查询前更新共享限速。
+        configure_default_rate_limiter(cfg.gitlab_api_requests_per_second)
         # 全局 bot 身份（config 优先）。全局 token 失效时不再整体放弃对账
         # （issue #63）：降级为 None，由每仓库用 remote url 内嵌 token
         # 客户端兜底，以其账号作为该仓库的 bot 身份。
@@ -86,11 +90,16 @@ class Reconciler:
                                "将对启用仓库逐个尝试 remote token 兜底", e)
 
         repos = [self.db.get_repo(repo_id)] if repo_id is not None else self.db.list_repos()
+        enabled_repos = [repo for repo in repos if repo is not None and repo["enabled"]]
         scanned = enqueued = 0
         errors: list[str] = []
-        for repo in repos:
-            if repo is None or not repo["enabled"]:
-                continue
+        for index, repo in enumerate(enabled_repos):
+            # 仅全量扫描在仓库之间加入随机抖动；单仓库手动对账无需额外等待。
+            if repo_id is None and index:
+                delay = random.uniform(cfg.reconcile_jitter_min_seconds,
+                                       cfg.reconcile_jitter_max_seconds)
+                logger.debug("对账扫描抖动：%.2fs 后扫描仓库 %s", delay, repo["name"])
+                time.sleep(delay)
             s, e, errs = self._reconcile_repo(repo, cfg, bot_id)
             scanned += s
             enqueued += e

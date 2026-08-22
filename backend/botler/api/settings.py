@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import math
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -73,6 +74,10 @@ def get_settings(request: Request):
             "max_concurrent_repos": s.max_concurrent_repos,
             "max_retries": s.max_retries,
             "reconcile_interval_seconds": s.reconcile_interval_seconds,
+            # GitLab API 全局限速及全量对账仓库间随机抖动（issue #195）。
+            "gitlab_api_requests_per_second": s.gitlab_api_requests_per_second,
+            "reconcile_jitter_min_seconds": s.reconcile_jitter_min_seconds,
+            "reconcile_jitter_max_seconds": s.reconcile_jitter_max_seconds,
             # issue 标签处理优先级（issue #76）：同仓库队列内按此顺序
             # 选任务派发，越靠前越先处理；未列出的标签排最后
             "issue_priority": s.issue_priority_labels,
@@ -632,6 +637,21 @@ def _validate_worker(patch: dict) -> None:
     for key in KNOWN_FIELDS["worker"]:
         if key in patch:
             val = patch[key]
+            if key in ("gitlab_api_requests_per_second",
+                       "reconcile_jitter_min_seconds", "reconcile_jitter_max_seconds"):
+                # issue #195：浮点配置不可为 bool / NaN / Infinity；限速必须
+                # 为正，抖动可为 0（显式关闭仓库间随机等待）。
+                if (not isinstance(val, (int, float)) or isinstance(val, bool)
+                        or not math.isfinite(float(val))):
+                    raise HTTPException(400, f"worker.{key} 必须是有限数字")
+                val = float(val)
+                if key == "gitlab_api_requests_per_second":
+                    if val <= 0 or val > 100:
+                        raise HTTPException(400, "worker.gitlab_api_requests_per_second 必须在 0 到 100 之间")
+                elif val < 0 or val > 60:
+                    raise HTTPException(400, f"worker.{key} 必须在 0 到 60 秒之间")
+                patch[key] = val
+                continue
             if key == "issue_priority":
                 # issue #76：标签优先级顺序单独校验（字符串数组）
                 patch[key] = _validate_issue_priority(val)

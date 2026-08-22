@@ -22,7 +22,8 @@ export default function TasksCard({
                 <input
                   className="input num-input"
                   type="number"
-                  min={1}
+                  min={key === 'reconcile_jitter_min_seconds' || key === 'reconcile_jitter_max_seconds' ? 0 : 0.1}
+                  step={key.includes('seconds') && key !== 'reconcile_interval_seconds' ? 0.1 : 1}
                   value={settings.worker[key]}
                   onChange={(e) => setWorkerField(key, e.target.value)}
                 />
@@ -170,6 +171,12 @@ export default function TasksCard({
           </tr>
         </tbody>
       </table>
+      <p className="muted small">
+        GitLab API 全局限速与对账抖动（issue #195）：所有 GitLab API 请求（包括
+        webhook、定时与手动对账、429 重试）共享同一匀速通道，默认上限为 10 请求/秒。
+        全量对账在每两个启用仓库之间按下限/上限随机等待；设为 0 可关闭对应抖动。
+        GitLab 返回 HTTP 429 时会记录日志并执行指数退避重试。
+      </p>
       <p className="muted small">
         issue 标签优先级：同仓库有多个排队任务时，按此顺序优先派发标签命中靠前的
         issue（默认 bug 最优先）；未列出的标签排在最后，同优先级按 issue 更新时间

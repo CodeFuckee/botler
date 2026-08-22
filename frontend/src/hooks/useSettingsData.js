@@ -15,6 +15,9 @@ export const FIELD_LABELS = {
   max_concurrent_repos: '跨仓库并行上限',
   max_retries: '失败重试次数',
   reconcile_interval_seconds: '对账扫描间隔（秒）',
+  gitlab_api_requests_per_second: 'GitLab API 全局限速（请求/秒）',
+  reconcile_jitter_min_seconds: '全量对账抖动下限（秒）',
+  reconcile_jitter_max_seconds: '全量对账抖动上限（秒）',
   // 引擎降级阈值（issue #236）：连续 N 次「引擎类」失败（命令缺失 / API key
   // 无效 / SDK 错误）后自动降级到备用引擎；任务级失败不累计
   fallback_after_failures: '降级触发失败次数',

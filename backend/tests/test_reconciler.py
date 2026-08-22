@@ -746,3 +746,28 @@ class TestReconcileRestartsManuallyStoppedIssues:
 
         assert result == {"scanned": 1, "enqueued": 0}
         assert ctx.db.find_active_task(42, 431) is None
+
+class TestReconcileRepoJitter:
+    """issue #195：全量对账须在仓库之间加入随机抖动。"""
+
+    def test_full_scan_waits_between_enabled_repositories(self, ctx, monkeypatch):
+        _add_repo(ctx.db, project_id=42, name="a")
+        _add_repo(ctx.db, project_id=43, name="b")
+        _add_repo(ctx.db, project_id=44, name="disabled", enabled=False)
+        ctx.gitlab.issues_by_project = {42: [], 43: []}
+        sleeps: list[float] = []
+        monkeypatch.setattr(reconciler_mod.random, "uniform", lambda low, high: 0.75)
+        monkeypatch.setattr(reconciler_mod.time, "sleep", sleeps.append)
+
+        result = ctx.reconciler.reconcile_once()
+
+        assert result == {"scanned": 0, "enqueued": 0}
+        assert sleeps == [0.75]
+
+    def test_single_repository_manual_scan_does_not_add_jitter(self, ctx, monkeypatch):
+        repo_id = _add_repo(ctx.db)
+        sleeps: list[float] = []
+        monkeypatch.setattr(reconciler_mod.time, "sleep", sleeps.append)
+
+        assert ctx.reconciler.reconcile_once(repo_id=repo_id) == {"scanned": 0, "enqueued": 0}
+        assert sleeps == []

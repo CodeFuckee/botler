@@ -212,6 +212,11 @@ class Settings:
     task_timeout_seconds: int | None = None
     max_retries: int = 2
     reconcile_interval_seconds: int = 300
+    # GitLab API 防突发（issue #195）：所有 GitLabClient 共享该速率；全量
+    # 对账还会在仓库之间按 jitter_min/max 加随机等待。
+    gitlab_api_requests_per_second: float = 10.0
+    reconcile_jitter_min_seconds: float = 0.5
+    reconcile_jitter_max_seconds: float = 2.0
     # issue 标签处理优先级（issue #76）：同仓库队列内按此顺序选任务派发，
     # 越靠前的标签越先处理；未列出的标签排在最后；同权重按 issue 更新时间
     # 升序。设置页「任务调度」卡片可修改（默认 bug > test > feature）。
@@ -440,7 +445,8 @@ class Settings:
 KNOWN_FIELDS = {
     "gitlab": {"owner_token"},
     "worker": {"max_concurrent_repos", "max_retries",
-               "reconcile_interval_seconds", "ci_wait_detect_seconds",
+               "reconcile_interval_seconds", "gitlab_api_requests_per_second",
+               "reconcile_jitter_min_seconds", "reconcile_jitter_max_seconds", "ci_wait_detect_seconds",
                "ci_wait_interval_seconds", "ci_wait_timeout_seconds",
                "engine", "plugin_paths", "issue_priority",
                "pause_windows", "pause_weekdays", "pause_timezone",
@@ -721,6 +727,11 @@ class ConfigManager:
             task_timeout_seconds=None,
             max_retries=int(worker.get("max_retries", 2)),
             reconcile_interval_seconds=int(worker.get("reconcile_interval_seconds", 300)),
+            gitlab_api_requests_per_second=max(0.1, float(worker.get("gitlab_api_requests_per_second", 10))),
+            reconcile_jitter_min_seconds=max(0.0, float(worker.get("reconcile_jitter_min_seconds", 0.5))),
+            reconcile_jitter_max_seconds=max(
+                max(0.0, float(worker.get("reconcile_jitter_min_seconds", 0.5))),
+                float(worker.get("reconcile_jitter_max_seconds", 2.0))),
             issue_priority_labels=_issue_priority_labels(worker),
             pause_windows=_pause_windows(worker),
             pause_weekdays=_pause_weekdays(worker),

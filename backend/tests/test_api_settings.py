@@ -2678,3 +2678,38 @@ class TestFallbackEnginesSettings:
         assert worker["fallback_after_failures"] == 1
         assert worker["fallback_engines"] == ["dsh"]
         assert worker["max_retries"] == 3
+
+
+class TestGitLabApiRateLimitSettings:
+    """issue #195：全局 API 限速与对账抖动可通过设置 API 配置。"""
+
+    def test_get_and_update_rate_limit_and_jitter(self, client):
+        tc, _ = client
+        initial = tc.get("/api/settings").json()["worker"]
+        assert initial["gitlab_api_requests_per_second"] == 10.0
+        assert initial["reconcile_jitter_min_seconds"] == 0.5
+        assert initial["reconcile_jitter_max_seconds"] == 2.0
+
+        resp = tc.put("/api/settings", json={"worker": {
+            "gitlab_api_requests_per_second": 6.5,
+            "reconcile_jitter_min_seconds": 0.0,
+            "reconcile_jitter_max_seconds": 1.25,
+        }})
+
+        assert resp.status_code == 200
+        worker = resp.json()["worker"]
+        assert worker["gitlab_api_requests_per_second"] == 6.5
+        assert worker["reconcile_jitter_min_seconds"] == 0.0
+        assert worker["reconcile_jitter_max_seconds"] == 1.25
+
+    @pytest.mark.parametrize("field,value", [
+        ("gitlab_api_requests_per_second", 0),
+        ("gitlab_api_requests_per_second", 101),
+        ("reconcile_jitter_min_seconds", -0.1),
+        ("reconcile_jitter_max_seconds", 61),
+        ("gitlab_api_requests_per_second", True),
+    ])
+    def test_rejects_unsafe_rate_limit_values(self, client, field, value):
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {field: value}})
+        assert resp.status_code == 400

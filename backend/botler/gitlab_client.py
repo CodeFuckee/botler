@@ -12,6 +12,7 @@ import ipaddress
 import logging
 import random
 import re
+import threading
 import time
 from pathlib import Path
 from urllib.parse import quote, urlparse, unquote
@@ -134,6 +135,52 @@ RETRY_MAX_ATTEMPTS = 4
 RETRY_BASE_DELAY = 0.5
 RETRY_MAX_DELAY = 2.0
 
+# GitLab API 全局限速（issue #195）：默认最多 10 请求/秒。所有 GitLabClient
+# 默认共享同一个限速器，因而 webhook、定时对账和手动对账不会各自绕过限制。
+DEFAULT_REQUESTS_PER_SECOND = 10.0
+
+
+class GitLabRateLimiter:
+    """进程内共享的匀速请求限速器。
+
+    以单调时钟安排下一请求时间，避免令牌桶初始突发导致多仓库扫描同时发出
+    多个请求。锁覆盖时间计算和等待，保证并发线程也不会突破配置上限。
+    """
+
+    def __init__(self, requests_per_second: float = DEFAULT_REQUESTS_PER_SECOND):
+        self._lock = threading.Lock()
+        self._next_request_at = 0.0
+        self.set_rate(requests_per_second)
+
+    def set_rate(self, requests_per_second: float) -> None:
+        """更新限速；非法或非正值回退默认值，防止关闭保护。"""
+        try:
+            rate = float(requests_per_second)
+        except (TypeError, ValueError):
+            rate = DEFAULT_REQUESTS_PER_SECOND
+        self.requests_per_second = rate if rate > 0 else DEFAULT_REQUESTS_PER_SECOND
+        self._interval = 1.0 / self.requests_per_second
+
+    def acquire(self) -> None:
+        """等待至本次请求可发送；每一次重试也必须调用本方法。"""
+        with self._lock:
+            now = time.monotonic()
+            wait_seconds = max(0.0, self._next_request_at - now)
+            if wait_seconds:
+                time.sleep(wait_seconds)
+            # 使用请求实际计划时刻推进，避免连续调用重新形成突发。
+            self._next_request_at = max(now, self._next_request_at) + self._interval
+
+
+_default_rate_limiter = GitLabRateLimiter()
+
+
+def configure_default_rate_limiter(requests_per_second: float) -> GitLabRateLimiter:
+    """更新进程内共享限速器，供配置热重载后的调用继续复用。"""
+    _default_rate_limiter.set_rate(requests_per_second)
+    return _default_rate_limiter
+
+
 # 写操作可安全重试的传输层故障（issue #196）：请求确认未送达服务器——TCP
 # 连接未建立（DNS 解析失败/连接拒绝/不可达 → ConnectError、握手超时 →
 # ConnectTimeout、连接池超时 → PoolTimeout）或请求未发出（LocalProtocolError），
@@ -168,7 +215,8 @@ class GitLabClient:
                  webhook_base_url: str | None = None,
                  retry_max_attempts: int = RETRY_MAX_ATTEMPTS,
                  retry_base_delay: float = RETRY_BASE_DELAY,
-                 retry_max_delay: float = RETRY_MAX_DELAY):
+                 retry_max_delay: float = RETRY_MAX_DELAY,
+                 rate_limiter: GitLabRateLimiter | None = None):
         self.url = url.rstrip("/")
         self.token = token
         self.webhook_base_url = (webhook_base_url or self.url).rstrip("/")
@@ -178,6 +226,8 @@ class GitLabClient:
         self.retry_max_attempts = retry_max_attempts
         self.retry_base_delay = retry_base_delay
         self.retry_max_delay = retry_max_delay
+        # 未显式传入时使用进程共享限速器，确保不同业务入口共用配额。
+        self.rate_limiter = rate_limiter or _default_rate_limiter
         self._bot_id: int | None = None
         self._http = httpx.Client(
             base_url=f"{self.url}/api/v4",
@@ -207,6 +257,8 @@ class GitLabClient:
         """
         attempts = self.retry_max_attempts
         for attempt in range(attempts):
+            # 所有实际尝试（包括 429/传输故障后的重试）都先经过共享限速器。
+            self.rate_limiter.acquire()
             # 指标（issue #208）：GitLab API 请求计数——每次实际 HTTP 尝试
             # 计一次（含重试），错误率 = gitlab_api_errors / gitlab_api_requests
             inc_gitlab_api_request(method)
@@ -226,8 +278,9 @@ class GitLabClient:
                 else (resp.status_code == 429)
             if retryable and attempt < attempts - 1:
                 delay = self._retry_delay(attempt)
-                logger.warning("GitLab %s %s 瞬时故障（HTTP %s），%.1fs 后重试（第 %d/%d 次）",
-                               method, path, resp.status_code, delay, attempt + 1, attempts)
+                reason = "触发限流（HTTP 429）" if resp.status_code == 429 else f"瞬时故障（HTTP {resp.status_code}）"
+                logger.warning("GitLab %s %s %s，%.1fs 后指数退避重试（第 %d/%d 次）",
+                               method, path, reason, delay, attempt + 1, attempts)
                 time.sleep(delay)
                 continue
             return resp
