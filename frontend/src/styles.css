@@ -800,16 +800,18 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 }
 .settings-nav-search-icon {
   position: absolute;
-  left: 10px;
+  left: 12px;
   top: 50%;
+  width: 16px;
+  height: 16px;
   transform: translateY(-50%);
-  font-size: 13px;
   opacity: 0.6;
   pointer-events: none;
 }
 .settings-nav-input {
   width: 100%;
-  padding-left: 32px;
+  /* 12px 左定位 + 16px 图标 + 12px 留白，避免提示文字与图标重叠。 */
+  padding-left: 40px;
   padding-right: 30px;
 }
 .settings-nav-clear {

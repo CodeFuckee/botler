@@ -3,6 +3,22 @@
 // 后配置持久化生效（写回 config.yaml）。
 import { test, expect } from '@playwright/test'
 
+test.describe('设置页左侧导航搜索框', () => {
+  test('搜索图标与提示文字之间保留清晰间距', async ({ page }) => {
+    await page.goto('/settings')
+    const input = page.locator('.settings-nav-input')
+    const icon = page.locator('.settings-nav-search-icon')
+    await expect(input).toBeVisible()
+    await expect(icon).toBeVisible()
+
+    const [inputBox, iconBox] = await Promise.all([input.boundingBox(), icon.boundingBox()])
+    expect(inputBox).not.toBeNull()
+    expect(iconBox).not.toBeNull()
+    // 提示文字从 input 左边缘 40px 处开始；图标右缘至文字至少留 12px。
+    expect(inputBox.x + 40 - (iconBox.x + iconBox.width)).toBeGreaterThanOrEqual(12)
+  })
+})
+
 test.describe('设置页保存配置', () => {
   test('修改任务调度参数并保存，重载后仍保持', async ({ page }) => {
     let putBody = null
