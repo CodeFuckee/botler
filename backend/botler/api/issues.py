@@ -443,6 +443,50 @@ def close_issue(request: Request, project_id: int, iid: int):
     return {"ok": True, "state": "closed"}
 
 
+@router.post("/{project_id}/{iid}/run")
+def run_issue(request: Request, project_id: int, iid: int):
+    """手动执行一个开放 issue（issue #431）。
+
+    概览页右边栏「执行」按钮的专用入口：不复用失败任务的会话或记录，
+    每次有效请求都以 ``manual`` 来源新建任务并交由现有调度器排队。这样
+    「执行」与「重试」的断点续跑语义明确分离。
+
+    已存在 queued/running/retrying 任务时返回 409，避免重复入队；GitLab
+    已关闭的 issue 返回 400，避免绕过前端隐藏按钮。任务创建使用数据库
+    的条件插入，覆盖并发请求在活跃检查与创建之间的竞态。
+    """
+    c = request.app.state.ctx
+    row = _enabled_repo_by_project_id(c, project_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在或未启用")
+    active = c.db.find_active_task(project_id, iid)
+    if active is not None:
+        raise HTTPException(409, "该 issue 已有任务在执行中，无法重复执行")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        issue = client.get_issue(project_id, iid)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "issue 不存在") from e
+        raise HTTPException(502, f"GitLab API 错误: {e}") from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+    if issue.get("state") != "opened":
+        raise HTTPException(400, "issue 已关闭，无法执行")
+    task_id = c.db.create_task(
+        row["id"], project_id, iid,
+        issue.get("title") or f"issue #{iid}",
+        triggered_by="manual",
+        issue_labels=issue.get("labels") or [],
+        issue_updated_at=normalize_issue_updated_at(issue.get("updated_at")),
+        issue_created_at=normalize_issue_created_at(issue.get("created_at")))
+    if task_id is None:
+        raise HTTPException(409, "该 issue 已有任务在执行中，无法重复执行")
+    c.scheduler.enqueue(task_id)
+    clear_issue_cache()
+    return {"task_id": task_id, "status": "queued", "mode": "created"}
+
+
 @router.post("/{project_id}/{iid}/retry")
 def retry_issue(request: Request, project_id: int, iid: int):
     """重新执行 issue 对应的任务（issue #117：概览页右边栏「重试」按钮）。

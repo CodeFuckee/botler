@@ -1224,6 +1224,90 @@ class TestRetryIssue:
         assert tc.get("/api/issues/overview").json()["total"] == 0,             "重试成功后缓存应被清空"
 
 
+# ---- issue #431：概览页右边栏执行按钮 ----
+
+class TestRunIssue:
+    """POST /api/issues/{project_id}/{iid}/run：手动创建新任务并入队。
+
+    与重试接口不同，此接口不复用任何历史任务的会话或记录；每次有效的
+    人工执行都创建一条 triggered_by=manual 的新任务。关闭 issue 及已有
+    queued/running/retrying 活跃任务必须拒绝，防止绕过前端保护重复执行。
+    """
+
+    @staticmethod
+    def _mk_repo(db, project_id=42, name="demo", enabled=True) -> int:
+        return _add_repo(db, project_id=project_id, name=name, enabled=enabled)
+
+    @staticmethod
+    def _mk_task(db, repo_id, iid=64, status="succeeded") -> int:
+        task_id = db.create_task(repo_id, 42, iid, f"任务 {iid}",
+                                 triggered_by="webhook")
+        db.set_task_status(task_id, status)
+        return task_id
+
+    def test_run_open_issue_creates_fresh_manual_task(self, client):
+        """开放 issue 正常执行：即使有成功历史也新建 manual 任务并入队。"""
+        tc, stub, db, _ = client
+        repo_id = self._mk_repo(db)
+        old_id = self._mk_task(db, repo_id, status="succeeded")
+        stub.issue_by_key = {(42, 64): make_issue(
+            64, "立即执行", updated_at="2026-08-14T18:30:00.000+08:00",
+            created_at="2026-08-14T08:00:00.000+08:00", labels=["feature"])}
+
+        resp = tc.post("/api/issues/42/64/run")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "queued"
+        assert body["mode"] == "created"
+        assert body["task_id"] != old_id
+        row = db.get_task(body["task_id"])
+        assert row["triggered_by"] == "manual"
+        assert row["issue_title"] == "立即执行"
+        assert tc.app.state.ctx.scheduler.enqueued == [body["task_id"]]
+
+    @pytest.mark.parametrize("status", ["queued", "running", "retrying"])
+    def test_run_rejects_every_active_task_status(self, client, status):
+        """边界：queued/running/retrying 均为活跃任务，拒绝重复执行。"""
+        tc, stub, db, _ = client
+        repo_id = self._mk_repo(db)
+        task_id = self._mk_task(db, repo_id, status=status)
+
+        resp = tc.post("/api/issues/42/64/run")
+
+        assert resp.status_code == 409
+        assert "执行中" in resp.json()["detail"]
+        assert db.get_task(task_id)["status"] == status
+        assert tc.app.state.ctx.scheduler.enqueued == []
+        assert stub.get_issue_calls == []
+
+    def test_run_rejects_closed_issue(self, client):
+        """边界：后端也拒绝关闭的 issue，不能只依赖前端隐藏按钮。"""
+        tc, stub, db, _ = client
+        self._mk_repo(db)
+        closed = make_issue(64, "已关闭")
+        closed["state"] = "closed"
+        stub.issue_by_key = {(42, 64): closed}
+
+        resp = tc.post("/api/issues/42/64/run")
+
+        assert resp.status_code == 400
+        assert "已关闭" in resp.json()["detail"]
+        assert db.count_tasks() == 0
+        assert tc.app.state.ctx.scheduler.enqueued == []
+
+    def test_run_disabled_repo_returns_not_found(self, client):
+        """异常输入：未启用仓库不能创建任务，也不应访问 GitLab。"""
+        tc, stub, db, _ = client
+        self._mk_repo(db, enabled=False)
+
+        resp = tc.post("/api/issues/42/64/run")
+
+        assert resp.status_code == 404
+        assert stub.get_issue_calls == []
+
+
+
 # ---- issue #92：概览页添加 Issue ----
 
 class TestIssueFormMeta:

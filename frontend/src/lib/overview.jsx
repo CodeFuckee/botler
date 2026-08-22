@@ -7,6 +7,9 @@ import { ENGINE_META } from '../components/IssueDrawer.jsx'
 import { Icon } from '../components/Icon.jsx'
 
 export const LIVE_STATUSES = ['running', 'retrying']
+// 可重复执行保护使用的完整活跃状态：queued 虽未开始运行，也必须隐藏
+// Issue 详情的「执行」按钮，防止同一 issue 重复入队（issue #431）。
+export const ACTIVE_TASK_STATUSES = ['queued', ...LIVE_STATUSES]
 
 // 每个任务信息块保留的实时输出行数（issue #114：任务信息随 issue 项
 // 展示，超出丢弃最旧行，防止任务块无限增长）
@@ -73,6 +76,20 @@ export function runningIssueKeys(tasks) {
   if (!Array.isArray(tasks)) return keys
   for (const t of tasks) {
     if (!t || !LIVE_STATUSES.includes(t.status)) continue
+    if (t.repo_id == null || t.issue_iid == null) continue
+    keys.add(`${t.repo_id}:${t.issue_iid}`)
+  }
+  return keys
+}
+
+
+// 返回所有活跃（queued/running/retrying）任务对应的 issue 键。展示上的
+// 「运行中」仍沿用 runningIssueKeys，仅执行按钮的去重判断使用本函数。
+export function activeIssueKeys(tasks) {
+  const keys = new Set()
+  if (!Array.isArray(tasks)) return keys
+  for (const t of tasks) {
+    if (!t || !ACTIVE_TASK_STATUSES.includes(t.status)) continue
     if (t.repo_id == null || t.issue_iid == null) continue
     keys.add(`${t.repo_id}:${t.issue_iid}`)
   }

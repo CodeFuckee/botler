@@ -67,8 +67,8 @@ test('App.jsx 注册 /overview 路由并挂载 Overview 页面', () => {
 
 // ---- Overview 数据流源码断言 ----
 
-test('概览页一次拉取全部正在执行的任务（running+retrying）', () => {
-  assert.match(overview, /status:\s*'running,retrying'/, '列表请求应带多值 status=running,retrying')
+test('概览页一次拉取全部活跃任务（queued/running/retrying）', () => {
+  assert.match(overview, /status:\s*'queued,running,retrying'/, '列表请求应带 queued/running/retrying 多值状态')
   assert.match(overview, /api\.get\('\/api\/tasks\?\s*'\s*\+\s*q/, '列表走 GET /api/tasks')
   assert.match(overview, /usePolling\(load, OVERVIEW_POLL_MS\)/,
                '列表应经 usePolling 定时轮询刷新（issue #200 统一管理）')

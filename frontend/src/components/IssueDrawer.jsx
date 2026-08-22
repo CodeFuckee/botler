@@ -77,6 +77,17 @@ export function isFailedTask(issue) {
   return hasFailed
 }
 
+
+// 执行条件（issue #431）：仅开放且没有 queued/running/retrying 活跃任务
+// 的 issue 显示「执行」。project_id/iid 缺失的旧缓存数据无法安全定位后端
+// 资源，按不可执行降级；active 由概览页的统一活跃任务轮询传入。
+export function canRunIssue(issue, active = false) {
+  return !active && !!issue && issue.state === 'opened'
+    && typeof issue.project_id === 'number' && Number.isInteger(issue.project_id)
+    && issue.project_id > 0 && typeof issue.iid === 'number'
+    && Number.isInteger(issue.iid) && issue.iid > 0
+}
+
 // ---- issue #118 + #120：任务执行引擎类型 ----
 // 概览页弹出的 issue 右边栏展示任务执行引擎的类型：抽屉打开时随
 // GET /api/issues/{project_id}/{iid}/detail 一起返回该 issue 最近
@@ -145,7 +156,7 @@ export function NoteAvatar({ note }) {
 
 export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                                       onLabelsUpdated, running = false, onRetried,
-                                      onAssigneeUpdated, onPrioritized }) {
+                                      onAssigneeUpdated, onPrioritized, onRun }) {
   const [closing, setClosing] = useState(false) // 关闭请求进行中（按钮禁用）
   const [closed, setClosed] = useState(false)   // 本次会话关闭成功标记
   const [closeErr, setCloseErr] = useState('')  // 关闭失败的错误信息
@@ -155,6 +166,12 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   const [retried, setRetried] = useState(false)
   const [retryErr, setRetryErr] = useState('')
   const [retryMsg, setRetryMsg] = useState('')
+  // issue #431：执行状态独立于「重试」：开放且无活跃任务的 issue 创建
+  // 新任务入队，不续用历史失败会话。成功后隐藏按钮并刷新概览。
+  const [runningNow, setRunningNow] = useState(false)
+  const [ran, setRan] = useState(false)
+  const [runErr, setRunErr] = useState('')
+  const [runMsg, setRunMsg] = useState('')
   // issue #97：评论与活动（notes 为 null 表示加载中；detailErr
   // 非空表示加载失败，两个区块共用错误横幅 + 重试按钮）
   const [notes, setNotes] = useState(null)
@@ -265,6 +282,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 标记按钮同约定）
   const canViewDetail = typeof i.project_id === 'number'
     && typeof i.iid === 'number'
+  const canRun = canRunIssue(i, running || ran)
   // 作者显示：name 优先，缺失回退 username，全无显示「—」
   const author = i.author && typeof i.author === 'object'
     ? (i.author.name || i.author.username || '—')
@@ -380,6 +398,28 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
       setRetryErr(e.message || '重试失败')
     } finally {
       setRetrying(false)
+    }
+  }
+
+
+  // 执行开放 issue（issue #431）：二次确认后创建新的 manual 任务入队，
+  // 不调用 retry，因此不会恢复历史失败任务的会话。请求失败时保留按钮，
+  // 便于用户修正问题后重试；成功后本地隐藏并刷新概览的活跃任务状态。
+  async function handleRun() {
+    const confirmText = '确定要执行该 issue 吗？任务将立即入队等待调度。'
+    if (!(await confirmDialog({ message: confirmText }))) return
+    setRunningNow(true)
+    setRunErr('')
+    setRunMsg('')
+    try {
+      const d = await api.post(`/api/issues/${i.project_id}/${i.iid}/run`)
+      setRan(true)
+      setRunMsg(`任务 #${d.task_id} 已入队，等待执行`)
+      onRun?.()
+    } catch (e) {
+      setRunErr(e.message || '执行失败')
+    } finally {
+      setRunningNow(false)
     }
   }
 
@@ -930,6 +970,15 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
           {closing ? '关闭中…' : '关闭 issue'}
         </button>
       )}
+      {/* issue #431：所有开放且无活跃任务的 issue 均可手动执行；关闭的
+          issue、有 queued/running/retrying 任务或本次已成功入队时隐藏，
+          防止重复创建任务。 */}
+      {canRun && (
+        <button className="btn btn-primary" onClick={handleRun}
+                disabled={runningNow} title="创建新任务并立即入队执行该 issue">
+          {runningNow ? '执行中…' : '执行'}
+        </button>
+      )}
       {/* issue #117：失败任务（bot-failed 且无 bot-done）显示重试按钮；
           重试成功后本地标记 retried 隐藏；任务正在运行（running）时
           不显示（重试中该 issue 已进入「运行中」组） */}
@@ -984,6 +1033,11 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
         </div>
         {closeErr && <div className="issue-drawer-error" role="alert">{closeErr}</div>}
         {retryErr && <div className="issue-drawer-error" role="alert">{retryErr}</div>}
+        {runErr && <div className="issue-drawer-error" role="alert">{runErr}</div>}
+        {runMsg && (
+          <div className="alert alert-ok" role="status"
+               onClick={() => setRunMsg('')}>{runMsg}</div>
+        )}
         {retryMsg && (
           <div className="alert alert-ok" role="status"
                onClick={() => setRetryMsg('')}>{retryMsg}</div>

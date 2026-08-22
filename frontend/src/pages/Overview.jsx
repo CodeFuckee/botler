@@ -16,7 +16,7 @@ import AddIssueModal from '../components/AddIssueModal.jsx'
 
 // 纯函数 / 常量 / 流水线状态映射：统一从 lib 再导出，保持旧导入路径兼容
 export {
-  LIVE_STATUSES,
+  LIVE_STATUSES, ACTIVE_TASK_STATUSES,
   MAX_CARD_LINES,
   OVERVIEW_POLL_MS,
   PIPELINE_POLL_MS,
@@ -27,7 +27,7 @@ export {
   BOT_STATUS_NAMES,
   BOT_STATUS_META,
   ISSUE_GROUPS,
-  runningIssueKeys,
+  runningIssueKeys, activeIssueKeys,
   tasksForIssue,
   fmtRateWindowText,
   engineLabel,
@@ -184,11 +184,12 @@ function OverviewBody({ location, navigate }) {
           列表卡片标记即时同步） */}
       {selectedIssue && (
         <IssueDrawer issue={selectedIssue.issue} repoName={selectedIssue.repoName}
-                     running={selectedIssue.running}
+                     running={selectedIssue.active ?? selectedIssue.running}
                      onClose={() => setSelectedIssue(null)}
                      onIssueClosed={() => loadIssues()}
                      onLabelsUpdated={() => loadIssues()}
                      onRetried={() => loadIssues()}
+                     onRun={() => loadIssues()}
                      onAssigneeUpdated={() => loadIssues()}
                      onPrioritized={() => loadIssues()} />
       )}

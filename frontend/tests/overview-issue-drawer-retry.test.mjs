@@ -43,6 +43,7 @@ const dialog = await vite.ssrLoadModule('/src/dialog.js')
 const drawerSrc = readFileSync(path.join(ROOT, 'src/components/IssueDrawer.jsx'), 'utf8')
 const overviewSrc = readFileSync(path.join(ROOT, 'src/pages/Overview.jsx'), 'utf8')
   + '\n' + readFileSync(path.join(ROOT, 'src/components/overview/IssueListSection.jsx'), 'utf8')
+const overviewHookSrc = readFileSync(path.join(ROOT, 'src/hooks/useOverviewData.js'), 'utf8')
 
 after(() => vite.close())
 
@@ -90,9 +91,9 @@ test('IssueDrawer 渲染「重试」按钮并调用 issue 级重试接口', () =
 })
 
 test('Overview 向 IssueDrawer 传递 running 与 onRetried', () => {
-  assert.match(overviewSrc, /running,\s*\}/, '选中 issue 时应携带 running 标记')
-  assert.match(overviewSrc, /running=\{selectedIssue\.running\}/,
-               '应把 running 传给 IssueDrawer')
+  assert.match(overviewSrc, /running,\s*active,\s*\}/, '选中 issue 时应携带运行与活跃标记')
+  assert.match(overviewSrc, /running=\{selectedIssue\.active \?\? selectedIssue\.running\}/,
+               '应把完整活跃状态传给 IssueDrawer')
   assert.match(overviewSrc, /onRetried=\{\(\) => loadIssues\(\)\}/,
                '重试成功后应刷新开放 issue 列表')
 })
@@ -335,6 +336,94 @@ test('Overview 列表点击 bot-failed issue 打开抽屉并携带 running 标�
     // 抽屉内不应有重试按钮（任务 running 中）
     const retryBtns = findRetryButtons(root)
     assert.equal(retryBtns.length, 0, '运行中的失败 issue 不应显示重试按钮')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// ---- issue #431：所有可执行开放 Issue 的「执行」按钮 ----
+
+test('IssueDrawer 导出执行条件并调用独立 run 接口', async () => {
+  const { canRunIssue } = await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
+  const { activeIssueKeys } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
+  assert.equal(typeof canRunIssue, 'function', '应导出执行条件函数便于边界测试')
+  assert.equal(canRunIssue(mkIssue({ labels: [{ name: 'feature' }] }), false), true,
+               '开放且无活跃任务的普通 issue 可执行')
+  assert.equal(canRunIssue(mkIssue({ state: 'closed' }), false), false,
+               '已关闭 issue 不应显示执行按钮')
+  assert.equal(canRunIssue(mkIssue(), true), false,
+               'queued/running/retrying 任一活跃任务均不应重复执行')
+  assert.match(overviewSrc, /activeKeys\.has/, '概览应将 queued 也作为抽屉执行保护')
+  assert.match(overviewHookSrc, /queued,running,retrying/, '活跃任务轮询必须包含 queued 状态')
+  const active = activeIssueKeys([
+    { status: 'queued', repo_id: 1, issue_iid: 2 },
+    { status: 'running', repo_id: 1, issue_iid: 3 },
+    { status: 'retrying', repo_id: 1, issue_iid: 4 },
+    { status: 'succeeded', repo_id: 1, issue_iid: 5 },
+    null,
+  ])
+  assert.deepEqual([...active].sort(), ['1:2', '1:3', '1:4'],
+                   'queued/running/retrying 均应阻止重复执行，终态和坏数据忽略')
+  assert.equal(canRunIssue({ state: 'opened', project_id: 42 }, false), false,
+               '缺 iid 的异常旧数据不应显示执行按钮')
+  assert.equal(canRunIssue({ state: 'opened', iid: 64 }, false), false,
+               '缺 project_id 的异常旧数据不应显示执行按钮')
+  assert.match(drawerSrc, /\/run`\)/, '执行按钮必须调用独立 run 接口')
+})
+
+test('普通开放 issue 点击执行后入队，关闭或活跃任务隐藏按钮', async () => {
+  const { canRunIssue } = await vite.ssrLoadModule('/src/components/IssueDrawer.jsx')
+  const postCalls = []
+  mock.method(api, 'post', async (pathname) => {
+    postCalls.push(pathname)
+    return { task_id: 431, status: 'queued', mode: 'created' }
+  })
+  const ordinary = mkIssue({ labels: [{ name: 'feature' }] })
+  const { renderer, root } = await renderDrawer(ordinary)
+  try {
+    const runButtons = root.findAll((n) => n.type === 'button'
+      && btnText(n.props.children).includes('执行'))
+    assert.ok(runButtons.length >= 1, '普通开放 issue 应显示执行按钮')
+    await TestRenderer.act(async () => {
+      runButtons[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    assert.deepEqual(postCalls, ['/api/issues/42/117/run'], '应调用独立执行接口')
+    assert.ok(drawerText(root).includes('任务 #431 已入队'), '应显示入队成功提示')
+    assert.equal(canRunIssue(mkIssue({ state: 'closed' }), false), false)
+    assert.equal(canRunIssue(ordinary, true), false)
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('执行请求失败保留按钮且请求中禁用防重复点击', async () => {
+  const ordinary = mkIssue({ labels: [{ name: 'feature' }] })
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  mock.method(api, 'post', async () => {
+    await gate
+    throw new Error('该 issue 已有任务在执行中')
+  })
+  const { renderer, root } = await renderDrawer(ordinary)
+  try {
+    const findRunButtons = () => root.findAll((n) => n.type === 'button'
+      && btnText(n.props.children).includes('执行'))
+    await TestRenderer.act(async () => {
+      findRunButtons()[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    assert.equal(findRunButtons()[0].props.disabled, true, '请求中应禁用执行按钮')
+    assert.ok(btnText(findRunButtons()[0].props.children).includes('执行中'),
+              '请求中应展示执行中状态')
+    await TestRenderer.act(async () => {
+      release()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    assert.ok(drawerText(root).includes('该 issue 已有任务在执行中'), '应展示执行错误')
+    assert.ok(findRunButtons().length >= 1, '失败后按钮应保留，允许用户再次尝试')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

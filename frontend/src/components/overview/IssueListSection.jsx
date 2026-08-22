@@ -48,7 +48,7 @@ export default function IssueListSection({
   manualOrders, manualSaving,
   dragFrom, setDragFrom, dragOverIndex, setDragOverIndex,
   commitManualReorder,
-  runningKeys, pinIssue,
+  runningKeys, activeKeys, pinIssue,
   tasks, liveLines, setSelectedIssue, loadIssues,
 }) {
   const { tr } = useI18n()
@@ -436,6 +436,7 @@ export default function IssueListSection({
                                 const statusMeta = bot ? BOT_STATUS_META[bot] : null
                                 // issue #99：任务（running/retrying）命中则该 issue 高亮
                                 const running = runningKeys.has(`${r.repo_id}:${i.iid}`)
+                                const active = activeKeys.has(`${r.repo_id}:${i.iid}`)
                                 // issue #80：终态标签由状态徽章替代展示，其余标签保留胶囊
                                 const otherLabels = (i.labels || []).filter(
                                   (l) => l && !BOT_STATUS_NAMES.has(l.name))
@@ -505,7 +506,7 @@ export default function IssueListSection({
                                       <button type="button" className="issue-link"
                                               onClick={() => setSelectedIssue({
                                                 issue: i, repoName: r.repo_name,
-                                                running,
+                                                running, active,
                                               })}
                                               title={tr('overview.viewIssueDetail')}>
                                         <span className="issue-iid">#{i.iid}</span>

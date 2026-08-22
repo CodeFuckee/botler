@@ -14,7 +14,7 @@ import {
   ISSUE_POLL_MS,
   INSPIRATION_POLL_MS,
   DEEPSEEK_BALANCE_POLL_MS,
-  runningIssueKeys,
+  runningIssueKeys, activeIssueKeys,
   DEFAULT_ISSUE_PRIORITY,
   loadIssueFilter,
   saveIssueFilter,
@@ -108,6 +108,7 @@ export function useOverviewData() {
   // issue #99：正在运行的 issue 匹配键集合（repo_id:iid），任务每 3 秒
   // 轮询刷新，任务结束（消失）后对应 issue 高亮自动消失
   const runningKeys = runningIssueKeys(tasks)
+  const activeKeys = activeIssueKeys(tasks)
 
   // issue #230：开放 issue 过滤偏好——标签多选 + 状态（全部/开放/进行
   // 中）。初值从 localStorage 恢复（无存储环境/解析失败回默认），变更
@@ -254,10 +255,11 @@ export function useOverviewData() {
     }))
     .filter((r) => !issueFilterActive || (r.issues || []).length > 0)
 
-  // 拉取全部正在执行的任务（running+retrying 多值过滤，issue #32）
+  // 拉取活跃任务（queued/running/retrying）；queued 供执行按钮去重，
+  // running/retrying 仍由 runningKeys 单独决定「运行中」展示（issue #431）。
   const load = useCallback(async () => {
     try {
-      const q = new URLSearchParams({ status: 'running,retrying', limit: '200' })
+      const q = new URLSearchParams({ status: 'queued,running,retrying', limit: '200' })
       const d = await api.get('/api/tasks?' + q, { silent: true })
       setTasks(d.tasks || [])
       setError('')
@@ -622,7 +624,7 @@ export function useOverviewData() {
     manualOrders, manualSaving, manualErrors, setManualErrors,
     dragFrom, setDragFrom, dragOverIndex, setDragOverIndex,
     issuePriority,
-    runningKeys, issueFilterActive, issueLabelOptions, hasAnyIssue,
+    runningKeys, activeKeys, issueFilterActive, issueLabelOptions, hasAnyIssue,
     sortedRepoIssues, filteredRepoIssues,
     saveManualOrder, commitManualReorder, pinIssue,
     load, loadPipelines, loadIssues, loadInspirations, loadDeepSeekBalance,
