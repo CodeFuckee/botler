@@ -48,6 +48,7 @@ import logging
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -945,26 +946,35 @@ def issue_detail(request: Request, project_id: int, iid: int):
     if row is None:
         raise HTTPException(404, "仓库不存在或未启用")
     client = _repo_client(c, row) or c.gitlab
-    try:
-        notes = client.list_issue_notes(project_id, iid,
-                                        limit=MAX_NOTES_PER_ISSUE)
-    except GitLabError as e:
-        if e.status_code == 404:
-            raise HTTPException(404, "issue 不存在") from e
-        raise HTTPException(502, f"GitLab API 错误: {e}") from e
-    except httpx.HTTPError as e:
-        # per-repo client 可能指向不可达 host（remote url 解析出的地址）
-        raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
-    # 标记活动（issue #349）：resource_label_events 独立于 notes 拉取
-    # （实测 notes 不含标记加/删事件），随 detail 一并返回供右边栏
-    # 「标记活动」区块展示；拉取失败（旧版 GitLab 无此端点/网络故障）
-    # 静默降级为空列表——标记活动是补充信息，不因上游故障拖垮整个
-    # 抽屉（notes 等主内容仍正常展示）
-    try:
-        label_events = client.list_issue_label_events(
-            project_id, iid, limit=MAX_LABEL_EVENTS_PER_ISSUE)
-    except (GitLabError, httpx.HTTPError):
-        label_events = []
+    # issue #452：notes 与 label_events 并发拉取（此前串行调用，上游
+    # 慢时累计翻倍——issue 详情右边栏实测需十几秒）。notes 为主内容，
+    # 失败按原错误映射（404/502）；label_events 为补充信息（issue
+    # #349），失败静默降级为空列表，不拖垮整个抽屉。
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        notes_fut = pool.submit(
+            client.list_issue_notes, project_id, iid,
+            limit=MAX_NOTES_PER_ISSUE)
+        events_fut = pool.submit(
+            client.list_issue_label_events, project_id, iid,
+            limit=MAX_LABEL_EVENTS_PER_ISSUE)
+        try:
+            notes = notes_fut.result()
+        except GitLabError as e:
+            if e.status_code == 404:
+                raise HTTPException(404, "issue 不存在") from e
+            raise HTTPException(502, f"GitLab API 错误: {e}") from e
+        except httpx.HTTPError as e:
+            # per-repo client 可能指向不可达 host（remote url 解析出的地址）
+            raise HTTPException(502, f"网络错误: {str(e)[:200]}") from e
+        # 标记活动（issue #349）：resource_label_events 独立于 notes
+        # 拉取（实测 notes 不含标记加/删事件），随 detail 一并返回供
+        # 右边栏「标记活动」区块展示；拉取失败（旧版 GitLab 无此端点/
+        # 网络故障）静默降级为空列表——标记活动是补充信息，不因上游
+        # 故障拖垮整个抽屉（notes 等主内容仍正常展示）
+        try:
+            label_events = events_fut.result()
+        except (GitLabError, httpx.HTTPError):
+            label_events = []
     # 异常元素（非 dict）防御性过滤，不因单条坏数据拖垮整个抽屉；
     # engine（issue #120）：该 issue 最近任务实际执行的引擎（无任务
     # 记录回退全局 worker.engine），前端右边栏「执行引擎」行据此展示；
@@ -1184,12 +1194,14 @@ def reply_issue_comment(request: Request, project_id: int, iid: int,
 def _trim_member(member: dict) -> dict | None:
     """精简成员对象：只留 id/username/name。
 
-    id 取 user_id（创建 issue 的 assignee_ids 需要 GitLab 用户 id，
-    而 members/all 顶层 id 是成员关系 id）；user_id 缺失但有 username
-    时 id 暂为 None，由调用方按 username 查 /users 补齐（issue #93：
-    GitLab 19 实测 members/all 返回项不含 user_id 字段，仅顶层 id 与
-    username/name）。既无 user_id 也无 username 的异常元素返回 None
-    （调用方过滤）。
+    id 取 user_id（创建 issue 的 assignee_ids 需要 GitLab 用户 id）；
+    user_id 缺失时回退 members/all 顶层 id（issue #452：实测 GitLab
+    19 的 members/all 返回项不含 user_id 字段，但顶层 id 即用户 id，
+    可直接用于 assignee_ids——此前逐个调 /users?username= 补齐造成
+    N+1 串行查询，上游慢时 form-meta 接口累计十几秒）；user_id 与
+    顶层 id 均缺失但有 username 时 id 暂为 None，由调用方按 username
+    查 /users 兜底（issue #93 遗留路径）。既无 user_id/顶层 id 也无
+    username 的异常元素返回 None（调用方过滤）。
     """
     if not isinstance(member, dict):
         return None
@@ -1198,6 +1210,14 @@ def _trim_member(member: dict) -> dict | None:
                 if isinstance(member.get("username"), str) else None)
     if user_id is None and username is None:
         return None
+    if user_id is None:
+        # issue #452：实测 GitLab 19 members/all 顶层 id 即用户 id，
+        # 直接复用避免 N+1 补查（此前每个成员一次 /users 串行查询，
+        # 上游慢时 form-meta 接口累计十几秒）；顶层 id 缺失时仍由
+        # 调用方按 username 查 /users 兜底（issue #93 遗留路径）
+        top_id = member.get("id")
+        if isinstance(top_id, int):
+            user_id = top_id
     return {"id": user_id, "username": username,
             "name": member.get("name")}
 
@@ -1259,9 +1279,16 @@ def issue_form_meta(request: Request, repo_id: int):
     if not row["enabled"]:
         raise HTTPException(400, "仓库未启用")
     client = _issue_create_client(c, row)
+    # issue #452：成员与标签并发拉取（此前串行调用，上游慢时累计翻倍
+    # ——添加 issue 对话框实测需十几秒）；任一失败仍整体 502 不降级
     try:
-        member_entries = _project_members(client, row["gitlab_project_id"])
-        labels = client.list_project_labels(row["gitlab_project_id"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            members_fut = pool.submit(
+                _project_members, client, row["gitlab_project_id"])
+            labels_fut = pool.submit(
+                client.list_project_labels, row["gitlab_project_id"])
+            member_entries = members_fut.result()
+            labels = labels_fut.result()
     except GitLabError as e:
         raise HTTPException(502, f"获取仓库成员/标签失败: {e}") from e
     except httpx.HTTPError as e:
