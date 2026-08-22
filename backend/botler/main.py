@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -210,7 +211,9 @@ def create_app(config_path: str | None = None) -> FastAPI:
             return JSONResponse({"error": "请求体必须是 JSON"}, status_code=400)
         token = request.headers.get("X-Gitlab-Token")
         try:
-            result = app.state.ctx.webhook.handle(body, token)
+            # WebhookHandler 会同步访问 GitLab REST API。该调用可能持续数秒，
+            # 必须移出事件循环，避免阻塞健康检查、SSE 和其他 API 请求。
+            result = await asyncio.to_thread(app.state.ctx.webhook.handle, body, token)
             return result
         except WebhookError as e:
             return JSONResponse({"error": str(e)}, status_code=e.status_code)
