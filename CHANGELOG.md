@@ -13,6 +13,10 @@
 - owner token 与仓库 token 支持录入或通过 GitLab `/personal_access_tokens/self` 自动探测到期日；对账巡检按 30 / 7 / 3 天及到期状态经网页通知与 Webhook 分级提醒，并对每个阈值去重（issue #279）。
 - 设置页、仓库管理页展示 token 到期状态与更新 GitLab PAT 指引（issue #279）。
 
+### Fixed
+
+- **`sync_wiki_to_github` 不再阻断流水线（issue #445 收尾）**：目标 GitHub 仓库 `CodeFuckee/botler` 尚未启用 Wiki（wiki Git 端点不存在，实测 `Repository not found`，流水线 #1353/#1354 均因此失败），该失败属外部依赖、需人工在 GitHub 仓库 Settings > Features 启用 Wiki 后恢复。作业改为 `allow_failure: true`：仍照常运行并以红名显示失败（不静默），避免每次 main push 因外部依赖整体全红；人工启用 GitHub Wiki 后作业自动转绿。
+
 ### Changed
 
 - **概览页灵感分页与按仓库懒加载（issue #219）**：`/api/inspirations/overview` 轮询改为仅返回每个仓库的灵感总数，不再传输全部条目；新增按仓库、`offset/limit` 分页读取接口。前端默认折叠有灵感的仓库，展开后每次加载 20 条并支持“加载更多”，轮询不会重渲染已展开的完整列表；`updated_at` 降序（同时间按 id 降序）保持不变。

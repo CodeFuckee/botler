@@ -1936,6 +1936,13 @@ sync_wiki_to_github:
   tags:
     - linux
     - code01
+  # ⚠️ allow_failure（issue #445 收尾）：目标 GitHub 仓库 CodeFuckee/botler
+  # 尚未在 Settings > Features 启用 Wiki（对应 wiki Git 端点不存在，2026-08
+  # 实测返回 "Repository not found"，流水线 #1353/#1354 均因此失败）。该失败
+  # 属外部依赖、需人工在 GitHub 侧启用 Wiki 后才能恢复，不应阻断整个流水线；
+  # 保留 allow_failure: false 会令每次 main push 都全红。置为 true 后作业仍
+  # 照常运行并红名显示失败（不静默），人工启用 Wiki 后即自动转绿。
+  allow_failure: true
   dependencies: []
   variables:
     GIT_STRATEGY: none
