@@ -2,17 +2,43 @@
 
 from __future__ import annotations
 
+import os
 import socket
+import tempfile
 from contextlib import asynccontextmanager
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
 import uvicorn
 
-import botler.main as main
+# botler.main 在模块导入时创建全局 app，会立即读取配置。CI 不提供
+# backend/config.yaml，因此必须在导入前为该测试进程准备隔离配置，避免依赖
+# 开发机本地的未跟踪配置文件。
+_MODULE_TMP = tempfile.mkdtemp(prefix="botler-webhook-threading-")
+os.environ["BOTLER_CONFIG"] = os.path.join(_MODULE_TMP, "config.yaml")
+os.environ["BOTLER_DB"] = os.path.join(_MODULE_TMP, "botler.db")
+Path(os.environ["BOTLER_CONFIG"]).write_text(
+    """gitlab:
+  url: https://gitlab.example.com
+  bot_token: test-token
+  webhook_secret: test-secret
+  verify_ssl: false
+worker: {}
+claude: {}
+templates: {}
+repos: []
+""",
+    encoding="utf-8",
+)
+
+import botler.main as main  # noqa: E402
+
+os.environ.pop("BOTLER_CONFIG")
+os.environ.pop("BOTLER_DB")
 
 
 class _SlowWebhook:
