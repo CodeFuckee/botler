@@ -22,6 +22,7 @@ from ..engine_health import engine_health_snapshot
 from ..gitlab_client import GitLabClient, GitLabError
 from ..labels import validate_label
 from ..pause_window import in_pause_window, normalize_window, parse_window
+from ..report import DEFAULT_COMMENT_TEMPLATE
 from ..templates import PLACEHOLDERS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -130,9 +131,9 @@ def get_settings(request: Request):
             # 中断恢复模版（issue #116）：与全局默认模版同机制可编辑，
             # 未配置/清空时返回内置默认（中断恢复必须有引导语）
             "resume": s.resume_template,
-            # 结果评论模版（issue #252）：未配置/清空时返回空串，
-            # 前端展示内置默认说明，渲染层 fallback 内置模版
-            "comment": s.comment_template,
+            # 结果评论模版（issue #438）：未配置/清空时返回内置默认内容，
+            # 让设置页直接展示并允许编辑；运行时仍保留相同的兜底模板。
+            "comment": s.comment_template or DEFAULT_COMMENT_TEMPLATE,
             # issue #223：正文注入控制——原始描述是否进 prompt 开关 +
             # 正文注入长度上限（超长截断并标注长度与 issue 链接）
             "raw_body_in_prompt": s.raw_body_in_prompt,

@@ -846,7 +846,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 - `templates.raw_body_in_prompt`（默认 `true`）：原始 issue 正文是否进 prompt。`false` 时 `{issue_body}` 渲染为「原始描述未注入，完整正文见 issue 链接」提示——防 prompt injection，高风险场景可只给 URL；
 - `templates.body_max_chars`（默认 `8000`，`0` = 不截断）：issue 正文注入提示词的最大字符数。超长截断并在末尾追加 `[描述已截断，共 N 字，完整见 {issue_url}]` 标记（agent 知道描述被截断，需要全文时经 issue 链接查看）。
 中断恢复模版（平台重启/中断后恢复会话的引导语，claude/hermes/dsh 三引擎通用）同机制可编辑：留空保存即恢复内置默认（issue #116）。
-结果评论模版（issue #252：任务收尾时在 issue 上留的结构化执行报告——改动文件表格 / 测试摘要 / commit 链接 / 用时）同机制可编辑，额外支持
+结果评论模版（issue #252：任务收尾时在 issue 上留的结构化执行报告——改动文件表格 / 测试摘要 / commit 链接 / 用时）同机制可编辑，未保存自定义配置时，模板页会直接载入内置默认内容；清空后同样回显该默认内容（issue #438）。额外支持
 `{diff_stat}` `{test_summary}` `{commit_link}` `{commit_sha}` `{duration}` `{result_summary}` `{error_message}` `{log_tail}` 占位符
 （仅评论模版生效，渲染后为空的段落自动隐藏）：留空保存即恢复内置默认。
 

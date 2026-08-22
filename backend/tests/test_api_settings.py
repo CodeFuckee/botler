@@ -2413,16 +2413,33 @@ class TestPauseWindowsSettings:
 class TestCommentTemplateSettings:
     """templates.comment 段（issue #252）：结果评论模版可配置。
 
-    与 resume 同机制：GET 返回当前值、PUT 落盘 config.yaml、清空恢复
-    内置默认（渲染层 fallback 内置模版）、非字符串 400。
+    与 resume 同机制：GET 返回当前值或内置默认、PUT 落盘 config.yaml、清空
+    恢复并回显内置默认（运行时兜底保持不变）、非字符串 400。
     """
 
-    def test_get_settings_includes_comment(self, client):
-        """未配置时返回空串（渲染层 fallback 内置模版）。"""
+    def test_get_settings_returns_builtin_comment_template_when_unconfigured(self, client):
+        """未配置时返回可编辑的内置结果评论模版（issue #438）。"""
+        from botler.report import DEFAULT_COMMENT_TEMPLATE
+
         tc, _ = client
         resp = tc.get("/api/settings")
         assert resp.status_code == 200
-        assert resp.json()["templates"]["comment"] == ""
+        comment = resp.json()["templates"]["comment"]
+        assert comment == DEFAULT_COMMENT_TEMPLATE
+        assert "## 结果摘要" in comment
+        assert "{diff_stat}" in comment and "{test_summary}" in comment
+
+    def test_get_settings_returns_builtin_comment_template_after_blank_reset(self, client):
+        """清空自定义结果评论模版后，设置页仍展示可编辑默认内容。"""
+        from botler.report import DEFAULT_COMMENT_TEMPLATE
+
+        tc, _ = client
+        assert tc.put("/api/settings", json={
+            "templates": {"comment": "自定义评论"}}).status_code == 200
+        resp = tc.put("/api/settings", json={
+            "templates": {"comment": "   "}})
+        assert resp.status_code == 200
+        assert resp.json()["templates"]["comment"] == DEFAULT_COMMENT_TEMPLATE
 
     def test_update_comment_persists(self, client):
         """PUT templates.comment 自定义文本写回 config.yaml 并可读回。"""
@@ -2437,13 +2454,15 @@ class TestCommentTemplateSettings:
         assert "{diff_stat}" in config_text and "{test_summary}" in config_text
 
     def test_update_comment_blank_restores_default(self, client):
-        """清空/纯空白 = 移除自定义键，恢复内置默认。"""
+        """清空/纯空白移除自定义键，并回显可编辑内置默认（issue #438）。"""
+        from botler.report import DEFAULT_COMMENT_TEMPLATE
+
         tc, tmp_path = client
         assert tc.put("/api/settings", json={
             "templates": {"comment": "自定义评论"}}).status_code == 200
         resp = tc.put("/api/settings", json={"templates": {"comment": "   "}})
         assert resp.status_code == 200
-        assert resp.json()["templates"]["comment"] == ""
+        assert resp.json()["templates"]["comment"] == DEFAULT_COMMENT_TEMPLATE
         config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
         assert "comment:" not in config_text
 
