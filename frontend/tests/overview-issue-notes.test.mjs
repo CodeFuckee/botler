@@ -211,6 +211,41 @@ test('加载中：detail 未返回前显示加载中文案', async () => {
   }
 })
 
+test('详情请求超时：显示可重试错误，重试成功后恢复评论', async () => {
+  let calls = 0
+  const getImpl = () => {
+    calls += 1
+    if (calls === 1) {
+      return new Promise((_resolve, reject) => setTimeout(() => {
+        const err = new Error('请求超时')
+        err.code = 'REQUEST_TIMEOUT'
+        reject(err)
+      }, 20))
+    }
+    return Promise.resolve({ notes: [NOTE_COMMENT] })
+  }
+  const { renderer, root } = await renderDrawer(OPEN_ISSUE, null, getImpl)
+  try {
+    await TestRenderer.act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80))
+    })
+    assert.ok(drawerText(root).includes('加载评论与活动超时，请重试'),
+              '超时应显示清晰错误')
+    const retryBtn = root.findAll((n) => n.type === 'button'
+      && String(n.props.className || '').includes('notes-retry'))
+    assert.equal(retryBtn.length, 1, '超时后应可重试')
+    await TestRenderer.act(async () => {
+      retryBtn[0].props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    assert.equal(calls, 2, '重试应发起新请求')
+    assert.ok(drawerText(root).includes('code01'), '重试成功后应显示评论')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
 test('接口失败：显示错误信息与重试按钮，重试可恢复', async () => {
   // issue #118：/api/settings 正常返回（执行引擎行），detail 首调失败
   let calls = 0
@@ -296,6 +331,41 @@ test('切换 issue：props 变化重新拉取对应 detail', async () => {
     const detailCalls = getMock.mock.calls.filter(
       (c) => String(c.arguments[0]).includes('/detail')).length
     assert.equal(detailCalls, 2, '应分别拉取两条 issue 的 detail')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+test('切换 issue 后：旧请求的延迟响应不能覆盖新详情', async () => {
+  const other = { ...OPEN_ISSUE, iid: 98, title: '另一个 issue' }
+  let resolveFirst
+  const getMock = mock.method(api, 'get', (pathname) => {
+    if (pathname === '/api/issues/42/97/detail') {
+      return new Promise((resolve) => { resolveFirst = resolve })
+    }
+    if (pathname === '/api/issues/42/98/detail') return Promise.resolve({ notes: [NOTE_ACTIVITY] })
+    throw new Error('unexpected ' + pathname)
+  })
+  let renderer = null
+  await TestRenderer.act(async () => {
+    renderer = TestRenderer.create(React.createElement(IssueDrawer, {
+      issue: OPEN_ISSUE, repoName: 'botler', onClose: () => {}, onIssueClosed: () => {},
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+  try {
+    await TestRenderer.act(async () => {
+      renderer.update(React.createElement(IssueDrawer, {
+        issue: other, repoName: 'botler', onClose: () => {}, onIssueClosed: () => {},
+      }))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      resolveFirst({ notes: [NOTE_COMMENT] })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    const text = drawerText(renderer.root)
+    assert.ok(text.includes('assigned to @agent'), '应保留新 issue 的活动')
+    assert.ok(!text.includes('确认'), '旧 issue 的延迟评论不应覆盖当前详情')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

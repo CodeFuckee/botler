@@ -221,6 +221,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 成功后以 GitLab Markdown 同步写入该条评论，不在浏览器本地持久化。
   const [commentImage, setCommentImage] = useState(null)
   const commentImageInputRef = useRef(null)
+  // issue #439：取消当前 detail 请求，并仅允许当前请求更新抽屉，避免切换
+  // issue 后旧响应覆盖。
+  const detailControllerRef = useRef(null)
+  const detailRequestIdRef = useRef(0)
   const [posting, setPosting] = useState(false)
   const [postErr, setPostErr] = useState('')
   const [replyingTo, setReplyingTo] = useState(null)
@@ -298,6 +302,12 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
   // 拉取 detail；旧缓存数据缺 project_id 时不发请求（无法定位仓库）
   const hasDetail = typeof i.project_id === 'number' && typeof i.iid === 'number'
   const loadNotes = useCallback(async () => {
+    detailControllerRef.current?.abort()
+    const controller = new AbortController()
+    detailControllerRef.current = controller
+    const { signal } = controller
+    const requestId = ++detailRequestIdRef.current
+    const isCurrent = () => requestId === detailRequestIdRef.current && !signal.aborted
     if (typeof i.project_id !== 'number' || typeof i.iid !== 'number') {
       // 旧缓存数据缺 project_id 无法定位仓库 → 执行引擎也无法获取
       setNotes([])
@@ -312,7 +322,10 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
     setTaskDuration(null)
     setTaskStatus(null)
     try {
-      const d = await api.get(`/api/issues/${i.project_id}/${i.iid}/detail`)
+      const d = await api.get(`/api/issues/${i.project_id}/${i.iid}/detail`, {
+        signal, silent: true, timeoutMs: 15_000,
+      })
+      if (!isCurrent()) return
       setNotes(Array.isArray(d && d.notes) ? d.notes : [])
       // issue #349：标记活动——detail 响应 label_events（后端拉取
       // 失败已降级为空数组）；异常值（非数组）按空列表兜底
@@ -336,14 +349,20 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
       setTaskStatus((typeof d.task_status === 'string' && d.task_status.trim())
                     ? d.task_status : null)
     } catch (e) {
-      setDetailErr(e.message || '加载失败')
-      setEngineErr(e.message || '加载失败')
+      if (!isCurrent()) return
+      const message = e?.code === 'REQUEST_TIMEOUT'
+        ? '加载评论与活动超时，请重试'
+        : (e.message || '加载失败')
+      setDetailErr(message)
+      setEngineErr(message)
     }
   }, [i.project_id, i.iid])
 
-  // 抽屉打开/切换 issue 时拉取详情（依赖 project_id/iid，切换即重拉）
+  // 抽屉打开/切换 issue 时拉取详情（依赖 project_id/iid，切换即重拉）；
+  // cleanup 取消旧请求，既避免无意义等待，也防止延迟响应污染新 issue。
   useEffect(() => {
     loadNotes()
+    return () => detailControllerRef.current?.abort()
   }, [loadNotes])
 
   // issue #342：合并时间线开关——设置页「界面显示」卡片切换（localStorage
