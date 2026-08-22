@@ -19,6 +19,7 @@
   /* 表面 */
   --bg: #fafafa;
   --bg-card: #ffffff;
+  --surface: #ffffff; /* 浮层面板表面 = --bg-card */
   --bg-hover: #fafafa;
   --bg-active: #f2f2f2;
   /* 中性面（HIG 匠心：散落硬编码统一 token 化，深色模式随变量翻转） */
@@ -29,12 +30,15 @@
   /* 文字 */
   --text: #171717;
   --muted: #666666;
+  --text-muted: #666666; /* 次级文字 = --muted */
   /* 边框(发丝线) */
   --border: #eaeaea;
   --border-hover: #d4d4d4;
+  --border-strong: #d4d4d4; /* 强调边框 = --border-hover */
   /* 主色：--primary 用于文字/链接/弱底，--primary-strong 用于实底按钮
      （深色模式下两者亮度解耦，保证蓝底白字与蓝字深底均达 WCAG AA） */
   --primary: #0070f3;
+  --accent: #0070f3; /* 强调色/链接 = --primary */
   --primary-hover: #005bd1;
   --primary-strong: #0070f3;
   --on-primary: #ffffff;
@@ -58,6 +62,7 @@
   --radius: 6px;
   --radius-lg: 12px;
   --shadow-border: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06); /* 小阴影 */
   --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.12);
   /* 动效（HIG 匠心：时长 150–300ms、ease-out 自然缓动，不拖沓） */
@@ -111,6 +116,7 @@
     color-scheme: dark;
     --bg: #1a1d23;
     --bg-card: #21252d;
+    --surface: #21252d; /* 浮层面板表面 = --bg-card */
     --bg-hover: #262b33;
     --bg-active: #2b303a;
     --bg-soft: rgba(255, 255, 255, 0.05);
@@ -121,9 +127,12 @@
     --nav-bg-glass: rgba(29, 33, 41, 0.78);
     --text: #e8eaed;
     --muted: #9aa3ad;
+    --text-muted: #9aa3ad; /* 次级文字 = --muted */
     --border: #2b303a;
     --border-hover: #3b424d;
+    --border-strong: #3b424d; /* 强调边框 = --border-hover */
     --primary: #60a5fa;
+    --accent: #60a5fa; /* 强调色/链接 = --primary */
     --primary-hover: #93c5fd;
     --primary-strong: #3b82f6;
     --on-primary: #ffffff;
@@ -139,6 +148,7 @@
     --stage-canceled: #6b7280;
     --stage-skipped: #363c45;
     --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.1);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4); /* 小阴影 */
     --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.6);
   }
@@ -150,6 +160,7 @@
   color-scheme: dark;
   --bg: #1a1d23;
   --bg-card: #21252d;
+  --surface: #21252d; /* 浮层面板表面 = --bg-card */
   --bg-hover: #262b33;
   --bg-active: #2b303a;
   --bg-soft: rgba(255, 255, 255, 0.05);
@@ -160,9 +171,12 @@
   --nav-bg-glass: rgba(29, 33, 41, 0.78);
   --text: #e8eaed;
   --muted: #9aa3ad;
+  --text-muted: #9aa3ad; /* 次级文字 = --muted */
   --border: #2b303a;
   --border-hover: #3b424d;
+  --border-strong: #3b424d; /* 强调边框 = --border-hover */
   --primary: #60a5fa;
+  --accent: #60a5fa; /* 强调色/链接 = --primary */
   --primary-hover: #93c5fd;
   --primary-strong: #3b82f6;
   --on-primary: #ffffff;
@@ -178,6 +192,7 @@
   --stage-canceled: #6b7280;
   --stage-skipped: #363c45;
   --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4); /* 小阴影 */
   --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.6);
 }

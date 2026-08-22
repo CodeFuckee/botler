@@ -42,6 +42,20 @@
 
 - **`sync_wiki_to_github` 不再阻断流水线（issue #445 收尾）**：目标 GitHub 仓库 `CodeFuckee/botler` 尚未启用 Wiki（wiki Git 端点不存在，实测 `Repository not found`，流水线 #1353/#1354 均因此失败），该失败属外部依赖、需人工在 GitHub 仓库 Settings > Features 启用 Wiki 后恢复。作业改为 `allow_failure: true`：仍照常运行并以红名显示失败（不静默），避免每次 main push 因外部依赖整体全红；人工启用 GitHub Wiki 后作业自动转绿。
 
+- **修复全局搜索框全透明、看不到内容（issue #444）**：全局搜索浮层
+  `.search-overlay` 等组件引用了设计令牌 `--surface` / `--text-muted` /
+  `--border-strong` / `--accent` / `--shadow-sm`，但 styles.css 的浅色
+  `:root`、深色 `@media(prefers-color-scheme: dark)`、手动深色
+  `:root[data-theme='dark']` 三套令牌集从未定义过这些变量——浮层面板
+  `background: var(--surface)` 计算值为透明（透出被遮罩压暗的页面），
+  占位符 / 提示 / 图标 / 分组标题等 `var(--text-muted)` 次级文字全部
+  不可见。现按既有令牌语义补齐三套令牌（`--surface` = `--bg-card`、
+  `--text-muted` = `--muted`、`--border-strong` = `--border-hover`、
+  `--accent` = `--primary`、`--shadow-sm` 小阴影），搜索框在浅色 / 深色
+  主题下均恢复不透明面板与可见文字；新增源码级回归测试
+  `frontend/tests/search-overlay-transparent.test.mjs`，断言「无 fallback
+  的 `var(--x)` 引用必须已定义」，防止引用未定义令牌再次混入。
+
 ### Changed
 
 - **概览页灵感分页与按仓库懒加载（issue #219）**：`/api/inspirations/overview` 轮询改为仅返回每个仓库的灵感总数，不再传输全部条目；新增按仓库、`offset/limit` 分页读取接口。前端默认折叠有灵感的仓库，展开后每次加载 20 条并支持“加载更多”，轮询不会重渲染已展开的完整列表；`updated_at` 降序（同时间按 id 降序）保持不变。
