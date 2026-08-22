@@ -303,6 +303,22 @@ test('styles.css：折叠态收成 56px 图标窄栏，文字与底部工具区�
   assert.match(styles, /\.sidebar-nav \.navlink\s*\{[\s\S]*?display:\s*flex;/, '导航项应为 flex 排布（图标+文字）')
 })
 
+test('styles.css：桌面折叠态展开按钮位于应用图标上方', () => {
+  const head = ruleBody('.sidebar.collapsed .sidebar-head')
+  assert.ok(head, '折叠态应单独定义侧边栏头部布局')
+  assert.match(head, /flex-direction:\s*column/, '折叠态头部应纵向排列')
+  assert.match(head, /align-items:\s*center/, '折叠态头部内容应居中')
+
+  const toggle = ruleBody('.sidebar.collapsed .sidebar-toggle')
+  assert.ok(toggle, '折叠态应单独定义展开按钮位置')
+  assert.match(toggle, /order:\s*-1/, '展开按钮应排在应用图标之前（上方）')
+  assert.match(toggle, /margin-left:\s*0/, '展开按钮不应保留展开态的右侧推挤')
+
+  const brand = ruleBody('.sidebar.collapsed .brand')
+  assert.ok(brand, '折叠态应用图标应单独对齐')
+  assert.match(brand, /justify-content:\s*center/, '应用图标应在窄栏中水平居中')
+})
+
 test('styles.css：窄视口（≤860px）侧边栏转抽屉（脱离文档流，内容区不挤压）', () => {
   // 取文件首个 860 断点（本特性断点位于文件前部、早于移动端 #270 断点，
   // 保持 responsive-mobile-layout「取最后一个 860 断点」约定不变）
