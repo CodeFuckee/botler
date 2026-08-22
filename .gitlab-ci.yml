@@ -1832,6 +1832,76 @@ sync_to_github:
       fi
 
 # ================================================================
+# GitLab Wiki → GitHub Wiki 同步（issue #175）
+#
+# GitLab Wiki 是文档事实来源。每次 main 分支 push 在部署与 E2E 通过后，
+# 本作业以 CI_JOB_TOKEN 拉取 GitLab Wiki Git 仓库，并把其全部页面同步到
+# CodeFuckee/botler GitHub Wiki。目标 Wiki 使用普通提交和普通 push，保留
+# GitHub Wiki 历史；GitHub 尚未启用 Wiki 或 token 无写入权限时，作业明确失败。
+# ================================================================
+sync_wiki_to_github:
+  stage: sync
+  tags:
+    - linux
+    - code01
+  dependencies: []
+  variables:
+    GIT_STRATEGY: none
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+  script:
+    - |
+      set -euo pipefail
+      echo "=== GitLab Wiki 同步至 GitHub Wiki（issue #175）==="
+
+      unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+      export NO_PROXY="localhost,127.0.0.1,::1"
+      export no_proxy="$NO_PROXY"
+
+      if [ -z "${GITHUB_PUSH_TOKEN:-}" ]; then
+        echo "❌ 未配置 GITHUB_PUSH_TOKEN，无法同步 GitHub Wiki"
+        echo "   请在 GitLab 项目 Settings > CI/CD > Variables 配置具备 GitHub Wiki 写权限的 PAT。"
+        exit 1
+      fi
+
+      WORK_DIR="/tmp/sync-github-wiki-${CI_JOB_ID}"
+      SOURCE_DIR="${WORK_DIR}/gitlab-wiki"
+      TARGET_DIR="${WORK_DIR}/github-wiki"
+      trap 'rm -rf "${WORK_DIR}"' EXIT
+      rm -rf "${WORK_DIR}"
+      mkdir -p "${WORK_DIR}"
+
+      # GitLab Wiki 是来源；从 CI_SERVER_URL 组装 URL，保留自建 GitLab
+      # 的 scheme 与端口；CI_JOB_TOKEN 仅用于读取当前项目的 Wiki Git 仓库。
+      GITLAB_WIKI_URL=$(printf '%s' "${CI_SERVER_URL}/${CI_PROJECT_PATH}.wiki.git" | \
+        sed "s#^https://#https://gitlab-ci-token:${CI_JOB_TOKEN}@#")
+      git clone --quiet "${GITLAB_WIKI_URL}" "${SOURCE_DIR}"
+
+      # GitHub 必须先在仓库 Settings > Features 中启用 Wiki，才能存在该 Git 端点。
+      git clone --quiet \
+        "https://x-access-token:${GITHUB_PUSH_TOKEN}@github.com/CodeFuckee/botler.wiki.git" \
+        "${TARGET_DIR}"
+
+      # 清空目标工作树（保留 .git），再复制来源的全部已跟踪页面与附件。
+      # git archive 不会携带 .git，因而不会覆盖 GitHub Wiki 的仓库元数据。
+      git -C "${TARGET_DIR}" rm -r --ignore-unmatch -- .
+      git -C "${SOURCE_DIR}" archive --format=tar HEAD | tar -C "${TARGET_DIR}" -xf -
+
+      git -C "${TARGET_DIR}" add --all
+      if git -C "${TARGET_DIR}" diff --cached --quiet; then
+        echo "✓ GitHub Wiki 已与 GitLab Wiki 一致，无需提交"
+        exit 0
+      fi
+
+      git -C "${TARGET_DIR}" config user.name "CI Bot"
+      git -C "${TARGET_DIR}" config user.email "ci-bot@botler.local"
+      git -C "${TARGET_DIR}" commit --quiet -m "docs: 同步 GitLab Wiki"
+      # GitHub Wiki 的默认 Git 分支为 master。禁止 force push，冲突必须显式暴露，
+      # 防止覆盖 GitHub 端独立修改；应在 GitLab Wiki 修正后重新触发同步。
+      git -C "${TARGET_DIR}" push --quiet origin HEAD:master
+      echo "✓ 已同步到 https://github.com/CodeFuckee/botler/wiki"
+
+# ================================================================
 # Stage: release —— 自动发版（issue #294）
 # 每次 main 分支 push 流水线全部成功后，检测「中间版本号 +1」（如 1.3.99 →
 # 1.4.0，gen-version.mjs 逢百进位，issue #179/#283）或「首次发版（尚无任何

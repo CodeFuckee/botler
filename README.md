@@ -77,6 +77,12 @@ npm run dev
 Issue 执行。后端健康检查可用 `curl http://localhost:8000/api/health` 验证。生产环境可
 直接使用 [Docker 部署](#docker-部署)；完整配置项见[配置说明](#配置说明)。
 
+## 项目 Wiki 与 GitHub 同步
+
+项目知识库维护在 [GitLab Wiki](https://home.chenkaidi.top:509/chenkaidi/botler/-/wikis/home)，包括项目概览、快速开始、配置、使用、架构、开发测试、CI/CD、运维和安全主题。GitLab Wiki 是唯一事实来源：向其中提交页面后，任意 `main` 分支推送完成部署与 E2E 门禁，会由 `sync_wiki_to_github` 作业把全部 Wiki 页面和附件同步至 [GitHub Wiki](https://github.com/CodeFuckee/botler/wiki)。
+
+启用同步前，请在 GitHub 仓库的 **Settings → Features** 启用 Wiki，并在 GitLab 项目 **Settings → CI/CD → Variables** 设置受保护且脱敏的 `GITHUB_PUSH_TOKEN`。该 PAT 必须具有 `CodeFuckee/botler` Wiki 的写权限；同步使用普通提交和普通 push，不会强制覆盖 GitHub Wiki 的历史或独立修改。
+
 ## 参与开发
 
 开发前请先阅读下方[目录结构](#目录结构)了解后端、前端和文档的边界。修改后至少运行：

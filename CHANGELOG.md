@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- **GitLab Wiki 与 GitHub Wiki 自动同步（issue #175）**：补充项目概览、快速开始、配置、使用、架构、开发测试、CI/CD、运维与安全等 GitLab Wiki 页面；新增 `sync_wiki_to_github` CI 作业，在 `main` 推送通过部署和 E2E 门禁后以 GitLab Wiki 为唯一来源同步全部页面和附件至 `CodeFuckee/botler` 的 GitHub Wiki。同步使用普通提交和 push 保留 GitHub Wiki 历史，未配置 `GITHUB_PUSH_TOKEN` 或未启用目标 Wiki 时明确失败，避免静默丢失文档。
+
 - owner token 与仓库 token 支持录入或通过 GitLab `/personal_access_tokens/self` 自动探测到期日；对账巡检按 30 / 7 / 3 天及到期状态经网页通知与 Webhook 分级提醒，并对每个阈值去重（issue #279）。
 - 设置页、仓库管理页展示 token 到期状态与更新 GitLab PAT 指引（issue #279）。
 
