@@ -987,27 +987,13 @@ backend:test:
 
       STEP4_START=$(date +%s)
       echo "=== 4. 运行测试（pytest-xdist 并行 + pytest-cov 覆盖率，issue #210/#211）==="
-      # 并行加速（issue #211）：pytest-xdist -n 多进程分片，默认 auto（CPU 核数），
-      # 封顶 worker——code01 上 backend:test 与 frontend:build / harmony:build
-      # 同 stage 并行，本地实测 16 worker 因资源争抢反而略慢（16→72s vs 8→69s，
-      # 串行基线 350s）；可用 CI 变量 PYTEST_WORKERS 覆盖为固定值（如 4）。
-      # 各用例使用独立 tmp_path SQLite 临时库（backend/tests 均为 per-test 隔离），
-      # 无共享状态，可安全并行；pytest-cov 与 xdist 兼容，各 worker 覆盖率自动合并，
-      # --cov-fail-under 门禁仍基于合并后总覆盖率判定
-      # （改造前串行基线：CI 2112 例 327 秒 / 流水线 #1169 实测）
-      # fd 耗尽修复（issue #360 收尾实测，流水线 #1272/#1273/#1275）：部分用例
-      # 泄漏的 sqlite 连接（ResourceWarning: unclosed database）在并发 worker 下
-      # 累积占用 fd，超过进程 ulimit 后触发 OSError: [Errno 24] Too many open
-      # files 与 sqlite3.OperationalError: unable to open database file（本地串行
-      # 全量 2868 例通过不受影响）。此处先尝试提升 soft limit，并将并发默认封顶
-      # 由 8 降至 4，兼顾稳定性与速度。
+      # Shell executor 的工作目录位于共享文件系统。尽管测试使用 tmp_path
+      # 隔离 SQLite 文件，xdist 多进程仍可能在文件锁协商时触发
+      # sqlite3.OperationalError: locking protocol（流水线 #1351）。默认串行
+      # 可保证稳定性；需要诊断并行问题时，维护者仍可显式设置 PYTEST_WORKERS 覆盖。
       ulimit -n 65535 2>/dev/null || echo "⚠️ 无法提升 ulimit -n，继续使用系统默认值"
       echo "→ 当前文件描述符上限 ulimit -n: $(ulimit -n)"
-      PYTEST_WORKERS="${PYTEST_WORKERS:-auto}"
-      if [ "$PYTEST_WORKERS" = "auto" ]; then
-        NPROC=$(nproc)
-        PYTEST_WORKERS=$(( NPROC > 4 ? 4 : NPROC ))
-      fi
+      PYTEST_WORKERS="${PYTEST_WORKERS:-1}"
       if [ -d tests ]; then
         echo "→ pytest-xdist 并行 worker 数: ${PYTEST_WORKERS}（CPU 核数: $(nproc)）"
         $PYTHON -m pytest tests/ -v --tb=short -n "${PYTEST_WORKERS}" \
