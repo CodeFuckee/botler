@@ -1,6 +1,6 @@
 // 设置页左侧导航搜索框图标与提示文字间距回归测试（issue #436）：
-// 搜索图标绝对定位在输入框左侧时，输入区左内边距必须同时为图标及其
-// 右侧留白预留空间，避免 placeholder 与图标重叠。
+// 图标必须在 flex 布局中占据独立空间，并通过容器间距与输入框分隔，
+// 不得绝对定位覆盖 placeholder。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -17,13 +17,15 @@ function ruleBlock(selector) {
   return found[1]
 }
 
-test('设置导航搜索框为 16px 图标及其右侧留白预留 40px 左内边距', () => {
+test('设置导航搜索框让 16px 图标在 flex 布局中占据独立空间', () => {
+  const search = ruleBlock('.settings-nav-search')
   const icon = ruleBlock('.settings-nav-search-icon')
   const input = ruleBlock('.settings-nav-input')
 
-  assert.match(icon, /left:\s*12px\s*;/, '搜索图标应距输入框左边缘 12px')
-  assert.match(icon, /width:\s*16px\s*;/, '搜索图标应固定为 16px 宽')
-  assert.match(icon, /height:\s*16px\s*;/, '搜索图标应固定为 16px 高')
-  assert.match(input, /padding-left:\s*40px\s*;/,
-    '提示文字应从 40px 处开始，距图标右缘至少保留 12px 间距')
+  assert.match(search, /display:\s*flex\s*;/, '搜索框容器应使用 flex 布局')
+  assert.match(search, /align-items:\s*center\s*;/, '图标与输入框应垂直居中')
+  assert.match(search, /gap:\s*var\(--space-2\)\s*;/, '图标与输入框应保留明确间距')
+  assert.doesNotMatch(icon, /position:\s*absolute\s*;/, '图标不得绝对定位覆盖输入文字')
+  assert.match(icon, /flex:\s*0\s+0\s+16px\s*;/, '图标应占用固定 16px 宽度')
+  assert.match(input, /flex:\s*1\s*;/, '输入框应填满图标之后的剩余空间')
 })

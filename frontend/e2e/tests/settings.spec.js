@@ -14,8 +14,9 @@ test.describe('设置页左侧导航搜索框', () => {
     const [inputBox, iconBox] = await Promise.all([input.boundingBox(), icon.boundingBox()])
     expect(inputBox).not.toBeNull()
     expect(iconBox).not.toBeNull()
-    // 提示文字从 input 左边缘 40px 处开始；图标右缘至文字至少留 12px。
-    expect(inputBox.x + 40 - (iconBox.x + iconBox.width)).toBeGreaterThanOrEqual(12)
+    // 图标与输入框是独立 flex 项：输入框左缘必须位于图标右缘之后，
+    // 并保持至少 8px 的容器间距，避免 placeholder 与图标重叠。
+    expect(inputBox.x - (iconBox.x + iconBox.width)).toBeGreaterThanOrEqual(8)
   })
 })
 

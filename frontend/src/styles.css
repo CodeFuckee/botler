@@ -808,22 +808,24 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 }
 .settings-nav-search {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
 .settings-nav-search-icon {
-  position: absolute;
-  left: 12px;
-  top: 50%;
+  /* 图标作为 flex 项占据实际空间，不能绝对定位覆盖输入框文字。 */
+  flex: 0 0 16px;
   width: 16px;
   height: 16px;
-  transform: translateY(-50%);
   opacity: 0.6;
   pointer-events: none;
 }
 .settings-nav-input {
-  width: 100%;
-  /* 12px 左定位 + 16px 图标 + 12px 留白，避免提示文字与图标重叠。 */
-  padding-left: 40px;
+  flex: 1;
+  min-width: 0;
+  /* 复用 .input 的 12px 左内边距；图标间距由容器 gap 明确保证。 */
+  padding-left: 12px;
   padding-right: 30px;
 }
 .settings-nav-clear {
