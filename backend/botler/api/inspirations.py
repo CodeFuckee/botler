@@ -45,7 +45,7 @@ from __future__ import annotations
 import logging
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..gitlab_client import GitLabError, GITLAB_ISSUE_TITLE_MAX_LEN
@@ -142,21 +142,21 @@ def _row_to_dict(row) -> dict:
 
 
 @router.get("/overview")
-def inspiration_overview(request: Request):
-    """概览页灵感板块聚合数据：所有未软删除仓库 + 各自灵感列表。
+def inspiration_overview(
+    request: Request,
+    limit: int = Query(default=0, ge=0, le=100),
+):
+    """返回轻量概览及可选首屏页（issue #219）。
 
-    仓库顺序与仓库列表一致（priority 升序、同优先级按 id）；灵感按
-    updated_at 降序（最新改动在前）。无灵感的仓库返回空列表。
+    默认只返回各仓库的灵感总数，避免 15 秒轮询传输和渲染全部长期积累
+    的灵感。传入 ``limit`` 时，每仓库最多附带该数量的最新灵感，保持
+    兼容需要首屏预览的调用方；详情由独立分页接口按仓库按需读取。
     """
     c = request.app.state.ctx
     repos = c.db.list_repos()
-    # issue #142：设置关闭时隐藏未启用项目（灵感 / CI/CD 页面一致）
     if not c.config.get().ui_show_disabled_repos:
         repos = [r for r in repos if r["enabled"]]
-    insp_rows = c.db.list_inspirations()
-    by_repo: dict[int, list[dict]] = {}
-    for row in insp_rows:
-        by_repo.setdefault(row["repo_id"], []).append(_row_to_dict(row))
+    totals = c.db.count_inspirations_by_repo()
     return {
         "repos": [
             {
@@ -164,10 +164,38 @@ def inspiration_overview(request: Request):
                 "repo_name": r["name"],
                 "enabled": bool(r["enabled"]),
                 "priority": r["priority"],
-                "inspirations": by_repo.get(r["id"], []),
+                "inspiration_total": total,
+                "inspirations": [
+                    _row_to_dict(row)
+                    for row in (c.db.list_inspirations_page(r["id"], 0, limit) if limit else [])
+                ],
+                "inspiration_has_more": total > limit,
             }
             for r in repos
+            for total in [totals.get(r["id"], 0)]
         ],
+    }
+
+
+@router.get("/pages/{repo_id}")
+def inspiration_page(
+    request: Request,
+    repo_id: int,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """按仓库懒加载灵感页，按 ``updated_at DESC, id DESC`` 稳定排序。"""
+    c = request.app.state.ctx
+    _require_repo(c, repo_id)
+    total = c.db.count_inspirations(repo_id)
+    rows = c.db.list_inspirations_page(repo_id, offset, limit)
+    return {
+        "repo_id": repo_id,
+        "offset": offset,
+        "limit": limit,
+        "total": total,
+        "inspirations": [_row_to_dict(row) for row in rows],
+        "has_more": offset + len(rows) < total,
     }
 
 

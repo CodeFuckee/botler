@@ -360,5 +360,8 @@
   "overview.batchCloseSuccess": "Successfully closed {n} issues",
   "overview.batchClosePartial": "{n} issues failed to close; check the error details below",
   "overview.batchCloseFailed": "Batch close failed",
-  "overview.batchCloseFailureDetail": "Issue #{iid}: {msg}"
+  "overview.batchCloseFailureDetail": "Issue #{iid}: {msg}",
+  "overview.expandInspirations": "Expand ideas",
+  "overview.collapseInspirations": "Collapse ideas",
+  "overview.loadMoreInspirations": "Load more ideas"
 }

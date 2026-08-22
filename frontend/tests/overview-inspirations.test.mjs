@@ -117,6 +117,7 @@ async function renderOverview({
   inspirationsError = null,
   inspirationsAddResult = null,
   inspirationsAddError = null,
+  inspirationPageResult = null,
   // issue #166：灵感 AI 对话 mock——chatMessages 对话历史（null=空）、
   // chatMessagesError 加载历史失败、chatSendResult 发送返回（null=默认
   // user+assistant 两消息）、chatSendError 发送失败
@@ -137,6 +138,10 @@ async function renderOverview({
     if (pathname === '/api/inspirations/overview') {
       if (inspirationsError) throw new Error(inspirationsError)
       return inspirationsPayload
+    }
+    if (pathname.startsWith('/api/inspirations/pages/')) {
+      if (!inspirationPageResult) throw new Error('unexpected inspiration page')
+      return inspirationPageResult
     }
     if (pathname.startsWith('/api/inspirations/') && pathname.endsWith('/messages')) {
       if (chatMessagesError) throw new Error(chatMessagesError)
@@ -668,6 +673,48 @@ test('交互：加载历史失败显示错误且面板可关闭', async () => {
     await TestRenderer.act(async () => { closeBtn.props.onClick() })
     const after = treeText(r.renderer)
     assert.ok(!after.includes('chat-drawer'), '关闭后抽屉应卸载')
+  } finally {
+    await r.unmount()
+  }
+})
+
+// ---- issue #219：大量灵感按仓库折叠 + 懒加载分页 ----
+
+test('源码：灵感概览展开后使用仓库分页接口，默认页大小为 20', () => {
+  assert.match(overview, /\/api\/inspirations\/pages\/\$\{repo\.repo_id\}\?offset=\$\{offset\}&limit=\$\{INSPIRATION_PAGE_SIZE\}/,
+    '展开仓库应请求带 offset 的分页接口')
+  assert.match(overview, /INSPIRATION_PAGE_SIZE\s*=\s*20/,
+    '前端每次仅加载 20 条灵感，限制单次 DOM 增量')
+  assert.match(overview, /inspiration_total/, '应使用后端返回的总数，而非仅已加载条数')
+})
+
+test('渲染：分页灵感仓库默认折叠，展开后才请求第一页', async () => {
+  const largePayload = {
+    repos: [{
+      repo_id: 7, repo_name: 'large-repo', enabled: true, priority: 10,
+      inspiration_total: 1000, inspiration_has_more: true, inspirations: [],
+    }],
+  }
+  const r = await renderOverview({
+    inspirationsPayload: largePayload,
+    inspirationPageResult: {
+      repo_id: 7, total: 1000, offset: 0, limit: 20, has_more: true,
+      inspirations: [{ id: 701, repo_id: 7, repo_name: 'large-repo', content: '第一页灵感', updated_at: '2026-08-16 12:00:00' }],
+    },
+  })
+  try {
+    const text = treeText(r.renderer)
+    assert.ok(text.includes('1000'), '折叠态应展示总条数')
+    assert.ok(!text.includes('第一页灵感'), '默认折叠态不应渲染灵感条目')
+    const toggle = findButton(r.renderer, 'inspiration-toggle-btn')
+    assert.equal(toggle.props['aria-expanded'], false, '大量灵感默认折叠')
+    await TestRenderer.act(async () => {
+      toggle.props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    assert.ok(r.getCalls.includes('/api/inspirations/pages/7?offset=0&limit=20'),
+      '展开时才按第一页懒加载')
+    assert.ok(treeText(r.renderer).includes('第一页灵感'), '第一页返回后再渲染条目')
   } finally {
     await r.unmount()
   }

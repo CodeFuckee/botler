@@ -5331,3 +5331,12 @@ body:has(.drawer-overlay) {
 .token-expiry-healthy { background: #d1fae5; color: #065f46; }
 .token-expiry-warning { background: #fef3c7; color: #92400e; }
 .token-expiry-critical, .token-expiry-urgent, .token-expiry-expired { background: #fee2e2; color: #991b1b; }
+/* issue #219：大量灵感默认折叠；只在用户展开后按页追加，避免首屏与轮询
+   构造过多条目。按钮沿用轻量操作样式，窄屏可自然换行。 */
+.inspiration-toggle-btn,
+.inspiration-load-more-btn {
+  margin-left: auto;
+}
+.inspiration-load-more-btn {
+  margin-top: var(--space-2);
+}

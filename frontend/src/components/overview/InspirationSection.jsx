@@ -8,7 +8,8 @@ import { INSPIRATION_POLL_MS } from '../../lib/overview.jsx'
 export default function InspirationSection({
   inspirationError, setInspirationError,
   inspirationCreatedIssue, setInspirationCreatedIssue,
-  inspirationRepos,
+  inspirationRepos, expandedInspirationRepoIds, inspirationPages, inspirationPageLoading,
+  toggleInspirationRepo, loadMoreInspirations,
   editingInspiration, setEditingInspiration,
   editInspirationDraft, setEditInspirationDraft,
   saveInspiration, deleteInspiration,
@@ -47,21 +48,44 @@ export default function InspirationSection({
               <div className="inspirations-list">
                 {inspirationRepos.map((r) => (
                   <div key={r.repo_id} className="card inspiration-repo-card" data-repo-id={r.repo_id}>
+                    {(() => {
+                      // 旧服务端响应未带 total 时兼容其内嵌数组；新响应只传计数，
+                      // 大列表保持折叠直到用户明确展开，避免轮询反复生成大 DOM。
+                      const hasPagedTotal = typeof r.inspiration_total === 'number'
+                      const total = r.inspiration_total ?? (r.inspirations || []).length
+                      const embedded = r.inspirations || []
+                      const page = inspirationPages[r.repo_id]
+                      // 新接口不携带条目，所有非空仓库都按需展开；旧响应保留
+                      // 原有直接展示行为，确保渐进部署期间前后端互相兼容。
+                      const isExpanded = !hasPagedTotal || total === 0 || !!expandedInspirationRepoIds[r.repo_id]
+                      const items = page?.inspirations || embedded
+                      const loading = !!inspirationPageLoading[r.repo_id]
+                      return <>
                     <div className="inspiration-repo-head">
                       <span className="inspiration-repo-name" title={tr('overview.repoTitle')}><Icon name="folder" /> {r.repo_name || tr('common.deleted')}</span>
                       {r.enabled === false && (
                         <span className="badge badge-muted" title={tr('overview.repoDisabledTitle')}>{tr('common.disabled')}</span>
                       )}
-                      <span className="muted">{tr('overview.inspirationCount', { n: (r.inspirations || []).length })}</span>
+                      <span className="muted">{tr('overview.inspirationCount', { n: total })}</span>
+                      {total > 0 && hasPagedTotal && (
+                        <button type="button" className="inspiration-toggle-btn"
+                                aria-expanded={isExpanded}
+                                onClick={() => toggleInspirationRepo(r)}>
+                          <Icon name={isExpanded ? 'chevronDown' : 'chevronRight'} />
+                          {isExpanded ? tr('overview.collapseInspirations') : tr('overview.expandInspirations')}
+                        </button>
+                      )}
                     </div>
-                    {(r.inspirations || []).length === 0 ? (
+                    {!isExpanded ? null : total === 0 ? (
                       <div className="empty-state small">
                         <span className="empty-icon" aria-hidden="true"><Icon name="lightbulb" /></span>
                         <p className="muted">{tr('overview.noInspirationPlaceholder')}</p>
                       </div>
+                    ) : loading && items.length === 0 ? (
+                      <p className="muted small">{tr('common.loading')}</p>
                     ) : (
                       <ul className="inspiration-list">
-                        {r.inspirations.map((ins) => (
+                        {items.map((ins) => (
                           <li key={ins.id} className="inspiration-item">
                             {editingInspiration && editingInspiration.id === ins.id ? (
                               <div className="inspiration-edit">
@@ -114,6 +138,14 @@ export default function InspirationSection({
                         ))}
                       </ul>
                     )}
+                    {isExpanded && page?.has_more && (
+                      <button type="button" className="btn btn-small inspiration-load-more-btn"
+                              disabled={loading} onClick={() => loadMoreInspirations(r)}>
+                        {loading ? tr('common.loading') : tr('overview.loadMoreInspirations')}
+                      </button>
+                    )}
+                    </>
+                    })()}
                     {/* 随手记录表单：内容去首尾空白非空才允许提交 */}
                     <form className="inspiration-add-form"
                           onSubmit={(e) => { e.preventDefault(); submitNewInspiration(r.repo_id) }}>

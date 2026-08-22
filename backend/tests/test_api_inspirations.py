@@ -94,7 +94,7 @@ class TestOverview:
 
     def test_empty_no_repos(self, client):
         tc, db = client
-        r = tc.get("/api/inspirations/overview")
+        r = tc.get("/api/inspirations/overview?limit=100")
         assert r.status_code == 200
         assert r.json() == {"repos": []}
 
@@ -103,7 +103,7 @@ class TestOverview:
         _add_repo(db, 1, "beta", priority=200)
         _add_repo(db, 2, "alpha", priority=100)
         _add_repo(db, 3, "gamma", priority=100)
-        r = tc.get("/api/inspirations/overview")
+        r = tc.get("/api/inspirations/overview?limit=100")
         repos = r.json()["repos"]
         assert [x["repo_name"] for x in repos] == ["alpha", "gamma", "beta"]
         # 无灵感仓库也返回（前端展示空状态 + 添加表单）
@@ -116,7 +116,7 @@ class TestOverview:
         _add_repo(db, 1, "alive")
         gone = _add_repo(db, 2, "gone")
         db.soft_delete_repo(gone)
-        r = tc.get("/api/inspirations/overview")
+        r = tc.get("/api/inspirations/overview?limit=100")
         names = [x["repo_name"] for x in r.json()["repos"]]
         assert names == ["alive"]
 
@@ -126,7 +126,7 @@ class TestOverview:
         tc, db = client
         _add_repo(db, 1, "enabled-repo", enabled=True)
         _add_repo(db, 2, "disabled-repo", enabled=False)
-        r = tc.get("/api/inspirations/overview")
+        r = tc.get("/api/inspirations/overview?limit=100")
         repos = r.json()["repos"]
         assert [x["repo_name"] for x in repos] == ["enabled-repo", "disabled-repo"]
         assert repos[1]["enabled"] is False
@@ -137,7 +137,7 @@ class TestOverview:
         _add_repo(db, 1, "enabled-repo", enabled=True)
         _add_repo(db, 2, "disabled-repo", enabled=False)
         app.state.ctx.config.update_section("ui", {"show_disabled_repos": False})
-        r = TestClient(app).get("/api/inspirations/overview")
+        r = TestClient(app).get("/api/inspirations/overview?limit=100")
         assert [x["repo_name"] for x in r.json()["repos"]] == ["enabled-repo"]
 
     def test_hides_disabled_repo_but_keeps_its_inspirations_data(self, api_app):
@@ -147,7 +147,7 @@ class TestOverview:
         _add_repo(db, 2, "disabled-repo", enabled=False)
         db.create_inspiration(repo, "只属于启用仓库的灵感")
         app.state.ctx.config.update_section("ui", {"show_disabled_repos": False})
-        r = TestClient(app).get("/api/inspirations/overview")
+        r = TestClient(app).get("/api/inspirations/overview?limit=100")
         repos = r.json()["repos"]
         assert [x["repo_name"] for x in repos] == ["enabled-repo"]
         assert repos[0]["inspirations"][0]["content"] == "只属于启用仓库的灵感"
@@ -160,7 +160,7 @@ class TestOverview:
         # 更新较早的记录 → 其 updated_at 最新，应排最前
         time.sleep(1.1)
         db.update_inspiration(id1, "灵感一（更新）")
-        r = tc.get("/api/inspirations/overview")
+        r = tc.get("/api/inspirations/overview?limit=100")
         items = r.json()["repos"][0]["inspirations"]
         assert [x["id"] for x in items] == [id1, id2]
         assert items[0]["content"] == "灵感一（更新）"
@@ -170,7 +170,7 @@ class TestOverview:
         tc, db = client
         repo = _add_repo(db, 1, "botler")
         insp_id = db.create_inspiration(repo, " 记录一段灵感 ")
-        r = tc.get("/api/inspirations/overview")
+        r = tc.get("/api/inspirations/overview?limit=100")
         item = r.json()["repos"][0]["inspirations"][0]
         assert item["id"] == insp_id
         assert item["repo_id"] == repo
@@ -193,7 +193,7 @@ class TestCreate:
         assert body["content"] == "支持批量处理 issue"
         assert body["id"] > 0
         # 创建后 overview 可见
-        items = tc.get("/api/inspirations/overview").json()["repos"][0]["inspirations"]
+        items = tc.get("/api/inspirations/overview?limit=100").json()["repos"][0]["inspirations"]
         assert len(items) == 1
 
     def test_create_strips_whitespace(self, client):
@@ -296,7 +296,7 @@ class TestDelete:
         r = tc.delete(f"/api/inspirations/{insp_id}")
         assert r.status_code == 204
         assert db.get_inspiration(insp_id) is None
-        items = tc.get("/api/inspirations/overview").json()["repos"][0]["inspirations"]
+        items = tc.get("/api/inspirations/overview?limit=100").json()["repos"][0]["inspirations"]
         assert items == []
 
     def test_delete_not_found(self, client):
@@ -420,7 +420,7 @@ class TestAddIssueFromInspiration:
         # issue #162：创建成功后灵感从列表删除（已转为 GitLab issue，
         # 保留会误导重复提交）；overview 不再展示该条目
         assert db.get_inspiration(insp_id) is None
-        items = tc.get("/api/inspirations/overview").json()["repos"][0]["inspirations"]
+        items = tc.get("/api/inspirations/overview?limit=100").json()["repos"][0]["inspirations"]
         assert items == []
 
     def test_multiline_content_preserved_in_description(self, edit_env):
@@ -1015,3 +1015,67 @@ class TestInspirationChat:
         tc.delete(f"/api/inspirations/{insp_b}")
         rows = db.list_inspiration_messages(insp_a)
         assert [r["content"] for r in rows] == ["A 的提问"]
+
+
+class TestOverviewPagination:
+    """灵感概览与单仓库分页（issue #219）。"""
+
+    def test_overview_only_returns_counts_by_default(self, client):
+        """默认概览不可把大量灵感行传给首屏与轮询。"""
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        for i in range(25):
+            db.create_inspiration(repo, f"灵感 {i}")
+
+        response = tc.get("/api/inspirations/overview")
+
+        assert response.status_code == 200
+        result = response.json()["repos"][0]
+        assert result["inspiration_total"] == 25
+        assert result["inspirations"] == []
+        assert result["inspiration_has_more"] is True
+
+    def test_overview_optional_page_keeps_updated_at_desc_order(self, client):
+        """overview 的可选首屏页应限量返回，并保留原有排序语义。"""
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        first = db.create_inspiration(repo, "较早灵感")
+        second = db.create_inspiration(repo, "较新灵感")
+
+        response = tc.get("/api/inspirations/overview?limit=1")
+
+        assert response.status_code == 200
+        result = response.json()["repos"][0]
+        assert result["inspiration_total"] == 2
+        assert [item["id"] for item in result["inspirations"]] == [second]
+        assert result["inspiration_has_more"] is True
+        assert first != second
+
+    def test_repo_page_loads_requested_slice_and_bounds(self, client):
+        """展开仓库时按 offset 懒加载，不重复读取此前条目。"""
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        ids = [db.create_inspiration(repo, f"灵感 {i}") for i in range(4)]
+
+        first_page = tc.get(f"/api/inspirations/pages/{repo}?offset=0&limit=2")
+        last_page = tc.get(f"/api/inspirations/pages/{repo}?offset=2&limit=2")
+        empty_page = tc.get(f"/api/inspirations/pages/{repo}?offset=4&limit=2")
+
+        assert first_page.status_code == 200
+        assert first_page.json()["total"] == 4
+        assert [item["id"] for item in first_page.json()["inspirations"]] == ids[::-1][:2]
+        assert first_page.json()["has_more"] is True
+        assert [item["id"] for item in last_page.json()["inspirations"]] == ids[::-1][2:]
+        assert last_page.json()["has_more"] is False
+        assert empty_page.json()["inspirations"] == []
+        assert empty_page.json()["has_more"] is False
+
+    def test_repo_page_rejects_invalid_pagination_and_deleted_repo(self, client):
+        """分页参数有边界，已删除仓库不能再被懒加载。"""
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        db.soft_delete_repo(repo)
+
+        assert tc.get(f"/api/inspirations/pages/{repo}?offset=-1").status_code == 422
+        assert tc.get(f"/api/inspirations/pages/{repo}?limit=0").status_code == 422
+        assert tc.get(f"/api/inspirations/pages/{repo}").status_code == 400

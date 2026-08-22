@@ -75,6 +75,11 @@ export function useOverviewData() {
   // 仅保存在 Botler 本地数据库，不提交到 GitLab issue
   const [inspirationRepos, setInspirationRepos] = useState([])
   const [inspirationError, setInspirationError] = useState('')
+  // issue #219：仅在用户展开仓库后保存已加载页，避免轮询写回全部灵感。
+  const [expandedInspirationRepoIds, setExpandedInspirationRepoIds] = useState({})
+  const [inspirationPages, setInspirationPages] = useState({})
+  const [inspirationPageLoading, setInspirationPageLoading] = useState({})
+  const INSPIRATION_PAGE_SIZE = 20
   // 各仓库卡片「新灵感」输入草稿（repo_id -> 内容）
   const [newInspirationDrafts, setNewInspirationDrafts] = useState({})
   // 正在编辑的灵感：{id, repo_id, content}，null 表示未在编辑
@@ -368,6 +373,7 @@ export function useOverviewData() {
   const loadInspirations = useCallback(async () => {
     try {
       const d = await api.get('/api/inspirations/overview', { silent: true })
+      // 轮询只更新仓库元数据与计数；已展开的分页缓存不被全量响应覆盖。
       setInspirationRepos(d.repos || [])
       setInspirationError('')
     } catch (e) {
@@ -376,6 +382,50 @@ export function useOverviewData() {
   }, [])
 
   usePolling(loadInspirations, INSPIRATION_POLL_MS)
+
+  // 按仓库展开后才读取首个分页；重复点击/并发加载不会重复发请求。
+  const loadInspirationPage = useCallback(async (repo, offset = 0, append = false) => {
+    if (inspirationPageLoading[repo.repo_id]) return
+    setInspirationPageLoading((prev) => ({ ...prev, [repo.repo_id]: true }))
+    try {
+      const d = await api.get(`/api/inspirations/pages/${repo.repo_id}?offset=${offset}&limit=${INSPIRATION_PAGE_SIZE}`, { silent: true })
+      setInspirationPages((prev) => ({
+        ...prev,
+        [repo.repo_id]: {
+          inspirations: append ? (prev[repo.repo_id]?.inspirations || []).concat(d.inspirations || []) : (d.inspirations || []),
+          total: d.total || 0,
+          has_more: !!d.has_more,
+        },
+      }))
+      setInspirationError('')
+    } catch (e) {
+      setInspirationError(e.message)
+    } finally {
+      setInspirationPageLoading((prev) => ({ ...prev, [repo.repo_id]: false }))
+    }
+  }, [inspirationPageLoading])
+
+  const toggleInspirationRepo = useCallback((repo) => {
+    const expanded = !!expandedInspirationRepoIds[repo.repo_id]
+    if (expanded) {
+      setExpandedInspirationRepoIds((prev) => ({ ...prev, [repo.repo_id]: false }))
+      return
+    }
+    setExpandedInspirationRepoIds((prev) => ({ ...prev, [repo.repo_id]: true }))
+    if (!inspirationPages[repo.repo_id]) loadInspirationPage(repo)
+  }, [expandedInspirationRepoIds, inspirationPages, loadInspirationPage])
+
+  const loadMoreInspirations = useCallback((repo) => {
+    const page = inspirationPages[repo.repo_id]
+    if (page?.has_more) loadInspirationPage(repo, page.inspirations.length, true)
+  }, [inspirationPages, loadInspirationPage])
+
+  // 写操作后废弃该仓库的分页缓存；若用户正展开查看，则立即重读第一页，
+  // 防止 15 秒轮询只更新计数而列表仍显示删除/编辑前的旧条目。
+  const invalidateInspirationPage = useCallback((repoId) => {
+    setInspirationPages((prev) => ({ ...prev, [repoId]: undefined }))
+    if (expandedInspirationRepoIds[repoId]) loadInspirationPage({ repo_id: repoId })
+  }, [expandedInspirationRepoIds, loadInspirationPage])
 
   // DeepSeek 账户余额（issue #138）：后端代调 deepseek user/balance，
   // API Key 明文不流转到前端（与 ai_providers 掩码同安全策略）；
@@ -417,11 +467,12 @@ export function useOverviewData() {
     try {
       await api.post('/api/inspirations', { repo_id: repoId, content })
       setNewInspirationDrafts((prev) => ({ ...prev, [repoId]: '' }))
+      invalidateInspirationPage(repoId)
       await loadInspirations()
     } catch (e) {
       setInspirationError(e.message)
     }
-  }, [newInspirationDrafts, loadInspirations])
+  }, [newInspirationDrafts, loadInspirations, invalidateInspirationPage])
 
   // 保存编辑：PUT 更新内容，成功后退出编辑态并刷新列表
   const saveInspiration = useCallback(async (insp) => {
@@ -431,21 +482,23 @@ export function useOverviewData() {
       await api.put('/api/inspirations/' + insp.id, { content })
       setEditingInspiration(null)
       setEditInspirationDraft('')
+      invalidateInspirationPage(insp.repo_id)
       await loadInspirations()
     } catch (e) {
       setInspirationError(e.message)
     }
-  }, [editInspirationDraft, loadInspirations])
+  }, [editInspirationDraft, loadInspirations, invalidateInspirationPage])
 
   // 删除灵感：DELETE 后刷新列表
   const deleteInspiration = useCallback(async (insp) => {
     try {
       await api.del('/api/inspirations/' + insp.id)
+      invalidateInspirationPage(insp.repo_id)
       await loadInspirations()
     } catch (e) {
       setInspirationError(e.message)
     }
-  }, [loadInspirations])
+  }, [loadInspirations, invalidateInspirationPage])
 
   // 将灵感一键提交为 GitLab issue（issue #143）：灵感内容作为 issue
   // 的标题与描述，通过 GitLab API 创建，默认标签 feature + ui；成功后
@@ -460,6 +513,7 @@ export function useOverviewData() {
       const created = await api.post(`/api/inspirations/${ins.id}/add-issue`)
       setInspirationCreatedIssue(created)
       setInspirationError('')
+      invalidateInspirationPage(ins.repo_id)
       await loadIssues()
       await loadInspirations()
     } catch (e) {
@@ -469,7 +523,7 @@ export function useOverviewData() {
     } finally {
       setAddingIssueInspIds((prev) => ({ ...prev, [ins.id]: false }))
     }
-  }, [addingIssueInspIds, loadIssues, loadInspirations])
+  }, [addingIssueInspIds, loadIssues, loadInspirations, invalidateInspirationPage])
 
   // ---- 灵感 AI 对话（issue #166）：与 AI agent 探讨灵感 ----
 
@@ -611,6 +665,7 @@ export function useOverviewData() {
     addIssueRepo, setAddIssueRepo,
     reconcileResults, setReconcileResults, introspectResults, discoverResults,
     inspirationRepos, inspirationError,
+    expandedInspirationRepoIds, inspirationPages, inspirationPageLoading,
     newInspirationDrafts, setNewInspirationDrafts,
     editingInspiration, setEditingInspiration,
     editInspirationDraft, setEditInspirationDraft,
@@ -628,6 +683,7 @@ export function useOverviewData() {
     sortedRepoIssues, filteredRepoIssues,
     saveManualOrder, commitManualReorder, pinIssue,
     load, loadPipelines, loadIssues, loadInspirations, loadDeepSeekBalance,
+    toggleInspirationRepo, loadMoreInspirations,
     submitNewInspiration, saveInspiration, deleteInspiration,
     addIssueFromInspiration,
     openInspirationChat, closeInspirationChat, sendInspirationChat,

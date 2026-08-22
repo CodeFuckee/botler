@@ -360,5 +360,8 @@
   "overview.batchCloseSuccess": "成功关闭 {n} 个 issue",
   "overview.batchClosePartial": "{n} 个 issue 关闭失败，请检查下方失败原因",
   "overview.batchCloseFailed": "批量关闭失败",
-  "overview.batchCloseFailureDetail": "Issue #{iid}：{msg}"
+  "overview.batchCloseFailureDetail": "Issue #{iid}：{msg}",
+  "overview.expandInspirations": "展开灵感列表",
+  "overview.collapseInspirations": "收起灵感列表",
+  "overview.loadMoreInspirations": "加载更多灵感"
 }

@@ -253,8 +253,10 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 
 > 概览页「灵感」板块位于「开放 Issue」板块下方（issue #293：灵感组件还是和
 > 原来一样，放在开放 issue 组件的下方；issue #184 曾改为右侧常驻边栏，本次
-> 回退该布局调整），每条灵感提供「对话」按钮（issue #166）：点击后以右侧
-> 边栏抽屉打开，即可围绕该灵感与 AI agent 多轮
+> 回退该布局调整）。为避免长期积累的灵感拖慢首屏，概览轮询只获取每仓库的
+> 总数；有灵感的仓库默认折叠，点击后按每页 20 条懒加载并可继续“加载更多”，
+> 排序始终为 `updated_at` 降序（issue #219）。每条灵感提供「对话」按钮
+> （issue #166）：点击后以右侧边栏抽屉打开，即可围绕该灵感与 AI agent 多轮
 > 探讨（完善想法、补充边界场景、评估可行性、给出分步落地建议），对话历史
 > 保存到本地数据库。对话模型复用设置页「AI API 供应商」（ai_providers）
 > 配置的文本对话模型——取列表第一个启用且 API Key 非空的项（支持 DeepSeek /
@@ -930,7 +932,8 @@ POST   /api/issues/{project_id}/{iid}/prioritize 排队任务一键置顶（概�
 GET    /api/issues/{project_id}/members      项目成员清单（概览页右边栏负责人下拉数据源：GitLab members/all + user_id 补齐，issue #303）
 PUT    /api/issues/{project_id}/{iid}/assignee  更新 issue 负责人（assignee_id 为 GitLab 用户 id，null 清除负责人；同步 GitLab，成功后清缓存并返回更新后负责人列表，issue #303）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 label_events 字段——标记活动事件（谁添加/移除了哪个标记，独立拉取 resource_label_events，最多 100 条，失败降级空列表），概览页右边栏展示（分开显示独立区块、合并时间线模式下并入时间线），issue #349/#351；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120；含 task_id 字段——该 issue 最近一条任务记录 id，已执行过才有值，从未执行/尚未派发为 null，概览页右边栏「任务」行展示，issue #290；含 task_duration_seconds 字段——该 issue 最近任务完成耗时秒数（finished_at - created_at），仅成功终态任务有值，其余为 null，概览页右边栏「完成耗时」行展示，issue #300）
-GET    /api/inspirations/overview      概览页灵感聚合：所有未软删除仓库 + 各自灵感（仓库按优先级排序，灵感按 updated_at 降序，issue #131）
+GET    /api/inspirations/overview[?limit=0..100]  轻量灵感概览：所有未软删除仓库 + 每仓库总数；默认不返回条目，传 limit 时每仓库最多附带该数量最新条目（仓库按优先级、灵感按 updated_at/id 降序；issue #219）
+GET    /api/inspirations/pages/{repo_id}?offset=&limit=  按仓库懒加载灵感分页（默认 20、最大 100），返回 total / has_more，排序同上（issue #219）
 POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；默认仅存本地数据库，issue #131）
 PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）
 DELETE /api/inspirations/{id}         删除灵感（issue #131）

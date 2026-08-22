@@ -884,6 +884,33 @@ class Database:
                    JOIN repos r ON r.id = i.repo_id
                    ORDER BY i.updated_at DESC, i.id DESC""").fetchall()
 
+    def count_inspirations_by_repo(self) -> dict[int, int]:
+        """返回每个仓库的灵感数量，供概览轻量轮询使用（issue #219）。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT repo_id, COUNT(*) AS total FROM inspirations GROUP BY repo_id"
+            ).fetchall()
+        return {row["repo_id"]: row["total"] for row in rows}
+
+    def list_inspirations_page(self, repo_id: int, offset: int, limit: int) -> list[sqlite3.Row]:
+        """按稳定的更新时间倒序读取一个仓库的灵感分页（issue #219）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT i.*, r.name AS repo_name FROM inspirations i
+                   JOIN repos r ON r.id = i.repo_id
+                   WHERE i.repo_id = ?
+                   ORDER BY i.updated_at DESC, i.id DESC
+                   LIMIT ? OFFSET ?""",
+                (repo_id, limit, offset),
+            ).fetchall()
+
+    def count_inspirations(self, repo_id: int) -> int:
+        """返回指定仓库的灵感总数（issue #219）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM inspirations WHERE repo_id = ?", (repo_id,)
+            ).fetchone()[0]
+
     def search_tasks(self, term: str, limit: int = 10) -> list[TaskRow]:
         """按 issue 标题/编号模糊匹配任务（issue #216 全局搜索）。
 
