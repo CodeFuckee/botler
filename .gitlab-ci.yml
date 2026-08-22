@@ -1211,6 +1211,106 @@ e2e:playwright:
       junit: frontend/junit.xml
     expire_in: 7 days
 
+# ----------------------------------------------------------------
+# Stage: e2e —— 全页面多尺寸截图（issue #445）
+# 在 CI 中对应用的每个页面在多种屏幕尺寸/宽高比下截图（Playwright
+# fullPage），输出 frontend/screenshots/（含 index.html 索引页）作为
+# artifacts 上传，人工可在流水线产物中离线浏览各视口下的真实渲染
+# （布局 / 溢出 / 断点表现）。复用与 e2e:playwright 相同的环境：
+# 真实后端（uvicorn）+ 前端构建产物（vite preview），GitLab 依赖接口
+# 浏览器级 mock（frontend/e2e/support/mock-api.js），数据完全确定。
+# 页面/视口清单集中在 frontend/e2e/screenshots/screenshot-config.mjs
+# （配套单元测试 frontend/tests/screenshot-config.test.mjs 保证覆盖
+# App.jsx 全部路由与需求要求的尺寸比例）。
+# ================================================================
+e2e:screenshots:
+  extends: [.docs_only_skip]
+  stage: e2e
+  tags:
+    - linux
+    - code01
+  timeout: 25m
+  # 依赖 frontend:build 的 dist 产物（artifacts 自动传入本 job）
+  dependencies:
+    - frontend:build
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+      prefix: frontend-npm
+    paths:
+      - frontend/node_modules/
+    policy: pull
+  script:
+    - JOB_START_TIME=$(date +%s)
+    - |
+      set -e
+
+      # shell executor 的 PATH 可能不含 node/uv
+      export PATH="$HOME/.local/bin:$HOME/miniconda3/bin:$HOME/.cargo/bin:$PATH"
+      # Playwright 浏览器下载镜像（国内网络；本机已缓存 chromium-1234 时
+      # playwright install 直接命中缓存，不触发下载）
+      export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}"
+
+      STEP1_START=$(date +%s)
+      echo "=== 1. 后端依赖（uv 安装，与 e2e:playwright 同模式）==="
+      cd backend
+      if ! command -v uv >/dev/null 2>&1; then
+        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+      if [ ! -x .venv/bin/python ]; then
+        rm -rf .venv
+        uv venv .venv
+      fi
+      uv pip install -r requirements.lock.txt -i ${PIP_INDEX_URL}
+      cd ..
+      STEP1_END=$(date +%s)
+      echo "⏱️  步骤1 (后端依赖) 用时: $((STEP1_END - STEP1_START)) 秒"
+
+      STEP2_START=$(date +%s)
+      echo "=== 2. 前端依赖 + Playwright 浏览器 ==="
+      cd frontend
+      npm ci --registry=${NPM_REGISTRY_URL}
+      npx playwright install chromium
+      cd ..
+      STEP2_END=$(date +%s)
+      echo "⏱️  步骤2 (前端依赖) 用时: $((STEP2_END - STEP2_START)) 秒"
+
+      STEP3_START=$(date +%s)
+      echo "=== 3. 启动 uvicorn + vite preview 并运行全页面多尺寸截图 ==="
+      echo "截图 spec: frontend/e2e/screenshots/page-screenshots.spec.js"
+      echo "输出目录: frontend/screenshots/（artifacts 上传，含 index.html 索引页）"
+      # 端口动态分配（issue #235）：共享 runner 上固定端口可能被其他项目
+      # 进程占用，运行时探测空闲端口并通过环境变量注入
+      E2E_PY="$PWD/backend/.venv/bin/python"
+      if [ -z "${E2E_BACKEND_PORT:-}" ]; then
+        E2E_BACKEND_PORT=$("$E2E_PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+      fi
+      if [ -z "${E2E_FRONTEND_PORT:-}" ]; then
+        E2E_FRONTEND_PORT=$("$E2E_PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+      fi
+      export E2E_BACKEND_PORT E2E_FRONTEND_PORT
+      echo "[e2e:screenshots] 动态端口: backend=$E2E_BACKEND_PORT frontend=$E2E_FRONTEND_PORT"
+      # 截图任务确定性执行：专用配置禁重试（retries=0），避免失败时重复
+      # 生成与等待；截图 spec 不参与常规 e2e:playwright 跑批（testDir 隔离）
+      bash frontend/e2e/scripts/start-servers.sh --config=playwright.screenshots.config.js
+      STEP3_END=$(date +%s)
+      echo "⏱️  步骤3 (截图运行) 用时: $((STEP3_END - STEP3_START)) 秒"
+
+      JOB_END_TIME=$(date +%s)
+      DURATION=$((JOB_END_TIME - JOB_START_TIME))
+      echo "========================================="
+      echo "⏱️  [e2e:screenshots] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
+      echo "========================================="
+  artifacts:
+    when: always
+    paths:
+      # 全页面多尺寸截图（含 index.html 索引页），流水线产物可离线浏览
+      - frontend/screenshots/
+    expire_in: 30 days
+
+
 # ================================================================
 # Stage: deploy —— 第二阶段：本机部署（pm2 + 健康检查）
 # 在 gitlab-runner 机器（code01 = 10.0.0.122）上直接部署，无需

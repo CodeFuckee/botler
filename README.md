@@ -399,6 +399,11 @@ cd frontend && npm run test:coverage
 # 前置：backend/.venv 就绪、frontend dist 已构建（脚本缺失时自动构建）
 bash frontend/e2e/scripts/start-servers.sh                 # 跑全部 E2E
 bash frontend/e2e/scripts/start-servers.sh tests/overview.spec.js   # 跑单个文件
+
+# 全页面多尺寸截图（issue #445）：起服务后对每个页面在 7 种屏幕尺寸/比例下
+# 整页截图，输出 frontend/screenshots/（含 index.html 索引页，CI 以 artifacts 上传）
+bash frontend/e2e/scripts/start-servers.sh --config=playwright.screenshots.config.js
+# 等价：cd frontend && npm run test:screenshots
 ```
 
 ## 代码质量门禁（Lint，issue #203）
@@ -452,6 +457,16 @@ false` 阻断门禁，按 requirements.lock.txt 安装依赖）。
 - **防 flaky**：`playwright.config.js` 配置 `retries: 2` + trace 保留；CI
   `.gitlab-ci.yml` 的 `e2e` stage 位于 deploy 之后、sync 之前（issue #306，
   E2E 未通过不同步/不发版）。
+- **全页面多尺寸截图（issue #445）**：同 stage 新增 `e2e:screenshots` 作业，
+  对应用每个页面（App.jsx 全部 12 个路由）在 7 种屏幕尺寸/宽高比
+  （1920×1080、1440×900、1366×768、1024×768、768×1024、375×667、320×568，
+  覆盖 16:9 / 16:10 / 4:3 / 3:4 / 9:16）下整页截图，输出
+  `frontend/screenshots/`（含 `index.html` 索引页）并以 artifacts 上传
+  （保留 30 天）。页面/视口清单集中在 `frontend/e2e/screenshots/screenshot-config.mjs`
+  （单元测试 `frontend/tests/screenshot-config.test.mjs` 保证与路由、尺寸比例
+  要求一致）；截图专用配置 `playwright.screenshots.config.js` 将 spec 目录
+  隔离在 `e2e/screenshots/`（不参与常规 E2E 跑批）、禁用重试。截图复用同一套
+  mock + 种子后端，不依赖真实 GitLab 与已部署环境。
 
 ## CHANGELOG 维护与发布轮转（issue #289）
 

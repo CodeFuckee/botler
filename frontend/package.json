@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "e2e:servers": "bash e2e/scripts/start-servers.sh",
-    "test:coverage": "c8 --check-coverage --lines 70 --statements 70 --branches 60 --functions 50 --reporter=text --reporter=cobertura --include='src/**' node --test-concurrency=8 --test --test-reporter=junit --test-reporter-destination=junit.xml 'tests/**/*.test.mjs'"
+    "test:coverage": "c8 --check-coverage --lines 70 --statements 70 --branches 60 --functions 50 --reporter=text --reporter=cobertura --include='src/**' node --test-concurrency=8 --test --test-reporter=junit --test-reporter-destination=junit.xml 'tests/**/*.test.mjs'",
+    "test:screenshots": "bash e2e/scripts/start-servers.sh --config=playwright.screenshots.config.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

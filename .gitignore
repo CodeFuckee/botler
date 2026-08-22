@@ -38,6 +38,9 @@ cache/
 # Playwright E2E 产物（issue #212）
 frontend/playwright-report/
 frontend/test-results/
+# 全页面多尺寸截图产物（issue #445，CI e2e:screenshots 生成，以 artifacts
+# 上传，不入库）
+frontend/screenshots/
 
 # 覆盖率产物（issue #210：pytest-cov / c8 本地运行时生成，CI 以 artifact 上传，不入库）
 .coverage
