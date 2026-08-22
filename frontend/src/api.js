@@ -18,31 +18,8 @@ export function setSsoEnabled(v) {
 const RETRY_DELAY_MS = 500
 const GET_MAX_ATTEMPTS = 2
 
-function sleep(ms, signal) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(done, ms)
-    function done() {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }
-    function onAbort() {
-      clearTimeout(timer)
-      reject(signal.reason || new DOMException('请求已取消', 'AbortError'))
-    }
-    if (signal?.aborted) return onAbort()
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
-function timeoutError() {
-  const err = new Error('请求超时')
-  err.name = 'TimeoutError'
-  err.code = 'REQUEST_TIMEOUT'
-  return err
-}
-
-function isAbortError(err) {
-  return err?.name === 'AbortError'
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 // 读取 cookie（issue #263）：CSRF 双提交模式前端从 botler_csrf cookie
@@ -84,92 +61,50 @@ function networkErrorMessage() {
   return '网络请求失败，请检查网络连接'
 }
 
-// 统一请求入口（issue #226、#439）：
-//   opts = { silent, timeoutMs, signal } —— silent: true 用于轮询类接口：失败不弹
-//   toast；timeoutMs 是整个请求操作（含 GET 重试）的总期限；signal 允许调用方在
-//   组件卸载或目标切换时取消请求。未传 timeoutMs/signal 时保留既有行为。
+// 统一请求入口（issue #226）：
+//   opts = { silent } —— silent: true 用于轮询类接口：失败不弹 toast，
+//   由页面保留上次数据并展示「刷新失败」错误文本，避免每几秒弹一次骚扰。
 // 非 2xx 且非 silent 时自动 toast 错误信息；401 SSO 会话失效仍跳登录页
 // （登录页自身端点除外，避免死循环，issue #27）。
 async function request(method, path, body, opts = {}) {
   const silent = !!opts.silent
-  const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
-    ? opts.timeoutMs : null
-  const deadline = timeoutMs === null ? null : Date.now() + timeoutMs
-  // 统一用内部 controller 传给 fetch：既承接 deadline，也承接调用方取消。
-  const timeoutController = (timeoutMs !== null || opts.signal) ? new AbortController() : null
-  let timeoutTimer = null
-  let externalAbort = false
-
-  if (opts.signal?.aborted) {
-    throw opts.signal.reason || new DOMException('请求已取消', 'AbortError')
-  }
-  const onExternalAbort = () => {
-    externalAbort = true
-    timeoutController?.abort(opts.signal.reason || new DOMException('请求已取消', 'AbortError'))
-  }
-  opts.signal?.addEventListener('abort', onExternalAbort, { once: true })
-  if (timeoutMs !== null) {
-    timeoutTimer = setTimeout(() => timeoutController.abort(timeoutError()), timeoutMs)
-  }
-
   const maxAttempts = method === 'GET' ? GET_MAX_ATTEMPTS : 1
-  try {
-    for (let attempt = 1; ; attempt++) {
-      if (timeoutController?.signal.aborted) throw timeoutController.signal.reason
-      let resp
-      try {
-        resp = await fetch(path, {
-          ...buildFetchOpts(method, body),
-          ...(timeoutController ? { signal: timeoutController.signal } : {}),
-        })
-      } catch (e) {
-        if (isAbortError(e) || timeoutController?.signal.aborted) {
-          throw timeoutController?.signal.reason || e
-        }
-        // 网络层失败（断网/连接重置）：GET 重试一次，最终失败 toast
-        if (attempt < maxAttempts && (deadline === null || Date.now() < deadline)) {
-          await sleep(Math.min(RETRY_DELAY_MS, deadline === null
-            ? RETRY_DELAY_MS : Math.max(0, deadline - Date.now())), timeoutController?.signal)
-          continue
-        }
-        if (!silent) showToast(networkErrorMessage(), { type: 'error' })
-        throw e
+  for (let attempt = 1; ; attempt++) {
+    let resp
+    try {
+      resp = await fetch(path, buildFetchOpts(method, body))
+    } catch (e) {
+      // 网络层失败（断网/超时/连接重置）：GET 重试一次，最终失败 toast
+      if (attempt < maxAttempts) {
+        await sleep(RETRY_DELAY_MS)
+        continue
       }
-      let data = null
-      try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
-      if (!resp.ok) {
-        // 会话失效统一拦截（issue #221）：SSO 启用时未登录/会话过期访问受保护
-        // API → 401，跳登录页并带过期提示参数，由登录页明确提示「登录已过期，
-        // 请重新登录」（登录流程自身端点除外，避免死循环，issue #27）。
-        // 不弹 toast：整页跳转后 toast 立即丢失，提示改由登录页展示。
-        if (resp.status === 401 && ssoEnabled && !path.startsWith('/api/auth/')) {
-          window.location.href = '/login?error=session_expired'
-          const msg = data?.error || '登录已过期，请重新登录'
-          throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
-        }
-        const msg = data?.error || data?.detail || `HTTP ${resp.status}`
-        const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
-        // 5xx（服务端瞬时故障）GET 重试一次；4xx 业务错误不重试
-        if (attempt < maxAttempts && resp.status >= 500
-            && (deadline === null || Date.now() < deadline)) {
-          await sleep(Math.min(RETRY_DELAY_MS, deadline === null
-            ? RETRY_DELAY_MS : Math.max(0, deadline - Date.now())), timeoutController?.signal)
-          continue
-        }
-        if (!silent) showToast(err.message, { type: 'error' })
-        throw err
+      if (!silent) showToast(networkErrorMessage(), { type: 'error' })
+      throw e
+    }
+    let data = null
+    try { data = await resp.json() } catch { /* 非 JSON 响应 */ }
+    if (!resp.ok) {
+      // 会话失效统一拦截（issue #221）：SSO 启用时未登录/会话过期访问受保护
+      // API → 401，跳登录页并带过期提示参数，由登录页明确提示「登录已过期，
+      // 请重新登录」（登录流程自身端点除外，避免死循环，issue #27）。
+      // 不弹 toast：整页跳转后 toast 立即丢失，提示改由登录页展示。
+      if (resp.status === 401 && ssoEnabled && !path.startsWith('/api/auth/')) {
+        window.location.href = '/login?error=session_expired'
+        const msg = data?.error || '登录已过期，请重新登录'
+        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
       }
-      return data
+      const msg = data?.error || data?.detail || `HTTP ${resp.status}`
+      const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      // 5xx（服务端瞬时故障）GET 重试一次；4xx 业务错误不重试
+      if (attempt < maxAttempts && resp.status >= 500) {
+        await sleep(RETRY_DELAY_MS)
+        continue
+      }
+      if (!silent) showToast(err.message, { type: 'error' })
+      throw err
     }
-  } catch (e) {
-    if (e?.code === 'REQUEST_TIMEOUT' || timeoutController?.signal.reason?.code === 'REQUEST_TIMEOUT') {
-      throw timeoutController?.signal.reason || e
-    }
-    if (externalAbort || isAbortError(e)) throw e
-    throw e
-  } finally {
-    if (timeoutTimer !== null) clearTimeout(timeoutTimer)
-    opts.signal?.removeEventListener('abort', onExternalAbort)
+    return data
   }
 }
 
