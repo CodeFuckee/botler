@@ -3883,16 +3883,66 @@ body:has(.drawer-overlay) {
   padding: var(--space-4) var(--space-2);
 }
 .chat-input-row {
+  /* issue #443：codex 风格 composer 容器——文本框与发送按钮融合进同一
+     圆角容器，聚焦时容器整体主色描边 + 焦点环高亮 */
   display: flex;
   gap: var(--space-2);
   align-items: flex-end;
+  padding: 6px 6px 6px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.chat-input-row:focus-within {
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
 }
 .chat-input {
+  /* 融入 composer：去掉独立边框/背景，随内容自动增高，达到上限后内部滚动 */
   flex: 1;
-  resize: vertical;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 4px 2px;
+  border-radius: 0;
+  resize: none;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.chat-input:focus {
+  border-color: transparent;
+  box-shadow: none;
 }
 .chat-send-btn {
-  white-space: nowrap;
+  /* 圆形上箭头发送按钮（codex 风格）：固定圆形尺寸，无文本内边距 */
+  flex: none;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 16px;
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+  color: var(--on-primary);
+}
+.chat-send-btn:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+.chat-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--bg-active);
+  border-color: var(--border);
+  color: var(--muted);
 }
 .chat-error {
   margin: 0;

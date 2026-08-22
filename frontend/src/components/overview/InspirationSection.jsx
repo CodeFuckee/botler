@@ -5,6 +5,17 @@ import { Icon } from '../Icon.jsx'
 import { fmtAgo } from '../../api.js'
 import { INSPIRATION_POLL_MS } from '../../lib/overview.jsx'
 
+// 对话输入框自动增高（issue #443 codex 风格）：内容超出单行时随内容撑高，
+// 达到上限（CHAT_INPUT_MAX_HEIGHT）后内部滚动；测试环境事件对象无真实
+// DOM（无 style 属性）时静默跳过，不抛错。
+export const CHAT_INPUT_MAX_HEIGHT = 160
+export function autoGrowChatInput(e) {
+  const el = e && e.target
+  if (!el || !el.style) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight || 0, CHAT_INPUT_MAX_HEIGHT) + 'px'
+}
+
 export default function InspirationSection({
   inspirationError, setInspirationError,
   inspirationCreatedIssue, setInspirationCreatedIssue,
@@ -202,10 +213,11 @@ export default function InspirationSection({
             </div>
             <form className="chat-input-row"
                   onSubmit={(e) => { e.preventDefault(); sendInspirationChat() }}>
-              <textarea className="input chat-input" rows={2}
+              <textarea className="input chat-input" rows={1}
                         placeholder={tr('overview.chatPlaceholder')}
                         value={chatDraft}
                         onChange={(e) => setChatDraft(e.target.value)}
+                        onInput={autoGrowChatInput}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && !e.shiftKey && !chatSending) {
                             e.preventDefault()
@@ -213,9 +225,11 @@ export default function InspirationSection({
                           }
                         }}
                         disabled={chatSending} />
-              <button type="submit" className="btn btn-small chat-send-btn"
+              <button type="submit" className="btn chat-send-btn"
+                      aria-label={tr('overview.send')}
+                      title={tr('overview.send')}
                       disabled={chatSending || !chatDraft.trim()}>
-                {chatSending ? tr('overview.sending') : tr('overview.send')}
+                {chatSending ? <Icon name="hourglass" /> : <Icon name="arrowUp" />}
               </button>
             </form>
           </div>
