@@ -3309,6 +3309,22 @@ body:has(.drawer-overlay) {
   border-radius: 999px;
 }
 
+/* 第三方看图组件主题适配（issue #462）：截图大图预览改用
+   yet-another-react-lightbox（YARL）。portal 浮层（.yarl__portal）默认
+   z-index 9999，高于 .drawer-overlay（100）盖住抽屉与页面内容；背景色
+   变量与自研浮层 rgba(0,0,0,0.72) 保持一致；captions 名称样式与
+   .pipeline-screenshots-lightbox-name 对齐（13px 白字圆角胶囊）。 */
+.pipeline-screenshots-lightbox-yarl {
+  --yarl__color_backdrop: rgba(0, 0, 0, 0.72);
+}
+.pipeline-screenshots-lightbox-yarl .yarl__slide_title {
+  font-size: 13px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
 
 /* ---- 概览页开放 issue 聚合（issue #64）：每仓库一张卡，
    组内按最后更新时间降序列出开放 issue ---- */

@@ -810,20 +810,59 @@ test('截图查看：源码区分预览图与原图 URL（先预览、点击放�
     '大图预览应使用 screenshotFileUrl 加载原图')
 })
 
-// issue #459：截图大图全局页面查看——lightbox 经 createPortal 渲染到
-// document.body（脱离 .drawer 的 will-change: transform 包含块，否则
-// position: fixed 浮层 inset:0 仅覆盖抽屉自身宽度，被限定在右边栏内），
-// z-index 需高于 .drawer-overlay（100）才能在脱离抽屉层级后盖住整页。
-// 测试环境无 document 时降级内联渲染，保证单测可渲染断言。
-test('截图大图全局页面查看：浮层挂载 document.body、层级高于抽屉遮罩（issue #459）', () => {
-  assert.match(drawerSrc, /createPortal/, '大图浮层应使用 ReactDOM.createPortal 渲染')
-  assert.match(drawerSrc, /document\.body/, '大图浮层应挂载到 document.body（全局页面查看）')
-  assert.match(drawerSrc, /typeof document !== 'undefined'/,
-    '无 document（测试环境）时应降级内联渲染不崩溃')
+// issue #462：截图大图改用第三方看图组件 yet-another-react-lightbox（YARL）。
+// 浏览器分支渲染 YARL Lightbox：portal 模块经 createPortal 挂载
+// document.body（默认 z-index 9999，脱离 .drawer 的 will-change: transform
+// 包含块——issue #459 根因，天然全局页面查看）；zoom（缩放平移）/ counter
+// （位置计数）/ captions（截图名称）插件 + 键盘 ←/→ 切换、Esc 关闭；测试
+// 环境无 document 时降级内联自研浮层（issue #459），保证单测可渲染断言。
+test('截图大图第三方看图组件：浏览器分支渲染 YARL Lightbox 并 portal 挂载 document.body（issue #462）', () => {
+  assert.match(drawerSrc, /yet-another-react-lightbox/,
+    '应导入第三方看图组件 yet-another-react-lightbox（issue #462）')
+  assert.match(drawerSrc, /<Lightbox/, '应渲染 YARL Lightbox 组件')
+  assert.match(drawerSrc, /portal=\{\{\s*root\s*:\s*\(\)\s*=>\s*document\.body/,
+    'YARL 应经 portal 挂载 document.body（全局页面查看，脱离 .drawer 包含块）')
+  assert.match(drawerSrc, /yet-another-react-lightbox\/plugins\/zoom/,
+    '应导入 YARL zoom 插件（滚轮/双击/拖动缩放平移）')
+  assert.match(drawerSrc, /yet-another-react-lightbox\/plugins\/counter/,
+    '应导入 YARL counter 插件（位置计数）')
+  assert.match(drawerSrc, /yet-another-react-lightbox\/plugins\/captions/,
+    '应导入 YARL captions 插件（展示截图名称）')
+  assert.match(drawerSrc, /plugins=\{\[Zoom, Counter, Captions\]\}/,
+    'YARL plugins 属性应启用 zoom/counter/captions 插件（v3 传插件函数）')
+  assert.match(drawerSrc, /typeof document === 'undefined'/,
+    '无 document（单测 SSR 环境）时应降级内联渲染不崩溃')
+})
+
+test('第三方看图组件：slides 来自截图列表、index 联动选中项、降级分支保留自研浮层（issue #462）', () => {
+  assert.match(drawerSrc, /slides\s*=\s*shots\.map/,
+    '浏览器分支应将截图列表映射为 YARL slides')
+  assert.match(drawerSrc, /screenshotFileUrl\(repoId, jobId, s\.path\)/,
+    'YARL slides 应使用原图 URL（screenshot-file，点击放大才拉原图）')
+  assert.match(drawerSrc, /index=\{index\}/, 'YARL index 应联动当前选中截图')
+  assert.match(drawerSrc, /open=\{true\}/, '选中截图时 Lightbox 应处于打开状态')
+  assert.match(drawerSrc, /close=\{onClose\}/,
+    '关闭回调应接通 onClose（Esc / 遮罩 / 关闭按钮）')
+  // 降级分支（无 document）：沿用自研浮层（预览图占位 + 原图）
+  assert.match(
+    drawerSrc,
+    /pipeline-screenshots-lightbox-original[\s\S]{0,400}?screenshotFileUrl\(repoId, jobId, selected\.path\)/,
+    '降级大图预览应使用原图 URL（screenshot-file）')
+  assert.match(
+    drawerSrc,
+    /pipeline-screenshots-lightbox-preview[\s\S]{0,400}?screenshotPreviewUrl\(repoId, jobId, selected\.path\)/,
+    '降级大图预览应使用预览图占位（screenshot-preview，避免加载空白）')
+})
+
+test('styles.css 提供 YARL 看图组件主题适配与自研浮层降级样式（issue #462）', () => {
+  assert.match(styles, /\.pipeline-screenshots-lightbox-yarl\s*\{/,
+    '应有 YARL 看图组件自定义类样式块')
+  assert.match(styles, /--yarl__color_backdrop/,
+    '应覆盖 YARL 背景色变量与项目自研浮层一致')
   const m = styles.match(/\.pipeline-screenshots-lightbox\s*\{([\s\S]*?)\}/)
-  assert.ok(m, '应有 .pipeline-screenshots-lightbox 样式块')
+  assert.ok(m, '应有降级自研浮层 .pipeline-screenshots-lightbox 样式块')
   const z = m[1].match(/z-index:\s*(\d+)/)
-  assert.ok(z && Number(z[1]) >= 100, '大图浮层 z-index 应不低于 .drawer-overlay（100）')
+  assert.ok(z && Number(z[1]) >= 100, '降级浮层 z-index 应不低于 .drawer-overlay（100）')
 })
 
 // 集成：e2e:screenshots job 带 archive 产物 → 任务行出现「查看截图」，

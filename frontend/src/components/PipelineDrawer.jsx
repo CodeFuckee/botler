@@ -15,8 +15,14 @@
 // 全部」经 GET /api/pipelines/{repo_id}/artifacts?job_id= 后端代理下载
 // GitLab zip 归档（浏览器不持有 GitLab token）。
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { Icon } from './Icon.jsx'
+// 第三方看图组件 yet-another-react-lightbox（issue #462）：核心组件 + 按需
+// 插件。YARL v3 的 plugins 属性接收插件函数（非字符串），插件经子路径
+// 默认导出；captions/counter 的独立 CSS 在 main.jsx 引入。
+import Lightbox from 'yet-another-react-lightbox'
+import Zoom from 'yet-another-react-lightbox/plugins/zoom'
+import Counter from 'yet-another-react-lightbox/plugins/counter'
+import Captions from 'yet-another-react-lightbox/plugins/captions'
 import { ScrollContainerBackToTop } from './BackToTop.jsx'
 import { api } from '../api.js'
 import { shortSha, fmtTime, fmtSeconds, fmtSize } from '../api.js'
@@ -549,11 +555,13 @@ export function screenshotPreviewUrl(repoId, jobId, path) {
 // pipeline-report-head 的「返回」交互。
 export function ScreenshotView({ repoId, jobId, jobName, onBack }) {
   const [state, setState] = useState({ loading: true, error: null, screenshots: null })
-  const [selected, setSelected] = useState(null)
+  // 选中的截图下标（issue #462）：大图预览改为第三方看图组件 YARL，
+  // 需要把「全部截图 + 选中下标」传给浮层（slides + index 联动）
+  const [selectedIndex, setSelectedIndex] = useState(null)
   useEffect(() => {
     let cancelled = false
     setState({ loading: true, error: null, screenshots: null })
-    setSelected(null)
+    setSelectedIndex(null)
     api.get(`/api/pipelines/${repoId}/screenshots?job_id=${jobId}`)
       .then((data) => {
         if (!cancelled) setState({
@@ -596,7 +604,7 @@ export function ScreenshotView({ repoId, jobId, jobName, onBack }) {
             {page.shots.map((s) => (
               <button key={s.path} type="button"
                       className="pipeline-screenshots-thumb"
-                      onClick={() => setSelected(s)}
+                      onClick={() => setSelectedIndex(state.screenshots.indexOf(s))}
                       title={`${s.page || '—'}/${s.viewport || s.path}`}>
                 <img src={screenshotPreviewUrl(repoId, jobId, s.path)}
                      alt={s.viewport || s.path} loading="lazy" />
@@ -613,43 +621,78 @@ export function ScreenshotView({ repoId, jobId, jobName, onBack }) {
           position: fixed 子元素以抽屉为包含块，浮层被限定在右边栏内，
           无法全局查看）。测试环境无 document 时降级内联渲染，保证单测
           可跑；浏览器环境始终全局挂载铺满整页。 */}
-      {selected && (
-        <ScreenshotLightbox repoId={repoId} jobId={jobId} selected={selected}
-                            onClose={() => setSelected(null)} />
+      {selectedIndex !== null && state.screenshots
+       && state.screenshots.length > 0 && (
+        <ScreenshotLightbox repoId={repoId} jobId={jobId}
+                            shots={state.screenshots} index={selectedIndex}
+                            onClose={() => setSelectedIndex(null)} />
       )}
     </div>
   )
 }
 
-// 截图大图浮层（issue #459）：全局页面查看——浮层经 createPortal 渲染到
-// document.body，而不是局限在右边栏内。根因：.drawer 样式带
-// will-change: transform（apple-design 合成层提示），使 .drawer 成为
-// position: fixed 后代的包含块，原浮层 inset:0 仅覆盖抽屉自身宽度；
-// 挂载 body 后浮层脱离该包含块，铺满整页（样式 z-index 200 高于
-// .drawer-overlay 的 100，盖住抽屉与页面内容）。测试环境（SSR 测试，
-// 无 document）降级为内联渲染，保证单测可渲染断言。点击任意处关闭
-// 大图预览（点击不冒泡到抽屉遮罩，抽屉保持打开）。
-export function ScreenshotLightbox({ repoId, jobId, selected, onClose }) {
-  const lightbox = (
-    <div className="pipeline-screenshots-lightbox"
-         onClick={onClose}
-         title="点击关闭大图预览">
-      {/* 预览图作占位：点击放大瞬间先显示已缓存的缩略图，
-          原图（issue #456）加载完成后覆盖，避免大图等待空白 */}
-      <div className="pipeline-screenshots-lightbox-stage">
-        <img className="pipeline-screenshots-lightbox-preview"
-             src={screenshotPreviewUrl(repoId, jobId, selected.path)}
-             alt="" aria-hidden="true" />
-        <img className="pipeline-screenshots-lightbox-original"
-             src={screenshotFileUrl(repoId, jobId, selected.path)}
-             alt={selected.viewport || selected.path} />
+// 截图大图浮层（issue #459 → issue #462）：改用第三方看图组件
+// yet-another-react-lightbox（YARL，第三方实现的图片预览组件）。
+// - 浏览器分支：渲染 YARL <Lightbox>，其 portal 模块内部经 createPortal
+//   挂载 document.body（默认 z-index 9999）。根因（issue #459）：.drawer
+//   样式带 will-change: transform（apple-design 合成层提示），使 .drawer
+//   成为 position: fixed 后代的包含块，浮层 inset:0 会被限定在抽屉宽度
+//   内；YARL portal 挂载 body 后脱离该包含块铺满整页。zoom 插件支持
+//   滚轮/双击/拖动缩放平移，counter 插件显示「第几张 / 共几张」，captions
+//   插件显示「页面 / 视口」名称，键盘 ←/→ 切换、Esc/点击遮罩关闭。
+// - 测试环境（SSR 单测，无 document）降级为内联自研浮层（预览图占位 +
+//   原图），保证单测可渲染断言；生产浏览器始终走 YARL。
+export function ScreenshotLightbox({ repoId, jobId, shots, index, onClose }) {
+  const selected = shots[index] || shots[0]
+  // 无 document（SSR 单测）：内联自研浮层，可渲染断言（不崩溃）
+  if (typeof document === 'undefined') {
+    const lightbox = (
+      <div className="pipeline-screenshots-lightbox"
+           onClick={onClose}
+           title="点击关闭大图预览">
+        {/* 预览图作占位：点击放大瞬间先显示已缓存的缩略图，
+            原图（issue #456）加载完成后覆盖，避免大图等待空白 */}
+        <div className="pipeline-screenshots-lightbox-stage">
+          <img className="pipeline-screenshots-lightbox-preview"
+               src={screenshotPreviewUrl(repoId, jobId, selected.path)}
+               alt="" aria-hidden="true" />
+          <img className="pipeline-screenshots-lightbox-original"
+               src={screenshotFileUrl(repoId, jobId, selected.path)}
+               alt={selected.viewport || selected.path} />
+        </div>
+        <span className="pipeline-screenshots-lightbox-name">
+          {selected.page || '—'} / {selected.viewport || selected.path}
+        </span>
       </div>
-      <span className="pipeline-screenshots-lightbox-name">
-        {selected.page || '—'} / {selected.viewport || selected.path}
-      </span>
-    </div>
+    )
+    return lightbox
+  }
+  // 浏览器：第三方看图组件 YARL（issue #462）——全部截图作为 slides，
+  // index 联动当前选中项，可在浮层内 ←/→ 切换浏览各张截图
+  const slides = shots.map((s) => ({
+    src: screenshotFileUrl(repoId, jobId, s.path),
+    title: `${s.page || '—'} / ${s.viewport || s.path}`,
+  }))
+  return (
+    <Lightbox
+      open={true}
+      close={onClose}
+      index={index}
+      slides={slides}
+      plugins={[Zoom, Counter, Captions]}
+      portal={{ root: () => document.body }}
+      controller={{ closeOnBackdropClick: true }}
+      carousel={{ finite: true }}
+      labels={{
+        Close: '关闭大图预览',
+        Previous: '上一张',
+        Next: '下一张',
+        'Zoom in': '放大',
+        'Zoom out': '缩小',
+        '{index} of {total}': '{index} / {total}',
+      }}
+      styles={{ root: { '--yarl__color_backdrop': 'rgba(0, 0, 0, 0.72)' } }}
+      className="pipeline-screenshots-lightbox-yarl"
+    />
   )
-  return typeof document !== 'undefined'
-    ? createPortal(lightbox, document.body)
-    : lightbox
 }

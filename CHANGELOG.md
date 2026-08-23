@@ -80,6 +80,28 @@
 
 ### Added
 
+- **概览页 CI/CD 流水线详情右边栏截图大图改用第三方看图组件（issue #462）**：
+  - 背景：流水线详情右边栏「截图预览」视图点击缩略图后的大图预览此前为
+    自研浮层（issue #453/#456/#459 演进）；本次按需求引入第三方图片预览
+    组件 `yet-another-react-lightbox`（YARL），升级为完整看图体验；
+  - 实现：`frontend/src/components/PipelineDrawer.jsx` 的
+    `ScreenshotLightbox` 浏览器分支渲染 YARL `<Lightbox>`——portal 模块
+    经 createPortal 挂载 `document.body`（默认 z-index 9999，脱离 `.drawer`
+    的 `will-change: transform` 包含块，保持 issue #459 的全局页面查看）；
+    `zoom` 插件提供滚轮/双击/拖动缩放平移，`counter` 插件显示「第几张 /
+    共几张」，`captions` 插件展示「页面 / 视口」名称，键盘 ←/→ 切换、
+    Esc/点击遮罩/关闭按钮均可关闭；截图列表整体作为 slides、index 联动
+    选中项，可在浮层内连续浏览全部截图；
+  - 测试环境（SSR 单测，无 document）降级为内联自研浮层，单测可渲染断言
+    不回归；样式适配在 `frontend/src/styles.css`（`.pipeline-screenshots-
+    lightbox-yarl`，背景色与自研浮层一致），YARL 样式在
+    `frontend/src/main.jsx` 引入；
+  - 测试：`frontend/tests/overview-pipeline-drawer.test.mjs`（源码断言
+    YARL 导入 / portal 挂载 / slides+index 联动 / 插件启用 / 降级分支保留）、
+    e2e `frontend/e2e/tests/pipeline-screenshot-lightbox.spec.js`（真实
+    Chromium：点击缩略图打开浮层、浮层铺满整页、计数/缩放/名称/切换/关闭）。
+
+
 - **仓库健康巡检：webhook / token / 连通性定时检测与自动修复（issue #265）**：
   - 新增定时巡检任务（`RepoHealthInspector`，`backend/botler/health_inspection.py`，
     复用 APScheduler，间隔 `inspection.interval_seconds` 可配置，默认 6 小时）：
