@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from ..audit import record_audit, settings_section_diff
 from ..config import KNOWN_FIELDS
 from ..plugins import PluginKind, list_plugins
 from ..engine_health import engine_health_snapshot
@@ -27,6 +28,15 @@ from ..token_expiry import evaluate_expiry
 from ..templates import PLACEHOLDERS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+# 设置保存审计（issue #260）：PUT /api/settings 可提交的配置段名。
+# 只对字典型配置段做 diff（列表段如 ai_providers 整段替换，由
+# repo/plugin/外部修改等专项埋点覆盖）。
+_SETTINGS_SECTIONS = (
+    "worker", "claude", "dsh", "templates", "browse", "backup",
+    "retention", "ui", "notifications", "sso", "minio", "webhook",
+    "auto_issue", "gitlab", "alerts",
+)
 
 # SSO 配置指南文档（issue #27 第六轮）：设置页直接展示，避免使用者去
 # 查看代码仓库本地文档。路径与 main.py 的 PROJECT_ROOT/docs 对应
@@ -268,6 +278,11 @@ def get_settings(request: Request):
             "disk_min_free_mb": s.alert_disk_min_free_mb,
             "throttle_seconds": s.alert_throttle_seconds,
         },
+        "audit_logs": {
+            # 操作审计日志（issue #260）：管理员 SSO 用户名名单，空 = 所有
+            # 登录用户均视为管理员；配置后仅名单内用户可查看/删除审计日志
+            "admin_usernames": list(s.audit_admin_usernames),
+        },
         "env": {
             # 只读信息：Claude Code 认证来源（服务器环境变量）
             "anthropic_base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
@@ -307,6 +322,13 @@ def get_owner_token_guide():
 def update_settings(request: Request, body: dict):
     """更新 worker / claude / templates.default。body 传哪些键就更新哪些。"""
     c = ctx_of(request)
+    # issue #260：设置保存审计——记录本次提交各段的 diff 前后值（仅记录
+    # 实际发生变化的键，避免派生字段噪音；敏感字段以掩码值比较，不落明文）
+    before = get_settings(request)
+    submitted_sections: dict[str, set[str]] = {}
+    for sec, val in body.items():
+        if sec in _SETTINGS_SECTIONS and isinstance(val, dict):
+            submitted_sections[sec] = set(val.keys())
 
     worker_patch = body.get("worker")
     if worker_patch is not None:
@@ -423,6 +445,11 @@ def update_settings(request: Request, body: dict):
         _validate_auto_issue(auto_issue)
         c.config.update_section("auto_issue", auto_issue)
 
+    audit_logs_patch = body.get("audit_logs")
+    if audit_logs_patch is not None:
+        _validate_audit_logs(audit_logs_patch)
+        c.config.update_section("audit_logs", audit_logs_patch)
+
     gitlab_patch = body.get("gitlab")
     if gitlab_patch is not None:
         _validate_gitlab(gitlab_patch)
@@ -447,7 +474,19 @@ def update_settings(request: Request, body: dict):
             gitlab_patch["owner_token_expires_at"] = expires_at.strip()
         c.config.update_section("gitlab", gitlab_patch)
 
-    return get_settings(request)
+    after = get_settings(request)
+    # issue #260：设置保存审计（diff 前后值，仅记录实际变化）
+    changed: dict[str, dict] = {}
+    for sec, keys in submitted_sections.items():
+        diff = settings_section_diff(before, after, sec, keys)
+        if diff:
+            changed[sec] = diff
+    if changed:
+        record_audit(request, c.db, "settings.update", "config", None, {
+            "sections": sorted(changed),
+            "diff": changed,
+        })
+    return after
 
 
 @router.post("/webhook-test")
@@ -1018,6 +1057,21 @@ def _validate_owner_token_scope(cfg, token: str) -> None:
             "scope 不够。请在 GitLab 用户设置 → Access Tokens 重新生成 "
             "token，Scopes 勾选 api 后保存")
     return info
+
+
+def _validate_audit_logs(patch: dict) -> None:
+    """校验 audit_logs 段（issue #260）：admin_usernames 必须是字符串列表。
+
+    空白归一 + 去重 + 剔除空串后写回（与 plugin_paths 等列表字段同风格）。
+    """
+    admins = patch.get("admin_usernames")
+    if admins is not None:
+        if not isinstance(admins, list) or any(
+                not isinstance(u, str) for u in admins):
+            raise HTTPException(
+                400, "audit_logs.admin_usernames 必须是字符串列表")
+        patch["admin_usernames"] = list(dict.fromkeys(
+            u.strip() for u in admins if u and u.strip()))
 
 
 def _validate_gitlab(patch: dict) -> None:

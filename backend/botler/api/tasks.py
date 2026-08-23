@@ -13,6 +13,7 @@ from queue import Empty
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
+from ..audit import record_audit
 from botler.env_snapshot import parse_snapshot
 from botler.precheck import parse_precheck
 from botler.events import parse_claude_stream_line, parse_hermes_event_line
@@ -29,6 +30,18 @@ STATUSES = {"queued", "running", "retrying", "succeeded", "failed", "interrupted
 # 任务仍可能产出新事件的活跃状态（SSE 实时推送期间订阅总线）
 LIVE_STATUSES = ("queued", "running", "retrying")
 
+
+
+
+def _task_audit_detail(row) -> dict:
+    """任务审计摘要（issue #260）：任务 id / issue 引用 / 状态。"""
+    return {
+        "task_id": row["id"] if row is not None else None,
+        "issue_iid": row["issue_iid"] if row is not None else None,
+        "issue_title": row["issue_title"] if row is not None else None,
+        "repo_id": row["repo_id"] if row is not None else None,
+        "status": row["status"] if row is not None else None,
+    }
 
 def _commit_url(repo_url: str | None, sha: str | None) -> str | None:
     """拼接任务提交的 GitLab 页面地址（issue #19）。
@@ -395,6 +408,9 @@ def stop_all_tasks(request: Request):
     """
     c = ctx_of(request)
     stopped = c.scheduler.stop_all()
+    # issue #260：一键停止任务审计
+    record_audit(request, c.db, "task.stop_all", "task", None, {
+        "stopped": stopped, "count": len(stopped)})
     return {"stopped": stopped, "count": len(stopped)}
 
 
@@ -409,6 +425,10 @@ def reconcile_all(request: Request):
     """
     c = ctx_of(request)
     result = c.reconciler.reconcile_once()
+    # issue #260：手动全量对账审计（任务干预留痕）
+    record_audit(request, c.db, "task.reconcile_all", "task", None, {
+        "scanned": result["scanned"], "enqueued": result["enqueued"],
+        "errors": result.get("errors", [])})
     return {"ok": True, "scanned": result["scanned"], "enqueued": result["enqueued"],
             "errors": result.get("errors", [])}
 
@@ -435,6 +455,9 @@ def retry_task(request: Request, task_id: int):
     # 仍登记在 executor，worker 领取时会命中检查被立即打回 interrupted
     c.executor.clear_stop_request(task_id)
     c.scheduler.enqueue(task_id)
+    # issue #260：任务手动重试审计（重试后任务状态已重置为 queued）
+    record_audit(request, c.db, "task.retry", "task", task_id,
+                 _task_audit_detail(c.db.get_task(task_id)))
     return {"task_id": task_id, "status": "queued"}
 
 
@@ -458,6 +481,9 @@ def stop_task(request: Request, task_id: int):
         raise HTTPException(400, "仅排队中（queued）、执行中（running）或重试中（retrying）的任务可停止")
     c.executor.request_stop(task_id)
     c.scheduler.remove_queued(task_id)
+    # issue #260：任务手动停止审计
+    record_audit(request, c.db, "task.stop", "task", task_id,
+                 _task_audit_detail(c.db.get_task(task_id)))
     return {"task_id": task_id, "status": "interrupted"}
 
 
@@ -483,6 +509,9 @@ def set_task_priority(request: Request, task_id: int, action: str = Query(...)):
             raise HTTPException(404, "任务不存在")
         if result == "bad_state":
             raise HTTPException(400, "仅排队中（queued）的任务可调整人工优先级")
+        # issue #260：排队任务人工优先级操作审计（任务干预留痕）
+        record_audit(request, c.db, "task.priority", "task", task_id, {
+            "action": action, "manual_priority": None})
         return {"task_id": task_id, "manual_priority": None}
     result, new_priority = c.db.reorder_manual_priority(task_id, action)
     if result == "not_found":
@@ -491,6 +520,9 @@ def set_task_priority(request: Request, task_id: int, action: str = Query(...)):
         raise HTTPException(400, "仅排队中（queued）的任务可调整人工优先级")
     if result == "bad_action":
         raise HTTPException(400, f"未知动作: {action}")
+    # issue #260：排队任务人工优先级操作审计（任务干预留痕）
+    record_audit(request, c.db, "task.priority", "task", task_id, {
+        "action": action, "manual_priority": new_priority})
     return {"task_id": task_id, "manual_priority": new_priority}
 
 
@@ -509,6 +541,9 @@ def dequeue_task(request: Request, task_id: int):
     if result == "bad_state":
         raise HTTPException(400, "仅排队中（queued）的任务可移出队列（running 任务请先停止）")
     c.scheduler.remove_queued(task_id)
+    # issue #260：任务移出队列（删除）审计
+    record_audit(request, c.db, "task.delete", "task", task_id,
+                 _task_audit_detail(c.db.get_task(task_id)))
     return {"task_id": task_id, "status": "canceled_by_user"}
 
 

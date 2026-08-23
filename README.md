@@ -698,6 +698,32 @@ CI 部署（`deploy_to_code01`）固定数据目录为绝对路径 **`/home/ckd/
 `POST /api/retention/cleanup`。PM2 的 `pm2-*.log` 超过默认 10 MiB 时会压缩归档并
 截断活动文件，避免常驻进程日志无限增长。
 
+## 操作审计日志（issue #260）
+
+平台对关键操作留痕（谁 / 什么时间 / 改了什么），多人在线（SSO 登录）或直接编辑
+`config.yaml` 时出问题可回溯「谁改的」：
+
+- **audit_logs 表**：`id / actor / action / target_type / target_id / detail
+  JSON / created_at（UTC）/ ip`；执行者取 SSO 会话用户名（SSO 未启用 = `local`，
+  直接编辑 config.yaml = `external`），IP 取 X-Forwarded-For 优先；
+- **关键操作埋点**：设置保存（diff 前后值 `settings.update`）、仓库增删改
+  （`repo.add` / `repo.update` / `repo.delete` / `repo.template_update`）、
+  任务重试/停止/移出队列/人工优先级/一键停止/全量对账（`task.retry` /
+  `task.stop` / `task.delete` / `task.priority` / `task.stop_all` /
+  `task.reconcile_all`）、插件安装/卸载/重载/设置（`plugin.install` /
+  `plugin.uninstall` / `plugin.reload` / `plugin.settings_update`）、备份
+  执行/删除/恢复（`backup.create` / `backup.delete` / `backup.restore`）；
+- **直接编辑 config.yaml**：复用 issue #25 的 mtime 变更检测机制，每次外部修改
+  记录一条 `config.external_edit`——差异摘要含变更段/字段（敏感凭据打码），
+  `webhook_secret` 变化额外标记 `webhook_secret_changed`（即 webhook 轮换留痕）；
+- **查看入口**：设置页「运维与数据 → 审计日志」——分页 + 按操作类型过滤 +
+  变更摘要展示；**删除仅限管理员**（普通用户 403）；
+- **管理员判定**：SSO 未启用（本机单用户）恒为管理员；SSO 启用后按
+  `audit_logs.admin_usernames`（SSO 用户名名单，设置页「审计日志」卡片可配置）
+  判定——名单为空 = 所有登录用户均视为管理员，配置后仅名单内用户可查看/删除；
+- **容错**：审计写入尽力而为，失败只记日志绝不阻塞主操作（与 webhook 推送
+  同容错策略）。
+
 ## 插件体系（issue #140）
 
 平台把三类能力统一为**插件**，注册进全局插件注册表（`botler.plugins.PluginRegistry`），
@@ -818,7 +844,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 
 `backend/config.yaml` 是唯一事实来源，Web UI 是编辑它的外壳。直接编辑 config.yaml 的修改会被运行中的进程自动感知（检测文件变化后重载，无需重启；issue #25），且后续 Web UI 保存设置不会覆盖手动编辑的内容。凭据一律用 `${ENV_VAR}` 引用环境变量（`backend/.env`），不入库、不进日志、不进提示词。
 
-设置页设置项较多时，左侧导航栏按功能分组整理全部设置项（issue #139）——分组：外部服务接入（Synology SSO 登录 / AI API 供应商 / 生图模型 / 识图模型 / MinIO 对象存储）、系统设置（任务调度 / 界面显示 / 网页通知 / 聚合告警 / 消息推送 Webhook / 任务失败自动上报）、执行引擎（Claude Code / dsh 引擎）、运维与数据（本地环境检测 / 数据备份）、账号与安全（Owner GitLab Token / GitLab 凭据）、关于（版本信息）。导航栏支持**关键词搜索设置项**（名称与关键字命中，含中英文别名）与**分组折叠/展开**（可「全部收起 / 全部展开」），点击子项平滑滚动到页面相应设置区块并高亮；导航面板可**整体折叠**成 44px 窄栏（仅保留「展开侧边栏」入口，issue #168），折叠后内容区占满全宽、最大化编辑空间，折叠偏好本地持久化（刷新保持）；窄视口（≤860px）平板/窄窗口竖屏（641~860px）下保持左右布局——左侧导航栏收窄为 200px 并吸顶、设置面板在右并排展示，类似手机/平板设置页面「左侧列表 + 右侧详情」的主从式感觉（issue #339，≤640px 手机竖屏内容列装不下两栏仍为单栏）；横屏窄视口回落单栏，导航置于页面顶部。
+设置页设置项较多时，左侧导航栏按功能分组整理全部设置项（issue #139）——分组：外部服务接入（Synology SSO 登录 / AI API 供应商 / 生图模型 / 识图模型 / MinIO 对象存储）、系统设置（任务调度 / 界面显示 / 网页通知 / 聚合告警 / 消息推送 Webhook / 任务失败自动上报）、执行引擎（Claude Code / dsh 引擎）、运维与数据（本地环境检测 / 数据备份 / 审计日志）、账号与安全（Owner GitLab Token / GitLab 凭据）、关于（版本信息）。导航栏支持**关键词搜索设置项**（名称与关键字命中，含中英文别名）与**分组折叠/展开**（可「全部收起 / 全部展开」），点击子项平滑滚动到页面相应设置区块并高亮；导航面板可**整体折叠**成 44px 窄栏（仅保留「展开侧边栏」入口，issue #168），折叠后内容区占满全宽、最大化编辑空间，折叠偏好本地持久化（刷新保持）；窄视口（≤860px）平板/窄窗口竖屏（641~860px）下保持左右布局——左侧导航栏收窄为 200px 并吸顶、设置面板在右并排展示，类似手机/平板设置页面「左侧列表 + 右侧详情」的主从式感觉（issue #339，≤640px 手机竖屏内容列装不下两栏仍为单栏）；横屏窄视口回落单栏，导航置于页面顶部。
 
 关键配置（`config.example.yaml` 中有完整示例与注释）：
 
@@ -876,6 +902,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 | `sso.session_days` | 7 | 登录有效期（天，1~365） |
 | `sso.redirect_uri` | 空（自动生成） | 回调地址，须与群晖侧注册一致 |
 | `sso.verify_ssl` | true | 群晖为自签名证书时设 false |
+| `audit_logs.admin_usernames` | `[]` | 审计日志管理员名单（issue #260）：SSO 用户名列表，名单为空 = 所有登录用户均视为管理员（SSO 未启用时本机用户恒为管理员）；配置后仅名单内用户可查看/删除审计日志。设置页「审计日志」卡片可配置 |
 | `minio.enabled` | false | MinIO 对象存储开关（issue #163/#164/#170）：设置页「MinIO 对象存储」卡片可配置（issue #170，含 endpoint / access_key / secret_key / public_base_url 等，凭据掩码显示、留空保持现有，卡片内独立保存）。启用后识图模型调用时用户上传的图片先计算 SHA-256 哈希、以哈希值为对象名上传 MinIO，识图请求传 http URL 而非 base64（图片 base64 可达数十万字符，网关/模型对请求体大小敏感；阿里云百炼等兼容网关直接拒绝 data: URL）。**issue #164 起 OpenAI 兼容识图模型（openai_vision / custom）禁止 base64 内联：未启用/配置不完整时识图测试明确报错引导启用 MinIO，不再静默回退**（Gemini 官方接口仅支持 base64 inline_data，保持内联） |
 | `minio.endpoint` / `secure` / `verify_ssl` | `127.0.0.1:9000` / false / true | MinIO API 地址（host:port）/ 是否 https / 证书校验（自签证书设 false） |
 | `minio.access_key` / `secret_key` | 回退环境变量 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | MinIO 访问凭据（与部署写入 `data/backend/.env` 的凭据同源；支持 `${ENV}` 引用） |
@@ -920,6 +947,9 @@ POST   /api/labels/sync-all  标记库页「一键同步全部」按钮（issue 
    读取仓库 remote url 获取仓库用户（remote url userinfo 用户名，如 https://user:token@host/... 的 user；读取顺序：local_path 的 git remote → workspace 克隆 → 存储 url；结果落库并作为灵感「添加 Issue」的默认分配人，issue #153）
 GET/PUT /api/repos/{id}/template      仓库模版
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）
+GET    /api/audit-logs                 审计日志分页查询（issue #260）：?page=&per_page=&action=&actor=&target_type=，按 id 倒序（时间倒序），响应含 items / total / page / per_page / actions（全部操作类型下拉）/ admin（当前用户是否管理员，前端据此显隐删除按钮）；SSO 启用且配置 admin_usernames 时仅名单内用户可访问（403）
+GET    /api/audit-logs/actions         审计日志出现过的全部操作类型（去重升序，过滤下拉数据源，issue #260）
+DELETE /api/audit-logs/{id}            删除单条审计日志（仅管理员，普通用户 403；行不存在 404，issue #260 验收标准 3）
 GET    /api/plugins                    插件列表（按分类分组，含内置/外部来源与供应商预设；插件管理页数据源，issue #145）
 POST   /api/plugins/install            安装外部插件模块（校验后写入 worker.plugin_paths 并热加载；失败不落盘，issue #145）
 POST   /api/plugins/uninstall          卸载外部插件（配置与注册表同时移除；内置插件不可卸载，issue #145）

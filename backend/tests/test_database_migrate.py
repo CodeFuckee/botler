@@ -516,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 25, f"user_version 应推进到 25（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at），实际 {ver}"
+        assert ver == 26, f"user_version 应推进到 26（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -606,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 25, f"user_version 应推进到 25（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at），实际 {ver}"
+        assert ver == 26, f"user_version 应推进到 26（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
@@ -671,7 +671,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols, "旧库应补出 tasks.environment 列"
-        assert ver == 25, f"user_version 应推进到 25（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at），实际 {ver}"
+        assert ver == 26, f"user_version 应推进到 26（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs），实际 {ver}"
 
     def test_new_db_has_environment_column(self, tmp_path):
         """新库建表语句应直接含 environment 列（无需迁移）。"""
@@ -680,7 +680,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols
-        assert ver == 25
+        assert ver == 26
 
     def test_set_task_status_accepts_environment(self, tmp_path):
         """set_task_status 应能写入 environment（_TASK_FIELDS 白名单）。"""
@@ -738,7 +738,7 @@ class TestTaskProgressLedger:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "task_progress" in tables, "旧库应补出 task_progress 表"
-        assert ver == 25
+        assert ver == 26
 
     def test_record_and_latest_per_step(self, tmp_path):
         """record/list/latest：只增不改快照式，latest 取每步最新状态。"""

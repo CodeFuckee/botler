@@ -395,6 +395,13 @@ sso:
   redirect_uri: ""                  # 回调地址；留空 = 按浏览器访问地址自动生成
   verify_ssl: true                  # 群晖为自签名证书时设 false
 
+# 操作审计日志（issue #260）：关键操作留痕（设置保存/仓库增删改/任务干预/
+# 插件安装卸载/备份执行/webhook 轮换/直接编辑 config.yaml）。
+# admin_usernames：管理员 SSO 用户名名单，空 = 所有登录用户均视为管理员
+# （SSO 未启用时本机用户恒为管理员）；配置后仅名单内用户可查看/删除审计日志。
+audit_logs:
+  admin_usernames: []
+
 # 仓库列表（在 Web UI 添加仓库时会自动写入这里）
 # 仓库级任务参数覆盖（issue #237）：max_retries / engine
 # 均为可选字段，留空 = 继承全局 worker 段对应配置（仓库编辑弹窗「任务参数」

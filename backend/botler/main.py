@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from .api import router as api_router
 from .minio_public import router as minio_public_router
 from .auth import CsrfGuardMiddleware, SsoAuth, SsoGuardMiddleware
+from .audit import config_diff_summary
 from .backup import BotlerBackup
 from .config import ConfigManager
 from .database import Database
@@ -123,6 +124,19 @@ def build_context(config_path: str | None = None) -> AppContext:
     # 手动与定时备份都先按 retention 策略收缩运行数据，降低备份成本。
     backup.pre_backup_cleanup = retention.cleanup
     sso = SsoAuth(config)
+    # issue #260：直接编辑 config.yaml 的场景（mtime 变化触发磁盘重载时）
+    # 记录一次「外部修改」审计——差异摘要含变更段/字段（敏感值打码）与
+    # webhook 轮换标记；回调失败不影响配置加载主流程（audit 尽力而为）。
+    def _on_config_external_change(old_data, new_data):
+        db.add_audit_log(
+            actor="external",
+            action="config.external_edit",
+            target_type="config",
+            target_id=None,
+            detail=config_diff_summary(old_data, new_data),
+            ip="",
+        )
+    config.set_external_change_callback(_on_config_external_change)
     return AppContext(
         config=config, db=db, gitlab=gitlab, renderer=renderer,
         executor=executor, scheduler=scheduler, reconciler=reconciler,

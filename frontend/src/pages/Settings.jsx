@@ -26,6 +26,7 @@ import DshCard from '../components/settings/DshCard.jsx'
 import EnvironmentCard from '../components/settings/EnvironmentCard.jsx'
 import OwnerTokenCard from '../components/settings/OwnerTokenCard.jsx'
 import GitlabCredCard from '../components/settings/GitlabCredCard.jsx'
+import AuditLogsCard from '../components/settings/AuditLogsCard.jsx'
 
 export default function Settings() {
   const data = useSettingsData()
@@ -118,6 +119,13 @@ export default function Settings() {
 
         <section id="settings-backup" className="settings-section">
           <BackupManager />
+        </section>
+
+        {/* 审计日志（issue #260）：设置页「审计日志」查看入口——分页 +
+            按操作类型过滤，仅管理员可见/可删除；区块在设置页 DOM 中渲染，
+            左侧导航栏（SettingsNav 运行时读取）自动生成「审计日志」子选项 */}
+        <section id="settings-audit-logs" className="settings-section" data-nav-label="审计日志">
+          <AuditLogsCard />
         </section>
 
         {/* Owner GitLab Token（issue #87）：专用于编辑 issue（评论/标签）的

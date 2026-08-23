@@ -116,6 +116,19 @@ class RepoRow(TypedDict):
     created_at: str | None
 
 
+class AuditLogRow(TypedDict):
+    """audit_logs 表行（issue #260）：操作审计日志数据行类型。"""
+
+    id: int
+    actor: str
+    action: str
+    target_type: str
+    target_id: str | None
+    detail: str | None
+    created_at: str
+    ip: str
+
+
 def _as_task(row: sqlite3.Row | None) -> TaskRow | None:
     """sqlite3.Row → TaskRow 静态类型收窄（issue #213）。
 
@@ -332,6 +345,28 @@ CREATE TABLE IF NOT EXISTS tool_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT ''
 );
+
+-- 操作审计日志（issue #260）：关键操作留痕——谁在什么时间改了什么、
+-- 删了哪个仓库、手动重试/停止了哪个任务。actor：执行者（SSO 用户名 /
+-- local 本机 / external 外部 config.yaml 直接编辑）；action：操作类型；
+-- target_type/target_id：操作目标（repo/task/plugin/backup/config）；
+-- detail：变更摘要 JSON（设置 diff 前后值等）；ip：来源 IP（SSO 场景）；
+-- created_at：UTC（SQLite datetime('now')，与 tasks.created_at 同契约）。
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL DEFAULT '',
+  target_type TEXT NOT NULL DEFAULT '',
+  target_id TEXT,
+  detail TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  ip TEXT NOT NULL DEFAULT ''
+);
+
+-- 审计日志常用查询索引（issue #260）：时间倒序分页 + 按操作类型过滤
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at
+  ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 """
 
 
@@ -741,6 +776,30 @@ class Database:
             conn.execute("PRAGMA user_version = 25")
             ver = 25
 
+        if ver < 26:
+            # issue #260：操作审计日志表。CREATE TABLE IF NOT EXISTS 已覆盖
+            # 新库；旧库（user_version=25）首次启动时同样建表并显式推进版本
+            # 号保持迁移链完整（与 tools 表 v20 迁移同模式）。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS audit_logs (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     actor TEXT NOT NULL DEFAULT '',
+                     action TEXT NOT NULL DEFAULT '',
+                     target_type TEXT NOT NULL DEFAULT '',
+                     target_id TEXT,
+                     detail TEXT NOT NULL DEFAULT '{}',
+                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                     ip TEXT NOT NULL DEFAULT ''
+                   )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at "
+                "ON audit_logs(created_at DESC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_logs_action "
+                "ON audit_logs(action)")
+            conn.execute("PRAGMA user_version = 26")
+            ver = 26
+
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
 
@@ -802,6 +861,93 @@ class Database:
             conn.execute("PRAGMA busy_timeout=30000")
             self._local.conn = conn
         return conn
+
+    # ---- audit_logs（issue #260）----
+    # 操作审计日志：关键操作留痕——谁（哪个用户）在什么时间改了什么配置、
+    # 删了哪个仓库、手动重试/停止了哪个任务。写操作尽力而为的容错放在
+    # API 层（audit.record_audit），本层只提供纯数据读写。
+
+    def add_audit_log(self, actor: str, action: str, target_type: str = "",
+                      target_id=None, detail: dict | None = None,
+                      ip: str = "") -> int:
+        """写入一条审计日志（issue #260）。
+
+        detail 以 JSON 落库（设置 diff / 变更摘要）；created_at 由 SQLite
+        datetime('now') UTC 生成（与 tasks.created_at 同契约，前端按 UTC
+        解析）。返回新行 id，供测试与链路追踪使用。
+        """
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                """INSERT INTO audit_logs
+                       (actor, action, target_type, target_id, detail, ip)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (actor or "", action or "", target_type or "",
+                 str(target_id) if target_id is not None else None,
+                 json.dumps(detail, ensure_ascii=False) if detail is not None else "{}",
+                 ip or ""))
+            return int(cur.lastrowid)
+
+    def list_audit_logs(self, offset: int = 0, limit: int = 50,
+                        action: str | None = None,
+                        target_type: str | None = None,
+                        actor: str | None = None
+                        ) -> tuple[list[sqlite3.Row], int]:
+        """分页查询审计日志（issue #260）。
+
+        按 id 倒序（等价于 created_at 倒序，同秒内保持稳定顺序）；可选
+        按 action / target_type / actor 精确过滤（过滤下拉走 action）。
+        返回 (行列表, 总条数)，总条数供前端计算总页数。
+        """
+        where: list[str] = []
+        params: list = []
+        if action:
+            where.append("action = ?")
+            params.append(action)
+        if target_type:
+            where.append("target_type = ?")
+            params.append(target_type)
+        if actor:
+            where.append("actor = ?")
+            params.append(actor)
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._conn() as conn:
+            total = conn.execute(
+                f"SELECT COUNT(*) AS n FROM audit_logs{clause}", params
+            ).fetchone()["n"]
+            rows = conn.execute(
+                f"SELECT * FROM audit_logs{clause} ORDER BY id DESC "
+                "LIMIT ? OFFSET ?",
+                params + [limit, offset]).fetchall()
+        return rows, total
+
+    def list_audit_actions(self) -> list[str]:
+        """审计日志中出现过的全部操作类型（去重，升序）。
+
+        供设置页审计日志过滤下拉使用；空表返回空列表。
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT action FROM audit_logs "
+                "WHERE action != '' ORDER BY action").fetchall()
+        return [r["action"] for r in rows]
+
+    def get_audit_log(self, audit_id: int) -> sqlite3.Row | None:
+        """按 id 读取单条审计日志；不存在返回 None。"""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM audit_logs WHERE id=?", (audit_id,)
+            ).fetchone()
+
+    def delete_audit_log(self, audit_id: int) -> bool:
+        """删除一条审计日志（仅管理员，issue #260）。
+
+        返回是否删除成功（行不存在返回 False）。审计记录不参与任务/仓库
+        业务逻辑，删除无需级联。
+        """
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                "DELETE FROM audit_logs WHERE id=?", (audit_id,))
+            return cur.rowcount > 0
 
     def close(self) -> None:
         """关闭当前线程持有的复用连接（仅影响调用线程）。

@@ -11,6 +11,7 @@ from ..repo_params import (
     MAX_RETRIES_MAX, MAX_RETRIES_MIN, engine_choices, normalize_engine,
 )
 
+from ..audit import record_audit, repo_diff
 from ..config import RepoConfig
 from ..token_expiry import evaluate_expiry
 from ..database import DEFAULT_PRIORITY
@@ -341,6 +342,12 @@ def add_repo(request: Request, body: RepoCreate):
 
     source = f"local_path={local_path}" if local_path else f"url={url}"
     logger.info("添加仓库 %s (project=%s, %s) 并注册 webhook", name, project_id, source)
+    # issue #260：仓库新增审计
+    record_audit(request, c.db, "repo.add", "repo", repo_id, {
+        "name": name,
+        "project_id": project_id,
+        "url": _masked_repo_row(c.db.get_repo(repo_id))["url"],
+    })
     return _masked_repo_row(c.db.get_repo(repo_id))
 
 
@@ -378,6 +385,13 @@ def update_repo(request: Request, repo_id: int, body: RepoUpdate):
     if fields:
         c.db.update_repo(repo_id, **fields)
     updated = _repo_row_to_dict(c.db.get_repo(repo_id))
+    # issue #260：仓库修改审计（diff 前后值，url 等敏感字段以掩码比较）
+    diff = repo_diff(_masked_repo_row(row), _masked_repo_row(updated), set(fields))
+    if diff:
+        record_audit(request, c.db, "repo.update", "repo", repo_id, {
+            "name": updated["name"],
+            "diff": diff,
+        })
     # 仅当仓库仍存在于 config 时同步（避免把已删除的仓库写回去）
     if any(r.project_id == updated["gitlab_project_id"] for r in c.config.get().repos):
         _sync_repo_to_config(request.app, updated)
@@ -406,6 +420,11 @@ def delete_repo(request: Request, repo_id: int):
     c.config.remove_repo(row["gitlab_project_id"])
     c.db.soft_delete_repo(repo_id)
     logger.info("删除仓库 %s (project=%s)", row["name"], row["gitlab_project_id"])
+    # issue #260：仓库删除审计（软删除行保留供历史解析，审计独立留痕）
+    record_audit(request, c.db, "repo.delete", "repo", repo_id, {
+        "name": row["name"],
+        "project_id": row["gitlab_project_id"],
+    })
     return {"ok": True}
 
 
@@ -511,6 +530,11 @@ def update_template(request: Request, repo_id: int, body: dict):
     updated = _repo_row_to_dict(c.db.get_repo(repo_id))
     if any(r.project_id == updated["gitlab_project_id"] for r in c.config.get().repos):
         _sync_repo_to_config(request.app, updated)
+    # issue #260：仓库提示词模版修改审计
+    record_audit(request, c.db, "repo.template_update", "repo", repo_id, {
+        "name": row["name"],
+        "is_override": bool(text),
+    })
     return _repo_row_to_dict(c.db.get_repo(repo_id))
 
 

@@ -42,6 +42,7 @@ export const SETTING_KEYWORDS = {
   'settings-dsh': ['dsh', 'deepseek', 'reasoning', '推理', 'effort'],
   'settings-environment': ['环境', '工具', '版本', '检测', 'env'],
   'settings-backup': ['backup', '备份', '恢复', 'restore', '数据'],
+  'settings-audit-logs': ['audit', '审计', '日志', '操作记录', 'admin'],
   'settings-owner-token': ['token', 'owner', 'gitlab', '令牌'],
   'settings-gitlab-cred': ['凭据', 'gitlab', 'bot', 'secret', '凭据'],
   'settings-version': ['version', '版本', '构建', 'build'],

@@ -281,6 +281,10 @@ class Settings:
     # 模块内调用 botler.plugins.register_plugin 完成登记；加载失败仅记
     # 日志告警，不阻塞应用启动。
     plugin_paths: list[str] = field(default_factory=list)
+    # 审计日志管理员名单（issue #260）：SSO 用户名列表。名单为空 =
+    # 所有登录用户均视为管理员（平台现状无用户分级，保持默认宽松）；
+    # 配置后仅名单内用户可见/删除审计日志（普通用户不可删除审计记录）。
+    audit_admin_usernames: list[str] = field(default_factory=list)
     # dsh 引擎（issue #84，worker.engine: dsh 时生效）：deepseek-harness
     # Python SDK 运行参数。DeepSeek API Key 走部署机环境变量 DEEPSEEK_API_KEY
     # （或 dsh.base_url/dsh.api_key 显式配置），与 hermes 同模式。
@@ -491,6 +495,8 @@ KNOWN_FIELDS = {
                "queue_backlog_threshold", "queue_stall_minutes",
                "notify_token_invalid", "notify_token_expiry", "notify_disk_low",
                "disk_min_free_mb", "throttle_seconds"},
+    # 操作审计日志（issue #260）：admin_usernames = 管理员 SSO 用户名名单
+    "audit_logs": {"admin_usernames"},
 }
 # 配置段写回 schema（issue #193 泛化 update_*）：settings API 写回 config.yaml
 # 的唯一入口 update_section(section, patch) 按此描述执行，替代原先 15+ 个
@@ -545,6 +551,7 @@ SECTION_SCHEMAS: dict[str, SectionSchema] = {
     "usage": SectionSchema(fields=tuple(KNOWN_FIELDS["usage"])),
     "alerts": SectionSchema(fields=tuple(KNOWN_FIELDS["alerts"])),
     "labels": SectionSchema(fields=("custom",)),
+    "audit_logs": SectionSchema(fields=("admin_usernames",)),
     "repos": SectionSchema(fields=(), replace_list=True),
     "ai_providers": SectionSchema(fields=(), replace_list=True),
     "image_models": SectionSchema(fields=(), replace_list=True),
@@ -645,6 +652,9 @@ class ConfigManager:
         self._data: dict[str, Any] = {}
         self.settings: Settings | None = None
         self._loaded_mtime: float = 0.0
+        # issue #260：config.yaml 外部修改检测回调（直接编辑 config.yaml
+        # 场景的审计入口，见 get() 的 mtime 检测；由 main.py 注册）
+        self._external_change_cb = None
 
     def load(self) -> Settings:
         if not os.path.exists(self.path):
@@ -768,6 +778,10 @@ class ConfigManager:
             fallback_after_failures=max(1, int(worker.get("fallback_after_failures", 2))),
             plugin_paths=[str(p).strip() for p in (worker.get("plugin_paths") or [])
                           if str(p).strip()],
+            audit_admin_usernames=list(dict.fromkeys(
+                str(u).strip() for u in
+                ((data.get("audit_logs") or {}).get("admin_usernames") or [])
+                if str(u).strip())),
             dsh_provider=str(dsh.get("provider", "deepseek-official")).strip() or "deepseek-official",
             dsh_model=str(dsh.get("model", "deepseek-v4-flash")).strip() or "deepseek-v4-flash",
             dsh_model_explicit=bool(str(dsh.get("model", "") or "").strip()),
@@ -927,13 +941,30 @@ class ConfigManager:
         except OSError:
             pass
 
+    def set_external_change_callback(self, cb) -> None:
+        """注册 config.yaml 外部修改检测回调（issue #260）。
+
+        cb(old_data, new_data)：mtime 变化触发磁盘重载成功后回调，参数为
+        重载前后的原始 yaml 数据（_data），供审计记录差异摘要。内部写回
+        （update_section / save）会同步 _loaded_mtime，不会误触发。
+        """
+        self._external_change_cb = cb
+
     def get(self) -> Settings:
         # 磁盘 mtime 变化（用户直接编辑 config.yaml）→ 自动重载，无需重启
         # 进程、无需再走一遍 Web UI（issue #25「修改了全局模版，但是没有生效」）
         if self.settings is not None:
             try:
                 if os.path.getmtime(self.path) > self._loaded_mtime:
-                    self._reload_from_disk()
+                    old_data = self._data
+                    if self._reload_from_disk() and self._external_change_cb is not None:
+                        # issue #260：记录一次「外部修改」审计（直接编辑
+                        # config.yaml 的场景，含 webhook 轮换等凭据变更）。
+                        # 回调失败仅记日志，绝不影响配置加载主流程。
+                        try:
+                            self._external_change_cb(old_data, self._data)
+                        except Exception:  # noqa: BLE001
+                            logger.exception("config.yaml 外部修改审计记录失败")
             except OSError:
                 pass  # 文件不可读/被临时移走：沿用当前配置
         if self.settings is None:

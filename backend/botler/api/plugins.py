@@ -26,6 +26,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ..audit import record_audit
 from ..engine_health import engine_health_snapshot
 from ..plugins import (
     PluginKind,
@@ -130,6 +131,9 @@ def install_plugin(request: Request, body: dict):
         raise HTTPException(
             500, f"插件热加载失败: {errors[0] if errors else '未知错误'}")
     logger.info("插件安装成功: %s（%s 个插件）", path, len(registered))
+    # issue #260：插件安装审计
+    record_audit(request, c.db, "plugin.install", "plugin", path, {
+        "registered": [f"{k.value}/{n}" for k, n in registered]})
     return _view(c)
 
 
@@ -153,6 +157,9 @@ def uninstall_plugin(request: Request, body: dict):
     c.config.update_section("worker", {"plugin_paths": new_paths})
     removed = get_registry().remove_external(path)
     logger.info("插件卸载成功: %s（移除 %s 个插件）", path, len(removed))
+    # issue #260：插件卸载审计
+    record_audit(request, c.db, "plugin.uninstall", "plugin", path, {
+        "removed": [f"{k.value}/{n}" for k, n in removed]})
     return _view(c)
 
 
@@ -173,6 +180,9 @@ def reload_plugins(request: Request):
         logger.warning("插件重载部分失败: %s", errors)
     logger.info("插件重载完成: 成功 %s 个路径，失败 %s 个",
                 len(loaded), len(errors))
+    # issue #260：插件重载审计
+    record_audit(request, c.db, "plugin.reload", "plugin", None, {
+        "paths": paths, "errors": errors})
     return _view(c)
 
 
@@ -195,4 +205,7 @@ def update_plugin_settings(request: Request, body: dict):
             400, f"engine 取值非法: {engine}（可选 {choices_text}）")
     c.config.update_section("worker", {"engine": engine})
     logger.info("默认执行引擎已更新: %s", engine)
+    # issue #260：插件设置（默认引擎）变更审计
+    record_audit(request, c.db, "plugin.settings_update", "plugin", None, {
+        "engine": engine})
     return _view(c)

@@ -11,6 +11,7 @@ import tempfile
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
+from ..audit import record_audit
 from ..backup import BackupError
 
 router = APIRouter(prefix="/backups", tags=["backups"])
@@ -49,7 +50,12 @@ def list_backups(request: Request):
 def create_backup(request: Request):
     """手动创建一份备份。"""
     try:
-        return _backup(request).create_backup(trigger="manual")
+        result = _backup(request).create_backup(trigger="manual")
+        # issue #260：备份执行审计
+        record_audit(request, request.app.state.ctx.db, "backup.create",
+                     "backup", result.get("name") if result else None,
+                     {"trigger": "manual"})
+        return result
     except BackupError as e:
         raise _handle(e) from e
 
@@ -68,7 +74,11 @@ def download_backup(request: Request, name: str):
 def delete_backup(request: Request, name: str):
     """删除一份备份。"""
     try:
-        return _backup(request).delete_backup(name)
+        result = _backup(request).delete_backup(name)
+        # issue #260：备份删除审计
+        record_audit(request, request.app.state.ctx.db, "backup.delete",
+                     "backup", name, {})
+        return result
     except BackupError as e:
         raise _handle(e) from e
 
@@ -84,7 +94,11 @@ class RestoreRequest(BaseModel):
 def restore_local(request: Request, body: RestoreRequest):
     """从服务器本地历史备份恢复（覆盖数据 + 自动重启）。"""
     try:
-        return _backup(request).restore_backup(body.name)
+        result = _backup(request).restore_backup(body.name)
+        # issue #260：备份恢复审计
+        record_audit(request, request.app.state.ctx.db, "backup.restore",
+                     "backup", body.name, {"source": "local"})
+        return result
     except BackupError as e:
         raise _handle(e) from e
 
@@ -98,7 +112,11 @@ async def restore_upload(request: Request, file: UploadFile):
             tmp = f.name
             while chunk := await file.read(1 << 20):
                 f.write(chunk)
-        return _backup(request).restore_upload(tmp)
+        result = _backup(request).restore_upload(tmp)
+        # issue #260：上传备份恢复审计
+        record_audit(request, request.app.state.ctx.db, "backup.restore",
+                     "backup", file.filename or tmp, {"source": "upload"})
+        return result
     except BackupError as e:
         raise _handle(e) from e
     finally:

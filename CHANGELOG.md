@@ -6,6 +6,34 @@
 
 ### Added
 
+- **操作审计日志（issue #260）**：
+  - 后端新增 `audit_logs` 表（id / actor / action / target_type / target_id /
+    detail JSON / created_at / ip，迁移 v26）与 `GET /api/audit-logs`（分页 +
+    按操作类型/执行者/目标类型过滤，响应含总条数、操作类型下拉数据源、
+    当前用户是否管理员）、`GET /api/audit-logs/actions`、
+    `DELETE /api/audit-logs/{id}`（仅管理员可删除，普通用户 403）；
+  - 关键操作埋点：设置保存（diff 前后值，`settings.update`）、仓库增删改
+    （`repo.add` / `repo.update` / `repo.delete` / `repo.template_update`）、
+    任务重试/停止/移出队列/人工优先级/一键停止/全量对账（`task.retry` /
+    `task.stop` / `task.delete` / `task.priority` / `task.stop_all` /
+    `task.reconcile_all`）、插件安装/卸载/重载/设置（`plugin.*`）、备份
+    执行/删除/恢复（`backup.create` / `backup.delete` / `backup.restore`）；
+  - 直接编辑 config.yaml 的场景：复用 issue #25 的 mtime 变更检测机制，
+    每次外部修改记录一条 `config.external_edit`（差异摘要含变更段/字段，
+    敏感凭据打码，webhook_secret 变化额外标记 `webhook_secret_changed`，
+    即 webhook 轮换留痕）；
+  - 审计写入尽力而为：失败只记 warning 绝不阻塞主操作（与 webhook 推送
+    同容错策略）；执行者取 SSO 会话用户名（未启用 SSO = `local`），记录
+    来源 IP（X-Forwarded-For 优先）；
+  - 设置页「运维与数据」分组新增「审计日志」查看入口（`settings-audit-logs`
+    区块）：分页 + 按操作类型过滤 + 变更摘要展示，仅管理员可删除；管理员
+    判定支持 `audit_logs.admin_usernames`（SSO 用户名名单，名单为空 = 所有
+    登录用户均视为管理员，SSO 未启用时本机用户恒为管理员）；
+  - 测试：`backend/tests/test_audit_logs.py`（数据库 CRUD/分页/过滤/迁移 +
+    API 分页/权限门禁 + 全埋点 + 外部修改检测 + 容错 + 配置，32 用例）、
+    `frontend/tests/settings-audit-logs.test.mjs`（渲染/过滤/分页/删除权限/
+    管理员名单/错误与空态，10 用例）。
+
 - **e2e 截图查看页先加载预览图、点击放大才加载原图（issue #456）**：
   - 背景：e2e:screenshots（issue #445）的整页 Playwright 截图单张可达数
     MB，原实现缩略图网格直接加载全部原图，页面打开慢、流量大；

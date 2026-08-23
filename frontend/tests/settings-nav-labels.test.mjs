@@ -118,7 +118,7 @@ function resolveName(entry) {
   return entry.id
 }
 
-/** 18 个设置项名称快照（issue #174：每个设置项都有对应的名称；
+/** 19 个设置项名称快照（issue #174：每个设置项都有对应的名称；
  *  issue #229 新增「聚合告警」设置区块） */
 const EXPECTED_NAMES = {
   'settings-sso': 'Synology SSO 登录',
@@ -136,6 +136,7 @@ const EXPECTED_NAMES = {
   'settings-dsh': 'dsh 引擎',
   'settings-environment': '本地环境检测',
   'settings-backup': '数据备份',
+  'settings-audit-logs': '审计日志',
   'settings-owner-token': 'Owner GitLab Token',
   'settings-gitlab-cred': 'GitLab 凭据（只读）',
   'settings-version': '版本信息',
@@ -145,7 +146,7 @@ const EXPECTED_NAMES = {
 
 test('设置页应包含 18 个设置区块且 id 唯一（与已知设置项一致）', () => {
   const entries = sectionEntries()
-  assert.equal(entries.length, 18, `应解析到 18 个设置区块，实际 ${entries.length}`)
+  assert.equal(entries.length, 19, `应解析到 19 个设置区块，实际 ${entries.length}`)
   const ids = entries.map((e) => e.id)
   assert.equal(new Set(ids).size, ids.length, '设置区块 id 不应重复')
   assert.deepEqual(
@@ -186,7 +187,7 @@ test('卡片区块名称由卡片组件内 h2 提供（16 个卡片区块与导�
   // 全部由卡片组件提供区块名称（含新拆出的 SsoCard / TasksCard 等；
   // issue #229 新增 AlertsCard「聚合告警」）
   const cardSections = sectionEntries().filter((e) => e.cards.length > 0)
-  assert.equal(cardSections.length, 17, '应有 17 个卡片区块（版本信息为页面内联 h2）')
+  assert.equal(cardSections.length, 18, '应有 18 个卡片区块（版本信息为页面内联 h2）')
   const expected = {
     'settings-sso': 'Synology SSO 登录',
     'settings-ai-providers': 'AI API 供应商',
@@ -203,6 +204,7 @@ test('卡片区块名称由卡片组件内 h2 提供（16 个卡片区块与导�
     'settings-dsh': 'dsh 引擎',
     'settings-environment': '本地环境检测',
     'settings-backup': '数据备份',
+    'settings-audit-logs': '审计日志',
     'settings-owner-token': 'Owner GitLab Token',
     'settings-gitlab-cred': 'GitLab 凭据（只读）',
   }
@@ -272,7 +274,7 @@ function renderNavWithMirror() {
 test('collectSettingsGroups：基于真实源码结构生成 18 项，每项名称非空且不等于原始 id', () => {
   const groups = collectSettingsGroups(sourceMirrorContent())
   const items = groups.flatMap((g) => g.items)
-  assert.equal(items.length, 18, `应生成 18 个设置子项，实际 ${items.length}`)
+  assert.equal(items.length, 19, `应生成 19 个设置子项，实际 ${items.length}`)
   const byId = Object.fromEntries(items.map((it) => [it.id, it.label]))
   for (const [id, name] of Object.entries(byId)) {
     assert.ok(name, `${id} 子项应有非空名称`)
@@ -293,7 +295,7 @@ test('渲染：左侧边栏展示全部 18 个设置项名称，无原始 id 泄
   const { renderer, root, restore } = renderNavWithMirror()
   try {
     const links = root.findAll((n) => n.type === 'a' && String(n.props.href || '').startsWith('#'))
-    assert.equal(links.length, 18, '应渲染 18 个子项链接')
+    assert.equal(links.length, 19, '应渲染 19 个子项链接')
     const linkTexts = new Set(links.map((l) => deepText(l)))
     for (const expected of Object.values(EXPECTED_NAMES)) {
       assert.ok(linkTexts.has(expected), `导航应展示设置项名称「${expected}」`)
@@ -489,7 +491,7 @@ test('【运行时】真实渲染 Settings：每个设置区块在渲染树中�
     })
     const sections = renderer.root.findAll(
       (n) => n.type === 'section' && String(n.props.className || '').split(/\s+/).includes('settings-section'))
-    assert.equal(sections.length, 18, `设置页应渲染 18 个设置区块，实际 ${sections.length}`)
+    assert.equal(sections.length, 19, `设置页应渲染 19 个设置区块，实际 ${sections.length}`)
     const byId = {}
     for (const s of sections) {
       const h2 = s.findAll((n) => n.type === 'h2')[0]
