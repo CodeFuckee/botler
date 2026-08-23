@@ -529,6 +529,14 @@ export function screenshotFileUrl(repoId, jobId, path) {
   return `/api/pipelines/${repoId}/screenshot-file?${qs}`
 }
 
+// 单张截图的缩略预览 URL（issue #456）：后端用 Pillow 把原图缩放出
+// 小尺寸 JPEG 预览图。缩略图网格先加载预览图（e2e 整页截图原图可达
+// 数 MB），用户点击放大进入大图预览时才用 screenshotFileUrl 拉原图。
+export function screenshotPreviewUrl(repoId, jobId, path) {
+  const qs = new URLSearchParams({ job_id: String(jobId), path })
+  return `/api/pipelines/${repoId}/screenshot-preview?${qs}`
+}
+
 // 截图预览视图：从后端拉取 job 产物归档内的 png 截图列表，按页面分组
 // 渲染缩略图网格，点击任一张进入大图预览（再点关闭）。加载中 / 接口
 // 失败 / 归档内无截图均有兜底，不崩溃。与 ReportView 平行，复用
@@ -584,7 +592,7 @@ export function ScreenshotView({ repoId, jobId, jobName, onBack }) {
                       className="pipeline-screenshots-thumb"
                       onClick={() => setSelected(s)}
                       title={`${s.page || '—'}/${s.viewport || s.path}`}>
-                <img src={screenshotFileUrl(repoId, jobId, s.path)}
+                <img src={screenshotPreviewUrl(repoId, jobId, s.path)}
                      alt={s.viewport || s.path} loading="lazy" />
                 <span className="pipeline-screenshots-thumb-name">
                   {s.viewport || '—'}
@@ -598,8 +606,16 @@ export function ScreenshotView({ repoId, jobId, jobName, onBack }) {
         <div className="pipeline-screenshots-lightbox"
              onClick={() => setSelected(null)}
              title="点击关闭大图预览">
-          <img src={screenshotFileUrl(repoId, jobId, selected.path)}
-               alt={selected.viewport || selected.path} />
+          {/* 预览图作占位：点击放大瞬间先显示已缓存的缩略图，
+              原图（issue #456）加载完成后覆盖，避免大图等待空白 */}
+          <div className="pipeline-screenshots-lightbox-stage">
+            <img className="pipeline-screenshots-lightbox-preview"
+                 src={screenshotPreviewUrl(repoId, jobId, selected.path)}
+                 alt="" aria-hidden="true" />
+            <img className="pipeline-screenshots-lightbox-original"
+                 src={screenshotFileUrl(repoId, jobId, selected.path)}
+                 alt={selected.viewport || selected.path} />
+          </div>
           <span className="pipeline-screenshots-lightbox-name">
             {selected.page || '—'} / {selected.viewport || selected.path}
           </span>

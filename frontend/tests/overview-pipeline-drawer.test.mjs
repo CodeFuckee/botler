@@ -794,6 +794,22 @@ test('截图查看：源码含「查看截图」入口与截图预览视图（is
     '截图列表应走后端代理接口 /api/pipelines/{repo_id}/screenshots')
 })
 
+// issue #456：缩略图先加载预览图，点击放大进入大图预览时才加载原图
+test('截图查看：源码区分预览图与原图 URL（先预览、点击放大才原图，issue #456）', () => {
+  assert.match(drawerSrc, /screenshotPreviewUrl/, '应提供截图预览缩略图 URL 帮助函数')
+  assert.match(drawerSrc, /screenshot-preview/, '预览接口路径应为 /screenshot-preview')
+  // 缩略图 <img> 必须使用预览 URL，不再直接加载原图
+  assert.match(
+    drawerSrc,
+    /pipeline-screenshots-thumb[\s\S]{0,600}?screenshotPreviewUrl\(repoId, jobId, s\.path\)/,
+    '缩略图 <img> 应使用 screenshotPreviewUrl 先加载预览图')
+  // 大图预览浮层必须使用原图 URL（点击放大才加载原图）
+  assert.match(
+    drawerSrc,
+    /pipeline-screenshots-lightbox-original[\s\S]{0,400}?screenshotFileUrl\(repoId, jobId, selected\.path\)/,
+    '大图预览应使用 screenshotFileUrl 加载原图')
+})
+
 // 集成：e2e:screenshots job 带 archive 产物 → 任务行出现「查看截图」，
 // 点击后抽屉内列出截图（按页面分组），提供返回按钮
 test('e2e:screenshots 任务行「查看截图」→ 抽屉内列出截图（issue #453 验收）', async () => {
@@ -846,14 +862,38 @@ test('e2e:screenshots 任务行「查看截图」→ 抽屉内列出截图（iss
     assert.ok(text.includes('desktop-1440x900'), '应显示视口 desktop-1440x900')
     assert.ok(text.includes('mobile-375x667'), '应显示视口 mobile-375x667')
     assert.ok(text.includes('返回'), '截图视图应有返回按钮')
-    // 图片预览：<img> 指向后端单张截图代理接口
+    // 缩略图预览：<img> 指向后端预览缩略图接口（issue #456），
+    // 不再直接加载整张原图（e2e 整页截图可达数 MB）
     const imgs = root.findAll((n) => n.type === 'img')
     assert.ok(imgs.length >= 2, '截图列表中应渲染图片缩略图/预览')
-    assert.match(imgs[0].props.src, /^\/api\/pipelines\/1\/screenshot-file\?/,
-      '图片 src 应指向后端单张截图代理接口')
+    assert.match(imgs[0].props.src, /^\/api\/pipelines\/1\/screenshot-preview\?/,
+      '缩略图 src 应指向后端预览缩略图接口（先加载预览图）')
     assert.match(imgs[0].props.src, /job_id=77/, '图片 src 应携带 job_id')
     assert.match(imgs[0].props.src, /path=frontend%2Fscreenshots%2Foverview%2Fdesktop-1440x900\.png/,
       '图片 src 应携带 URL 编码后的归档内路径')
+
+    // 点击缩略图放大（issue #456 验收）：大图预览浮层才加载原图
+    // （screenshot-file），同时用预览图作占位避免大图加载空白
+    const thumbs = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-screenshots-thumb'))
+    assert.ok(thumbs.length >= 1, '应渲染缩略图按钮')
+    await TestRenderer.act(async () => { thumbs[0].props.onClick() })
+    const lightbox = root.findAll(
+      (n) => String(n.props.className || '').includes('pipeline-screenshots-lightbox'))
+    assert.ok(lightbox.length >= 1, '点击缩略图应打开大图预览浮层')
+    const lbImgs = root.findAll((n) => n.type === 'img')
+    const lbOriginal = lbImgs.filter(
+      (n) => /screenshot-file\?/.test(String(n.props.src || '')))
+    const lbPreview = lbImgs.filter(
+      (n) => /screenshot-preview\?/.test(String(n.props.src || '')))
+    assert.ok(lbOriginal.length >= 1, '大图预览应加载原图（screenshot-file）')
+    assert.ok(lbPreview.length >= 1, '大图预览应有预览图占位（screenshot-preview）')
+    assert.match(lbOriginal[0].props.src, /job_id=77/,
+      '大图预览原图 src 应携带 job_id')
+    assert.match(lbOriginal[0].props.src,
+      /path=frontend%2Fscreenshots%2Foverview%2Fdesktop-1440x900\.png/,
+      '大图预览原图 src 应携带 URL 编码后的归档内路径')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

@@ -79,6 +79,17 @@ _SCREENSHOT_CONTENT_TYPES = {
     ".gif": "image/gif", ".webp": "image/webp",
 }
 
+# 截图预览缩略图（issue #456）：缩略图网格不再直接加载整张原图（e2e
+# 整页 Playwright 截图可达数 MB），后端用 Pillow 缩放出小尺寸 JPEG
+# 预览图，前端先加载预览图，点击放大进入大图预览时才拉取原图。
+# 预览图最长边像素；JPEG 压缩质量；TTL 内存缓存（key=repo_id+job_id+
+# path，只缓存小体积预览字节，避免浏览会话内反复下载原图 + 重复缩放）。
+_SCREENSHOT_PREVIEW_MAX_EDGE = 480
+_SCREENSHOT_PREVIEW_JPEG_QUALITY = 72
+_SCREENSHOT_PREVIEW_TTL_SECONDS = 300.0
+_SCREENSHOT_PREVIEWS_LOCK = threading.Lock()
+_SCREENSHOT_PREVIEWS: dict[tuple[int, int, str], tuple[float, tuple[bytes, str]]] = {}
+
 
 def _trim_artifacts(job: dict) -> list[dict]:
     """精简 job 产物列表（issue #329）：保留 file_type / filename / size。
@@ -119,6 +130,8 @@ def clear_pipeline_cache() -> None:
         _REPO_CLIENTS.clear()
     with _SCREENSHOT_LISTS_LOCK:
         _SCREENSHOT_LISTS.clear()
+    with _SCREENSHOT_PREVIEWS_LOCK:
+        _SCREENSHOT_PREVIEWS.clear()
 
 
 def _stage_status(jobs: list[dict]) -> str:
@@ -541,6 +554,75 @@ def pipeline_screenshots(repo_id: int, job_id: int, request: Request):
     return {"job_id": job_id, "screenshots": shots}
 
 
+def _load_screenshot_bytes(client, gitlab_project_id: int, job_id: int,
+                             path: str) -> bytes:
+    """下载 job 产物归档内单张截图图片的原始字节（issue #456 抽出共用）。
+
+    优先走 GitLab 单文件下载接口（GET /jobs/{job_id}/artifacts/{path}，
+    已在真实实例验证对归档内路径可用）；404（个别路径单文件不可达）
+    回退下载整个 zip 归档定位提取（与报告查看 issue #337 同模式）。
+    screenshot-file（原图）与 screenshot-preview（预览图）共用。
+    """
+    try:
+        resp = client.download_job_artifact_file(
+            gitlab_project_id, job_id, path)
+        return _response_content(resp)
+    except GitLabError as e:
+        if e.status_code != 404:
+            raise HTTPException(502, f"GitLab 截图下载失败: {e}") from e
+        # 单文件接口 404 时回退 zip 归档定位（与报告查看同模式）
+        try:
+            archive_resp = client.download_job_artifacts(
+                gitlab_project_id, job_id)
+            archive_content = _response_content(archive_resp)
+        except GitLabError as archive_error:
+            if archive_error.status_code == 404:
+                raise HTTPException(404, "截图不存在或任务无该产物") from archive_error
+            raise HTTPException(
+                502, f"GitLab 截图归档下载失败: {archive_error}") from archive_error
+        try:
+            with zipfile.ZipFile(io.BytesIO(archive_content)) as zf:
+                try:
+                    return zf.read(path)
+                except KeyError as missing:
+                    raise HTTPException(
+                        404, "截图不存在或任务无该产物") from missing
+        except zipfile.BadZipFile as archive_error:
+            raise HTTPException(502, "任务产物归档不是有效 ZIP 文件") from archive_error
+
+
+def _make_screenshot_preview(content: bytes, ext: str,
+                             path: str = "") -> tuple[bytes, str]:
+    """用 Pillow 把原图字节缩放出小尺寸 JPEG 预览图（issue #456）。
+
+    最长边缩放到 _SCREENSHOT_PREVIEW_MAX_EDGE（等比），JPEG 压缩输出；
+    RGBA/调色板等模式先转 RGB。Pillow 缺失或图片损坏无法解码时
+    返回 (原图字节, 原 content-type)，预览能力降级但不影响查看原图。
+    """
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(content)) as im:
+            im.thumbnail((_SCREENSHOT_PREVIEW_MAX_EDGE,
+                          _SCREENSHOT_PREVIEW_MAX_EDGE))
+            if im.mode != "RGB":
+                im = im.convert("RGB")
+            out = io.BytesIO()
+            im.save(out, format="JPEG", quality=_SCREENSHOT_PREVIEW_JPEG_QUALITY)
+            return out.getvalue(), "image/jpeg"
+    except Exception:  # noqa: BLE001 - 预览是增强能力，任何失败都降级回原图
+        logger.warning("截图预览图生成失败，回退返回原图（path=%s）", path)
+        return content, _SCREENSHOT_CONTENT_TYPES[ext]
+
+
+def _screenshot_ext(path: str) -> str:
+    """校验截图路径并返回小写扩展名（不含点）。非法路径抛 422。"""
+    _validate_artifact_path(path)
+    ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext not in _SCREENSHOT_IMAGE_EXTS:
+        raise HTTPException(422, "仅支持查看图片类产物（png/jpg/gif/webp）")
+    return ext
+
+
 @router.get("/{repo_id}/screenshot-file")
 def pipeline_screenshot_file(repo_id: int, job_id: int, request: Request,
                              path: str = ""):
@@ -552,39 +634,44 @@ def pipeline_screenshot_file(repo_id: int, job_id: int, request: Request,
     仅允许图片扩展名，杜绝路径穿越。图片字节直接返回，前端 <img>
     即可渲染，无需浏览器持有 GitLab token。
     """
-    _validate_artifact_path(path)
-    ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
-    if ext not in _SCREENSHOT_IMAGE_EXTS:
-        raise HTTPException(422, "仅支持查看图片类产物（png/jpg/gif/webp）")
+    ext = _screenshot_ext(path)
     c = request.app.state.ctx
     row = c.db.get_repo(repo_id)
     if row is None:
         raise HTTPException(404, "仓库不存在")
     client = _repo_client(c, row) or c.gitlab
-    try:
-        resp = client.download_job_artifact_file(
-            row["gitlab_project_id"], job_id, path)
-        content = _response_content(resp)
-    except GitLabError as e:
-        if e.status_code != 404:
-            raise HTTPException(502, f"GitLab 截图下载失败: {e}") from e
-        # 单文件接口 404 时回退 zip 归档定位（与报告查看同模式）
-        try:
-            archive_resp = client.download_job_artifacts(
-                row["gitlab_project_id"], job_id)
-            archive_content = _response_content(archive_resp)
-        except GitLabError as archive_error:
-            if archive_error.status_code == 404:
-                raise HTTPException(404, "截图不存在或任务无该产物") from archive_error
-            raise HTTPException(
-                502, f"GitLab 截图归档下载失败: {archive_error}") from archive_error
-        try:
-            with zipfile.ZipFile(io.BytesIO(archive_content)) as zf:
-                try:
-                    content = zf.read(path)
-                except KeyError as missing:
-                    raise HTTPException(
-                        404, "截图不存在或任务无该产物") from missing
-        except zipfile.BadZipFile as archive_error:
-            raise HTTPException(502, "任务产物归档不是有效 ZIP 文件") from archive_error
+    content = _load_screenshot_bytes(
+        client, row["gitlab_project_id"], job_id, path)
     return Response(content=content, media_type=_SCREENSHOT_CONTENT_TYPES[ext])
+
+
+@router.get("/{repo_id}/screenshot-preview")
+def pipeline_screenshot_preview(repo_id: int, job_id: int, request: Request,
+                                path: str = ""):
+    """返回单张截图的缩略预览图（JPEG 小图，issue #456）。
+
+    缩略图网格不再直接加载整张原图（e2e 整页截图可达数 MB），先加载
+    后端用 Pillow 缩放出的小尺寸 JPEG 预览图；用户点击放大进入大图
+    预览时才由前端请求 /screenshot-file 拉取原图。预览字节带 300 秒
+    TTL 内存缓存，避免浏览会话内反复下载原图 + 重复缩放。Pillow 无法
+    解码（损坏图片/缺失依赖）时兜底返回原图，预览能力降级不影响查看。
+    """
+    ext = _screenshot_ext(path)
+    c = request.app.state.ctx
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    key = (repo_id, job_id, path)
+    now = time.monotonic()
+    with _SCREENSHOT_PREVIEWS_LOCK:
+        hit = _SCREENSHOT_PREVIEWS.get(key)
+        if hit is not None and now - hit[0] < _SCREENSHOT_PREVIEW_TTL_SECONDS:
+            preview, media_type = hit[1]
+            return Response(content=preview, media_type=media_type)
+    client = _repo_client(c, row) or c.gitlab
+    content = _load_screenshot_bytes(
+        client, row["gitlab_project_id"], job_id, path)
+    preview, media_type = _make_screenshot_preview(content, ext, path)
+    with _SCREENSHOT_PREVIEWS_LOCK:
+        _SCREENSHOT_PREVIEWS[key] = (now, (preview, media_type))
+    return Response(content=preview, media_type=media_type)

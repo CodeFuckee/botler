@@ -6,6 +6,21 @@
 
 ### Added
 
+- **e2e 截图查看页先加载预览图、点击放大才加载原图（issue #456）**：
+  - 背景：e2e:screenshots（issue #445）的整页 Playwright 截图单张可达数
+    MB，原实现缩略图网格直接加载全部原图，页面打开慢、流量大；
+  - 后端新增 `GET /api/pipelines/{repo_id}/screenshot-preview`：复用
+    screenshot-file 的下载逻辑（GitLab 单文件下载 + 404 回退 zip 提取，
+    抽成共用函数 `_load_screenshot_bytes`），用 Pillow（既有依赖，
+    issue #310 已引入）把原图等比缩放出最长边 480px 的 JPEG 预览图
+    （quality 72），带 300 秒 TTL 内存缓存，避免浏览会话内反复下载
+    原图 + 重复缩放；Pillow 无法解码（损坏图片等）时兜底返回原图字节，
+    预览能力降级但不影响查看原图；
+  - 前端缩略图网格 `<img>` 改用预览图 URL（`screenshotPreviewUrl`）；
+    点击缩略图进入大图预览时才经 `screenshotFileUrl` 加载原图，同时用
+    预览图作大图占位——点击瞬间先显示已缓存的预览图，原图加载完成后
+    无缝覆盖，避免大图等待空白。
+
 - **全站「回到顶部」浮动按钮（issue #455）**：
   - 前端在 App 根部新增全局 `BackToTop` 组件：所有需要竖向滚动的页面
     右下角提供「回到顶部」按钮（`frontend/src/components/BackToTop.jsx`）；

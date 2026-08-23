@@ -3162,7 +3162,9 @@ body:has(.drawer-overlay) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 大图预览：抽屉内浮层，点击关闭 */
+/* 大图预览：抽屉内浮层，点击关闭。点击放大才加载原图（issue #456）：
+   舞台容器尺寸由预览占位图撑起，原图绝对定位铺满覆盖，加载完成后
+   无缝替换预览图；两者同源等比，宽高一致不会跳动。 */
 .pipeline-screenshots-lightbox {
   position: fixed;
   inset: 0;
@@ -3175,9 +3177,28 @@ body:has(.drawer-overlay) {
   background: rgba(0, 0, 0, 0.72);
   cursor: zoom-out;
 }
-.pipeline-screenshots-lightbox img {
+.pipeline-screenshots-lightbox-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 96px);
+}
+.pipeline-screenshots-lightbox-preview {
+  display: block;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  object-fit: contain;
+  border-radius: var(--radius);
+  background: #fff;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+.pipeline-screenshots-lightbox-original {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   border-radius: var(--radius);
   background: #fff;

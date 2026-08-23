@@ -1140,17 +1140,25 @@ class TestReportView:
 # 复现场景：CI/CD 详情右边栏应能直接查看 e2e 截图测试的截图，而不是
 # 只能下载整个 zip 归档。以下测试先验证「截图列表 / 单张截图」两个
 # 代理接口的行为（当前实现缺失，接口返回 404 即复现 bug）。
+def _screenshot_png_bytes(size=(1440, 900), color=(30, 120, 210)) -> bytes:
+    """Pillow 生成真实 PNG 字节（截图预览缩略图需要可解码的真实图片）。"""
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def _screenshot_zip() -> bytes:
     """构造与 e2e:screenshots job 归档同构的 zip（2 页面 × 2 视口 png）。"""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("frontend/screenshots/index.html", "<html>screenshots</html>")
         zf.writestr("frontend/screenshots/overview/desktop-1440x900.png",
-                    b"\x89PNG\r\n\x1a\noverview-desktop")
+                    _screenshot_png_bytes(color=(30, 120, 210)))
         zf.writestr("frontend/screenshots/overview/mobile-375x667.png",
-                    b"\x89PNG\r\n\x1a\noverview-mobile")
+                    _screenshot_png_bytes(size=(375, 667), color=(210, 90, 30)))
         zf.writestr("frontend/screenshots/settings/desktop-1440x900.png",
-                    b"\x89PNG\r\n\x1a\nsettings-desktop")
+                    _screenshot_png_bytes(color=(90, 200, 60)))
     return buf.getvalue()
 
 
@@ -1244,3 +1252,101 @@ class TestScreenshotsView:
         assert resp.status_code == 404
         assert "仓库不存在" in resp.json()["detail"]
         assert not any(c.startswith("artifacts:") for c in stub.calls)
+
+    # ---- 截图预览缩略图（issue #456）----
+    # 需求：查看截图的页面先加载预览图（缩略图网格不再直接拉取整张原图，
+    # e2e 整页截图可达数 MB），点击放大进入大图预览时才加载原图。
+    # 后端新增 /screenshot-preview 代理：拉取原图字节后用 Pillow 缩放出
+    # 小尺寸 JPEG 预览图并缓存，前端缩略图 <img> 指向它。
+
+    def test_screenshot_preview_ok(self, client):
+        """预览图应返回 JPEG 缩略图：尺寸被缩放、字节远小于原图、可解码。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_bytes = {(42, 5): _screenshot_zip()}
+        path = "frontend/screenshots/overview/desktop-1440x900.png"
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/screenshot-preview",
+                      params={"job_id": 5, "path": path})
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("image/jpeg")
+        from PIL import Image
+        with Image.open(io.BytesIO(resp.content)) as im:
+            assert im.format == "JPEG"
+            # 最长边不超过预览上限（480px），等比缩放 1440x900 → 480x300
+            assert max(im.size) <= 480
+            assert im.size == (480, 300), f"应等比缩放，实际 {im.size}"
+        # 预览图字节应远小于原图（1440x900 全尺寸 PNG 数十 KB 级）
+        assert len(resp.content) < 20000, f"预览图应足够小，实际 {len(resp.content)} 字节"
+
+    def test_screenshot_preview_cached(self, client):
+        """预览图应缓存：同 key 第二次请求不再下载原图字节。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_bytes = {(42, 5): _screenshot_zip()}
+        path = "frontend/screenshots/overview/desktop-1440x900.png"
+        params = {"job_id": 5, "path": path}
+
+        for _ in range(2):
+            resp = tc.get(f"/api/pipelines/{repo_id}/screenshot-preview",
+                          params=params)
+            assert resp.status_code == 200
+
+        file_calls = [c for c in stub.calls if c.startswith("artifact-file:")]
+        assert len(file_calls) == 1, "预览缓存命中时不应重复下载原图"
+
+    def test_screenshot_preview_rejects_non_image_and_traversal(self, client):
+        """非图片扩展名 / 路径穿越 / 绝对路径 / 空路径 → 422，不下载归档。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        for bad in ["frontend/screenshots/index.html", "../secret.png",
+                    "/etc/passwd.png", ""]:
+            resp = tc.get(f"/api/pipelines/{repo_id}/screenshot-preview",
+                          params={"job_id": 5, "path": bad})
+            assert resp.status_code == 422, f"path={bad!r} 应 422"
+        assert not any(c.startswith("artifacts:") for c in stub.calls)
+
+    def test_screenshot_preview_unknown_repo_404(self, client):
+        """仓库不存在 → 404，且不发起任何 GitLab 调用。"""
+        tc, stub, db, tmp_path = client
+        resp = tc.get("/api/pipelines/9999/screenshot-preview",
+                      params={"job_id": 1, "path": "a.png"})
+        assert resp.status_code == 404
+        assert "仓库不存在" in resp.json()["detail"]
+        assert not any(c.startswith("artifacts:") for c in stub.calls)
+
+    def test_screenshot_preview_zip_fallback(self, client):
+        """单文件下载 404 回退 zip 归档提取，仍能生成预览图。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_bytes = {(42, 5): _screenshot_zip()}
+        path = "frontend/screenshots/overview/desktop-1440x900.png"
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/screenshot-preview",
+                      params={"job_id": 5, "path": path})
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("image/jpeg")
+        assert any(c.startswith("artifacts:") for c in stub.calls), \
+            "单文件 404 后应回退下载 zip 归档"
+
+    def test_screenshot_preview_undecodable_falls_back_to_original(self, client):
+        """Pillow 无法解码（损坏图片）时兜底返回原图字节与原始 content-type，
+        不 500（预览能力降级但不影响查看原图）。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("frontend/screenshots/broken/shot.png",
+                        b"\x89PNG\r\n\x1a\nbroken-image-bytes")
+        stub.artifact_bytes = {(42, 5): buf.getvalue()}
+        path = "frontend/screenshots/broken/shot.png"
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/screenshot-preview",
+                      params={"job_id": 5, "path": path})
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("image/png")
+        assert resp.content.startswith(b"\x89PNG")
+
