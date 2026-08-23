@@ -363,5 +363,12 @@
   "overview.batchCloseFailureDetail": "Issue #{iid}: {msg}",
   "overview.expandInspirations": "Expand ideas",
   "overview.collapseInspirations": "Collapse ideas",
-  "overview.loadMoreInspirations": "Load more ideas"
+  "overview.loadMoreInspirations": "Load more ideas",
+  "nav.watermarkAria": "Task concurrency watermark",
+  "nav.watermarkRunning": "Running {n}",
+  "nav.watermarkRunningTitle": "View running tasks (incl. retrying)",
+  "nav.watermarkQueued": "Queued {n}",
+  "nav.watermarkQueuedTitle": "View queued tasks",
+  "nav.watermarkToday": "Completed today {n}",
+  "nav.watermarkTodayTitle": "View succeeded tasks"
 }

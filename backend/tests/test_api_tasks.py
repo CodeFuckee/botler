@@ -6,6 +6,7 @@
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -58,12 +59,18 @@ def _mk_repo(db, project_id: int = 42, name: str = "demo") -> int:
 def _mk_task(db, repo_id: int, issue_iid: int = 1, title: str = "修复登录问题",
              status: str = "succeeded", error_message: str | None = None,
              error_detail: str | None = None, commit_sha: str | None = None,
-             failure_category: str | None = None) -> int:
-    """创建任务并按需更新状态，返回 task_id。"""
+             failure_category: str | None = None,
+             finished_at: str | None = None) -> int:
+    """创建任务并按需更新状态，返回 task_id。
+
+    finished_at（issue #257 水位测试用）：UTC 无时区串，透传给
+    set_task_status（tasks.finished_at 白名单字段）。
+    """
     task_id = db.create_task(repo_id, 42, issue_iid, title, triggered_by="webhook")
     db.set_task_status(task_id, status, error_message=error_message,
                        error_detail=error_detail, commit_sha=commit_sha,
-                       failure_category=failure_category)
+                       failure_category=failure_category,
+                       finished_at=finished_at)
     return task_id
 
 
@@ -1132,3 +1139,77 @@ class TestEffectiveTaskParamsInTaskList:
         assert task["timeout_seconds"] is None and task["timeout_source"] is None
         assert task["max_retries"] == 4 and task["max_retries_source"] == "global"
         assert task["effective_engine"] == "dsh" and task["engine_source"] == "global"
+
+
+class TestTasksWatermark:
+    """GET /api/tasks/watermark（issue #257）：导航栏并发水位数据契约。
+
+    验收标准 1「水位徽章数字与任务列表实际一致」：水位各状态计数与
+    GET /api/tasks 的 stats 同表同口径（task_stats 分组），本类验证
+    一致性；今日完成/最近完成时间边界单独验证。
+    """
+
+    def test_empty_db(self, client):
+        app_client, db = client
+        resp = app_client.get("/api/tasks/watermark")
+        assert resp.status_code == 200
+        body = resp.json()
+        for key in ("queued", "running", "retrying", "succeeded", "failed",
+                    "interrupted", "canceled_by_user", "total", "completed_today"):
+            assert body[key] == 0, f"{key} 应为 0"
+        assert body["last_completed_at"] is None
+
+    def test_counts_match_task_list_stats(self, client):
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        # 同 issue 仅允许一条活跃任务（去重索引），各任务用不同 issue_iid
+        _mk_task(db, repo_id, issue_iid=1, status="queued")
+        _mk_task(db, repo_id, issue_iid=2, status="queued")
+        _mk_task(db, repo_id, issue_iid=3, status="running")
+        _mk_task(db, repo_id, issue_iid=4, status="retrying")
+        _mk_task(db, repo_id, issue_iid=5, status="succeeded")
+        _mk_task(db, repo_id, issue_iid=6, status="failed")
+        _mk_task(db, repo_id, issue_iid=7, status="interrupted")
+        _mk_task(db, repo_id, issue_iid=8, status="canceled_by_user")
+
+        body = app_client.get("/api/tasks/watermark").json()
+        assert body["queued"] == 2
+        assert body["running"] == 1
+        assert body["retrying"] == 1
+        assert body["succeeded"] == 1
+        assert body["failed"] == 1
+        assert body["interrupted"] == 1
+        assert body["canceled_by_user"] == 1
+        assert body["total"] == 8
+
+        # 与任务列表 stats（task_stats 分组）口径一致
+        stats = app_client.get("/api/tasks").json()["stats"]
+        for key in ("queued", "running", "retrying", "succeeded", "failed",
+                    "interrupted", "canceled_by_user"):
+            assert body[key] == stats.get(key, 0), f"{key} 与任务列表 stats 不一致"
+
+    def test_completed_today_only_succeeded_finished_today(self, client):
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        now = datetime.now(timezone.utc)
+        today = now.strftime("%Y-%m-%d %H:%M:%S")
+        yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        _mk_task(db, repo_id, status="succeeded", finished_at=today)
+        _mk_task(db, repo_id, status="succeeded", finished_at=yesterday)
+        _mk_task(db, repo_id, status="failed", finished_at=today)
+        # 无 finished_at 的排队任务不影响今日完成
+        _mk_task(db, repo_id, status="queued")
+
+        body = app_client.get("/api/tasks/watermark").json()
+        assert body["succeeded"] == 2
+        assert body["completed_today"] == 1, "仅 UTC 今日成功终态计入今日完成"
+        assert body["total"] == 4
+
+    def test_last_completed_at_is_max_finished(self, client):
+        app_client, db = client
+        repo_id = _mk_repo(db)
+        _mk_task(db, repo_id, status="succeeded", finished_at="2026-08-20 10:00:00")
+        _mk_task(db, repo_id, status="failed", finished_at="2026-08-21 09:00:00")
+        _mk_task(db, repo_id, status="queued")  # 无完成时间，不参与
+        body = app_client.get("/api/tasks/watermark").json()
+        assert body["last_completed_at"] == "2026-08-21 09:00:00"

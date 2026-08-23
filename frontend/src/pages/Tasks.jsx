@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { usePolling } from '../hooks/usePolling.js'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 import { confirmDialog } from '../dialog.js'
@@ -185,7 +185,24 @@ export default function Tasks() {
   // 界面国际化（issue #268）：静态 UI 文案经 t() 翻译（默认中文）
   const { tr } = useI18n()
   const [data, setData] = useState({ tasks: [], total: 0, stats: {} })
-  const [status, setStatus] = useState('')
+  // 任务列表 URL 参数（issue #257）：导航栏水位徽章点击跳转
+  // /tasks?status=xxx 携带过滤条件——status 初值取 URL 参数，URL 变化
+  // （徽章再次点击/手动改地址）时同步到状态并重置回第 1 页。页面自身
+  // 下拉筛选不回写 URL（保持既有行为）；URL 无 status 参数时不覆盖
+  // 用户当前下拉选择。
+  const [searchParams] = useSearchParams()
+  const urlStatus = searchParams.get('status')
+  const lastUrlStatusRef = useRef(urlStatus)
+  useEffect(() => {
+    if (urlStatus !== lastUrlStatusRef.current) {
+      lastUrlStatusRef.current = urlStatus
+      if (urlStatus !== null) {
+        setStatus(urlStatus)
+        setPage(1)
+      }
+    }
+  }, [urlStatus])
+  const [status, setStatus] = useState(() => searchParams.get('status') || '')
   const [search, setSearch] = useState('')
   const [repos, setRepos] = useState([])
   const [repoId, setRepoId] = useState('')

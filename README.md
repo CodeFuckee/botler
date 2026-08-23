@@ -328,6 +328,13 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 键 botler.navCollapsed），刷新后保持；窄视口（≤860px）侧边栏转为抽屉导航
 > （顶栏汉堡按钮打开，遮罩 / 点击导航项关闭），内容区保持全宽不挤压。语言切换 /
 > 快捷键帮助 / 登录用户区位于侧边栏底部。
+>
+> 任务并发水位徽章（issue #257）：侧边栏「任务」导航项下方常驻展示
+> **「运行 N · 排队 M · 今日完成 K」**——运行 = running+retrying、排队 = queued、
+> 今日完成 = UTC 今日成功终态数，数据来自 `GET /api/tasks/watermark`（与任务
+> 列表同表同口径）；各段点击跳转任务列表对应过滤（/tasks?status=running,retrying
+> / queued / succeeded）。数据与现有轮询共用 15s 周期（不增加请求频率），任务
+> 状态变化时经通知轮询事件回调即时刷新；折叠态窄栏隐藏徽章。
 
 ## 后端依赖管理与升级流程（issue #209）
 
@@ -916,6 +923,7 @@ GET    /api/pipelines/{repo_id}/artifacts 下载指定 job 的流水线产物（
 GET    /api/pipelines/{repo_id}/report 查看指定 job 的报告（?job_id=&file=&file_type=，issue #337）：后端代理 GitLab 单文件产物并解析为统一 JSON——file_type=sast 解析 SARIF 问题列表（bandit/semgrep/gitleaks）、dependency_scanning 解析依赖漏洞（deps-python/deps-frontend）、junit 解析测试用例明细（backend:test/frontend:build/e2e:playwright）；文件路径仅允许归档内相对路径（拒绝绝对路径/路径穿越），报告解析失败 502、文件不存在 404
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138；「每小时余额变化速率」由前端基于历史观测样本计算，issue #304）
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment；?include_usage=1 可选附带 token 用量字段，issue #235）
+GET    /api/tasks/watermark           任务并发水位（issue #257）：导航栏常驻徽章数据源——各状态计数（queued/running/retrying/succeeded/failed/interrupted/canceled_by_user）+ 总量 total + 今日完成数 completed_today（UTC 今日成功终态）+ 最近完成时间 last_completed_at；与任务列表 stats 同表同口径（保证徽章数字与列表一致），单条轻量聚合查询供导航栏 15s 轮询（不产生额外高频请求）
 GET    /api/tasks/export              任务数据导出（issue #228）：?format=csv|json（默认 csv），可按 status（支持逗号分隔多值）/repo_id/search 过滤（与任务列表一致）与创建时间范围 date_from/date_to（'YYYY-MM-DD' 或 'YYYY-MM-DD HH:MM:SS'）过滤；CSV 带 UTF-8 BOM（Excel 打开中文不乱码），字段含 id/仓库/issue/状态/引擎/用时/错误/时间等，JSON 为同字段英文 key 扁平对象数组；响应 attachment 下载
 GET    /api/search?q=&limit=      全局搜索（issue #216）：跨 4 模块（任务 / GitLab 开放 issue / 灵感 / 仓库）按关键词模糊匹配，结果按模块分组（tasks/issues/inspirations/repos 四个数组，每模块默认 10 条上限 50 条）；中文关键词直接用 LIKE 字面子串匹配（FTS5 默认分词器不切分中文、trigram 对 1~2 字词无效，按 Issue 正文允许的 LIKE 兜底方案）；issues 模块复用概览页 10 秒 TTL 聚合缓存（不额外打爆 GitLab API，仅覆盖已启用仓库）；搜索词中的 % _ 通配符按字面匹配
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url/environment——执行环境快照 JSON：引擎版本/模型/起始提交/平台版本/配置哈希，issue #276；usage——任务 token 用量：engine/model/prompt_tokens/completion_tokens/total_tokens/estimated_cost/currency/raw_usage，无用量数据为 null，issue #235）

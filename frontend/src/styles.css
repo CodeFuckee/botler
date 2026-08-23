@@ -395,6 +395,49 @@ body {
   padding-right: 0;
 }
 .sidebar.collapsed .nav-label { display: none; }
+/* 任务并发水位徽章（issue #257）：侧边栏任务导航项下方的常驻状态条，
+   展示「运行 N · 排队 M · 今日完成 K」三段，各段可点击跳转任务列表
+   对应过滤（运行=running,retrying；排队=queued；今日完成=succeeded）。
+   浅底色卡片区分于普通导航项；折叠态窄栏放不下整体隐藏（含移动端
+   抽屉内的展开导航）。 */
+.watermark {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 2px 12px 6px;
+  padding: 6px 8px;
+  background: var(--bg-hover-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+.watermark-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  border-radius: 6px;
+  padding: 1px 4px;
+  transition: color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
+}
+.watermark-seg:hover { color: var(--primary); background: var(--primary-weak); }
+.watermark-seg:focus-visible { box-shadow: var(--focus-ring); }
+.watermark-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--stage-pending);
+  flex-shrink: 0;
+}
+.watermark-running .watermark-dot { background: var(--primary); }
+.watermark-queued .watermark-dot { background: var(--warn); }
+.watermark-today .watermark-dot { background: var(--ok); }
+.sidebar.collapsed .watermark { display: none; }
 /* 侧边栏底部工具区（issue #324）：语言切换 / 快捷键帮助 / 登录用户区 */
 .sidebar-foot {
   margin-top: auto;

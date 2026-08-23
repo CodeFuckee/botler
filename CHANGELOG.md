@@ -6,6 +6,21 @@
 
 ### Added
 
+- **导航栏任务并发水位徽章（issue #257）**：
+  - 后端新增 `GET /api/tasks/watermark`：任务各状态计数（queued/running/
+    retrying/succeeded/failed/interrupted/canceled_by_user）+ 总量 total +
+    今日完成数 completed_today（UTC 今日成功终态）+ 最近完成时间
+    last_completed_at——与任务列表 stats 同表同口径（保证徽章数字与任务
+    列表实际一致），单条轻量聚合查询，供导航栏 15s 轮询使用；
+  - 前端侧边栏「任务」导航项下方常驻展示「运行 N · 排队 M · 今日完成 K」
+    徽章：运行 = running+retrying、排队 = queued、今日完成 = 今日成功终态；
+    各段点击跳转任务列表对应过滤（/tasks?status=running,retrying / queued /
+    succeeded），任务列表页新增 URL status 参数同步（徽章点击直达过滤列表）；
+  - 数据更新与现有轮询共用 15s 周期（不增加请求频率），任务状态变化时经
+    通知轮询 onEvents 回调即时刷新徽章（复用 10s 通知轮询，仅新事件到达
+    时触发一次额外刷新）；折叠态窄栏隐藏徽章。
+
+
 - **前端页面与后端接口性能测试 + CI 性能测试环节（issue #452）**：
   - 后端接口性能测试 `backend/tests/test_api_issues_perf.py`：用注入延迟的
     StubGitLab 模拟慢 GitLab 上游，覆盖「添加 Issue 对话框」（`GET

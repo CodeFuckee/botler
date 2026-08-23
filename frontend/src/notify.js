@@ -98,7 +98,7 @@ export async function sendTestNotification() {
 // show 默认用 showNotification（测试可注入收集函数）。
 // 返回 { poll, getCursor }；poll 一次 = 拉取 → 过滤 → 弹通知 → 推进游标。
 export function createNotifyPoller(opts) {
-  const { getEvents, getSettings, onError } = opts
+  const { getEvents, getSettings, onError, onEvents } = opts
   const show = opts.show || showNotification
   let cursor = 0
   let first = true
@@ -106,6 +106,12 @@ export function createNotifyPoller(opts) {
     try {
       const [data, settings] = await Promise.all([getEvents(cursor), getSettings()])
       const events = data.events || []
+      // 新事件回调（issue #257）：任务状态变化等新事件到达时触发一次
+      // 附加刷新（如导航栏水位徽章即时更新）——仅在确实有新事件时回调，
+      // 不增加轮询请求频率
+      if (data.latest_id > cursor) {
+        onEvents?.(events)
+      }
       if (!first) {
         for (const ev of filterNotifyEvents(events, settings)) {
           show(ev)

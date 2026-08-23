@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
+import { Link, Navigate, NavLink, Route, Routes } from 'react-router-dom'
 // 路由级代码分割（issue #202）：页面组件全部经 pages/lazy.jsx 的
 // React.lazy 包装按路由懒加载——首屏只加载当前页面 chunk，其余页面
 // 代码按需下载；页面切换期间由 <Suspense> fallback 展示轻量加载态
@@ -25,6 +25,26 @@ import { useI18n, LANG_LABELS } from './i18n.jsx'
 // 同模式——偏好存 localStorage，'1'/'true' 视为折叠，其余一律展开；
 // 无存储环境（SSR/隐私模式）或 getItem 抛异常时兜底为展开，不影响页面使用。
 export const SIDEBAR_STORAGE_KEY = 'botler.navCollapsed'
+
+// 导航栏任务水位轮询周期（issue #257）：与现有轮询共用 15s 周期
+// （PIPELINE_POLL_MS / ISSUE_POLL_MS 同为 15000），不额外提高请求频率；
+// 任务状态变化时经通知事件回调即时刷新（见 createNotifyPoller onEvents）。
+export const WATERMARK_POLL_MS = 15000
+
+/** 水位接口数据 → 导航栏徽章展示值（纯函数，可测，issue #257）。
+ *  运行 = running + retrying（两者都在实际执行引擎任务，点击跳转
+ *  /tasks?status=running,retrying 与徽章数字严格一致）；排队 = queued；
+ *  今日完成 = completed_today（UTC 今日成功终态数）。数据缺失（接口
+ *  失败或旧后端无该端点）返回 null，App 不渲染徽章不报错。 */
+export function computeWatermarkDisplay(watermark) {
+  if (!watermark || typeof watermark !== 'object') return null
+  return {
+    running: (watermark.running || 0) + (watermark.retrying || 0),
+    queued: watermark.queued || 0,
+    completedToday: watermark.completed_today || 0,
+    total: watermark.total || 0,
+  }
+}
 
 /** 读取左侧边栏折叠偏好（issue #324）：storage 兼容对象（测试可注入）。 */
 export function loadSidebarCollapsed(storage) {
@@ -156,11 +176,34 @@ export default function App() {
   // 隐藏时暂停通知轮询（后台标签页 0 请求），恢复可见立即拉一次再恢复。
   // 轮询器用 ref 懒创建（仅一次）：游标在 poller 内持久，不随重渲染重置。
   const notifyEnabled = !!(auth && (!auth.enabled || auth.user))
+
+  // 导航栏任务水位（issue #257）：加载 /api/tasks/watermark 轻量聚合，
+  // 侧边栏常驻展示「运行 N · 排队 M · 今日完成 K」。轮询周期 15s 与现有
+  // 轮询共用（不额外提高请求频率）；任务状态变化时经通知轮询 onEvents
+  // 回调即时刷新（复用 10s 通知轮询，仅在新事件到达时触发一次，不增加
+  // 请求频率）。silent=true：失败保留上次数据不弹 toast。
+  const [watermark, setWatermark] = useState(null)
+  const loadWatermark = useCallback(async () => {
+    try {
+      const d = await api.get('/api/tasks/watermark', { silent: true })
+      setWatermark(d)
+    } catch {
+      // 接口失败（旧后端无该端点等）：保留上次数据，徽章不闪断不报错
+    }
+  }, [])
+  usePolling(loadWatermark, WATERMARK_POLL_MS, { enabled: notifyEnabled })
+
+  // 徽章展示值（issue #257）：接口数据缺失（失败/旧后端）时不渲染
+  const watermarkBadge = computeWatermarkDisplay(watermark)
+
   const notifyPollerRef = useRef(null)
   if (notifyEnabled && notifyPollerRef.current === null) {
     notifyPollerRef.current = createNotifyPoller({
       getEvents: (after) => api.get(`/api/notifications/events?after=${after}`, { silent: true }),
       getSettings: () => api.get('/api/settings', { silent: true }),
+      // 任务状态变化即时刷新水位徽章（issue #257）：通知轮询拉到新事件
+      // （任务成功/失败/入队等）时额外拉一次水位，徽章数字跟随最新状态
+      onEvents: () => loadWatermark(),
     })
   }
   const notifyPoll = useCallback(() => {
@@ -304,6 +347,40 @@ export default function App() {
             <Icon name="clipboard" aria-hidden="true" />
             <span className="nav-label">{t('nav.tasks')}</span>
           </NavLink>
+          {/* 任务并发水位徽章（issue #257）：常驻展示「运行 N · 排队 M ·
+              今日完成 K」，各段点击跳转任务列表对应过滤（运行=running,
+              retrying 多状态过滤；排队=queued；今日完成=succeeded）。
+              数字来自 /api/tasks/watermark（与任务列表同表同口径，15s
+              轮询 + 通知事件即时刷新）；折叠态隐藏（窄栏放不下），
+              移动端抽屉内随导航展示 */}
+          {watermarkBadge && (
+            <div className="watermark" role="group" aria-label={t('nav.watermarkAria')}>
+              <Link
+                to="/tasks?status=running,retrying"
+                className="watermark-seg watermark-running"
+                title={t('nav.watermarkRunningTitle')}
+              >
+                <span className="watermark-dot" aria-hidden="true" />
+                <span className="nav-label">{t('nav.watermarkRunning', { n: watermarkBadge.running })}</span>
+              </Link>
+              <Link
+                to="/tasks?status=queued"
+                className="watermark-seg watermark-queued"
+                title={t('nav.watermarkQueuedTitle')}
+              >
+                <span className="watermark-dot" aria-hidden="true" />
+                <span className="nav-label">{t('nav.watermarkQueued', { n: watermarkBadge.queued })}</span>
+              </Link>
+              <Link
+                to="/tasks?status=succeeded"
+                className="watermark-seg watermark-today"
+                title={t('nav.watermarkTodayTitle')}
+              >
+                <span className="watermark-dot" aria-hidden="true" />
+                <span className="nav-label">{t('nav.watermarkToday', { n: watermarkBadge.completedToday })}</span>
+              </Link>
+            </div>
+          )}
           {/* 统计看板页（issue #264）：成功率/引擎对比/仓库排行聚合视图 */}
           <NavLink to="/stats" title={t('nav.stats')} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
             <Icon name="chart" aria-hidden="true" />

@@ -1926,6 +1926,42 @@ class Database:
         return {r["status"]: r["c"] for r in rows}
 
 
+    def task_watermark(self) -> dict:
+        """任务并发水位（issue #257）：导航栏常驻徽章数据源。
+
+        与任务列表 stats 同表（tasks）同口径：各状态计数 + 任务总量 +
+        今日完成数 + 最近完成时间。今日完成 = 成功终态（succeeded）且
+        finished_at 落在 UTC 今日（00:00:00 起）的任务数——与统计看板
+        （issue #264）按 UTC 日期分组的约定一致；最近完成时间为全部任务
+        finished_at 的最大值（无完成任务为 None）。单连接内一次分组 +
+        两条轻量聚合查询完成，供导航栏 15s 轮询（issue #257）使用，不做
+        任务列表全量拉取。
+        """
+        with self._conn() as conn:
+            counts = {r["status"]: r["c"] for r in conn.execute(
+                "SELECT status, COUNT(*) AS c FROM tasks GROUP BY status")}
+            total = conn.execute("SELECT COUNT(*) AS c FROM tasks").fetchone()["c"]
+            today_start = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
+            completed_today = conn.execute(
+                "SELECT COUNT(*) AS c FROM tasks WHERE status=? AND finished_at >= ?",
+                (STATUS_SUCCEEDED, today_start)).fetchone()["c"]
+            last = conn.execute(
+                "SELECT MAX(finished_at) AS last FROM tasks "
+                "WHERE finished_at IS NOT NULL AND finished_at <> ''").fetchone()["last"]
+        return {
+            "queued": counts.get(STATUS_QUEUED, 0),
+            "running": counts.get(STATUS_RUNNING, 0),
+            "retrying": counts.get(STATUS_RETRYING, 0),
+            "succeeded": counts.get(STATUS_SUCCEEDED, 0),
+            "failed": counts.get(STATUS_FAILED, 0),
+            "interrupted": counts.get(STATUS_INTERRUPTED, 0),
+            "canceled_by_user": counts.get(STATUS_CANCELED, 0),
+            "total": total,
+            "completed_today": completed_today,
+            "last_completed_at": last,
+        }
+
+
     def task_duration_histogram(self, buckets: list[float]) -> tuple[int, float, list[int]]:
         """任务执行时长直方图聚合（issue #208，/metrics 数据源）。
 

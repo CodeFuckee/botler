@@ -363,5 +363,12 @@
   "overview.batchCloseFailureDetail": "Issue #{iid}：{msg}",
   "overview.expandInspirations": "展开灵感列表",
   "overview.collapseInspirations": "收起灵感列表",
-  "overview.loadMoreInspirations": "加载更多灵感"
+  "overview.loadMoreInspirations": "加载更多灵感",
+  "nav.watermarkAria": "任务并发水位",
+  "nav.watermarkRunning": "运行 {n}",
+  "nav.watermarkRunningTitle": "查看执行中的任务（含重试中）",
+  "nav.watermarkQueued": "排队 {n}",
+  "nav.watermarkQueuedTitle": "查看排队中的任务",
+  "nav.watermarkToday": "今日完成 {n}",
+  "nav.watermarkTodayTitle": "查看已成功完成的任务"
 }

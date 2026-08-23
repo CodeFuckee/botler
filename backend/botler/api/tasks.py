@@ -214,6 +214,21 @@ def list_tasks(
     }
 
 
+@router.get("/watermark")
+def tasks_watermark(request: Request):
+    """任务并发水位（issue #257）：导航栏常驻徽章数据源。
+
+    返回 queued/running/retrying/succeeded/failed/interrupted/
+    canceled_by_user 各状态计数、任务总量 total、今日完成数
+    completed_today（succeeded 且 finished_at 为 UTC 今日）与最近完成
+    时间 last_completed_at（无完成任务为 null）。与任务列表 stats 同表
+    同口径，保证徽章数字与任务列表一致；单条轻量聚合查询，供导航栏
+    15s 轮询使用，不随任务列表全量拉取（不产生额外高频请求）。
+    """
+    c = ctx_of(request)
+    return c.db.task_watermark()
+
+
 # ---- 任务数据导出（issue #228）----
 # CSV 表头用中文（Excel 直接可读，UTF-8 BOM 保证中文不乱码），JSON 用
 # 英文 key（供离线脚本/工具解析）；两者字段集合一致、顺序即列顺序。
