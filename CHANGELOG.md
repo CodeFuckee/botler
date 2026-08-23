@@ -27,16 +27,27 @@
     灵感 AI 对话 / 任务详情快览，`.drawer` 系列自身 `overflow-y: auto`
     滚动）右下角提供「回到顶部」按钮——抽屉内容高度超过可视高且滚动
     位置超过阈值 400px（约两屏）时出现，点击平滑滚动抽屉容器自身到顶部；
-  - 抽屉内按钮相对抽屉容器右下角定位（`position: absolute`，`.drawer`
-    设 `position: relative` 承托，z-index 6 高于头部 sticky 操作区）；
+  - 抽屉内按钮定位修复（`position: sticky` + `align-self: flex-end`，
+    `.drawer` 设 `position: relative` 兜底，z-index 6 高于头部 sticky
+    操作区）——初版用 `position: absolute` 在滚动容器内按内容坐标系锚定，
+    滚动后按钮随内容滚出可视区，与「scrollTop > 400 才显示」的条件互斥，
+    实测按钮永不显示（概览页 issue / 流水线详情右边栏反馈缺失）；sticky
+    相对滚动容器 scrollport 定位，任何滚动位置都钉在可视区右下角；
     移动端（≤860px）issue 详情抽屉底部 sticky 操作栏常驻时按钮自动上移
     64px 避开遮挡；
+  - 灵感 AI 对话抽屉修复：chat-drawer 自身 `overflow: hidden` 不滚动
+    （实际滚动容器是 `.chat-body`），初版 ref 挂在 `.drawer` 上
+    scrollTop 恒 0、按钮永不显示；现 ref 指向 `.chat-body`、按钮移入
+    chat-body 内渲染（浮在消息区右下角，不遮底部输入行）；
   - 事件监听容器 scroll + window resize + ResizeObserver（抽屉内数据
     异步加载 / 转屏时重估显隐），卸载移除监听无泄漏；容器未挂载（SSR）
     时安全不渲染不抛错；
   - 测试：`frontend/tests/drawer-back-to-top.test.mjs`（显隐条件 / 滚动
     事件驱动 / 点击滚动容器 / 减弱动态效果 / 监听清理 / 5 个抽屉接入
-    完整性 / 样式定位，18 用例）。
+    完整性 / 样式定位 sticky / chat-body ref，19 用例）、
+    `frontend/e2e/tests/drawer-back-to-top.spec.js`（真实浏览器：滚动后
+    按钮钉在抽屉可视区右下角、继续滚动位置稳定、点击回顶，issue / 流水线
+    两个抽屉，2 用例）。
 
 ## [1.6.1] - 2026-08-23
 

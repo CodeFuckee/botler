@@ -694,14 +694,24 @@ body {
 /* 抽屉/右边栏内回到顶部按钮（issue #457）：面向自身竖向滚动的右侧边栏
    抽屉（.drawer 系列：issue 详情 / 流水线详情 / 任务执行详情 / AI 对话 /
    任务详情快览）。与全局版（position: fixed 相对视口）不同，抽屉内按钮
-   必须 relative 定位到抽屉容器——.drawer 已设 position: relative，
-   按钮 absolute 贴右下角；z-index 6 高于抽屉头部 sticky 操作区（z-index
-   5，issue #331），滚动时按钮浮在内容之上。其余视觉（圆角/令牌配色/
-   focus-visible）继承 .back-to-top 基础样式。 */
+   必须钉在抽屉可视区右下角。
+   issue #457 修复：position: absolute + bottom/right 在滚动容器内按
+   「容器内容坐标系」锚定（bottom 相对容器 content-box 底缘，按钮随内容
+   滚动滚出可视区）——显示条件（scrollTop > 400）与按钮可见位置
+   （scrollTop < 容器可视高 - 56）互斥，实测按钮永不显示（概览页
+   issue/流水线详情右边栏反馈缺失）。改为 position: sticky：
+   按钮保持 flex 项身份，sticky bottom 相对滚动容器 scrollport 定位，
+   任何滚动位置都钉在可视区底缘；align-self: flex-end 靠右（与
+   .drawer padding 16px 配合离右 16px）；bottom: 0 配合 .drawer
+   padding 16px 离底 16px，与原 absolute 版 bottom: var(--space-4)
+   视觉一致；flex: 0 0 auto 防被压缩。z-index 6 高于抽屉头部 sticky
+   操作区（z-index 5，issue #331），滚动时按钮浮在内容之上。其余视觉
+   （圆角/令牌配色/focus-visible）继承 .back-to-top 基础样式。 */
 .back-to-top.in-drawer {
-  position: absolute;
-  right: var(--space-4, 16px);
-  bottom: var(--space-4, 16px);
+  position: sticky;
+  bottom: 0;
+  align-self: flex-end;
+  flex: 0 0 auto;
   z-index: 6;
 }
 
@@ -1581,9 +1591,10 @@ code {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  /* issue #457：相对定位承托抽屉内「回到顶部」按钮
-     （.back-to-top.in-drawer 用 absolute 相对抽屉右下角定位）；
-     不改动布局（无偏移），仅作定位参考系 */
+  /* issue #457：相对定位承托抽屉内「回到顶部」按钮——按钮为
+     position: sticky 的 flex 项（align-self: flex-end 靠右），
+     sticky 相对 .drawer 自身 scrollport 定位，无需 absolute 参考系；
+     position: relative 保留（不改动布局，仅作兜底参考系） */
   position: relative;
   /* apple-design：从右滑入（空间一致性——退出应沿同路径向右） */
   animation: drawer-in 240ms var(--ease-spring);
@@ -5164,7 +5175,9 @@ body:has(.drawer-overlay) {
     flex-shrink: 0;
   }
   /* issue #457：issue 详情抽屉移动端底部有 sticky 操作栏
-     （.drawer-bottom-actions），回到顶部按钮上移 64px 避开遮挡 */
+     （.drawer-bottom-actions），回到顶部按钮 sticky bottom 上移
+     64px（16px + 64px）避开遮挡——sticky 偏移同样相对 scrollport
+     底缘计算，与桌面版同一机制 */
   .drawer.issue-drawer .back-to-top.in-drawer {
     bottom: calc(var(--space-4, 16px) + 64px);
   }

@@ -183,7 +183,6 @@ export default function InspirationSection({
       {chatInspiration && (
         <div className="drawer-overlay" onClick={closeInspirationChat}>
           <div className="drawer chat-drawer" role="dialog" aria-modal="true"
-               ref={chatDrawerRef}
                onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <strong><Icon name="message" /> {tr('overview.chatTitle')}</strong>
@@ -194,7 +193,10 @@ export default function InspirationSection({
               <span className="muted">{tr('overview.chatRepo', { name: chatInspiration.repo_name || '—' })}</span>
               <p className="chat-subject-content">{chatInspiration.content}</p>
             </div>
-            <div className="chat-body">
+            {/* issue #457：chat-drawer 自身 overflow: hidden 不滚动，
+                实际滚动容器是 chat-body——回到顶部按钮的 ref 必须指向
+                chat-body（scrollTop/scrollHeight 才有效） */}
+            <div className="chat-body" ref={chatDrawerRef}>
               {chatLoading ? (
                 <div className="chat-empty muted">{tr('overview.chatLoading')}</div>
               ) : chatMessages.length === 0 ? (
@@ -215,6 +217,7 @@ export default function InspirationSection({
                 <div className="alert alert-error chat-error"
                      onClick={() => setChatError('')}>{chatError}</div>
               )}
+              <ScrollContainerBackToTop containerRef={chatDrawerRef} />
             </div>
             <form className="chat-input-row"
                   onSubmit={(e) => { e.preventDefault(); sendInspirationChat() }}>
@@ -237,7 +240,6 @@ export default function InspirationSection({
                 {chatSending ? <Icon name="hourglass" /> : <Icon name="arrowUp" />}
               </button>
             </form>
-            <ScrollContainerBackToTop containerRef={chatDrawerRef} />
           </div>
         </div>
       )}

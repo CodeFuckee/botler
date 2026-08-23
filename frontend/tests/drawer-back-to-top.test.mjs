@@ -253,6 +253,17 @@ for (const [name, file] of Object.entries(drawerSources)) {
   })
 }
 
+// issue #457 修复：chat-drawer 自身 overflow: hidden 不滚动（实际滚动
+// 容器是 .chat-body），ref 必须指向 .chat-body，否则 scrollTop 恒 0、
+// 按钮永不显示
+test('接入完整性：灵感 AI 对话抽屉 ref 指向真正滚动的 .chat-body', () => {
+  const src = readFileSync(new URL('../src/components/overview/InspirationSection.jsx', import.meta.url), 'utf8')
+  assert.match(src, /className="chat-body"\s+ref=\{chatDrawerRef\}/,
+               '.chat-body 应挂 chatDrawerRef（实际滚动容器）')
+  assert.match(src, /<ScrollContainerBackToTop containerRef=\{chatDrawerRef\} \/>/,
+               '回到顶部按钮应在 chat-body 内渲染（浮在消息区右下角）')
+})
+
 // ---- 样式断言 ----
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 
@@ -265,16 +276,18 @@ function ruleBody(css, selector, feature) {
   assert.ok(false, `styles.css 应存在 ${selector} 规则（特征：${feature || '任意'}）`)
 }
 
-test('CSS：.drawer 为相对定位（承托抽屉内 absolute 按钮）', () => {
+test('CSS：.drawer 为相对定位（承托抽屉内回到顶部按钮）', () => {
   const body = ruleBody(styles, '\\.drawer', 'position')
   assert.match(body, /position:\s*relative/, '.drawer 应 position: relative')
 })
 
-test('CSS：.back-to-top.in-drawer 相对抽屉右下角定位（absolute）', () => {
+test('CSS：.back-to-top.in-drawer 用 sticky 钉在抽屉可视区右下角'
+     + '（absolute 会随内容滚动滚出可视区，按钮永不显示）', () => {
   const body = ruleBody(styles, '\\.back-to-top\\.in-drawer', 'position')
-  assert.match(body, /position:\s*absolute/, '抽屉内按钮应 absolute 定位（相对 .drawer）')
-  assert.match(body, /right:\s*var\(--space-4/, '右下角定位应使用 --space-4 令牌')
-  assert.match(body, /bottom:\s*var\(--space-4/, '右下角定位应使用 --space-4 令牌')
+  assert.match(body, /position:\s*sticky/, '抽屉内按钮应 sticky 定位（相对滚动容器 scrollport）')
+  assert.match(body, /bottom:\s*0\s*;/, 'sticky bottom 偏移 0（配合 .drawer padding 离底 16px）')
+  assert.match(body, /align-self:\s*flex-end/, 'flex 项靠右对齐（配合 .drawer padding 离右 16px）')
+  assert.match(body, /flex:\s*0\s*0\s*auto/, '按钮不被 flex 压缩')
 })
 
 test('CSS：移动端（≤860px）issue 抽屉按钮上移，避开底部 sticky 操作栏', () => {

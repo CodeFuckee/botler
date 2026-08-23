@@ -146,7 +146,8 @@ export default function BackToTop({ raised = false }) {
  *    动态效果」时改 auto（尊重无障碍偏好，复用 scrollBehaviorFor）；
  * 5. 无障碍与样式：与全局版一致（i18n aria-label/title、Tab 可聚焦、
  *    focus-visible 焦点环、design token 配色）；定位用 .back-to-top
- *    .in-drawer（absolute 相对 .drawer 右下角，见 styles.css）。
+ *    .in-drawer（position: sticky + align-self: flex-end，钉在滚动
+ *    容器可视区右下角——absolute 会随内容滚动滚出可视区，见 styles.css）。
  * 6. containerRef 为空（容器未挂载/SSR）时安全跳过，不渲染不抛错。 */
 
 /** 读取容器当前滚动位置（无容器按 0，按钮不显示） */
