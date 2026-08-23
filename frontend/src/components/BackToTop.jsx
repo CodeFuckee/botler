@@ -129,3 +129,92 @@ export default function BackToTop({ raised = false }) {
     ? <BackToTopWithRouter raised={raised} />
     : <BackToTopButton raised={raised} routeKey={null} />
 }
+
+/* ==================== 容器滚动版（issue #457） ====================
+ * 面向**自身竖向滚动**的容器（右侧边栏抽屉 .drawer 系列：issue 详情 /
+ * 流水线详情 / 任务执行详情 / 灵感 AI 对话 / 任务详情快览）——这些
+ * 容器 overflow-y: auto 内部滚动，全局版按钮监听 window scroll 不生效，
+ * 需要按钮滚动**容器自身**。
+ * 设计要点：
+ * 1. 挂载：由各抽屉组件在滚动容器（.drawer）内渲染，传入容器 ref；
+ * 2. 显示条件与全局版一致：容器可竖向滚动（内容高 > 可视高）且滚动
+ *    位置超过 BACK_TO_TOP_THRESHOLD（400px）——复用 canScrollVertically /
+ *    shouldShowBackToTop 纯函数；
+ * 3. 事件：容器 scroll（passive）+ window resize + ResizeObserver
+ *    （容器尺寸变化重估——抽屉内数据异步加载/转屏时及时更新）；
+ * 4. 点击：滚动**容器自身**到顶部（scrollTo top:0），系统开启「减弱
+ *    动态效果」时改 auto（尊重无障碍偏好，复用 scrollBehaviorFor）；
+ * 5. 无障碍与样式：与全局版一致（i18n aria-label/title、Tab 可聚焦、
+ *    focus-visible 焦点环、design token 配色）；定位用 .back-to-top
+ *    .in-drawer（absolute 相对 .drawer 右下角，见 styles.css）。
+ * 6. containerRef 为空（容器未挂载/SSR）时安全跳过，不渲染不抛错。 */
+
+/** 读取容器当前滚动位置（无容器按 0，按钮不显示） */
+export function containerScrollTop(el) {
+  return el ? el.scrollTop : 0
+}
+
+/** 读取容器可滚动高度（无容器按 0，视为不可滚动） */
+export function containerScrollHeight(el) {
+  return el ? el.scrollHeight : 0
+}
+
+/** 读取容器可视高度（无容器按 0，视为不可滚动） */
+export function containerClientHeight(el) {
+  return el ? el.clientHeight : 0
+}
+
+/** 容器滚动可见性钩子：监听容器 scroll / window resize / ResizeObserver，
+ *  任一变化时按「可竖向滚动 && 滚动超阈值」重算显隐 */
+function useContainerBackToTopVisibility(containerRef) {
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    const el = containerRef && containerRef.current
+    if (!el) return undefined
+    const evaluate = () => {
+      setVisible(
+        canScrollVertically(containerScrollHeight(el), containerClientHeight(el))
+        && shouldShowBackToTop(containerScrollTop(el)),
+      )
+    }
+    evaluate()
+    el.addEventListener('scroll', evaluate, { passive: true })
+    window.addEventListener('resize', evaluate, { passive: true })
+    let observer = null
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(evaluate)
+      observer.observe(el)
+    }
+    return () => {
+      el.removeEventListener('scroll', evaluate)
+      window.removeEventListener('resize', evaluate)
+      if (observer) observer.disconnect()
+    }
+  }, [containerRef])
+  return visible
+}
+
+/** 容器滚动版回到顶部按钮：containerRef 指向自身竖向滚动的容器 DOM
+ *  （右侧边栏抽屉 .drawer），点击滚动容器自身到顶部 */
+export function ScrollContainerBackToTop({ containerRef }) {
+  const { t } = useI18n()
+  const visible = useContainerBackToTopVisibility(containerRef)
+  const scrollToTop = () => {
+    const el = containerRef && containerRef.current
+    if (!el || typeof el.scrollTo !== 'function') return
+    el.scrollTo({ top: 0, left: 0, behavior: scrollBehaviorFor(prefersReducedMotion()) })
+  }
+  if (!visible) return null
+  const label = t('common.backToTop')
+  return (
+    <button
+      type="button"
+      className="back-to-top in-drawer"
+      onClick={scrollToTop}
+      aria-label={label}
+      title={label}
+    >
+      <Icon name="arrowUp" aria-hidden="true" />
+    </button>
+  )
+}

@@ -691,6 +691,19 @@ body {
 .back-to-top:focus-visible { box-shadow: var(--focus-ring, 0 0 0 3px rgba(0,112,243,.18)); outline: none; }
 /* 版本更新横幅显示时上移（横幅 44px + 12px 间距 = 56px，落在 4px 网格） */
 .back-to-top.raised { bottom: calc(var(--gutter, 20px) + 56px); }
+/* 抽屉/右边栏内回到顶部按钮（issue #457）：面向自身竖向滚动的右侧边栏
+   抽屉（.drawer 系列：issue 详情 / 流水线详情 / 任务执行详情 / AI 对话 /
+   任务详情快览）。与全局版（position: fixed 相对视口）不同，抽屉内按钮
+   必须 relative 定位到抽屉容器——.drawer 已设 position: relative，
+   按钮 absolute 贴右下角；z-index 6 高于抽屉头部 sticky 操作区（z-index
+   5，issue #331），滚动时按钮浮在内容之上。其余视觉（圆角/令牌配色/
+   focus-visible）继承 .back-to-top 基础样式。 */
+.back-to-top.in-drawer {
+  position: absolute;
+  right: var(--space-4, 16px);
+  bottom: var(--space-4, 16px);
+  z-index: 6;
+}
 
 /* HIG 布局：内容区即安全区——左右外边距引用 --gutter（桌面 20px /
    窄屏 16px），顶部 24px 起步、底部 60px 留白保证滚动内容延伸到底部 */
@@ -1568,6 +1581,10 @@ code {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  /* issue #457：相对定位承托抽屉内「回到顶部」按钮
+     （.back-to-top.in-drawer 用 absolute 相对抽屉右下角定位）；
+     不改动布局（无偏移），仅作定位参考系 */
+  position: relative;
   /* apple-design：从右滑入（空间一致性——退出应沿同路径向右） */
   animation: drawer-in 240ms var(--ease-spring);
 }
@@ -5128,6 +5145,11 @@ body:has(.drawer-overlay) {
     width: 100%;
     max-width: 100%;
     flex-shrink: 0;
+  }
+  /* issue #457：issue 详情抽屉移动端底部有 sticky 操作栏
+     （.drawer-bottom-actions），回到顶部按钮上移 64px 避开遮挡 */
+  .drawer.issue-drawer .back-to-top.in-drawer {
+    bottom: calc(var(--space-4, 16px) + 64px);
   }
   /* 仅 issue 详情抽屉（含底部操作栏）取消底部留白——操作栏自带
      padding-bottom 避免双层；其余抽屉（任务执行详情/对话面板）保持

@@ -14,8 +14,9 @@
 // 展示产物清单（文件名/大小，后端已过滤 trace/metadata 噪音），「下载
 // 全部」经 GET /api/pipelines/{repo_id}/artifacts?job_id= 后端代理下载
 // GitLab zip 归档（浏览器不持有 GitLab token）。
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon.jsx'
+import { ScrollContainerBackToTop } from './BackToTop.jsx'
 import { api } from '../api.js'
 import { shortSha, fmtTime, fmtSeconds, fmtSize } from '../api.js'
 
@@ -107,6 +108,8 @@ export function reportArtifacts(job) {
 // 异常数据防御：entry 为 null / 非对象 / pipeline 缺失时展示空态；
 // stages 非数组视为空；stage / job 字段缺失逐项兜底，不崩溃。
 export default function PipelineDrawer({ entry, onClose }) {
+  // issue #457：抽屉滚动容器 ref——右下角「回到顶部」按钮定位/监听于此
+  const drawerRef = useRef(null)
   // Esc 关闭本层抽屉（SSR 测试环境无 document 时跳过，与 IssueDrawer 一致）
   useEffect(() => {
     if (typeof document === 'undefined') return
@@ -130,6 +133,7 @@ export default function PipelineDrawer({ entry, onClose }) {
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <div className="drawer pipeline-drawer" role="dialog" aria-modal="true"
+           ref={drawerRef}
            onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong className="issue-drawer-title">
@@ -317,6 +321,7 @@ export default function PipelineDrawer({ entry, onClose }) {
             )}
           </>
         )}
+      <ScrollContainerBackToTop containerRef={drawerRef} />
       </div>
     </div>
   )

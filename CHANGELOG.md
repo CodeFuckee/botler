@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- **右侧边栏抽屉「回到顶部」按钮（issue #457）**：
+  - 前端在 `BackToTop.jsx` 新增容器滚动版组件 `ScrollContainerBackToTop`
+    （复用全局版的显示阈值 / 减弱动态效果 / 无障碍 / i18n 逻辑）：所有
+    需要竖向滚动的右侧边栏抽屉（issue 详情 / 流水线详情 / 任务执行详情 /
+    灵感 AI 对话 / 任务详情快览，`.drawer` 系列自身 `overflow-y: auto`
+    滚动）右下角提供「回到顶部」按钮——抽屉内容高度超过可视高且滚动
+    位置超过阈值 400px（约两屏）时出现，点击平滑滚动抽屉容器自身到顶部；
+  - 抽屉内按钮相对抽屉容器右下角定位（`position: absolute`，`.drawer`
+    设 `position: relative` 承托，z-index 6 高于头部 sticky 操作区）；
+    移动端（≤860px）issue 详情抽屉底部 sticky 操作栏常驻时按钮自动上移
+    64px 避开遮挡；
+  - 事件监听容器 scroll + window resize + ResizeObserver（抽屉内数据
+    异步加载 / 转屏时重估显隐），卸载移除监听无泄漏；容器未挂载（SSR）
+    时安全不渲染不抛错；
+  - 测试：`frontend/tests/drawer-back-to-top.test.mjs`（显隐条件 / 滚动
+    事件驱动 / 点击滚动容器 / 减弱动态效果 / 监听清理 / 5 个抽屉接入
+    完整性 / 样式定位，18 用例）。
+
 ## [1.6.1] - 2026-08-23
 
 ### Added

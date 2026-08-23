@@ -1,7 +1,9 @@
 // 灵感板块 + AI 对话抽屉（issue #201 拆分）：从 Overview.jsx 抽出的
 // 灵感记录子组件与右侧对话面板，数据由 useOverviewData hook 注入。
+import { useRef } from 'react'
 import { useI18n } from '../../i18n.jsx'
 import { Icon } from '../Icon.jsx'
+import { ScrollContainerBackToTop } from '../BackToTop.jsx'
 import { fmtAgo } from '../../api.js'
 import { INSPIRATION_POLL_MS } from '../../lib/overview.jsx'
 
@@ -30,6 +32,8 @@ export default function InspirationSection({
   chatSending, chatDraft, setChatDraft, chatError, setChatError,
   sendInspirationChat,
 }) {
+  // issue #457：AI 对话抽屉滚动容器 ref——右下角「回到顶部」按钮定位/监听于此
+  const chatDrawerRef = useRef(null)
   const { tr } = useI18n()
   return (
     <>
@@ -179,6 +183,7 @@ export default function InspirationSection({
       {chatInspiration && (
         <div className="drawer-overlay" onClick={closeInspirationChat}>
           <div className="drawer chat-drawer" role="dialog" aria-modal="true"
+               ref={chatDrawerRef}
                onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <strong><Icon name="message" /> {tr('overview.chatTitle')}</strong>
@@ -232,6 +237,7 @@ export default function InspirationSection({
                 {chatSending ? <Icon name="hourglass" /> : <Icon name="arrowUp" />}
               </button>
             </form>
+            <ScrollContainerBackToTop containerRef={chatDrawerRef} />
           </div>
         </div>
       )}

@@ -48,6 +48,7 @@
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon.jsx'
+import { ScrollContainerBackToTop } from './BackToTop.jsx'
 import { api, fmtTime, fmtSeconds } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import Markdown, { linkifyCommits } from './Markdown.jsx'
@@ -157,6 +158,8 @@ export function NoteAvatar({ note }) {
 export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
                                       onLabelsUpdated, running = false, onRetried,
                                       onAssigneeUpdated, onPrioritized, onRun }) {
+  // issue #457：抽屉滚动容器 ref——右下角「回到顶部」按钮定位/监听于此
+  const drawerRef = useRef(null)
   const [closing, setClosing] = useState(false) // 关闭请求进行中（按钮禁用）
   const [closed, setClosed] = useState(false)   // 本次会话关闭成功标记
   const [closeErr, setCloseErr] = useState('')  // 关闭失败的错误信息
@@ -1022,7 +1025,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
-      <div className="drawer issue-drawer" onClick={(e) => e.stopPropagation()}>
+      <div className="drawer issue-drawer" ref={drawerRef} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong className="issue-drawer-title">
             #{i.iid} {i.title || '—'}
@@ -1214,6 +1217,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
         <div className="drawer-bottom-actions">
           {drawerActions}
         </div>
+        <ScrollContainerBackToTop containerRef={drawerRef} />
       </div>
       {/* issue #167：任务执行详情第二层右边栏——叠加在本层抽屉之上，
           遮罩点击/×/Esc 关闭；project_id/iid 与 repoName 传给第二层

@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePolling } from '../hooks/usePolling.js'
 import { Icon } from './Icon.jsx'
+import { ScrollContainerBackToTop } from './BackToTop.jsx'
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 import UsageCard from '../components/UsageCard.jsx'
@@ -106,6 +107,8 @@ export function renderChatMessage(m) {
 
 export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
                                            repoName, onClose }) {
+  // issue #457：抽屉滚动容器 ref——右下角「回到顶部」按钮定位/监听于此
+  const drawerRef = useRef(null)
   // 任务列表：tasks null=加载中；listErr 非空=加载失败（错误横幅 + 重试）
   const [tasks, setTasks] = useState(null)
   const [listErr, setListErr] = useState('')
@@ -228,7 +231,7 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
-      <div className="drawer task-detail-drawer" onClick={(e) => e.stopPropagation()}>
+      <div className="drawer task-detail-drawer" ref={drawerRef} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong className="issue-drawer-title">
             任务执行详情 — #{issueIid} {issueTitle || '—'}
@@ -418,6 +421,7 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
             )}
           </div>
         )}
+      <ScrollContainerBackToTop containerRef={drawerRef} />
       </div>
     </div>
   )

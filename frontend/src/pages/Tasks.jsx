@@ -4,6 +4,7 @@ import { usePolling } from '../hooks/usePolling.js'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { Icon } from '../components/Icon.jsx'
+import { ScrollContainerBackToTop } from '../components/BackToTop.jsx'
 import { useI18n } from '../i18n.jsx'
 import { useShortcuts } from '../keymap.js'
 import { UsageSummary } from '../components/UsageCard.jsx'
@@ -98,6 +99,8 @@ export function paramSourceKey(source) {
 // 任务抽屉（issue #70）：窄视口下部分列被隐藏时，点操作列「⋯」按钮
 // 弹出右侧抽屉显示该任务全部字段（含被隐藏列的数据）。
 function TaskDrawer({ task, onClose }) {
+  // issue #457：抽屉滚动容器 ref——右下角「回到顶部」按钮定位/监听于此
+  const drawerRef = useRef(null)
   const { tr } = useI18n()
   const meta = STATUS_META[task.status] || { label: task.status, cls: '' }
   const failedReason =
@@ -106,7 +109,7 @@ function TaskDrawer({ task, onClose }) {
       : ''
   return (
     <div className="drawer-overlay" onClick={onClose}>
-      <div className="drawer" onClick={(e) => e.stopPropagation()}>
+      <div className="drawer" ref={drawerRef} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong>{tr('tasks.drawerTitle', { id: task.id, iid: task.issue_iid, title: task.issue_title })}</strong>
           <button className="btn modal-close" onClick={onClose} title={tr('common.close')}
@@ -159,6 +162,7 @@ function TaskDrawer({ task, onClose }) {
             </td></tr>
           </tbody>
         </table>
+        <ScrollContainerBackToTop containerRef={drawerRef} />
       </div>
     </div>
   )
