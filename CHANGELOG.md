@@ -29,6 +29,19 @@
 
 ### Fixed
 
+- **修复 CI/CD 详情右边栏无法查看 e2e 截图测试的截图（issue #453）**：
+  - 根因：`e2e:screenshots`（issue #445）生成的 12 个页面 × 7 种视口共
+    84 张 png 截图以 zip 归档（archive 产物，约 20MB）形式存在于 GitLab
+    job 产物中，流水线详情右边栏只能「下载全部」整个 zip，无法在抽屉内
+    直接预览图片；
+  - 修复：后端新增 `GET /api/pipelines/{repo_id}/screenshots`（下载归档
+    并列出其中 png 截图，带 60 秒 TTL 缓存避免浏览会话内重复下载）与
+    `GET /api/pipelines/{repo_id}/screenshot-file`（返回单张图片字节流，
+    优先 GitLab 单文件下载、404 回退 zip 提取；仅允许图片扩展名并拒绝
+    路径穿越）；前端流水线详情右边栏对带 archive 产物的成功 job 提供
+    「查看截图」入口，抽屉内按页面分组渲染缩略图网格、点击进入大图预览，
+    加载中 / 接口失败 / 归档内无截图均有兜底。
+
 - **修复「添加 Issue」对话框与 issue 详情右边栏加载缓慢（issue #452）**：
   - 根因一：`_project_members` 对每个缺 `user_id` 的成员串行调用
     `/users?username=` 补查（N+1 查询）——实测 GitLab 19 的 members/all

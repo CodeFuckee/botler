@@ -1131,3 +1131,116 @@ class TestReportView:
                       params={"job_id": 5, "file": "a.zip", "file_type": "archive"})
         assert resp.status_code == 422
         assert "报告类型" in resp.json()["detail"]
+
+
+# ---- e2e 截图查看（issue #453） ----
+
+# e2e:screenshots job（issue #445）的归档产物结构：
+# frontend/screenshots/<页面>/<视口>.png + index.html（截图索引页）。
+# 复现场景：CI/CD 详情右边栏应能直接查看 e2e 截图测试的截图，而不是
+# 只能下载整个 zip 归档。以下测试先验证「截图列表 / 单张截图」两个
+# 代理接口的行为（当前实现缺失，接口返回 404 即复现 bug）。
+def _screenshot_zip() -> bytes:
+    """构造与 e2e:screenshots job 归档同构的 zip（2 页面 × 2 视口 png）。"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("frontend/screenshots/index.html", "<html>screenshots</html>")
+        zf.writestr("frontend/screenshots/overview/desktop-1440x900.png",
+                    b"\x89PNG\r\n\x1a\noverview-desktop")
+        zf.writestr("frontend/screenshots/overview/mobile-375x667.png",
+                    b"\x89PNG\r\n\x1a\noverview-mobile")
+        zf.writestr("frontend/screenshots/settings/desktop-1440x900.png",
+                    b"\x89PNG\r\n\x1a\nsettings-desktop")
+    return buf.getvalue()
+
+
+class TestScreenshotsView:
+    """GET /api/pipelines/{repo_id}/screenshots 与 /screenshot-file（issue #453）。
+
+    需求：CI/CD 详情右边栏直接查看 e2e:screenshots job 生成的截图。
+    """
+
+    def test_screenshots_list_ok(self, client):
+        """归档内 png 应被列出（路径/页面/视口），供前端预览。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_bytes = {(42, 5): _screenshot_zip()}
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/screenshots",
+                      params={"job_id": 5})
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["job_id"] == 5
+        paths = [s["path"] for s in data["screenshots"]]
+        assert "frontend/screenshots/overview/desktop-1440x900.png" in paths
+        assert "frontend/screenshots/settings/desktop-1440x900.png" in paths
+        assert not any("index.html" in p for p in paths), "索引页不是截图，不应列出"
+        # 每个条目携带页面/视口信息，前端按页面分组展示
+        shot = next(s for s in data["screenshots"]
+                    if s["path"].endswith("desktop-1440x900.png"))
+        assert shot["page"] == "overview"
+        assert shot["viewport"] == "desktop-1440x900"
+        assert shot["size"] > 0
+        assert "artifacts:42:5" in stub.calls
+
+    def test_screenshots_archive_without_png_returns_empty(self, client):
+        """归档内无 png（普通 build 产物）→ 200 + 空列表，不崩溃。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("dist/index.html", "build output")
+        stub.artifact_bytes = {(42, 5): buf.getvalue()}
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/screenshots",
+                      params={"job_id": 5})
+
+        assert resp.status_code == 200
+        assert resp.json()["screenshots"] == []
+
+    def test_screenshots_gitlab_404_maps_404(self, client):
+        """GitLab 侧产物 404（任务无产物）→ 明确 404。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.fail_artifacts = {7: GitLabError("任务无产物（404）", 404)}
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/screenshots",
+                      params={"job_id": 7})
+
+        assert resp.status_code == 404
+        assert "产物" in resp.json()["detail"]
+
+    def test_screenshot_file_ok(self, client):
+        """单张 png 应返回图片字节流（image/png），供 <img> 直接渲染。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        stub.artifact_bytes = {(42, 5): _screenshot_zip()}
+        path = "frontend/screenshots/overview/desktop-1440x900.png"
+
+        resp = tc.get(f"/api/pipelines/{repo_id}/screenshot-file",
+                      params={"job_id": 5, "path": path})
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("image/png")
+        assert resp.content.startswith(b"\x89PNG")
+        assert "artifacts:42:5" in stub.calls
+
+    def test_screenshot_file_rejects_non_png_and_traversal(self, client):
+        """非 png 扩展名 / 路径穿越 / 绝对路径 / 空路径 → 422，不下载归档。"""
+        tc, stub, db, tmp_path = client
+        repo_id = _add_repo(db, project_id=42, name="demo")
+        for bad in ["frontend/screenshots/index.html", "../secret.png",
+                    "/etc/passwd.png", ""]:
+            resp = tc.get(f"/api/pipelines/{repo_id}/screenshot-file",
+                          params={"job_id": 5, "path": bad})
+            assert resp.status_code == 422, f"path={bad!r} 应 422"
+        assert not any(c.startswith("artifacts:") for c in stub.calls)
+
+    def test_screenshot_file_unknown_repo_404(self, client):
+        tc, stub, db, tmp_path = client
+        resp = tc.get("/api/pipelines/9999/screenshot-file",
+                      params={"job_id": 1, "path": "a.png"})
+        assert resp.status_code == 404
+        assert "仓库不存在" in resp.json()["detail"]
+        assert not any(c.startswith("artifacts:") for c in stub.calls)

@@ -119,6 +119,8 @@ export default function PipelineDrawer({ entry, onClose }) {
 
   // 选中的报告（issue #337）：{repoId, jobId, jobName, file, fileType} 或 null
   const [report, setReport] = useState(null)
+  // 选中的截图（issue #453）：{repoId, jobId, jobName} 或 null
+  const [screenshot, setScreenshot] = useState(null)
   const repo = entry && typeof entry === 'object' ? entry : null
   const repoName = repo && repo.repo_name ? repo.repo_name : '—'
   const pl = repo ? repo.pipeline : null
@@ -197,6 +199,8 @@ export default function PipelineDrawer({ entry, onClose }) {
                 issue #337：点击「查看报告」后切换为报告视图 */}
             {report ? (
               <ReportView {...report} onBack={() => setReport(null)} />
+            ) : screenshot ? (
+              <ScreenshotView {...screenshot} onBack={() => setScreenshot(null)} />
             ) : (
             <div className="pipeline-detail-stages">
               <h3>阶段与任务</h3>
@@ -260,6 +264,25 @@ export default function PipelineDrawer({ entry, onClose }) {
                                   </li>
                                 ))}
                               </ul>
+                            </div>
+                          )}
+                          {/* issue #453：job 成功且带 archive 产物（zip 归档）时
+                              提供「查看截图」，点击在抽屉内列出并预览产物内的
+                              png 截图（e2e:screenshots job）；无 png 时展示
+                              空态提示，不崩溃 */}
+                          {j.status === 'success' && j.id != null && repo.repo_id != null
+                           && hasArchiveArtifact(j) && (
+                            <div className="pipeline-detail-report">
+                              <button type="button"
+                                      className="pipeline-detail-screenshot-btn"
+                                      onClick={() => setScreenshot({
+                                        repoId: repo.repo_id,
+                                        jobId: j.id,
+                                        jobName: j.name,
+                                      })}
+                                      title="预览该任务产物中的截图">
+                                <Icon name="image" /> 查看截图
+                              </button>
                             </div>
                           )}
                           {/* issue #337：job 成功且带报告产物时提供「查看报告」，
@@ -471,5 +494,117 @@ function TestReport({ report }) {
         </ul>
       )}
     </>
+  )
+}
+
+// ---- 截图查看（issue #453）----
+
+// job 是否带 archive 产物（zip 归档）：有归档才提供「查看截图」入口。
+// e2e:screenshots job（issue #445）的 png 截图以 zip 归档形式存在于
+// 产物中，缺字段 / 非数组兜底为 false。
+export function hasArchiveArtifact(job) {
+  return Array.isArray(job && job.artifacts)
+    && job.artifacts.some((a) => a && typeof a === 'object' && a.file_type === 'archive')
+}
+
+// 截图列表 → 按页面分组 [{name, shots:[...]}]（保持后端排序稳定；脏数据逐项兜底）
+export function groupScreenshots(shots) {
+  const pages = []
+  const byPage = new Map()
+  for (const s of Array.isArray(shots) ? shots : []) {
+    if (!s || typeof s !== 'object') continue
+    const page = s.page || '—'
+    if (!byPage.has(page)) {
+      byPage.set(page, [])
+      pages.push({ name: page, shots: byPage.get(page) })
+    }
+    byPage.get(page).push(s)
+  }
+  return pages
+}
+
+// 单张截图的后端代理 URL（图片字节直接返回，浏览器无需持有 GitLab token）
+export function screenshotFileUrl(repoId, jobId, path) {
+  const qs = new URLSearchParams({ job_id: String(jobId), path })
+  return `/api/pipelines/${repoId}/screenshot-file?${qs}`
+}
+
+// 截图预览视图：从后端拉取 job 产物归档内的 png 截图列表，按页面分组
+// 渲染缩略图网格，点击任一张进入大图预览（再点关闭）。加载中 / 接口
+// 失败 / 归档内无截图均有兜底，不崩溃。与 ReportView 平行，复用
+// pipeline-report-head 的「返回」交互。
+export function ScreenshotView({ repoId, jobId, jobName, onBack }) {
+  const [state, setState] = useState({ loading: true, error: null, screenshots: null })
+  const [selected, setSelected] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    setState({ loading: true, error: null, screenshots: null })
+    setSelected(null)
+    api.get(`/api/pipelines/${repoId}/screenshots?job_id=${jobId}`)
+      .then((data) => {
+        if (!cancelled) setState({
+          loading: false,
+          screenshots: data && Array.isArray(data.screenshots) ? data.screenshots : [],
+        })
+      })
+      .catch((e) => {
+        if (!cancelled) setState({
+          loading: false, error: (e && e.message) || '截图加载失败', screenshots: [],
+        })
+      })
+    return () => { cancelled = true }
+  }, [repoId, jobId])
+
+  const pages = state.screenshots ? groupScreenshots(state.screenshots) : []
+  return (
+    <div className="pipeline-screenshots">
+      <div className="pipeline-report-head">
+        <button type="button" className="btn pipeline-report-back" onClick={onBack}
+                title="返回阶段与任务明细">
+          <Icon name="arrowLeft" /> 返回
+        </button>
+        <span className="pipeline-report-title" title={jobName || ''}>
+          {jobName || '—'} · 截图预览
+        </span>
+      </div>
+      {state.loading && <p className="muted pipeline-report-empty">截图加载中…</p>}
+      {!state.loading && state.error && (
+        <div className="alert alert-error pipeline-report-error">{state.error}</div>
+      )}
+      {!state.loading && !state.error && state.screenshots
+       && state.screenshots.length === 0 && (
+        <p className="muted pipeline-report-empty">该任务产物中未发现截图</p>
+      )}
+      {!state.loading && !state.error && pages.map((page) => (
+        <div key={page.name} className="pipeline-screenshots-page">
+          <h4 className="pipeline-screenshots-page-name">{page.name}</h4>
+          <div className="pipeline-screenshots-grid">
+            {page.shots.map((s) => (
+              <button key={s.path} type="button"
+                      className="pipeline-screenshots-thumb"
+                      onClick={() => setSelected(s)}
+                      title={`${s.page || '—'}/${s.viewport || s.path}`}>
+                <img src={screenshotFileUrl(repoId, jobId, s.path)}
+                     alt={s.viewport || s.path} loading="lazy" />
+                <span className="pipeline-screenshots-thumb-name">
+                  {s.viewport || '—'}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      {selected && (
+        <div className="pipeline-screenshots-lightbox"
+             onClick={() => setSelected(null)}
+             title="点击关闭大图预览">
+          <img src={screenshotFileUrl(repoId, jobId, selected.path)}
+               alt={selected.viewport || selected.path} />
+          <span className="pipeline-screenshots-lightbox-name">
+            {selected.page || '—'} / {selected.viewport || selected.path}
+          </span>
+        </div>
+      )}
+    </div>
   )
 }

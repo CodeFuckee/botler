@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from ..gitlab_client import GitLabClient, GitLabError
 from ..report_parsers import parse_report
@@ -61,6 +61,23 @@ _PENDING_STATUSES = {"pending", "created", "waiting_for_resource",
 # trace = job 运行日志（job.log），metadata = GitLab 内部元数据。
 # 这两类每个成功 job 必有、对用户无下载价值，聚合展示时过滤。
 _ARTIFACT_NOISE_TYPES = {"trace", "metadata"}
+
+# e2e 截图查看（issue #453）：CI/CD 详情右边栏直接预览 e2e:screenshots
+# job（issue #445）产物归档内的截图，替代「只能下载整个 zip 再解压」。
+# 截图列表接口需要下载完整 zip 归档解析 png 清单（归档约 20MB），
+# 浏览会话内重复点击不应反复下载，做 60 秒 TTL 缓存（key=repo_id+job_id，
+# 只缓存解析后的轻量列表，不缓存归档字节）。
+_SCREENSHOT_LIST_TTL_SECONDS = 60.0
+_SCREENSHOT_LISTS_LOCK = threading.Lock()
+_SCREENSHOT_LISTS: dict[tuple[int, int], tuple[float, list[dict]]] = {}
+
+# screenshot-file 接口允许的图片扩展名与对应 content-type
+# （e2e:screenshots 产物为 png，兼容其他常见图片产物）
+_SCREENSHOT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_SCREENSHOT_CONTENT_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
 
 
 def _trim_artifacts(job: dict) -> list[dict]:
@@ -100,6 +117,8 @@ def clear_pipeline_cache() -> None:
         _CACHE["data"] = None
     with _REPO_CLIENTS_LOCK:
         _REPO_CLIENTS.clear()
+    with _SCREENSHOT_LISTS_LOCK:
+        _SCREENSHOT_LISTS.clear()
 
 
 def _stage_status(jobs: list[dict]) -> str:
@@ -441,3 +460,131 @@ def pipeline_artifacts_download(repo_id: int, job_id: int, request: Request):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---- e2e 截图查看（issue #453）----
+
+# 产物归档内路径校验（列表/单张截图共用）：非空、非绝对路径、任一路径
+# 段不得为 ..；与报告文件路径校验同规则，杜绝路径穿越。
+def _validate_artifact_path(path: str) -> None:
+    if not path or path.startswith("/") or ".." in path.split("/"):
+        raise HTTPException(422, "产物文件路径不合法")
+
+
+def _list_png_screenshots(zf: zipfile.ZipFile) -> list[dict]:
+    """从 job 产物归档中列出 png 截图（issue #453）。
+
+    e2e:screenshots job 的归档路径形如
+    frontend/screenshots/<页面>/<视口>.png（另有 index.html 索引页，
+    非 png 不列出）；从路径倒数两级解析 page / viewport 供前端按页面
+    分组展示。任何路径结构都能兜底：解析不出页面时用文件名本身。
+    按 (page, viewport) 稳定排序保证展示顺序确定。
+    """
+    shots: list[dict] = []
+    for info in zf.infolist():
+        if info.is_dir() or info.file_size <= 0:
+            continue
+        name = info.filename.replace("\\", "/")
+        if not name.lower().endswith(".png"):
+            continue
+        parts = [seg for seg in name.split("/") if seg]
+        if len(parts) >= 2:
+            page = parts[-2]
+            viewport = parts[-1]
+        else:
+            page = "—"
+            viewport = parts[-1] if parts else name
+        # viewport 展示名去掉扩展名（desktop-1440x900.png → desktop-1440x900）
+        if viewport.lower().endswith(".png"):
+            viewport = viewport[:-4]
+        shots.append({"path": name, "page": page,
+                      "viewport": viewport, "size": info.file_size})
+    shots.sort(key=lambda s: (s["page"], s["viewport"]))
+    return shots
+
+
+@router.get("/{repo_id}/screenshots")
+def pipeline_screenshots(repo_id: int, job_id: int, request: Request):
+    """列出指定 job 产物归档内的 png 截图（issue #453）。
+
+    CI/CD 详情右边栏「查看截图」经此代理下载 job 的 zip 归档并列出
+    其中全部 png（路径/页面/视口/大小），前端按页面分组渲染缩略图。
+    前端浏览器不持有 GitLab token，产物读取统一在后端完成；结果带
+    60 秒 TTL 缓存（归档约 20MB，避免浏览会话内重复下载）。
+    归档内无 png（普通 build 产物）返回空列表，不视为错误。
+    """
+    c = request.app.state.ctx
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    key = (repo_id, job_id)
+    now = time.monotonic()
+    with _SCREENSHOT_LISTS_LOCK:
+        hit = _SCREENSHOT_LISTS.get(key)
+        if hit is not None and now - hit[0] < _SCREENSHOT_LIST_TTL_SECONDS:
+            return {"job_id": job_id, "screenshots": hit[1]}
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        resp = client.download_job_artifacts(row["gitlab_project_id"], job_id)
+        content = _response_content(resp)
+    except GitLabError as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "该任务无产物或不存在") from e
+        raise HTTPException(502, f"GitLab 产物下载失败: {e}") from e
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            shots = _list_png_screenshots(zf)
+    except zipfile.BadZipFile as e:
+        raise HTTPException(502, "任务产物归档不是有效 ZIP 文件") from e
+    with _SCREENSHOT_LISTS_LOCK:
+        _SCREENSHOT_LISTS[key] = (now, shots)
+    return {"job_id": job_id, "screenshots": shots}
+
+
+@router.get("/{repo_id}/screenshot-file")
+def pipeline_screenshot_file(repo_id: int, job_id: int, request: Request,
+                             path: str = ""):
+    """返回 job 产物归档内单张截图图片字节流（issue #453）。
+
+    优先走 GitLab 单文件下载接口（GET /jobs/{job_id}/artifacts/{path}，
+    已在真实实例验证对归档内路径可用）；404（个别路径单文件不可达）
+    回退下载整个 zip 归档定位提取（与报告查看 issue #337 同模式）。
+    仅允许图片扩展名，杜绝路径穿越。图片字节直接返回，前端 <img>
+    即可渲染，无需浏览器持有 GitLab token。
+    """
+    _validate_artifact_path(path)
+    ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext not in _SCREENSHOT_IMAGE_EXTS:
+        raise HTTPException(422, "仅支持查看图片类产物（png/jpg/gif/webp）")
+    c = request.app.state.ctx
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    client = _repo_client(c, row) or c.gitlab
+    try:
+        resp = client.download_job_artifact_file(
+            row["gitlab_project_id"], job_id, path)
+        content = _response_content(resp)
+    except GitLabError as e:
+        if e.status_code != 404:
+            raise HTTPException(502, f"GitLab 截图下载失败: {e}") from e
+        # 单文件接口 404 时回退 zip 归档定位（与报告查看同模式）
+        try:
+            archive_resp = client.download_job_artifacts(
+                row["gitlab_project_id"], job_id)
+            archive_content = _response_content(archive_resp)
+        except GitLabError as archive_error:
+            if archive_error.status_code == 404:
+                raise HTTPException(404, "截图不存在或任务无该产物") from archive_error
+            raise HTTPException(
+                502, f"GitLab 截图归档下载失败: {archive_error}") from archive_error
+        try:
+            with zipfile.ZipFile(io.BytesIO(archive_content)) as zf:
+                try:
+                    content = zf.read(path)
+                except KeyError as missing:
+                    raise HTTPException(
+                        404, "截图不存在或任务无该产物") from missing
+        except zipfile.BadZipFile as archive_error:
+            raise HTTPException(502, "任务产物归档不是有效 ZIP 文件") from archive_error
+    return Response(content=content, media_type=_SCREENSHOT_CONTENT_TYPES[ext])

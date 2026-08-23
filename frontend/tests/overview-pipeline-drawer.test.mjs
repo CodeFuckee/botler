@@ -93,8 +93,9 @@ async function renderOverview(pipelinesPayload, issues = [], reportFn = null) {
     if (pathname === '/api/issues/overview') {
       return { repos: [{ repo_id: 1, repo_name: 'botler', priority: 10, issues }], errors: [], total: 0 }
     }
-    // issue #337：报告解析接口
-    if (reportFn && /^\/api\/pipelines\/\d+\/report\?/.test(pathname)) {
+    // issue #337：报告解析接口；issue #453：截图列表接口。
+    // 两者均由调用方传入的 reportFn 按路径分派响应。
+    if (reportFn && /^\/api\/pipelines\/\d+\/(report|screenshots)\?/.test(pathname)) {
       return reportFn(pathname)
     }
     throw new Error('unexpected ' + pathname)
@@ -778,4 +779,112 @@ test('测试报告明细不创建局部纵向滚动，滚动由流水线详情�
     '报告明细列表不应限制高度，否则会形成局部滚动区')
   assert.doesNotMatch(match[1], /overflow-y\s*:/,
     '报告明细列表不应设置纵向滚动，滚动应由 .drawer 统一承担')
+})
+
+// ---- e2e 截图查看（issue #453）----
+// 复现场景：e2e:screenshots job（issue #445）的截图以 zip 归档形式存在
+// 于 job 产物中，CI/CD 详情右边栏只能「下载全部」，无法直接查看截图。
+// 以下断言期望：任务行提供「查看截图」入口，点击后抽屉内列出并预览
+// 归档内的 png 截图（后端代理 /api/pipelines/{repo_id}/screenshots）。
+
+test('截图查看：源码含「查看截图」入口与截图预览视图（issue #453）', () => {
+  assert.match(drawerSrc, /查看截图/, '任务行应有「查看截图」按钮文案')
+  assert.match(drawerSrc, /ScreenshotView/, '应渲染 ScreenshotView 截图预览视图组件')
+  assert.match(drawerSrc, /\/api\/pipelines\/\$\{repoId\}\/screenshots/,
+    '截图列表应走后端代理接口 /api/pipelines/{repo_id}/screenshots')
+})
+
+// 集成：e2e:screenshots job 带 archive 产物 → 任务行出现「查看截图」，
+// 点击后抽屉内列出截图（按页面分组），提供返回按钮
+test('e2e:screenshots 任务行「查看截图」→ 抽屉内列出截图（issue #453 验收）', async () => {
+  const entry = {
+    ...PIPELINE_ENTRY,
+    stages: [
+      { name: 'e2e', status: 'success', jobs: [
+        { id: 77, name: 'e2e:screenshots', status: 'success',
+          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/77',
+          artifacts: [
+            { file_type: 'archive', filename: 'artifacts.zip',
+              size: 19579475, file_format: 'zip' },
+          ] },
+      ] },
+    ],
+  }
+  const screenshotsPayload = {
+    job_id: 77,
+    screenshots: [
+      { path: 'frontend/screenshots/overview/desktop-1440x900.png',
+        page: 'overview', viewport: 'desktop-1440x900', size: 24421 },
+      { path: 'frontend/screenshots/overview/mobile-375x667.png',
+        page: 'overview', viewport: 'mobile-375x667', size: 20001 },
+    ],
+  }
+  const { renderer, renderError } = await renderOverview(
+    { pipelines: [entry], errors: [] }, [], (pathname) => {
+      if (/\/screenshots\?job_id=77$/.test(pathname)) return screenshotsPayload
+      throw new Error('unexpected ' + pathname)
+    })
+  assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
+  const root = renderer.root
+  try {
+    const cardBtn = root.findAll(
+      (n) => n.type === 'button' && String(n.props.className || '').includes('pipeline-link'))
+    await TestRenderer.act(async () => { cardBtn[0].props.onClick() })
+
+    // 成功 job 带 archive 产物 → 应出现「查看截图」按钮
+    const btns = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-screenshot-btn'))
+    assert.equal(btns.length, 1, 'e2e:screenshots 任务行应有一个「查看截图」按钮')
+
+    // 点击后抽屉内渲染截图列表（按页面分组 + 图片预览）
+    await TestRenderer.act(async () => { btns[0].props.onClick() })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const text = drawerText(root)
+    assert.ok(text.includes('e2e:screenshots'), '截图视图头应显示 job 名')
+    assert.ok(text.includes('overview'), '应显示页面分组 overview')
+    assert.ok(text.includes('desktop-1440x900'), '应显示视口 desktop-1440x900')
+    assert.ok(text.includes('mobile-375x667'), '应显示视口 mobile-375x667')
+    assert.ok(text.includes('返回'), '截图视图应有返回按钮')
+    // 图片预览：<img> 指向后端单张截图代理接口
+    const imgs = root.findAll((n) => n.type === 'img')
+    assert.ok(imgs.length >= 2, '截图列表中应渲染图片缩略图/预览')
+    assert.match(imgs[0].props.src, /^\/api\/pipelines\/1\/screenshot-file\?/,
+      '图片 src 应指向后端单张截图代理接口')
+    assert.match(imgs[0].props.src, /job_id=77/, '图片 src 应携带 job_id')
+    assert.match(imgs[0].props.src, /path=frontend%2Fscreenshots%2Foverview%2Fdesktop-1440x900\.png/,
+      '图片 src 应携带 URL 编码后的归档内路径')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// 无 archive 产物的 job 不应出现「查看截图」按钮
+test('无 archive 产物的 job 不渲染「查看截图」按钮', async () => {
+  const entry = {
+    ...PIPELINE_ENTRY,
+    stages: [
+      { name: 'test', status: 'success', jobs: [
+        { id: 88, name: 'unit', status: 'success',
+          web_url: 'https://x/-/jobs/88', artifacts: [] },
+      ] },
+    ],
+  }
+  const { renderer, root } = await openPipelineDrawer({ pipelines: [entry], errors: [] })
+  try {
+    const btns = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-screenshot-btn'))
+    assert.equal(btns.length, 0, '无 archive 产物的 job 不应有查看截图按钮')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// 样式：styles.css 提供截图视图样式
+test('styles.css 提供截图视图样式（.pipeline-detail-screenshot-btn / .pipeline-screenshots-*）', () => {
+  assert.match(styles, /\.pipeline-detail-screenshot-btn\s*\{/, '应有「查看截图」按钮样式')
+  assert.match(styles, /\.pipeline-screenshots\s*\{/, '应有截图视图容器样式')
 })
