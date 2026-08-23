@@ -178,6 +178,10 @@ variables:
       echo "Node 版本: $(node --version 2>/dev/null || echo '未安装')"
       echo "npm 版本: $(npm --version 2>/dev/null || echo '未安装')"
       echo "npm registry: $NPM_REGISTRY_URL"
+      # issue #461：同 .backend_setup，CI 与生产同机，降优先级避免抢占
+      # 生产 botler 的 CPU/磁盘 IO（nice 10 + ionice best-effort 7）
+      renice -n 10 -p $BASHPID >/dev/null 2>&1 || true
+      ionice -c 2 -n 7 -p $BASHPID >/dev/null 2>&1 || true
 
 # --- 后端公共配置 ---
 .backend_setup:
@@ -191,6 +195,13 @@ variables:
       echo "CI_PROJECT_DIR: $CI_PROJECT_DIR"
       echo "Python 版本: $(python3 --version 2>/dev/null || echo '未安装')"
       echo "uv 版本: $(uv --version 2>/dev/null || echo '未安装')"
+      # issue #461：CI 与生产 botler 同机（code01 shell executor，pm2
+      # 部署在同一台机器）。CI 为后台批处理，降优先级避免抢占生产进程的
+      # CPU/磁盘 IO：nice 10（低优先级）+ ionice best-effort 最低级 7，
+      # 生产（默认 nice 0）在资源争抢时优先，缓解「CI 跑后端测试时前端
+      # 页面读库卡顿」。
+      renice -n 10 -p $BASHPID >/dev/null 2>&1 || true
+      ionice -c 2 -n 7 -p $BASHPID >/dev/null 2>&1 || true
 
 # ================================================================
 # Stage: security —— 第零阶段：bandit 安全静态扫描（issue #58）
@@ -882,6 +893,11 @@ harmony:build:
     - linux
     - code01
   timeout: 20m
+  # issue #461：hvigorw 编译为多核重负载，CI 与生产同机，降优先级
+  # （nice 10 + ionice best-effort 7），避免抢占生产 botler 的 CPU/磁盘
+  before_script:
+    - renice -n 10 -p $BASHPID >/dev/null 2>&1 || true
+    - ionice -c 2 -n 7 -p $BASHPID >/dev/null 2>&1 || true
   # hvigor 增量缓存（构建目录跨 job 持久化，key 基于 oh-package 依赖声明）
   cache:
     key:
@@ -1129,6 +1145,11 @@ e2e:playwright:
     - linux
     - code01
   timeout: 25m
+  # issue #461：E2E 起真实 uvicorn + Chromium 真浏览器，资源占用大；
+  # CI 与生产同机，降优先级避免抢占生产 botler 的 CPU/磁盘 IO
+  before_script:
+    - renice -n 10 -p $BASHPID >/dev/null 2>&1 || true
+    - ionice -c 2 -n 7 -p $BASHPID >/dev/null 2>&1 || true
   # 依赖 frontend:build 的 dist 产物（artifacts 自动传入本 job）
   dependencies:
     - frontend:build
@@ -1231,6 +1252,10 @@ e2e:screenshots:
     - linux
     - code01
   timeout: 25m
+  # issue #461：同 e2e:playwright，降优先级避免抢占生产资源
+  before_script:
+    - renice -n 10 -p $BASHPID >/dev/null 2>&1 || true
+    - ionice -c 2 -n 7 -p $BASHPID >/dev/null 2>&1 || true
   # 依赖 frontend:build 的 dist 产物（artifacts 自动传入本 job）
   dependencies:
     - frontend:build
@@ -1406,6 +1431,10 @@ performance:frontend:
     - linux
     - code01
   timeout: 25m
+  # issue #461：同 e2e，降优先级避免抢占生产资源
+  before_script:
+    - renice -n 10 -p $BASHPID >/dev/null 2>&1 || true
+    - ionice -c 2 -n 7 -p $BASHPID >/dev/null 2>&1 || true
   dependencies:
     - frontend:build
   cache:

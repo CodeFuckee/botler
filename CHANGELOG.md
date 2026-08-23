@@ -6,6 +6,34 @@
 
 ### Fixed
 
+- **日志脱敏过滤器破坏 uvicorn 访问日志，每次请求抛 ValueError（issue #461）**：
+  - `RedactFilter`（`backend/botler/log_redact.py`，issue #259 引入）挂到
+    `uvicorn.access` logger/handler 后，会把 `record.msg` 重写为预格式化
+    文本并清空 `record.args`；而 uvicorn 的 `AccessFormatter.formatMessage`
+    依赖 `args` 的 5 元组（client_addr / method / full_path / http_version /
+    status_code）解包重建请求行，导致**每个 HTTP 请求**都抛
+    `ValueError: not enough values to unpack`，生产 `pm2-error.log` 单日
+    增长 52MB+（8938 次），日志磁盘 IO 抖动与 CI 并发叠加时加剧前端页面
+    读库卡顿；
+  - 修复：对 `uvicorn.access` 记录特判——保持 args 元组结构，仅对
+    `full_path`（含 query string，token/密钥通常出现在这里）就地脱敏；
+    非 5 元组结构原样放行，访问日志恢复正常格式化且 token 脱敏能力保留；
+  - 测试：`backend/tests/test_log_redact.py::TestUvicornAccessCompat`
+    （真实 `AccessFormatter` + `RedactFilter` 组合，复现崩溃并断言脱敏
+    输出），`test_log_redact.py` 全量 30 用例通过。
+
+- **CI 与生产同机（code01）资源争抢：重负载 job 降优先级（issue #461）**：
+  - 排查结论：CI 后端测试全部使用 `tmp_path` 隔离临时 SQLite，不触碰生产
+    库 `data/backend/botler.db`（无文件级锁争抢）；但 `backend:test`（2112
+    用例）/ `harmony:build`（hvigorw 多核编译）/ `frontend:build` /
+    e2e / performance 与生产 pm2 botler 跑在同一台机器，CPU/磁盘 IO 争抢
+    才是「CI 期间前端页面加载慢」的主因；
+  - 修复：`.backend_setup` / `.frontend_setup` 及 harmony:build /
+    e2e:playwright / e2e:screenshots / performance:frontend 的
+    `before_script` 统一 `renice -n 10` + `ionice -c 2 -n 7`（CI 为后台
+    批处理，降优先级让生产进程在资源争抢时优先获得 CPU/磁盘带宽），
+    `.gitlab-ci.yml` 经 GitLab `ci/lint` API 校验通过。
+
 - **设置页审计日志表格窄视口横向溢出（issue #459 CI 阻塞）**：
   - 审计日志表格（7 列：时间/操作者/操作类型/目标/变更摘要/IP/操作，
     `.nowrap` 时间/IP 列撑出 min-content 约 565px）在手机（≤640px）与
