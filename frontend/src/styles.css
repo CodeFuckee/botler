@@ -5680,11 +5680,52 @@ body:has(.drawer-overlay) {
 .token-expiry-warning { background: #fef3c7; color: #92400e; }
 .token-expiry-critical, .token-expiry-urgent, .token-expiry-expired { background: #fee2e2; color: #991b1b; }
 /* issue #219：大量灵感默认折叠；只在用户展开后按页追加，避免首屏与轮询
-   构造过多条目。按钮沿用轻量操作样式，窄屏可自然换行。 */
-.inspiration-toggle-btn,
-.inspiration-load-more-btn {
+   构造过多条目。
+   issue #460：美化「展开灵感列表 / 收起灵感列表」按钮——从无样式裸文本
+   升级为 apple-design 轻量 pill 按钮：柔和背景 + 细边框 + 圆角，hover
+   主色、active 微缩放、focus-visible 焦点环，展开态（aria-expanded=
+   "true"）主色弱背景强调，折叠/展开状态一眼可辨；颜色全部经 CSS 变量
+   引用，深浅色主题自动适配；窄屏可自然换行。 */
+.inspiration-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   margin-left: auto;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  /* HIG 动效：150ms ease-out 过渡 + 按下微反馈（与 .btn 统一，issue #124） */
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.inspiration-toggle-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+  color: var(--primary);
+}
+.inspiration-toggle-btn:not(:disabled):active {
+  transform: translateY(1px) scale(0.98);
+  background: var(--bg-active);
+}
+.inspiration-toggle-btn:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+/* 展开态：主色弱背景 + 主色文字，与收起态一眼可辨 */
+.inspiration-toggle-btn[aria-expanded='true'] {
+  background: var(--primary-weak);
+  color: var(--primary);
 }
 .inspiration-load-more-btn {
+  margin-left: auto;
   margin-top: var(--space-2);
 }

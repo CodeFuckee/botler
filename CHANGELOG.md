@@ -63,6 +63,23 @@
 
 ### Added
 
+- **美化「展开灵感列表 / 收起灵感列表」按钮（issue #460）**：
+  - 概览页灵感板块仓库卡片的展开/收起按钮（`.inspiration-toggle-btn`）此前
+    为无样式裸文本（仅 `margin-left: auto` 右对齐），升级为 apple-design
+    轻量 pill 按钮：柔和背景（`--bg-soft`）+ 细边框（`--border`）+ 圆角
+    （`--radius-lg`）+ 内边距（4px 8px，HIG 4px 网格），图标与文字
+    `inline-flex` 垂直居中；
+  - 交互反馈：hover 背景/边框加深、文字转主色（`--primary`）；按下微缩放
+    `translateY(1px) scale(0.98)`（与 `.btn` 统一 press 反馈）；键盘聚焦
+    主色焦点环（`--focus-ring`），全部经 `--dur-fast`（150ms）+
+    `--ease-out` 平滑过渡，受全局 `prefers-reduced-motion` 降级；
+  - 状态区分：展开态（`aria-expanded="true"`）主色弱背景（`--primary-weak`）
+    + 主色文字，折叠/展开一眼可辨；颜色全部经 CSS 变量引用，深浅色主题
+    （issue #217）自动适配；
+  - 测试：新增 `frontend/tests/overview-inspiration-toggle-style.test.mjs`
+    （8 条样式断言：pill 外观 / hover / active / focus-visible / 展开态 /
+    主题安全），`overview-inspirations.test.mjs` 既有 27 条用例保持通过。
+
 - **维护模式：一键暂停/恢复任务处理（issue #241）**：
   - 设置页「任务调度」卡片新增「维护模式」开关（config `worker.maintenance_mode`
     + 内存态，保存即生效、无需重启服务）：紧急情况（服务器负载高 / GitLab
