@@ -34,6 +34,22 @@
     批处理，降优先级让生产进程在资源争抢时优先获得 CPU/磁盘带宽），
     `.gitlab-ci.yml` 经 GitLab `ci/lint` API 校验通过。
 
+- **修复 CI 后端测试 flaky 用例：Database GC 测试误报 unclosed 警告（issue #461）**：
+  - 现象：`backend:test` 偶发失败（流水线 #1375「实际 10 条」、#1376「实际 15 条」），
+    `test_database_gc_no_unclosed_database_warning` 断言 `gc.collect()` 后零
+    `unclosed database` ResourceWarning 被打破；
+  - 根因：`gc.collect()` 是进程级回收。FastAPI TestClient 等前置测试的 app 在
+    portal 线程中创建 SQLite 连接，测试结束后其 Database 被回收时 finalizer 因
+    `check_same_thread` 无法跨线程 `close` 这些连接（`_close_all_connections`
+    按设计静默跳过），连接随后被进程级 `gc.collect()` 连带回收，`__del__` 产生
+    ResourceWarning 落入本测试的 `catch_warnings` 窗口，导致与自身无关的误报；
+  - 修复：断言范围限定为本测试自己创建的连接（按连接对象 repr 过滤），
+    finalizer 应确定性关闭它、绝不以「未关闭」路径回收；跨线程遗留连接的
+    ResourceWarning 与本测试无关，不再纳入断言（其确定性关闭属
+    issue #459 连接生命周期管理范畴）；
+  - 测试：`test_database_conn_reuse.py::test_database_gc_no_unclosed_database_warning`
+    在 `test_api_backup.py` 前置场景下连续 3 轮通过（修复前必现失败）。
+
 - **设置页审计日志表格窄视口横向溢出（issue #459 CI 阻塞）**：
   - 审计日志表格（7 列：时间/操作者/操作类型/目标/变更摘要/IP/操作，
     `.nowrap` 时间/IP 列撑出 min-content 约 565px）在手机（≤640px）与

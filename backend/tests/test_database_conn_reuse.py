@@ -190,25 +190,36 @@ def test_database_gc_closes_connections_deterministically(tmp_path):
 
 
 def test_database_gc_no_unclosed_database_warning(tmp_path):
-    """Database GC 时不产生 unclosed database ResourceWarning。
+    """Database GC 时不产生 unclosed database ResourceWarning（本测试连接）。
 
     回归：finalizer 关闭连接后，GC 不再以「未关闭」路径回收连接，
     消除测试套件中大量 ResourceWarning 累积（数千条/次运行）与
     由此引发的 SQLite 锁协议偶发冲突。
+
+    issue #461：gc.collect() 是进程级回收，FastAPI TestClient 等前置
+    测试的 app 在 portal 线程中创建的连接（其 Database finalizer 因
+    check_same_thread 无法跨线程 close）被连带回收时也会产生 unclosed
+    database ResourceWarning，与本测试无关（流水线 #1375/#1376 偶发
+    「实际 10/15 条」误报）。断言范围限定为本测试创建的连接：finalizer
+    应确定性关闭它，绝不以「未关闭」路径回收。
     """
     import gc
     import warnings
 
+    db = Database(str(tmp_path / "gc2.db"))
+    with db._conn():
+        pass
+    # 记录本测试连接的对象标识（地址 repr），用于从进程级回收警告中
+    # 过滤出与本测试相关的部分；del db 后 finalizer 立即确定性关闭连接
+    our_repr = repr(db._local.conn)
+    del db
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        db = Database(str(tmp_path / "gc2.db"))
-        with db._conn():
-            pass
-        del db
         gc.collect()
     leaked = [
         w for w in caught
         if issubclass(w.category, ResourceWarning)
         and "unclosed database" in str(w.message)
+        and our_repr in str(w.message)
     ]
-    assert leaked == [], f"Database GC 不应产生 unclosed database 警告，实际 {len(leaked)} 条"
+    assert leaked == [], f"本测试 Database 的连接不应以未关闭路径回收，实际 {len(leaked)} 条"
