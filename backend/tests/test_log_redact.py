@@ -287,3 +287,45 @@ class TestIntegration:
             root.removeHandler(handler)
             root.setLevel(old_level)
         assert "Bearer abc***678" in stream.getvalue()
+
+
+class TestUvicornAccessCompat:
+    """RedactFilter 与 uvicorn AccessFormatter 兼容性（issue #461）。
+
+    背景：install_redact_filter 把 RedactFilter 挂到 uvicorn.access
+    logger/handler 后，filter 会重写 record.msg 并清空 record.args；
+    而 uvicorn 的 AccessFormatter.formatMessage 依赖 args 5 元组解包
+    （client_addr/method/full_path/http_version/status_code），导致每次
+    HTTP 请求都抛 ValueError（生产 pm2-error.log 单日增长 52MB，日志
+    磁盘 IO 抖动与 CI 并发叠加时加剧前端页面读库卡顿）。
+    """
+
+    def test_access_record_not_crashing_formatter(self):
+        """访问日志记录经 RedactFilter 后，AccessFormatter 仍能正常格式化。
+
+        复现：构造与 uvicorn 一致的 5 元组 args 记录 → 过 RedactFilter →
+        用真实 uvicorn AccessFormatter 格式化 → 不应抛 ValueError，且
+        URL query 中的 token 仍被脱敏。
+        """
+        import io
+
+        from uvicorn.logging import AccessFormatter
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(
+            AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s'))
+        logger = logging.getLogger("uvicorn.access")
+        logger.handlers = [handler]
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        logger.addFilter(RedactFilter())
+
+        logger.info('%s - "%s %s HTTP/%s" %d',
+                    "10.0.0.169:35760", "GET",
+                    "/api/tasks?token=glpat-SECRETVALUE123456", "1.1", 200)
+
+        output = stream.getvalue()
+        # 格式化成功（未触发 Logging error），URL 中的 token 已脱敏
+        assert '10.0.0.169:35760 - "GET /api/tasks?token=glpat-SEC***456 HTTP/1.1" 200' in output
+        assert "glpat-SECRETVALUE123456" not in output

@@ -222,6 +222,26 @@ class RedactFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        # issue #461：uvicorn 的 AccessFormatter.formatMessage 依赖
+        # record.args 的 5 元组（client_addr / method / full_path /
+        # http_version / status_code）解包重建请求行；统一脱敏若重写 msg
+        # 并清空 args，会导致每次 HTTP 请求格式化访问日志时抛 ValueError
+        # （生产 pm2-error.log 单日增长 50MB+，日志磁盘 IO 抖动与 CI 并发
+        # 叠加时加剧前端页面读库卡顿）。对 uvicorn.access 记录特判：保持
+        # args 元组结构，仅对 full_path（含 query string，token/密钥通常
+        # 出现在这里）就地脱敏；非 5 元组结构则原样放行，不做重写。
+        if record.name == "uvicorn.access":
+            try:
+                if isinstance(record.args, tuple) and len(record.args) == 5:
+                    client_addr, method, full_path, http_version, status_code = record.args
+                    record.args = (
+                        client_addr, method,
+                        redact(str(full_path)),
+                        http_version, status_code,
+                    )
+            except Exception:  # noqa: BLE001 脱敏失败：原样放行，不阻塞日志
+                pass
+            return True
         try:
             message = record.getMessage()
         except Exception:  # noqa: BLE001 消息格式化失败：原样放行
