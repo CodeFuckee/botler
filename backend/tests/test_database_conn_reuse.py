@@ -164,3 +164,51 @@ def test_connection_settings_applied_once(tmp_path):
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         assert mode.lower() == "wal"
     db.close()
+
+
+def test_database_gc_closes_connections_deterministically(tmp_path):
+    """Database 被 GC 回收时 finalizer 确定性关闭其连接（无泄漏）。
+
+    背景：测试 fixture 中创建的 Database 实例多数从不显式 close，靠 GC
+    兜底回收 sqlite3.Connection——GC 延迟回收使 fd 高频关闭/重用，SQLite
+    的 fcntl 锁状态在 fd 复用时会错乱，高负载下偶发
+    sqlite3.OperationalError: locking protocol / database is locked
+    （流水线 #1290/#1352 backend:test 即因此偶发失败）。Database 级
+    finalizer 在对象不可达时统一 close 连接，消除泄漏与 fd 抖动。
+    """
+    import gc
+
+    db = Database(str(tmp_path / "gc.db"))
+    with db._conn() as conn:
+        conn.execute("CREATE TABLE t(x)")
+        conn.execute("INSERT INTO t VALUES (1)")
+    conn = db._local.conn  # 测试线程持有的连接引用
+    del db
+    gc.collect()  # refcount 归零后 finalizer 同步关闭连接
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        conn.execute("SELECT * FROM t")
+
+
+def test_database_gc_no_unclosed_database_warning(tmp_path):
+    """Database GC 时不产生 unclosed database ResourceWarning。
+
+    回归：finalizer 关闭连接后，GC 不再以「未关闭」路径回收连接，
+    消除测试套件中大量 ResourceWarning 累积（数千条/次运行）与
+    由此引发的 SQLite 锁协议偶发冲突。
+    """
+    import gc
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        db = Database(str(tmp_path / "gc2.db"))
+        with db._conn():
+            pass
+        del db
+        gc.collect()
+    leaked = [
+        w for w in caught
+        if issubclass(w.category, ResourceWarning)
+        and "unclosed database" in str(w.message)
+    ]
+    assert leaked == [], f"Database GC 不应产生 unclosed database 警告，实际 {len(leaked)} 条"

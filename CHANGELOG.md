@@ -63,6 +63,22 @@
     按钮钉在抽屉可视区右下角、继续滚动位置稳定、点击回顶，issue / 流水线
     两个抽屉，2 用例）。
 
+### Fixed
+
+- **修复测试/高负载下 SQLite 锁协议偶发冲突（issue #459）**：
+  - `Database` 新增 GC finalizer：实例不可达时经 `weakref.finalize` +
+    连接注册表确定性关闭其创建的全部连接，消除测试 fixture 中从不显式
+    `close` 导致的连接泄漏——此前依赖 GC 兜底回收 `sqlite3.Connection`，
+    GC 延迟回收使 fd 高频关闭/重用，SQLite fcntl 锁状态在 fd 复用时会
+    错乱，高负载下偶发 `sqlite3.OperationalError: locking protocol /
+    database is locked`（流水线 #1290/#1352 及 #1371/#1372 backend:test
+    即因此偶发失败，单次运行数千条 unclosed database ResourceWarning）；
+  - 跨线程连接 `close()` 受 sqlite3 `check_same_thread` 限制，finalizer
+    静默跳过，由所属线程退出后 GC 回收；
+  - 测试：`backend/tests/test_database_conn_reuse.py` 新增 2 用例——
+    Database GC 后连接被确定性关闭（再操作抛 ProgrammingError）、
+    GC 不产生 unclosed database ResourceWarning。
+
 ## [1.6.1] - 2026-08-23
 
 ### Added

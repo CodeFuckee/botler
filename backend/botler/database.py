@@ -18,6 +18,7 @@ import logging
 import os
 import sqlite3
 import threading
+import weakref
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import TypedDict, cast
@@ -25,6 +26,28 @@ from typing import TypedDict, cast
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.environ.get("BOTLER_DB", os.path.join(os.path.dirname(os.path.dirname(__file__)), "botler.db"))
+
+
+def _close_all_connections(conns: list) -> None:
+    """确定性关闭 Database 创建的全部连接（GC 回收时由 finalizer 调用）。
+
+    背景：Database 实例（尤其测试 fixture 中创建的）多数从不显式 close，
+    依赖 GC 兜底回收 sqlite3.Connection。连接无法被弱引用，无法挂
+    per-connection finalizer；GC 延迟回收使 fd 高频关闭/重用，SQLite 的
+    fcntl 锁状态在 fd 复用时会错乱，高负载下偶发
+    sqlite3.OperationalError: locking protocol / database is locked
+    （issue #395 修复触发的流水线 #1290 及 #1352 即因此偶发失败）。
+    由 Database 级 finalizer 持有连接列表，在对象不可达时统一关闭：
+    同线程连接直接 close；跨线程连接受 sqlite3 check_same_thread 限制
+    无法 close，静默跳过（其所属线程退出后仍由 GC 释放）。
+    """
+    for conn in list(conns):
+        try:
+            conn.close()
+        except Exception:
+            # 跨线程连接 close() 抛 ProgrammingError（check_same_thread），
+            # 跳过，等所属线程退出后由 GC 回收释放 fd
+            pass
 
 # 任务状态机
 STATUS_QUEUED = "queued"
@@ -434,6 +457,11 @@ class Database:
         # 并发、写串行），从根本上消除 database is locked。
         self._local = threading.local()
         self._write_lock = threading.Lock()
+        # 连接统一注册表：Database 被 GC 回收时由 finalizer 确定性关闭，
+        # 避免测试/长跑进程连接泄漏（unclosed database ResourceWarning
+        # 累积 → fd 抖动 → SQLite 锁协议偶发冲突，见 _close_all_connections）
+        self._conns: list[sqlite3.Connection] = []
+        weakref.finalize(self, _close_all_connections, self._conns)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with self._conn(write=True) as conn:
             conn.executescript(_SCHEMA)
@@ -860,6 +888,7 @@ class Database:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=30000")
             self._local.conn = conn
+            self._conns.append(conn)
         return conn
 
     # ---- audit_logs（issue #260）----
