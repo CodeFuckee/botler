@@ -240,6 +240,13 @@ class Reconciler:
             if self.db.find_active_task(repo["gitlab_project_id"], issue["iid"]):
                 active_count += 1  # 已有活跃任务（含排队中）
                 continue
+            # 维护模式（issue #241）：对账照常扫描但不派发。默认（
+            # maintenance_hold_events=True）照常建任务入队（调度器拦截
+            # 派发，恢复后自动执行）；False = 扫描照常但跳过建任务。
+            if cfg.maintenance_mode and not cfg.maintenance_hold_events:
+                logger.info("维护模式开启且不保留事件，对账跳过创建任务 "
+                            "%s#%s", repo["gitlab_project_id"], issue["iid"])
+                continue
             # issue #76 + #234：补入队时记录 issue 标签、更新时间与创建
             # 时间，调度器按配置的标签优先级排序派发（同权重按创建时间
             # 升序，创建早的 issue 先处理）

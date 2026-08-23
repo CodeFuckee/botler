@@ -239,7 +239,11 @@ def tasks_watermark(request: Request):
     15s 轮询使用，不随任务列表全量拉取（不产生额外高频请求）。
     """
     c = ctx_of(request)
-    return c.db.task_watermark()
+    data = c.db.task_watermark()
+    # 维护模式状态（issue #241）：导航栏「维护中」徽章数据源（与水位同
+    # 接口 15s 轮询，不额外增加请求频率）
+    data["maintenance_mode"] = c.config.get().maintenance_mode
+    return data
 
 
 # ---- 任务数据导出（issue #228）----

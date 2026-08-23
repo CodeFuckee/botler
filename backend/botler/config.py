@@ -238,6 +238,15 @@ class Settings:
     # 暂停窗口内仍可开始新任务（不受暂停窗口影响）；0 = 关闭（所有仓库都受
     # 暂停窗口约束，issue #169 行为不变）。设置页「任务调度」卡片可编辑。
     pause_priority_threshold: int = 0
+    # 维护模式（issue #241）：人工总开关。开启后调度器停止开始新任务（新事件
+    # 照常接收，任务只入队不派发），运行中任务继续执行完，关闭后自动恢复派发。
+    # config 持久化（worker.maintenance_mode）+ 内存态（设置页保存即生效，
+    # 无需重启服务）。设置页「任务调度」卡片可编辑。
+    maintenance_mode: bool = False
+    # 维护模式下新事件处理方式（issue #241）：True = 任务只入队不派发
+    # （webhook/对账照常建任务，关闭维护模式后自动执行，默认）；False =
+    # 直接不建任务（webhook 事件忽略、对账扫描但跳过创建）。
+    maintenance_hold_events: bool = True
     # 任务执行前预检（issue #238）：领取任务后、消耗模型调用前对环境做快速
     # 检查（git 凭据/token 有效性、local_path 可写、磁盘剩余空间、工作区
     # 可用），环境性失败直接判任务失败（不重试、不消耗模型调用），检查明细
@@ -465,6 +474,7 @@ KNOWN_FIELDS = {
                "engine", "plugin_paths", "issue_priority",
                "pause_windows", "pause_weekdays", "pause_timezone",
                "pause_priority_threshold",
+               "maintenance_mode", "maintenance_hold_events",
                "fallback_engines", "fallback_after_failures",
                "precheck_enabled", "precheck_disk_min_free_mb"},
     "claude": {"command", "args"},
@@ -764,6 +774,8 @@ class ConfigManager:
             pause_weekdays=_pause_weekdays(worker),
             pause_timezone=str(worker.get("pause_timezone") or "").strip(),
             pause_priority_threshold=_pause_priority_threshold(worker),
+            maintenance_mode=_worker_bool(worker, "maintenance_mode", False),
+            maintenance_hold_events=_worker_bool(worker, "maintenance_hold_events", True),
             precheck_enabled=_worker_bool(worker, "precheck_enabled", True),
             precheck_disk_min_free_mb=max(1, int(worker.get("precheck_disk_min_free_mb", 2048))),
             ci_wait_detect_seconds=int(worker.get("ci_wait_detect_seconds", 120)),

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import math
 import os
 from pathlib import Path
@@ -26,6 +27,8 @@ from ..pause_window import in_pause_window, normalize_window, parse_window
 from ..report import DEFAULT_COMMENT_TEMPLATE
 from ..token_expiry import evaluate_expiry
 from ..templates import PLACEHOLDERS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -121,6 +124,13 @@ def get_settings(request: Request):
             # 该值的仓库在暂停窗口内仍可开始新任务；0 = 关闭
             "pause_priority_threshold": s.pause_priority_threshold,
             "pause_active": in_pause_window(s),
+            # 维护模式（issue #241）：人工总开关——开启后调度器停止派发
+            # 新任务，运行中任务继续执行完，关闭后自动恢复派发。内存态
+            # 切换（保存即生效），持久化 worker.maintenance_mode。
+            "maintenance_mode": s.maintenance_mode,
+            # 维护模式下新事件处理方式：True = 任务只入队不派发（默认，
+            # 恢复后自动执行）；False = 直接不建任务
+            "maintenance_hold_events": s.maintenance_hold_events,
         },
         "claude": {
             "command": s.claude_command,
@@ -333,7 +343,13 @@ def update_settings(request: Request, body: dict):
     worker_patch = body.get("worker")
     if worker_patch is not None:
         _validate_worker(worker_patch)
+        # 维护模式切换通知（issue #241）：开启与恢复各记录一条通知事件
+        # （审计 diff 由下方统一 settings 保存审计覆盖，此处只补通知）
+        before_maint = bool(before.get("worker", {}).get("maintenance_mode", False))
+        after_maint = bool(worker_patch.get("maintenance_mode", before_maint))
         c.config.update_section("worker", worker_patch)
+        if after_maint != before_maint:
+            _record_maintenance_notification(c, after_maint)
 
     claude_patch = body.get("claude")
     if claude_patch is not None:
@@ -702,6 +718,22 @@ def reconcile_now(request: Request):
 ENGINE_CHOICES = tuple(p.name for p in list_plugins(PluginKind.EXECUTOR))
 
 
+def _record_maintenance_notification(c, active: bool) -> None:
+    """维护模式开启/恢复通知事件（issue #241）：尽力而为，失败不阻塞保存。"""
+    try:
+        if active:
+            c.db.add_notification(
+                "maintenance_mode", "维护模式已开启",
+                "任务派发已暂停：新事件入队保留（或按配置忽略），运行中任务"
+                "继续执行，关闭后自动恢复派发。")
+        else:
+            c.db.add_notification(
+                "maintenance_mode", "维护模式已关闭",
+                "任务派发已恢复，排队中的任务将自动开始执行。")
+    except Exception:
+        logger.warning("维护模式切换通知记录失败", exc_info=True)
+
+
 def _validate_worker(patch: dict) -> None:
     for key in KNOWN_FIELDS["worker"]:
         if key in patch:
@@ -846,6 +878,14 @@ def _validate_worker(patch: dict) -> None:
                     raise HTTPException(
                         400, "worker.fallback_after_failures 必须是正整数"
                              "（连续引擎类失败次数，默认 2）")
+                patch[key] = val
+                continue
+            if key in ("maintenance_mode", "maintenance_hold_events"):
+                # issue #241：维护模式开关必须是布尔值（False 是合法值，
+                # 不能落到下方「正整数」分支——bool 是 int 子类且 False<=0）
+                if not isinstance(val, bool):
+                    raise HTTPException(
+                        400, f"worker.{key} 必须是布尔值（true/false）")
                 patch[key] = val
                 continue
             if not isinstance(val, int) or val <= 0:

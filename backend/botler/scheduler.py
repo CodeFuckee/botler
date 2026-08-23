@@ -51,6 +51,8 @@ class TaskScheduler:
         # 暂停窗口状态翻转标记（issue #169）：仅状态变化时记录一次日志，
         # 避免窗口内每秒派发循环刷屏
         self._last_pause_state: bool | None = None
+        # 维护模式状态翻转标记（issue #241）：同上，开启/恢复各记录一次日志
+        self._last_maintenance_state: bool | None = None
         self._thread = threading.Thread(target=self._loop, name="botler-scheduler", daemon=True)
 
     # ---- 对外接口 ----
@@ -161,6 +163,26 @@ class TaskScheduler:
             else:
                 logger.info("退出定时暂停窗口：恢复派发新任务")
             self._last_pause_state = val
+        return val
+
+    # ---- 维护模式（issue #241）----
+
+    def _in_maintenance_mode(self) -> bool:
+        """维护模式：人工总开关，开启后停止开始新任务。
+
+        与定时暂停窗口的区别：维护模式为立即生效的人工总开关，无豁免
+        阈值（任何仓库都不派发新任务）；运行中任务不受影响（仅派发点
+        检查），队列中任务保留，关闭后自动派发。状态翻转时记日志
+        （开启与恢复各记录一条，scheduler 日志 + 设置页通知事件）。
+        """
+        val = self.config.get().maintenance_mode
+        if val != self._last_maintenance_state:
+            if val:
+                logger.info("维护模式已开启：停止派发新任务，运行中任务"
+                            "继续执行，未开始任务保留队列等待恢复")
+            else:
+                logger.info("维护模式已关闭：恢复派发新任务")
+            self._last_maintenance_state = val
         return val
 
     # ---- 调度循环 ----
@@ -302,6 +324,8 @@ class TaskScheduler:
 
     def _dispatch(self) -> None:
         cfg = self.config.get()
+        if self._in_maintenance_mode():
+            return  # 维护模式（issue #241）：不开始新任务（优先级高于暂停窗口）
         in_pause = self._in_pause_window()
         if in_pause and cfg.pause_priority_threshold <= 0:
             return  # 暂停窗口内不开始新任务（issue #169；未配置豁免阈值）

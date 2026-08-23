@@ -5,6 +5,7 @@
 import { useEffect, useRef } from 'react'
 import { useInRouterContext, useLocation, useNavigate } from 'react-router-dom'
 import { useI18n } from '../i18n.jsx'
+import { Icon } from '../components/Icon.jsx'
 import { useOverviewData } from '../hooks/useOverviewData.js'
 import IssueListSection from '../components/overview/IssueListSection.jsx'
 import InspirationSection from '../components/overview/InspirationSection.jsx'
@@ -86,6 +87,7 @@ function OverviewBody({ location, navigate }) {
   const { tr } = useI18n()
   const {
     dsBalance,
+    maintenanceMode,
     selectedIssue,
     selectedPipeline,
     addIssueRepo,
@@ -157,6 +159,15 @@ function OverviewBody({ location, navigate }) {
   return (
     <div>
       <h1>{tr('overview.title')}</h1>
+
+      {/* 维护模式横幅（issue #241）：开启时概览页顶部醒目提示（与导航栏
+          徽章同数据源，轮询 /api/settings 15s 同步） */}
+      {maintenanceMode && (
+        <div className="alert alert-warning maintenance-banner" role="status">
+          <Icon name="warning" aria-hidden="true" />
+          <span>{tr('overview.maintenanceBanner')}</span>
+        </div>
+      )}
 
       {/* issue #138：DeepSeek 账户余额卡片——设置里配置了 deepseek api 时
           展示（未配置时整卡不渲染），数据由 useOverviewData 轮询注入 */}

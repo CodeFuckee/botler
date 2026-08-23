@@ -2732,3 +2732,84 @@ class TestGitLabApiRateLimitSettings:
         tc, _ = client
         resp = tc.put("/api/settings", json={"worker": {field: value}})
         assert resp.status_code == 400
+
+
+class TestMaintenanceMode:
+    """维护模式（issue #241）：worker.maintenance_mode 配置段。
+
+    验收标准 4「有接口与前端测试」：设置 API 读取/保存/校验 + 切换时
+    记录通知事件。
+    """
+
+    def test_get_maintenance_fields(self, client):
+        """未配置时返回默认值：关闭 + hold_events=true（入队不派发）。"""
+        tc, tmp_path = client
+        resp = tc.get("/api/settings")
+        assert resp.status_code == 200
+        worker = resp.json()["worker"]
+        assert worker["maintenance_mode"] is False
+        assert worker["maintenance_hold_events"] is True
+
+    def test_update_maintenance_persists(self, client):
+        """PUT 保存维护模式开关并写回 config.yaml（config 是唯一事实来源）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={
+            "worker": {"maintenance_mode": True, "maintenance_hold_events": False}})
+        assert resp.status_code == 200
+        worker = resp.json()["worker"]
+        assert worker["maintenance_mode"] is True
+        assert worker["maintenance_hold_events"] is False
+
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "maintenance_mode: true" in config_text
+        assert "maintenance_hold_events: false" in config_text
+
+        # 再次 GET 返回持久化后的值
+        worker = tc.get("/api/settings").json()["worker"]
+        assert worker["maintenance_mode"] is True
+
+    def test_update_maintenance_accepts_false(self, client):
+        """False 是合法值（bool 是 int 子类，不得落入正整数校验分支）。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {"maintenance_mode": False}})
+        assert resp.status_code == 200
+        assert resp.json()["worker"]["maintenance_mode"] is False
+
+    @pytest.mark.parametrize("key,value", [
+        ("maintenance_mode", "yes"),
+        ("maintenance_mode", 1),
+        ("maintenance_mode", None),
+        ("maintenance_hold_events", "false"),
+        ("maintenance_hold_events", 0),
+    ])
+    def test_update_maintenance_rejects_non_bool(self, client, key, value):
+        """非布尔值 400（防手滑写坏配置）。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"worker": {key: value}})
+        assert resp.status_code == 400
+        assert "布尔" in resp.json()["detail"]
+
+    def test_toggle_records_notification_events(self, client):
+        """开启与恢复各记录一条通知事件（验收「开启与恢复各记录一条日志/通知」）。"""
+        tc, tmp_path = client
+        assert tc.get("/api/notifications/events").json()["events"] == []
+
+        # 开启维护模式 → 一条「已开启」通知
+        resp = tc.put("/api/settings", json={"worker": {"maintenance_mode": True}})
+        assert resp.status_code == 200
+        events = tc.get("/api/notifications/events").json()["events"]
+        assert len(events) == 1
+        assert events[0]["type"] == "maintenance_mode"
+        assert "已开启" in events[0]["title"]
+
+        # 再次提交相同值（未切换）→ 不产生重复通知
+        tc.put("/api/settings", json={"worker": {"maintenance_mode": True}})
+        events = tc.get("/api/notifications/events").json()["events"]
+        assert len(events) == 1, "未切换状态不应重复记录通知"
+
+        # 关闭维护模式 → 一条「已关闭」通知
+        tc.put("/api/settings", json={"worker": {"maintenance_mode": False}})
+        events = tc.get("/api/notifications/events").json()["events"]
+        assert len(events) == 2
+        assert events[1]["type"] == "maintenance_mode"
+        assert "已关闭" in events[1]["title"]

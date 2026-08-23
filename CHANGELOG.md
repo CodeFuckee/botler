@@ -19,6 +19,28 @@
 
 ### Added
 
+- **维护模式：一键暂停/恢复任务处理（issue #241）**：
+  - 设置页「任务调度」卡片新增「维护模式」开关（config `worker.maintenance_mode`
+    + 内存态，保存即生效、无需重启服务）：紧急情况（服务器负载高 / GitLab
+    故障 / 停服维护 / 误配全仓触发）下一键暂停全部任务派发；
+  - 开启后行为：webhook 事件照常接收、对账照常扫描，但调度器不再派发新任务
+    （派发点检查，运行中任务继续执行完、不中断）；队列中任务保留，关闭后
+    自动恢复派发（验收标准 1/2）；
+  - 维护期间新事件处理方式可配置（`worker.maintenance_hold_events`，默认
+    true = 任务只入队不派发，恢复后自动执行；false = 直接不建任务，webhook
+    忽略事件、对账扫描但跳过创建）；
+  - 页面状态提示：导航栏「维护中」徽章（数据来自 `/api/tasks/watermark` 的
+    `maintenance_mode`，15s 轮询同源）+ 概览页顶部维护中横幅 + 任务调度卡片
+    内警示条（验收标准 3）；
+  - 开启与恢复各记录一条通知事件（`maintenance_mode` 类型）+ 调度器状态翻转
+    日志 + 设置保存审计 diff（验收「开启与恢复各记录一条日志/通知事件」）；
+  - 测试：`backend/tests/test_scheduler_maintenance.py`（6 用例：开启不派发 /
+    关闭恢复派发 / 运行中不中断 / 优先级高于暂停窗口豁免等）、
+    `test_webhook.py` / `test_reconciler.py` / `test_api_settings.py` /
+    `test_api_tasks.py` 维护模式用例，`frontend/tests/app-watermark.test.mjs`
+    （导航栏徽章）、`settings-tasks-maintenance.test.mjs`（任务调度卡片开关）、
+    `overview-maintenance.test.mjs`（概览页横幅），全量测试无 regression。
+
 - **流水线详情右边栏截图大图全局页面查看（issue #459）**：
   - 右侧边栏「查看截图」点击缩略图弹出的大图预览，此前浮层（`position:
     fixed; inset: 0`）因 `.drawer` 的 `will-change: transform` 成为其

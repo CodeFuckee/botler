@@ -1158,6 +1158,7 @@ class TestTasksWatermark:
                     "interrupted", "canceled_by_user", "total", "completed_today"):
             assert body[key] == 0, f"{key} 应为 0"
         assert body["last_completed_at"] is None
+        assert body["maintenance_mode"] is False, "默认未开启维护模式"
 
     def test_counts_match_task_list_stats(self, client):
         app_client, db = client

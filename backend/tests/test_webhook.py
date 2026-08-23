@@ -422,3 +422,62 @@ class TestWebhookStoresIssueLabelsForPriority:
         task = ctx.db.find_active_task(PROJECT_ID, IID)
         assert task["issue_labels"] == "[]"
         assert task["issue_updated_at"] == ""  # 无 updated_at 时存空串
+
+
+class TestWebhookMaintenanceMode:
+    """维护模式（issue #241）：开启后新事件不派发新任务。
+
+    - maintenance_hold_events=True（默认）：webhook 事件照常接收、照常建
+      任务入队——「只入队不派发」由调度器维护模式检查保证（见
+      test_scheduler_maintenance.py）；
+    - maintenance_hold_events=False：直接不建任务（事件忽略，不消耗
+      GitLab API 查询）。
+    """
+
+    def test_hold_events_true_creates_task(self, ctx):
+        """维护模式开启 + hold_events=true（默认）：照常建任务入队。"""
+        _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
+        ctx.config.update_section("worker", {"maintenance_mode": True})
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        task = ctx.db.find_active_task(PROJECT_ID, IID)
+        assert task is not None and task["status"] == "queued", \
+            "hold_events=true 时维护模式只入队不派发，任务应创建并排队"
+
+    def test_hold_events_false_ignores_event(self, ctx):
+        """维护模式开启 + hold_events=false：直接不建任务（事件忽略）。"""
+        _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
+        ctx.config.update_section(
+            "worker", {"maintenance_mode": True, "maintenance_hold_events": False})
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert "维护模式" in result["reason"]
+        assert ctx.db.count_tasks() == 0, "hold_events=false 时不得创建任务"
+
+    def test_hold_events_false_skips_api_calls(self, ctx):
+        """hold_events=false 时不消耗 GitLab API 查询（检查点在 assignee 判定前）。"""
+        _add_repo(ctx.db)
+        ctx.config.update_section(
+            "worker", {"maintenance_mode": True, "maintenance_hold_events": False})
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert ctx.gitlab.issue_calls == 0, "不建任务时不应发起 issue 查询"
+
+    def test_maintenance_off_unchanged(self, ctx):
+        """维护模式关闭：行为与现状一致，正常入队。"""
+        _add_repo(ctx.db)
+        ctx.gitlab.current_issue = make_api_issue(labels=["bug"])
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        task = ctx.db.find_active_task(PROJECT_ID, IID)
+        assert task is not None

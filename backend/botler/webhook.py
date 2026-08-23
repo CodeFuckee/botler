@@ -84,6 +84,15 @@ class WebhookHandler:
         if not project_id or not issue_iid:
             raise WebhookError("事件缺少 project_id / issue_iid")
 
+        # 2.5 维护模式（issue #241）：开启后新事件不派发新任务。默认
+        # （maintenance_hold_events=True）照常建任务入队，由调度器拦截派发
+        # （恢复后自动执行）；False = 直接不建任务（事件忽略，不消耗
+        # GitLab API 查询）。
+        if cfg.maintenance_mode and not cfg.maintenance_hold_events:
+            logger.info("维护模式开启且不保留事件，忽略 webhook 事件 %s#%s",
+                        project_id, issue_iid)
+            return {"accepted": False, "reason": "维护模式开启，忽略新事件"}
+
         # 3. assignee 判定：事件快照可能不可靠，一律以 API 最新状态为准
         #    （顺带取最新标签供终态过滤，见步骤 4）
         issue = body.get("issue") or {}

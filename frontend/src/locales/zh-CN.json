@@ -371,5 +371,8 @@
   "nav.watermarkQueued": "排队 {n}",
   "nav.watermarkQueuedTitle": "查看排队中的任务",
   "nav.watermarkToday": "今日完成 {n}",
-  "nav.watermarkTodayTitle": "查看已成功完成的任务"
+  "nav.watermarkTodayTitle": "查看已成功完成的任务",
+  "nav.maintenanceMode": "维护中",
+  "nav.maintenanceModeTitle": "维护模式已开启：新任务暂停派发，运行中任务继续执行，关闭后自动恢复",
+  "overview.maintenanceBanner": "维护模式已开启：新任务暂停派发，运行中任务继续执行，关闭后自动恢复。可到「设置 → 任务调度」关闭。"
 }

@@ -434,6 +434,10 @@ export function useSettingsData() {
       // 暂停窗口豁免优先级阈值（issue #299）：0=关闭；1~999=仓库调度
       // 优先级（数字越小越优先）不差于该值的仓库在窗口内仍可开始新任务
       worker.pause_priority_threshold = Number(settings.worker?.pause_priority_threshold ?? 0)
+      // 维护模式（issue #241）：人工总开关 + 新事件处理方式（默认入队保留，
+      // 取消勾选 = 直接忽略新事件），跟随全局「保存」提交 worker 段
+      worker.maintenance_mode = settings.worker?.maintenance_mode === true
+      worker.maintenance_hold_events = settings.worker?.maintenance_hold_events !== false
       // 备用引擎降级（issue #236）：主引擎探测不可用或连续引擎类失败时
       // 按此顺序自动降级（空数组 = 不降级）
       worker.fallback_engines = settings.worker?.fallback_engines || []

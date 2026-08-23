@@ -65,6 +65,7 @@ let watermarkBody = {
   queued: 5, running: 1, retrying: 1, succeeded: 30, failed: 2,
   interrupted: 0, canceled_by_user: 0, total: 38, completed_today: 12,
   last_completed_at: '2026-08-23 11:00:00',
+  maintenance_mode: false,
 }
 let watermarkOk = true
 function okJson(body, status = 200) {
@@ -169,6 +170,60 @@ test('水位接口失败：徽章不渲染、页面不崩溃', async () => {
   }
 })
 
+// ---- 2.5 维护模式徽章（issue #241）----
+
+function findMaintenanceBadge(renderer) {
+  const nodes = renderer.root.findAll(
+    (n) => String(n.props.className || '').includes('maintenance-badge'))
+  return nodes.length > 0 ? nodes[0] : null
+}
+
+test('维护模式开启：导航栏渲染「维护中」徽章（数据来自 watermark）', async () => {
+  watermarkBody = { ...watermarkBody, maintenance_mode: true }
+  try {
+    const renderer = await renderApp('/')
+    try {
+      const badge = findMaintenanceBadge(renderer)
+      assert.ok(badge, '维护模式开启时应渲染维护中徽章')
+      assert.ok(collectText(badge).includes('维护中'), '徽章应显示「维护中」文案')
+      assert.equal(badge.props.role, 'status', '徽章应带 role=status 供读屏播报')
+    } finally {
+      await TestRenderer.act(() => renderer.unmount())
+    }
+  } finally {
+    watermarkBody = { ...watermarkBody, maintenance_mode: false }
+  }
+})
+
+test('维护模式关闭/未返回：不渲染维护中徽章', async () => {
+  watermarkBody = { ...watermarkBody, maintenance_mode: false }
+  try {
+    const renderer = await renderApp('/')
+    try {
+      assert.equal(findMaintenanceBadge(renderer), null, '维护模式关闭时不应渲染徽章')
+    } finally {
+      await TestRenderer.act(() => renderer.unmount())
+    }
+  } finally {
+    watermarkBody = { ...watermarkBody, maintenance_mode: false }
+  }
+})
+
+test('watermark 缺 maintenance_mode 字段（旧后端）：不渲染徽章不崩溃', async () => {
+  const saved = watermarkBody
+  watermarkBody = { queued: 0, running: 0, retrying: 0, total: 0 } // 无 maintenance_mode
+  try {
+    const renderer = await renderApp('/')
+    try {
+      assert.equal(findMaintenanceBadge(renderer), null, '缺字段时不应渲染徽章')
+    } finally {
+      await TestRenderer.act(() => renderer.unmount())
+    }
+  } finally {
+    watermarkBody = saved
+  }
+})
+
 // ---- 3. 源码断言：样式与折叠态 ----
 
 test('CSS：.watermark 样式存在，折叠态侧边栏隐藏徽章', () => {
@@ -176,4 +231,8 @@ test('CSS：.watermark 样式存在，折叠态侧边栏隐藏徽章', () => {
   assert.ok(styles.includes('.watermark-seg'), '应定义 .watermark-seg 样式')
   assert.ok(styles.includes('.sidebar.collapsed .watermark { display: none; }'),
     '折叠态侧边栏应隐藏水位徽章')
+  // 维护模式徽章（issue #241）：样式存在 + 折叠态隐藏
+  assert.ok(styles.includes('.maintenance-badge {'), '应定义 .maintenance-badge 样式')
+  assert.ok(styles.includes('.sidebar.collapsed .maintenance-badge { display: none; }'),
+    '折叠态侧边栏应隐藏维护模式徽章')
 })

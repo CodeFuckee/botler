@@ -58,6 +58,9 @@ export function useOverviewData() {
   // token（未配置时后端直接 400 拦截，绝不回退 code01 身份发布）。null=
   // 检测中，false=未配置（显示醒目提示），true=已配置/检测失败
   const [ownerTokenOk, setOwnerTokenOk] = useState(null)
+  // 维护模式状态（issue #241）：概览页「维护中」横幅数据源——从 /api/
+  // settings 轮询（15s，与现有轮询同周期；silent 失败保留上次状态不打扰）
+  const [maintenanceMode, setMaintenanceMode] = useState(false)
   // 详情右边栏选中的 issue（issue #85）：{issue, repoName}，null 表示关闭
   const [selectedIssue, setSelectedIssue] = useState(null)
   // 添加 issue 弹窗（issue #92）：打开的仓库卡片数据，null 表示关闭
@@ -353,6 +356,17 @@ export function useOverviewData() {
   }, [])
 
   usePolling(loadIssues, ISSUE_POLL_MS)
+
+  // 维护模式轮询（issue #241）：开启/恢复即时反映到概览页横幅（后端
+  // 保存即生效，前端 15s 内同步；接口失败保留上次状态，不弹错误）
+  usePolling(async () => {
+    try {
+      const d = await api.get('/api/settings', { silent: true })
+      setMaintenanceMode(!!(d.worker && d.worker.maintenance_mode))
+    } catch {
+      // 读取失败保留上次状态，后端自会拦截写入
+    }
+  }, ISSUE_POLL_MS)
 
   // issue #132：owner token 配置状态（启动时检测一次；配置变化由设置页
   // 保存后手动刷新页面生效）
@@ -659,6 +673,7 @@ export function useOverviewData() {
   // ---- 页面组件消费的数据与处理器（issue #201）----
   return {
     tasks, liveLines, error,
+    maintenanceMode,
     pipelines, selectedPipeline, setSelectedPipeline, pipeErrors, pipeError,
     repoIssues, issueErrors, issueError, ownerTokenOk,
     selectedIssue, setSelectedIssue,

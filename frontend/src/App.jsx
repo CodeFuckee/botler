@@ -348,6 +348,15 @@ export default function App() {
             <Icon name="clipboard" aria-hidden="true" />
             <span className="nav-label">{t('nav.tasks')}</span>
           </NavLink>
+          {/* 维护模式徽章（issue #241）：开启时导航栏常驻「维护中」提示，
+              数据来自 /api/tasks/watermark 的 maintenance_mode（15s 轮询
+              同源，不额外增加请求频率）；折叠态隐藏（与 watermark 同规则） */}
+          {watermark?.maintenance_mode && (
+            <div className="maintenance-badge" role="status" title={t('nav.maintenanceModeTitle')}>
+              <Icon name="warning" aria-hidden="true" />
+              <span className="nav-label">{t('nav.maintenanceMode')}</span>
+            </div>
+          )}
           {/* 任务并发水位徽章（issue #257）：常驻展示「运行 N · 排队 M ·
               今日完成 K」，各段点击跳转任务列表对应过滤（运行=running,
               retrying 多状态过滤；排队=queued；今日完成=succeeded）。

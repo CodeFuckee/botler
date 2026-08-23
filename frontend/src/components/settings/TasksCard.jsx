@@ -43,6 +43,46 @@ export default function TasksCard({
           </tr>
           <tr>
             <th>
+              维护模式
+              <br /><code>worker.maintenance_mode</code>
+            </th>
+            <td>
+              {settings.worker?.maintenance_mode && (
+                <div className="alert alert-warning small">
+                  <Icon name="warning" /> 维护模式已开启：新任务暂停派发，运行中任务继续执行，
+                  关闭后自动恢复。
+                </div>
+              )}
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  className="check-input"
+                  checked={settings.worker?.maintenance_mode === true}
+                  onChange={(e) => setWorkerField('maintenance_mode', e.target.checked)}
+                />
+                开启维护模式（紧急情况下一键暂停全部任务派发）
+              </label>
+              <div className="weekday-row">
+                <span className="muted">维护期间新事件：</span>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    className="check-input"
+                    checked={settings.worker?.maintenance_hold_events !== false}
+                    disabled={!settings.worker?.maintenance_mode}
+                    onChange={(e) => setWorkerField('maintenance_hold_events', e.target.checked)}
+                  />
+                  入队保留（恢复后自动执行）
+                </label>
+                <span className="muted small">取消勾选 = 直接忽略新事件（webhook/对账不建任务）</span>
+              </div>
+              <span className="muted small">
+                webhook 事件照常接收；对账照常扫描但不派发；已运行任务不中断。保存后立即生效。
+              </span>
+            </td>
+          </tr>
+          <tr>
+            <th>
               定时暂停窗口
               <br /><code>worker.pause_windows</code>
             </th>

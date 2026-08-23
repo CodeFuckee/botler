@@ -771,3 +771,48 @@ class TestReconcileRepoJitter:
 
         assert ctx.reconciler.reconcile_once(repo_id=repo_id) == {"scanned": 0, "enqueued": 0}
         assert sleeps == []
+
+
+class TestReconcileMaintenanceMode:
+    """维护模式（issue #241）：对账照常扫描但不派发。
+
+    - maintenance_hold_events=True（默认）：照常建任务入队——「不派发」由
+      调度器维护模式检查保证（见 test_scheduler_maintenance.py）；
+    - maintenance_hold_events=False：扫描照常（scanned 计数）但跳过建任务。
+    """
+
+    def test_hold_events_true_enqueues(self, ctx):
+        """维护模式开启 + hold_events=true（默认）：照常建任务入队。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {42: [make_issue(1, labels=["bug"])]}
+        ctx.config.update_section("worker", {"maintenance_mode": True})
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}, \
+            "hold_events=true 时对账照常建任务入队（派发由调度器拦截）"
+        task = ctx.db.find_active_task(42, 1)
+        assert task is not None and task["status"] == "queued"
+
+    def test_hold_events_false_skips_create(self, ctx):
+        """维护模式开启 + hold_events=false：扫描照常但跳过建任务。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {42: [make_issue(1, labels=["bug"])]}
+        ctx.config.update_section(
+            "worker", {"maintenance_mode": True, "maintenance_hold_events": False})
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 0}, \
+            "hold_events=false 时对账扫描照常（scanned=1）但不建任务"
+        assert ctx.db.count_tasks() == 0
+
+    def test_maintenance_off_unchanged(self, ctx):
+        """维护模式关闭：对账行为与现状一致，正常补入队。"""
+        repo_id = _add_repo(ctx.db)
+        ctx.gitlab.issues_by_project = {42: [make_issue(1, labels=["bug"])]}
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert ctx.db.find_active_task(42, 1) is not None

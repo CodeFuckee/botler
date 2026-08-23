@@ -438,6 +438,25 @@ body {
 .watermark-queued .watermark-dot { background: var(--warn); }
 .watermark-today .watermark-dot { background: var(--ok); }
 .sidebar.collapsed .watermark { display: none; }
+/* 维护模式徽章（issue #241）：导航栏常驻「维护中」提示——警示色胶囊，
+   数据来自 /api/tasks/watermark 的 maintenance_mode（15s 轮询同源）；
+   折叠态窄栏放不下整体隐藏（与 watermark 同规则）。 */
+.maintenance-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 12px 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+  background: var(--warn-weak);
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  border-radius: 999px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.sidebar.collapsed .maintenance-badge { display: none; }
 /* 侧边栏底部工具区（issue #324）：语言切换 / 快捷键帮助 / 登录用户区 */
 .sidebar-foot {
   margin-top: auto;
@@ -1555,6 +1574,14 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 }
 .alert-error { background: var(--err-weak); border-color: rgba(229, 72, 77, 0.35); color: var(--err); }
 .alert-warning { background: var(--warn-weak); border-color: rgba(217, 119, 6, 0.35); color: var(--warn); cursor: default; }
+/* 维护模式横幅（issue #241）：概览页顶部醒目提示——与普通 alert 同视觉，
+   横向排列图标+文案 */
+.maintenance-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
 .alert-ok { background: var(--ok-weak); border-color: rgba(23, 163, 74, 0.35); color: var(--ok); cursor: default; }
 .alert.small { padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2); font-size: 12.5px; }
 

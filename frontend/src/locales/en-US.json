@@ -371,5 +371,8 @@
   "nav.watermarkQueued": "Queued {n}",
   "nav.watermarkQueuedTitle": "View queued tasks",
   "nav.watermarkToday": "Completed today {n}",
-  "nav.watermarkTodayTitle": "View succeeded tasks"
+  "nav.watermarkTodayTitle": "View succeeded tasks",
+  "nav.maintenanceMode": "Maintenance",
+  "nav.maintenanceModeTitle": "Maintenance mode is on: new tasks are paused, running tasks continue, dispatch resumes after it is turned off",
+  "overview.maintenanceBanner": "Maintenance mode is on: new tasks are paused, running tasks continue, and dispatch resumes automatically after it is turned off. You can turn it off under Settings → Task scheduling."
 }
