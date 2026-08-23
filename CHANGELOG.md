@@ -6,6 +6,21 @@
 
 ### Added
 
+- **全站「回到顶部」浮动按钮（issue #455）**：
+  - 前端在 App 根部新增全局 `BackToTop` 组件：所有需要竖向滚动的页面
+    右下角提供「回到顶部」按钮（`frontend/src/components/BackToTop.jsx`）；
+  - 显示条件：页面可竖向滚动（内容高度 > 视口高度）且滚动位置超过阈值
+    400px（约两屏）——内容不足一屏的页面或页面顶部附近不显示，避免
+    遮挡与闪烁；滚动/窗口尺寸变化与路由切换（location.key）时重新评估；
+  - 点击平滑滚动回顶部（`window.scrollTo({top:0, behavior:'smooth'})`），
+    系统开启「减弱动态效果」时自动改用 instant，尊重无障碍偏好；
+  - 无障碍与国际化：`aria-label`/`title` 走 i18n（`common.backToTop`，
+    中英双语 issue #268），键盘可聚焦、focus-visible 焦点环，不可见时
+    整颗按钮不渲染（不残留隐藏可聚焦元素）；
+  - 样式全部走设计令牌（`--gutter`/`--bg-card`/`--border`/`--shadow-card`），
+    深色模式自动适配（issue #217）；层级 z-index 90 位于对话框/toast
+    （100）之下；版本更新横幅显示时按钮上移让位（`raised`，避免遮挡）。
+
 - **导航栏任务并发水位徽章（issue #257）**：
   - 后端新增 `GET /api/tasks/watermark`：任务各状态计数（queued/running/
     retrying/succeeded/failed/interrupted/canceled_by_user）+ 总量 total +

@@ -10,6 +10,7 @@ import {
 import DialogHost from './components/DialogHost.jsx'
 import ToastHost from './components/ToastHost.jsx'
 import UserMenu from './components/UserMenu.jsx'
+import BackToTop from './components/BackToTop.jsx'
 import ShortcutHelpModal from './components/ShortcutHelpModal.jsx'
 import SearchOverlay from './components/SearchOverlay.jsx'
 import { useShortcuts } from './keymap.js'
@@ -496,6 +497,9 @@ export default function App() {
       {/* 自定义对话框宿主（issue #105）：替代浏览器原生 alert/confirm，
           挂在根部全局唯一，供 confirmDialog / alertDialog 渲染 */}
       <DialogHost />
+      {/* 回到顶部按钮（issue #455）：全站右下角浮动，滚动超过阈值且页面
+          可竖向滚动时显示；版本更新横幅显示时上移让位（raised） */}
+      <BackToTop raised={!!versionUpdate} />
       <ToastHost />
     </div>
   )
