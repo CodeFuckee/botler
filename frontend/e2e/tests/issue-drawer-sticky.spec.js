@@ -158,10 +158,14 @@ test('竖屏视口：× 关闭按钮固定在顶部、其余操作按钮固定�
   // 3. 头部与底部 computed style 均 sticky（吸附顶/底）
   expect(await header.evaluate((el) => getComputedStyle(el).position)).toBe('sticky')
   expect(await bottomActions.evaluate((el) => getComputedStyle(el).position)).toBe('sticky')
-  // issue #340：竖屏下底部操作栏按钮右对齐（justify-content: flex-end，
-  // 修复前为 flex 默认左对齐）——与桌面端/横屏窄视口（保持左对齐）区分
-  expect(await bottomActions.evaluate(
-    (el) => getComputedStyle(el).justifyContent)).toBe('flex-end')
+  // issue #340 + #463：竖屏下底部操作栏按钮组右对齐——宽度足够时首按钮
+  // margin-left: auto 把按钮组推到右侧（修复前为 justify-content:
+  // flex-end；#463 改为 auto margin 后超宽时按钮从左排布可横向滚动、
+  // 首按钮不被裁切不可达）。375px 视口下四个按钮超宽：首按钮（关闭
+  // issue）必须完整可见（修复前 flex-end 时被挤到容器左侧 -158px 外）
+  const firstBtnBox = await bottomActions.locator('.btn').first().boundingBox()
+  const baBox = await bottomActions.boundingBox()
+  expect(firstBtnBox.x).toBeGreaterThanOrEqual(baBox.x - 1)
 
   // 4. 抽屉内容必须可滚动（scrollHeight > clientHeight），否则断言无意义
   const scrollable = await drawer.evaluate((el) => el.scrollHeight > el.clientHeight)

@@ -5274,17 +5274,26 @@ body:has(.drawer-overlay) {
     display: none;
   }
   /* 底部操作栏：sticky 常驻抽屉底部（thumb 可及），内容滚动时
-     始终可见；内容不足一屏时由 margin-top:auto 推到底部对齐 */
+     始终可见；内容不足一屏时由 margin-top:auto 推到底部对齐。
+     issue #463：小尺寸手机（375px）下五个按钮原 flex-wrap: wrap 被拆成
+     两行、右对齐第二行零散不美观——改为 nowrap 单行 + 内容超宽时横向
+     滚动（overflow-x: auto），按钮永不换行；滚动条隐藏（WebKit/Firefox）
+     保持视觉干净，触摸/触控板仍可横向滑动 */
   .drawer-bottom-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: var(--space-2);
+    overflow-x: auto;
+    scrollbar-width: none;
     margin-top: auto;
     padding: var(--space-3) 0 var(--space-4);
     border-top: 1px solid var(--border);
     background: var(--bg-card);
     position: sticky;
     bottom: 0;
+  }
+  .drawer-bottom-actions::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -5342,10 +5351,17 @@ body:has(.drawer-overlay) {
      position:sticky/bottom:0） */
   .drawer.issue-drawer .drawer-bottom-actions {
     display: flex;
-    /* issue #340：竖屏下底部操作栏按钮从左对齐改为右对齐——flex 默认
-       justify-content: flex-start 为左对齐，显式改为 flex-end 右对齐
-       （仅作用于竖屏 + issue 抽屉；横屏窄视口/桌面端对齐方式不变） */
-    justify-content: flex-end;
+  }
+  /* issue #340 右对齐语义 + issue #463 实现调整：竖屏下底部操作栏按钮
+     右对齐。flex 的 justify-content: flex-end 在内容超宽（小屏 5 按钮）
+     时会把溢出放在左侧、容器不可横向滚动（scrollWidth 不增长），首按钮
+     被裁切不可达——改用首按钮 margin-left: auto：宽度足够时自动右对齐
+     （与 flex-end 等效），内容超宽时 auto margin 失效、按钮从左排布且
+     容器可横向滚动（nowrap + overflow-x: auto 见 860px 断点），全部
+     按钮可滑动可见。仅作用于竖屏 + issue 抽屉；横屏窄视口/桌面端
+     对齐方式不变 */
+  .drawer.issue-drawer .drawer-bottom-actions > :first-child {
+    margin-left: auto;
   }
   /* 底部操作栏不再重复展示 ×（× 已固定在顶部，避免两处关闭入口） */
   .drawer.issue-drawer .drawer-bottom-actions .modal-close {

@@ -333,21 +333,29 @@ test('styles.css：竖屏下 issue 抽屉头部仅保留 × 关闭按钮、其�
   assert.match(bottomClose[1], /display:\s*none/, '竖屏下底部操作栏应隐藏 ×（避免与顶部重复）')
 })
 
-// 竖屏底部操作栏右对齐（issue #340）：竖屏（≤860px 且 orientation:
+// 竖屏底部操作栏右对齐（issue #340 + #463）：竖屏（≤860px 且 orientation:
 // portrait）下概览页 issue 详情右边栏的底部操作栏
 // （.drawer.issue-drawer .drawer-bottom-actions，承载「关闭 issue /
-// 查看执行的详情 / 在 GitLab 中打开」等按钮）原先为 flex 默认左对齐
-// （justify-content 缺省 flex-start）；本 issue 要求改为右对齐
-// （justify-content: flex-end）。修复前竖屏断点内该规则体无
-// justify-content 声明，本用例必失败。
-test('styles.css：竖屏下 issue 抽屉底部操作栏按钮右对齐（issue #340）', () => {
+// 查看执行的详情 / 在 GitLab 中打开」等按钮）按钮组右对齐。issue #463
+// 将实现由 justify-content: flex-end 调整为首按钮 margin-left: auto——
+// 两者在宽度足够时均右对齐，但 flex-end 在内容超宽（小屏 5 按钮）时
+// 溢出在左侧且容器不可滚动、首按钮不可达；auto margin 超宽时自动失效、
+// 按钮从左排布并随 nowrap + overflow-x: auto 横向滚动。
+test('styles.css：竖屏下 issue 抽屉底部操作栏按钮右对齐（issue #340 + #463）', () => {
   const block = portraitMediaBlock(styles)
   const bottom = block.match(/\.drawer\.issue-drawer\s+\.drawer-bottom-actions\s*\{([^}]*)\}/)
   assert.ok(bottom, 'portrait 断点内应声明 issue 抽屉底部操作栏显示规则')
-  assert.match(bottom[1], /justify-content:\s*flex-end/,
-               '竖屏下底部操作栏按钮应右对齐（justify-content: flex-end）')
-  // 布局继承不受影响：仍为 flex 行容器（sticky 常驻底部布局来自 860px 断点）
+  // 右对齐实现为 auto margin（宽度足够时生效；超宽时自动失效可滚动）——
+  // 不得回退为 justify-content: flex-end（超宽时首按钮被裁切不可达，issue #463）
+  assert.ok(!/justify-content:\s*flex-end/.test(bottom[1]),
+            '底部操作栏不得使用 justify-content: flex-end（超宽时首按钮不可达）')
   assert.match(bottom[1], /display:\s*flex/, '竖屏下底部操作栏仍应保持 flex 布局')
+  // 右对齐规则：首按钮 margin-left: auto
+  const firstChild = block.match(
+    /\.drawer\.issue-drawer\s+\.drawer-bottom-actions\s+>\s+:first-child\s*\{([^}]*)\}/)
+  assert.ok(firstChild, 'portrait 断点内应声明底部操作栏首按钮 auto margin 规则')
+  assert.match(firstChild[1], /margin-left:\s*auto/,
+               '竖屏下底部操作栏按钮组应右对齐（首按钮 margin-left: auto）')
 })
 
 // 竖屏标题与 × 关闭按钮同行 + 省略号（issue #341）：竖屏（≤860px 且

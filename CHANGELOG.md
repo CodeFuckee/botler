@@ -6,6 +6,23 @@
 
 ### Fixed
 
+- **小尺寸手机（375px）下 issue 详情右边栏底部操作栏五个按钮被拆成两行（issue #463）**：
+  - 现象：概览页 issue 详情右边栏底部操作栏（`.drawer-bottom-actions`，issue #270
+    移动端下沉按钮）在 ≤860px 断点使用 `flex-wrap: wrap`，375px 竖屏下「关闭
+    issue / 执行 / 重试 / 查看执行的详情 / 在 GitLab 中打开」五个按钮总宽超容器，
+    被拆成两行、右对齐的第二行零散不整齐，底部操作栏被撑高，界面不美观；
+  - 根因：按钮总宽约 500px+ 而 375px 抽屉内容宽仅约 343px，wrap 必然换行；且竖屏
+    右对齐（issue #340）用 `justify-content: flex-end`，内容超宽时溢出在容器左侧、
+    首按钮被裁切不可达（实测左移 -158px）；
+  - 修复：底部操作栏改 `flex-wrap: nowrap` + `overflow-x: auto` 单行横向滚动（滚动条
+    隐藏，Firefox `scrollbar-width: none` + WebKit `::-webkit-scrollbar`），按钮永不
+    换行、超宽可滑动看到全部；竖屏右对齐改由首按钮 `margin-left: auto` 实现——宽度
+    足够时右对齐（与 flex-end 等效），超宽时 auto margin 自动失效、按钮从左排布可滚动；
+  - 测试：`frontend/e2e/tests/issue-drawer-bottom-actions-wrap.spec.js`（375px 真实
+    Chromium 断言 5 按钮垂直中心 y 一致、单行；修复前 y 差 45.9px 必失败）、
+    `frontend/tests/issue-drawer-bottom-actions-wrap.test.mjs`（CSS 源码断言 nowrap /
+    overflow-x / 滚动条隐藏 / auto margin 右对齐）。
+
 - **日志脱敏过滤器破坏 uvicorn 访问日志，每次请求抛 ValueError（issue #461）**：
   - `RedactFilter`（`backend/botler/log_redact.py`，issue #259 引入）挂到
     `uvicorn.access` logger/handler 后，会把 `record.msg` 重写为预格式化
