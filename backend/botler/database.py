@@ -909,13 +909,15 @@ class Database:
         if actor:
             where.append("actor = ?")
             params.append(actor)
+        # 动态 WHERE 段由固定列名（action/target_type/actor）拼接，值一律
+        # 走 ? 参数绑定，无注入面（与库内既有 B608 nosec 模式一致，见上）
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         with self._conn() as conn:
             total = conn.execute(
-                f"SELECT COUNT(*) AS n FROM audit_logs{clause}", params
+                f"SELECT COUNT(*) AS n FROM audit_logs{clause}", params  # nosec B608
             ).fetchone()["n"]
             rows = conn.execute(
-                f"SELECT * FROM audit_logs{clause} ORDER BY id DESC "
+                f"SELECT * FROM audit_logs{clause} ORDER BY id DESC "  # nosec B608
                 "LIMIT ? OFFSET ?",
                 params + [limit, offset]).fetchall()
         return rows, total
