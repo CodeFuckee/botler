@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **设置页审计日志表格窄视口横向溢出（issue #459 CI 阻塞）**：
+  - 审计日志表格（7 列：时间/操作者/操作类型/目标/变更摘要/IP/操作，
+    `.nowrap` 时间/IP 列撑出 min-content 约 565px）在手机（≤640px）与
+    平板竖屏（641~860px）下直接溢出页面产生横向滚动，导致 e2e
+    `responsive-mobile.spec.js` 设置页「无横向滚动」用例失败；根因是
+    表格无横向滚动容器。套用项目既有 `.table-wrap`（`overflow-x: auto`，
+    issue #28）包裹表格：窄视口下表格在卡片内横向滚动、页面不再溢出，
+    桌面宽视口行为不变；
+  - 测试：`frontend/tests/settings-audit-logs.test.mjs`（渲染/删除/分页
+    既有用例保持通过）、e2e `responsive-mobile.spec.js` 全量并行复跑通过。
+
 ### Added
 
 - **流水线详情右边栏截图大图全局页面查看（issue #459）**：

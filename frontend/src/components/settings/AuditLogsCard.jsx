@@ -189,6 +189,12 @@ export default function AuditLogsCard() {
       {items.length === 0 ? (
         <p className="muted">暂无审计记录。</p>
       ) : (
+        // issue #459 CI：审计日志表格 7 列（时间/操作者/操作类型/目标/变更摘要/
+        // IP/操作）min-content 宽约 565px，手机（≤640px）与平板竖屏（641~860px）
+        // 下直接溢出页面产生横向滚动（e2e responsive-mobile 设置页用例失败）。
+        // 套用项目既有 .table-wrap 横向滚动容器（issue #28），表格在卡片内滚动、
+        // 页面不再横向溢出；桌面宽视口行为不变。
+        <div className="table-wrap">
         <table className="table">
           <thead>
             <tr>
@@ -229,6 +235,7 @@ export default function AuditLogsCard() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       <hr className="muted" />
