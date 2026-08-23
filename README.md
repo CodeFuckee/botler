@@ -494,12 +494,15 @@ false` 阻断门禁，按 requirements.lock.txt 安装依赖）。
   要求一致）；截图专用配置 `playwright.screenshots.config.js` 将 spec 目录
   隔离在 `e2e/screenshots/`（不参与常规 E2E 跑批）、禁用重试。截图复用同一套
   mock + 种子后端，不依赖真实 GitLab 与已部署环境。
-- **截图在线预览（issue #453/#456）**：流水线详情右边栏对带 archive 产物的
+- **截图在线预览（issue #453/#456/#459）**：流水线详情右边栏对带 archive 产物的
   成功 job 提供「查看截图」入口，抽屉内按页面分组预览 e2e:screenshots 截图；
   缩略图网格先加载后端 Pillow 生成的 JPEG 预览图（`GET
   /api/pipelines/{repo_id}/screenshot-preview`，最长边 480px、300 秒 TTL
   缓存），点击缩略图进入大图预览时才加载原图（`/screenshot-file`），避免
-  整页截图（单张可达数 MB）在缩略图阶段全部直出。
+  整页截图（单张可达数 MB）在缩略图阶段全部直出。大图预览为全局页面浮层
+  （issue #459）：经 `createPortal` 渲染到 `document.body`，脱离右边栏
+  （`.drawer` 的 `will-change: transform` 会使 `position: fixed` 浮层被
+  限定在抽屉内），铺满整页居中查看、点击任意处关闭，抽屉保持打开。
 
 ## CHANGELOG 维护与发布轮转（issue #289）
 

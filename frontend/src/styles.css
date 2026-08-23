@@ -3207,13 +3207,17 @@ body:has(.drawer-overlay) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 大图预览：抽屉内浮层，点击关闭。点击放大才加载原图（issue #456）：
-   舞台容器尺寸由预览占位图撑起，原图绝对定位铺满覆盖，加载完成后
-   无缝替换预览图；两者同源等比，宽高一致不会跳动。 */
+/* 大图预览：全局页面浮层（issue #459），点击关闭。浮层经 createPortal
+   渲染到 document.body（脱离 .drawer 的 will-change: transform 包含块，
+   否则 position: fixed 会被限定在右边栏内）；z-index 200 高于
+   .drawer-overlay / 对话框宿主（100），铺满整页盖住抽屉与页面内容。
+   点击放大才加载原图（issue #456）：舞台容器尺寸由预览占位图撑起，
+   原图绝对定位铺满覆盖，加载完成后无缝替换预览图；两者同源等比，
+   宽高一致不会跳动。 */
 .pipeline-screenshots-lightbox {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 200;
   display: flex;
   flex-direction: column;
   align-items: center;

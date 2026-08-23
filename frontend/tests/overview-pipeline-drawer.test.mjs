@@ -810,6 +810,22 @@ test('截图查看：源码区分预览图与原图 URL（先预览、点击放�
     '大图预览应使用 screenshotFileUrl 加载原图')
 })
 
+// issue #459：截图大图全局页面查看——lightbox 经 createPortal 渲染到
+// document.body（脱离 .drawer 的 will-change: transform 包含块，否则
+// position: fixed 浮层 inset:0 仅覆盖抽屉自身宽度，被限定在右边栏内），
+// z-index 需高于 .drawer-overlay（100）才能在脱离抽屉层级后盖住整页。
+// 测试环境无 document 时降级内联渲染，保证单测可渲染断言。
+test('截图大图全局页面查看：浮层挂载 document.body、层级高于抽屉遮罩（issue #459）', () => {
+  assert.match(drawerSrc, /createPortal/, '大图浮层应使用 ReactDOM.createPortal 渲染')
+  assert.match(drawerSrc, /document\.body/, '大图浮层应挂载到 document.body（全局页面查看）')
+  assert.match(drawerSrc, /typeof document !== 'undefined'/,
+    '无 document（测试环境）时应降级内联渲染不崩溃')
+  const m = styles.match(/\.pipeline-screenshots-lightbox\s*\{([\s\S]*?)\}/)
+  assert.ok(m, '应有 .pipeline-screenshots-lightbox 样式块')
+  const z = m[1].match(/z-index:\s*(\d+)/)
+  assert.ok(z && Number(z[1]) >= 100, '大图浮层 z-index 应不低于 .drawer-overlay（100）')
+})
+
 // 集成：e2e:screenshots job 带 archive 产物 → 任务行出现「查看截图」，
 // 点击后抽屉内列出截图（按页面分组），提供返回按钮
 test('e2e:screenshots 任务行「查看截图」→ 抽屉内列出截图（issue #453 验收）', async () => {

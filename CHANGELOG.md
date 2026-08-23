@@ -6,6 +6,20 @@
 
 ### Added
 
+- **流水线详情右边栏截图大图全局页面查看（issue #459）**：
+  - 右侧边栏「查看截图」点击缩略图弹出的大图预览，此前浮层（`position:
+    fixed; inset: 0`）因 `.drawer` 的 `will-change: transform` 成为其
+    包含块，被限定在 520px 右边栏内查看；现浮层经 React `createPortal`
+    渲染到 `document.body` 实现全局页面查看——脱离抽屉包含块后铺满整页，
+    图片居中、点击任意处关闭，抽屉保持打开；
+  - 层级调整：`.pipeline-screenshots-lightbox` z-index 由 60 提升至
+    200（高于 `.drawer-overlay` / 对话框宿主 / toast 宿主的 100），
+    脱离抽屉层级后仍盖住整页与抽屉；测试环境（SSR 测试无 document）
+    降级内联渲染，保证单测可渲染断言；
+  - 测试：`frontend/tests/overview-pipeline-drawer.test.mjs`（源码级
+    断言 createPortal + `document.body` 挂载、z-index ≥ 100 层级 +
+    既有截图查看功能用例保持通过，共 31 用例）。
+
 - **「添加 Issue」弹窗滚动布局（issue #458）**：
   - 弹窗内容超过可视高（max-height 80vh）时，头部标题固定在顶部、取消/创建
     Issue 按钮固定在底部，中间表单区（标题/描述/图片附件/分配人/标签）独立
