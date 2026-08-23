@@ -370,6 +370,18 @@ alerts:
   disk_min_free_mb: 512             # 磁盘剩余阈值（MiB，与 /api/health 探测同口径）
   throttle_seconds: 3600            # 同类告警节流窗口（秒，默认 1 小时）
 
+inspection:
+  # 仓库健康巡检（issue #265）：定时检查每个启用仓库的 webhook 有效性 /
+  # token 有效性 / 项目可达性，结果落库 repo_health 表（历史保留），仓库
+  # 列表页展示健康徽章（正常/异常/未知），异常可点击查看详情与手动重检。
+  # 异常聚合通知（in_app 网页通知 + webhook 推送，按 alerts.throttle_seconds
+  # 节流防刷屏）。设置页「仓库健康巡检」卡片可配置。本段全部可缺省。
+  enabled: true                     # 巡检总开关（关闭 = 不执行定时巡检，
+                                    #   手动重检仍可用）
+  interval_seconds: 21600           # 巡检间隔（秒，默认 6 小时；下限 300）
+  auto_repair: true                 # webhook 缺失 / secret 不匹配时自动
+                                    #   重新注册（默认开）
+
 usage:
   # 任务 token 用量与费用（issue #235）：任务执行时采集三引擎（claude /
   # hermes / dsh）的模型调用 token 用量，任务详情页展示用量卡片、概览页

@@ -128,6 +128,9 @@ export function useSettingsData() {
   // 「聚合告警」卡片保存状态（issue #229）：独立保存按钮 busy / 保存成功提示
   const [alertSaveBusy, setAlertSaveBusy] = useState(false)
   const [alertSaved, setAlertSaved] = useState(false)
+  // 「仓库健康巡检」卡片（issue #265）：inspection 段保存状态
+  const [inspectionSaveBusy, setInspectionSaveBusy] = useState(false)
+  const [inspectionSaved, setInspectionSaved] = useState(false)
   // 定时暂停窗口（issue #169）：textarea 每行一个窗口串 ↔ 数组存储；
   // 初始值在 settings 加载后回填（与 issue_priority 同模式）
   const [pauseWindowsInput, setPauseWindowsInput] = useState('')
@@ -220,6 +223,10 @@ export function useSettingsData() {
   // 保存（saveAlerts）一次性提交，不影响其他设置
   const setAlertField = (key, val) =>
     setSettings((s) => ({ ...s, alerts: { ...s.alerts, [key]: val } }))
+  // 「仓库健康巡检」卡片字段更新（issue #265）：inspection 段局部更新，
+  // 随卡片内保存（saveInspection）一次性提交，不影响其他设置
+  const setInspectionField = (key, val) =>
+    setSettings((s) => ({ ...s, inspection: { ...s.inspection, [key]: val } }))
   const setOwnerTokenExpiry = (value) =>
     setSettings((s) => ({ ...s, gitlab: { ...s.gitlab, owner_token_expires_at: value } }))
   const saveOwnerTokenExpiry = async () => {
@@ -361,6 +368,18 @@ export function useSettingsData() {
     } catch (e) { setError(e.message) } finally { setAlertSaveBusy(false) }
   }
 
+  // 「仓库健康巡检」卡片内独立保存（issue #265）：只提交 inspection 段，
+  // 后端 PUT /api/settings 支持部分更新，不影响其他设置；间隔/auto_repair
+  // 写回 config.yaml 后下次定时巡检即按新配置生效
+  const saveInspection = async () => {
+    setInspectionSaveBusy(true); setError(''); setInspectionSaved(false)
+    try {
+      await api.put('/api/settings', { inspection: { ...settings.inspection } })
+      setInspectionSaved(true)
+      setTimeout(() => setInspectionSaved(false), 2000)
+    } catch (e) { setError(e.message) } finally { setInspectionSaveBusy(false) }
+  }
+
   // SSO 卡片内独立保存（issue #27 第四轮）：只提交 sso 段，
   // 后端 PUT /api/settings 支持部分更新，不影响其他设置
   const saveSso = async () => {
@@ -488,6 +507,8 @@ export function useSettingsData() {
     setNotifyField, handleTestNotify, saveNotify,
     setAlertField, alertSaveBusy, setAlertSaveBusy,
     alertSaved, setAlertSaved, saveAlerts,
+    setInspectionField, inspectionSaveBusy, setInspectionSaveBusy,
+    inspectionSaved, setInspectionSaved, saveInspection,
     minioAccessInput, setMinioAccessInput, minioSecretInput, setMinioSecretInput,
     minioSaveBusy, setMinioSaveBusy, minioSaved, setMinioSaved, setMinioField,
     buildMinioPatch, saveMinio,

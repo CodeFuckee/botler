@@ -39,6 +39,7 @@ test('NOTIFY_TYPE_MAP 覆盖全部事件类型（任务/队列 + 聚合告警）
     alert_queue_backlog: 'alert_queue_backlog',
     alert_token_invalid: 'alert_token_invalid',
     alert_disk_low: 'alert_disk_low',
+    alert_repo_health: 'alert_repo_health',
   })
 })
 
@@ -46,6 +47,7 @@ test('filterNotifyEvents：告警事件在总开关开启时弹出（缺省视�
   const alerts = [
     { id: 9, type: 'alert_failure_rate', title: '⚠️ 任务失败率过高', body: 'b' },
     { id: 10, type: 'alert_disk_low', title: '⚠️ 磁盘空间不足', body: 'c' },
+    { id: 11, type: 'alert_repo_health', title: '⚠️ 仓库健康异常', body: 'd' },
   ]
   assert.deepEqual(filterNotifyEvents(alerts, DEFAULT_SETTINGS), alerts)
 })

@@ -197,6 +197,25 @@ CREATE TABLE IF NOT EXISTS repos (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- 仓库健康巡检（issue #265）：定时巡检（webhook/token/项目可达）结果
+-- 历史表——每次巡检为每个启用仓库写入一行（含各检查项明细与自动修复
+-- 标记），仓库列表健康徽章取每仓库最新一行。表结构为新增列，不影响
+-- 既有行（CREATE TABLE IF NOT EXISTS 幂等）。
+CREATE TABLE IF NOT EXISTS repo_health (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_id INTEGER NOT NULL REFERENCES repos(id),
+  health_status TEXT NOT NULL,
+  check_time TEXT NOT NULL,
+  last_error TEXT,
+  webhook_ok INTEGER,
+  token_ok INTEGER,
+  project_ok INTEGER,
+  repaired INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_repo_health_repo
+  ON repo_health(repo_id, check_time);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   repo_id INTEGER NOT NULL REFERENCES repos(id),
@@ -828,6 +847,29 @@ class Database:
             conn.execute("PRAGMA user_version = 26")
             ver = 26
 
+        if ver < 27:
+            # issue #265：仓库健康巡检结果表。CREATE TABLE IF NOT EXISTS
+            # 已覆盖新库；旧库（user_version=26）首次启动时同样建表并显式
+            # 推进版本号保持迁移链完整（与 audit_logs 表 v26 迁移同模式）。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS repo_health (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     repo_id INTEGER NOT NULL REFERENCES repos(id),
+                     health_status TEXT NOT NULL,
+                     check_time TEXT NOT NULL,
+                     last_error TEXT,
+                     webhook_ok INTEGER,
+                     token_ok INTEGER,
+                     project_ok INTEGER,
+                     repaired INTEGER DEFAULT 0,
+                     created_at TEXT DEFAULT (datetime('now'))
+                   )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_repo_health_repo "
+                "ON repo_health(repo_id, check_time)")
+            conn.execute("PRAGMA user_version = 27")
+            ver = 27
+
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
 
@@ -1308,6 +1350,60 @@ class Database:
     def delete_repo(self, repo_id: int) -> None:
         with self._conn(write=True) as conn:
             conn.execute("DELETE FROM repos WHERE id=?", (repo_id,))
+
+    # ---- 仓库健康巡检（issue #265）----
+    # 巡检结果历史表：每次巡检为每个启用仓库写入一行（含各检查项明细与
+    # 自动修复标记），仓库列表健康徽章取每仓库最新一行
+    # （latest_repo_health / latest_health_by_repo），详情弹窗展示历史
+    # （list_repo_health）。
+
+    def add_repo_health(self, repo_id: int, health_status: str,
+                        check_time: str, last_error: str | None = None,
+                        webhook_ok: bool | None = None,
+                        token_ok: bool | None = None,
+                        project_ok: bool | None = None,
+                        repaired: bool = False) -> int:
+        """写入一条仓库健康巡检结果，返回记录 id。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                """INSERT INTO repo_health
+                   (repo_id, health_status, check_time, last_error,
+                    webhook_ok, token_ok, project_ok, repaired)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (repo_id, health_status, check_time, last_error,
+                 1 if webhook_ok else 0 if webhook_ok is not None else None,
+                 1 if token_ok else 0 if token_ok is not None else None,
+                 1 if project_ok else 0 if project_ok is not None else None,
+                 1 if repaired else 0))
+            return cur.lastrowid
+
+    def latest_repo_health(self, repo_id: int) -> sqlite3.Row | None:
+        """仓库最近一次巡检结果（无记录返回 None = 状态未知）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT * FROM repo_health WHERE repo_id=?
+                   ORDER BY id DESC LIMIT 1""", (repo_id,)).fetchone()
+
+    def list_repo_health(self, repo_id: int, limit: int = 50) -> list[sqlite3.Row]:
+        """仓库巡检历史（按时间倒序，最多 limit 条）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT * FROM repo_health WHERE repo_id=?
+                   ORDER BY id DESC LIMIT ?""", (repo_id, limit)).fetchall()
+
+    def latest_health_by_repo(self) -> dict[int, sqlite3.Row]:
+        """全部仓库的最新巡检结果（仓库列表健康徽章数据源）。
+
+        返回 {repo_id: 最新行}；从未巡检的仓库不包含（状态按未知处理）。
+        子查询按 id 取每组最新一行（id 递增 = 时间递增，与 check_time
+        同序，避免同秒写入时时间戳并列）。
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM repo_health WHERE id IN (
+                     SELECT MAX(id) FROM repo_health GROUP BY repo_id
+                   )""").fetchall()
+            return {int(r["repo_id"]): r for r in rows}
 
     # ---- issue_manual_orders（issue #287）----
     # 概览页「其他」分组手动调度顺序：用户在「调度器执行顺序」排序下拖动

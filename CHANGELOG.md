@@ -63,6 +63,33 @@
 
 ### Added
 
+- **仓库健康巡检：webhook / token / 连通性定时检测与自动修复（issue #265）**：
+  - 新增定时巡检任务（`RepoHealthInspector`，`backend/botler/health_inspection.py`，
+    复用 APScheduler，间隔 `inspection.interval_seconds` 可配置，默认 6 小时）：
+    对每个启用仓库检查 a) webhook 存在且 secret 匹配（`GET /projects/{id}/hooks`
+    比对 URL 与 token 字段）、b) token 有效性（轻量 API 调用 `GET /user`）、
+    c) 仓库可达（`GET /projects/{id}`）；
+  - 巡检结果落库新增 `repo_health` 表（`health_status` / `check_time` /
+    `last_error` / 各检查项明细 / 自动修复标记，历史保留），仓库列表健康徽章
+    取每仓库最新一行（`healthy` 正常 / `abnormal` 异常 / `unknown` 未知 =
+    从未巡检）；
+  - webhook 缺失 / secret 不匹配时自动重新注册（`inspection.auto_repair`，
+    默认开），注册成功当轮标记 `repaired`；
+  - 异常聚合通知（in_app 网页通知 + webhook 推送）：同一轮所有异常仓库汇总为
+    一条告警（`alert_repo_health`），按 `alerts.throttle_seconds` 节流（默认
+    1 小时）防刷屏；
+  - 仓库列表页展示健康徽章（异常可点击查看详情弹窗：检查项明细 / 错误描述 /
+    自动修复标记 / 巡检历史），支持「重新巡检」手动重检（`POST
+    /api/repos/{id}/health-check`，`GET /api/repos/{id}/health` 详情）；
+  - 设置页新增「仓库健康巡检」卡片（`inspection` 段：enabled / interval_seconds /
+    auto_repair，独立保存写回 config.yaml）；
+  - 测试：新增 `backend/tests/test_health_inspection.py`（35 用例：巡检判定 /
+    自动修复成功与失败 / auto_repair 关闭 / token 失效 / 项目 404 / 多失败项
+    聚合 / 停用与关闭跳过 / force 手动重检 / 结果落库与历史 / 聚合通知节流与
+    webhook 推送 / 设置 API 读写校验），前端新增
+    `frontend/tests/repos-health-badge.test.mjs`（徽章渲染 / 详情弹窗 / 手动
+    重检），全量测试无 regression。
+
 - **美化「展开灵感列表 / 收起灵感列表」按钮（issue #460）**：
   - 概览页灵感板块仓库卡片的展开/收起按钮（`.inspiration-toggle-btn`）此前
     为无样式裸文本（仅 `margin-left: auto` 右对齐），升级为 apple-design

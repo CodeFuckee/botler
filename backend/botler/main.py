@@ -32,6 +32,7 @@ from .config import ConfigManager
 from .database import Database
 from .executor import ClaudeExecutor
 from .gitlab_client import GitLabClient, configure_default_rate_limiter
+from .health_inspection import RepoHealthInspector
 from .log_redact import install_redact_filter, register_config_secrets
 from .reconciler import Reconciler
 from .retention import RetentionManager
@@ -90,6 +91,7 @@ class AppContext:
     webhook: WebhookHandler
     backup: BotlerBackup
     retention: RetentionManager
+    health_inspection: RepoHealthInspector
     sso: SsoAuth
     config_path: str = ""
 
@@ -121,6 +123,9 @@ def build_context(config_path: str | None = None) -> AppContext:
     webhook = WebhookHandler(config, db, gitlab, scheduler)
     retention = RetentionManager(db, config)
     backup = BotlerBackup(config.path, db.path, config=config)
+    # 仓库健康巡检（issue #265）：定时检查启用仓库的 webhook/token/项目
+    # 可达，结果落库 repo_health，异常聚合告警（in_app + webhook 推送）
+    health_inspection = RepoHealthInspector(config, db, gitlab)
     # 手动与定时备份都先按 retention 策略收缩运行数据，降低备份成本。
     backup.pre_backup_cleanup = retention.cleanup
     sso = SsoAuth(config)
@@ -140,7 +145,8 @@ def build_context(config_path: str | None = None) -> AppContext:
     return AppContext(
         config=config, db=db, gitlab=gitlab, renderer=renderer,
         executor=executor, scheduler=scheduler, reconciler=reconciler,
-        webhook=webhook, backup=backup, retention=retention, sso=sso, config_path=config.path,
+        webhook=webhook, backup=backup, retention=retention,
+        health_inspection=health_inspection, sso=sso, config_path=config.path,
     )
 
 
@@ -194,12 +200,14 @@ async def lifespan(app: FastAPI):
     ctx.reconciler.start()
     ctx.backup.start_scheduler()
     ctx.retention.start_scheduler()
+    ctx.health_inspection.start_scheduler()
     logger.info("Botler 启动完成")
     yield
     ctx.scheduler.stop()
     ctx.reconciler.stop()
     ctx.backup.stop_scheduler()
     ctx.retention.stop_scheduler()
+    ctx.health_inspection.stop_scheduler()
     logger.info("Botler 已停止")
 
 

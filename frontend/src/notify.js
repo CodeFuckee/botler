@@ -23,6 +23,9 @@ export const NOTIFY_TYPE_MAP = {
   alert_queue_backlog: 'alert_queue_backlog',
   alert_token_invalid: 'alert_token_invalid',
   alert_disk_low: 'alert_disk_low',
+  // 仓库健康巡检告警（issue #265）：仓库健康状态异常聚合通知，缺省视为
+  // 开启（生成开关在设置页「仓库健康巡检」卡片与 alerts 节流共用）
+  alert_repo_health: 'alert_repo_health',
 }
 
 // 按设置过滤可弹通知的事件（纯函数，可测）

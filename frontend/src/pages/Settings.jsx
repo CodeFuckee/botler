@@ -19,6 +19,7 @@ import TasksCard from '../components/settings/TasksCard.jsx'
 import UiCard from '../components/settings/UiCard.jsx'
 import NotificationsCard from '../components/settings/NotificationsCard.jsx'
 import AlertsCard from '../components/settings/AlertsCard.jsx'
+import InspectionCard from '../components/settings/InspectionCard.jsx'
 import WebhookCard from '../components/settings/WebhookCard.jsx'
 import AutoIssueCard from '../components/settings/AutoIssueCard.jsx'
 import ClaudeCard from '../components/settings/ClaudeCard.jsx'
@@ -92,6 +93,9 @@ export default function Settings() {
         </section>
         <section id="settings-alerts" className="settings-section" data-nav-label="聚合告警">
           <AlertsCard {...data} />
+        </section>
+        <section id="settings-inspection" className="settings-section" data-nav-label="仓库健康巡检">
+          <InspectionCard {...data} />
         </section>
         <section id="settings-webhook" className="settings-section">
           <WebhookCard {...data} />

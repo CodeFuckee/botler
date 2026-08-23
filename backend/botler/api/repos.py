@@ -17,6 +17,7 @@ from ..token_expiry import evaluate_expiry
 from ..database import DEFAULT_PRIORITY
 from ..gitlab_client import GitLabError
 from ..labels import DEFAULT_LABELS
+from ..health_inspection import HEALTH_UNKNOWN
 from ..git_remote import build_client_from_url, mask_url_token
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,28 @@ def _masked_repo_row(row) -> dict:
     return d
 
 
+def _health_row_to_dict(row) -> dict | None:
+    """repo_health 行 → API 展示 dict（None = 无记录 = 状态未知）。
+
+    webhook_ok/token_ok/project_ok 为 NULL（未检查项，当前实现总会检查，
+    保留 NULL 兼容未来部分检查场景）时按 None 返回。
+    """
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "status": row["health_status"],
+        "check_time": row["check_time"],
+        "last_error": row["last_error"],
+        "webhook_ok": None if row["webhook_ok"] is None
+                      else bool(row["webhook_ok"]),
+        "token_ok": None if row["token_ok"] is None else bool(row["token_ok"]),
+        "project_ok": None if row["project_ok"] is None
+                       else bool(row["project_ok"]),
+        "repaired": bool(row["repaired"]),
+    }
+
+
 def _detect_token_expiry(client) -> str | None:
     """尽力读取 PAT self 的 expires_at；旧 GitLab 或无权限时保留手填值。"""
     try:
@@ -198,7 +221,21 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
 def list_repos(request: Request):
     c = ctx_of(request)
     rows = c.db.list_repos()
-    return {"repos": [_masked_repo_row(r) for r in rows]}
+    # 仓库健康巡检（issue #265）：每仓库附带最新健康状态（健康徽章数据源）；
+    # 从未巡检过的仓库 status=unknown（未知）
+    latest = c.db.latest_health_by_repo()
+    repos = []
+    for r in rows:
+        d = _masked_repo_row(r)
+        health = latest.get(r["id"])
+        d["health"] = {
+            "status": health["health_status"] if health is not None
+                      else HEALTH_UNKNOWN,
+            "check_time": health["check_time"] if health is not None else None,
+            "last_error": health["last_error"] if health is not None else None,
+        }
+        repos.append(d)
+    return {"repos": repos}
 
 
 @router.get("/browse")
@@ -452,6 +489,40 @@ def test_repo(request: Request, repo_id: int):
     except GitLabError as e:
         result["webhook"] = {"ok": False, "error": str(e)}
     return result
+
+
+@router.get("/{repo_id}/health")
+def get_repo_health(request: Request, repo_id: int, limit: int = 20):
+    """仓库健康巡检详情：最新状态 + 历史记录（仓库列表页健康徽章详情弹窗）。"""
+    c = ctx_of(request)
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    latest = c.db.latest_repo_health(repo_id)
+    history = c.db.list_repo_health(repo_id, limit=limit)
+    return {
+        "repo": _masked_repo_row(row),
+        "latest": _health_row_to_dict(latest),
+        "history": [_health_row_to_dict(h) for h in history],
+    }
+
+
+@router.post("/{repo_id}/health-check")
+def check_repo_health(request: Request, repo_id: int):
+    """手动重检（issue #265）：立即对该仓库执行一轮健康巡检并返回结果。
+
+    巡检结果落库 repo_health 表（供徽章/详情展示）；与定时巡检共用同一
+    检查逻辑，force=True 忽略 inspection.enabled 总开关（用户显式操作
+    立即生效）。停用仓库不巡检（与对账行为一致）。
+    """
+    c = ctx_of(request)
+    row = c.db.get_repo(repo_id)
+    if row is None:
+        raise HTTPException(404, "仓库不存在")
+    if not row["enabled"]:
+        return {"ok": True, "note": "仓库已停用，未巡检"}
+    result = c.health_inspection.inspect_once(repo_id=repo_id, force=True)
+    return {"ok": True, **result}
 
 
 @router.post("/{repo_id}/remote-user")

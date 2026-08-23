@@ -216,7 +216,12 @@ class TestAuditDatabase:
         assert db.delete_audit_log(rid) is False
 
     def test_migration_v26_creates_audit_logs(self, tmp_path):
-        """v25 旧库初始化后应补出 audit_logs 表并推进版本到 26。"""
+        """v25 旧库初始化后应补出 audit_logs 表并推进版本到 26。
+
+        迁移链：v25 → v26（audit_logs 表）→ v27（repo_health 表，issue
+        #265）。v25 旧库打开后 audit_logs 与 repo_health 均应存在，最终
+        版本号为 27。
+        """
         path = tmp_path / "old.db"
         conn = sqlite3.connect(str(path))
         conn.executescript("""CREATE TABLE repos (
@@ -236,7 +241,8 @@ class TestAuditDatabase:
                     "SELECT name FROM sqlite_master WHERE type='table'")}
                 ver = conn.execute("PRAGMA user_version").fetchone()[0]
             assert "audit_logs" in tables
-            assert ver == 26
+            assert "repo_health" in tables  # issue #265：v27 迁移同链补建
+            assert ver == 27
             # 新表可正常写入
             db.add_audit_log("alice", "repo.add", "repo", 1)
         finally:

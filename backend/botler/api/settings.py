@@ -38,7 +38,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 _SETTINGS_SECTIONS = (
     "worker", "claude", "dsh", "templates", "browse", "backup",
     "retention", "ui", "notifications", "sso", "minio", "webhook",
-    "auto_issue", "gitlab", "alerts",
+    "auto_issue", "gitlab", "alerts", "inspection",
 )
 
 # SSO 配置指南文档（issue #27 第六轮）：设置页直接展示，避免使用者去
@@ -288,6 +288,14 @@ def get_settings(request: Request):
             "disk_min_free_mb": s.alert_disk_min_free_mb,
             "throttle_seconds": s.alert_throttle_seconds,
         },
+        "inspection": {
+            # 仓库健康巡检（issue #265）：定时检查启用仓库的
+            # webhook/token/项目可达，异常聚合告警；间隔（秒）
+            # 与 auto_repair（webhook 自动重新注册）可配置
+            "enabled": s.inspection_enabled,
+            "interval_seconds": s.inspection_interval_seconds,
+            "auto_repair": s.inspection_auto_repair,
+        },
         "audit_logs": {
             # 操作审计日志（issue #260）：管理员 SSO 用户名名单，空 = 所有
             # 登录用户均视为管理员；配置后仅名单内用户可查看/删除审计日志
@@ -422,6 +430,11 @@ def update_settings(request: Request, body: dict):
     if alerts is not None:
         _validate_alerts(alerts)
         c.config.update_section("alerts", alerts)
+
+    inspection = body.get("inspection")
+    if inspection is not None:
+        _validate_inspection(inspection)
+        c.config.update_section("inspection", inspection)
 
     sso = body.get("sso")
     if sso is not None:
@@ -1043,6 +1056,23 @@ def _validate_alerts(patch: dict) -> None:
             if isinstance(val, bool) or not isinstance(val, (int, float)) or float(val) <= 0:
                 raise HTTPException(400, f"alerts.{key} 必须是正整数")
             patch[key] = int(val)
+
+
+def _validate_inspection(patch: dict) -> None:
+    """校验 inspection 段（issue #265）：开关必须布尔，间隔为正整数。
+
+    interval_seconds 为巡检间隔（秒），下限 300（5 分钟，与 config 解析
+    一致，避免误配极短间隔压垮 GitLab API）。
+    """
+    for key in ("enabled", "auto_repair"):
+        if key in patch and not isinstance(patch[key], bool):
+            raise HTTPException(400, f"inspection.{key} 必须是布尔值")
+    if "interval_seconds" in patch:
+        val = patch["interval_seconds"]
+        if isinstance(val, bool) or not isinstance(val, (int, float))                 or float(val) < 300:
+            raise HTTPException(
+                400, "inspection.interval_seconds 必须是 >= 300 的整数（秒）")
+        patch["interval_seconds"] = int(val)
 
 
 def _validate_owner_token_scope(cfg, token: str) -> None:

@@ -1487,6 +1487,27 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .engine-health-fail { background: var(--err-weak); color: var(--err); border-color: rgba(229, 72, 77, 0.3); }
 .engine-health-unknown { background: var(--bg-soft); color: var(--muted); }
 .engine-health-status { font-size: 11px; opacity: 0.85; }
+/* 仓库健康状态徽章（issue #265）：仓库列表页展示巡检结果——正常（绿）/
+   异常（红，可点击打开详情弹窗查看明细与手动重检）/ 未知（灰，从未巡检） */
+.health-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 500; border: 1px solid transparent;
+  vertical-align: middle; cursor: help;
+}
+.health-healthy { background: var(--ok-weak); color: var(--ok); border-color: rgba(18, 130, 61, 0.25); }
+.health-abnormal {
+  background: var(--err-weak); color: var(--err);
+  border-color: rgba(229, 72, 77, 0.3); cursor: pointer;
+}
+.health-abnormal:hover { filter: brightness(0.96); }
+.health-unknown { background: var(--bg-soft); color: var(--muted); }
+/* 健康详情弹窗（issue #265）：巡检明细 chip 与检查项历史表格 */
+.health-detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); margin: var(--space-2) 0; }
+.health-item { display: flex; flex-direction: column; gap: 4px; padding: 8px; border-radius: var(--radius); background: var(--bg-soft); }
+.health-item .muted { font-size: 12px; }
+.health-repaired { background: var(--warn-weak); color: var(--warn); }
+
 /* 失败原因分类徽章（issue #274）：env=警示（环境配置问题）、engine=主色
    （引擎层问题）、unsolvable=错误色（任务本身不可解）、unknown=中性灰
    （兜底未命中），与状态徽章配色体系一致 */

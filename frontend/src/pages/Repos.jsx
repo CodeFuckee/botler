@@ -35,6 +35,8 @@ export default function Repos() {
   // logo 加载失败集合（issue #338）: repoId -> true——低网速/网络错误下
   // 缩略图加载失败时显示占位图标兜底，避免渲染破图
   const [logoFailed, setLogoFailed] = useState({})
+  // 健康详情弹窗中的仓库（issue #265）：null = 关闭（点击「异常」徽章打开）
+  const [healthView, setHealthView] = useState(null)
 
   const load = async () => {
     try {
@@ -334,6 +336,7 @@ export default function Repos() {
               <div className="repo-name">
                 {repo.name}
                 {!repo.enabled && <span className="badge badge-muted">已停用</span>}
+                <HealthBadge repo={repo} onClick={() => setHealthView(repo)} />
                 <span className="badge badge-muted" title="调度优先级：数字越小越优先">
                   优先级 {repo.priority ?? 100}
                 </span>
@@ -404,6 +407,17 @@ export default function Repos() {
             setEditing(null)
             await load()
           }}
+        />
+      )}
+
+      {/* issue #265：仓库健康巡检详情弹窗（点击「异常」徽章打开）——
+          展示最新巡检明细（webhook/token/项目）、自动修复标记、历史记录，
+          支持「重新巡检」手动重检；重检后同步刷新仓库列表健康徽章 */}
+      {healthView && (
+        <HealthDetailModal
+          repo={healthView}
+          onClose={() => setHealthView(null)}
+          onChecked={load}
         />
       )}
 
@@ -516,6 +530,169 @@ function LogoViewModal({ repo, onClose }) {
           <button className="btn" onClick={onClose}>关闭</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+
+// 仓库健康状态徽章（issue #265）：正常=绿 / 异常=红（可点击打开详情弹窗
+// 查看明细与手动重检）/ 未知=灰（从未巡检过）
+function HealthBadge({ repo, onClick }) {
+  const h = repo.health
+  if (!h || !h.status) return null
+  if (h.status === 'healthy') {
+    return (
+      <span className="health-badge health-healthy"
+            title={`健康巡检正常（${h.check_time || ''}）`}>
+        健康
+      </span>
+    )
+  }
+  if (h.status === 'abnormal') {
+    return (
+      <span role="button" tabIndex={0}
+            className="health-badge health-abnormal"
+            title={`健康巡检异常：${h.last_error || ''}（点击查看详情）`}
+            onClick={onClick}
+            onKeyDown={(e) => { if (e.key === 'Enter') onClick() }}>
+        异常
+      </span>
+    )
+  }
+  return (
+    <span className="health-badge health-unknown" title="尚未巡检过（定时巡检开启后自动检查）">
+      未知
+    </span>
+  )
+}
+
+// 仓库健康巡检详情弹窗（issue #265）：点击「异常」徽章打开——展示最新
+// 巡检状态（webhook/token/项目明细、错误描述、自动修复标记、检查时间）、
+// 历史记录，并提供「重新巡检」按钮（手动重检，结果落库并刷新徽章）
+function HealthDetailModal({ repo, onClose, onChecked }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    try {
+      const res = await api.get(`/api/repos/${repo.id}/health`)
+      setData(res)
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+  useEffect(() => {
+    // 弹窗每次打开重新挂载（{healthView && ...} 条件渲染），仅挂载时加载
+    // 一次：load 每次渲染重建引用，加入 deps 会形成「加载→setState→重渲染
+    // →再加载」死循环（与 Tools/Skills 页 load 同约定）
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const recheck = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.post(`/api/repos/${repo.id}/health-check`)
+      await load()
+      onChecked?.()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const latest = data?.latest
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <strong>{repo.name} 健康巡检</strong>
+          <button className="btn modal-close" onClick={onClose} title="关闭"
+                  aria-label="关闭"><Icon name="x" /></button>
+        </div>
+        {error && <div className="alert alert-error">{error}</div>}
+        {!data && !error && <div className="muted">加载中…</div>}
+        {data && !latest && (
+          <div className="small muted">
+            该仓库尚未巡检过。点击「重新巡检」立即检查 webhook / token / 项目可达性。
+          </div>
+        )}
+        {data && latest && (
+          <>
+            <div className="small muted">
+              最近巡检时间：{latest.check_time}
+              {latest.repaired && (
+                <span className="badge health-repaired" title="巡检发现 webhook 缺失或 secret 不匹配，已自动重新注册">
+                  已自动修复 webhook
+                </span>
+              )}
+            </div>
+            {latest.last_error && (
+              <div className="alert alert-error small">{latest.last_error}</div>
+            )}
+            <div className="health-detail-grid">
+              <HealthItem label="webhook" ok={latest.webhook_ok} />
+              <HealthItem label="token" ok={latest.token_ok} />
+              <HealthItem label="项目可达" ok={latest.project_ok} />
+            </div>
+            {latest.status === 'healthy' && (
+              <div className="small test-chip ok"><Icon name="check" /> 全部检查项正常</div>
+            )}
+          </>
+        )}
+        {data && data.history?.length > 0 && (
+          <div className="small" style={{ marginTop: 12 }}>
+            <strong>巡检历史（最近 {data.history.length} 次）</strong>
+            <table className="table" style={{ marginTop: 6 }}>
+              <thead>
+                <tr><th>时间</th><th>状态</th><th>错误描述</th></tr>
+              </thead>
+              <tbody>
+                {data.history.map((h) => (
+                  <tr key={h.id}>
+                    <td className="muted">{h.check_time}</td>
+                    <td>
+                      <span className={`badge ${h.status === 'healthy' ? 'health-healthy' : 'health-abnormal'}`}>
+                        {h.status === 'healthy' ? '正常' : '异常'}
+                      </span>
+                    </td>
+                    <td className="muted">{h.last_error || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="modal-footer">
+          <button className="btn btn-primary" onClick={recheck} disabled={busy}>
+            {busy ? <><Icon name="refresh" /> 巡检中…</> : '重新巡检'}
+          </button>
+          <button className="btn" onClick={onClose}>关闭</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// 巡检明细项（issue #265）：webhook / token / 项目 各自的检查结果
+function HealthItem({ label, ok }) {
+  if (ok === null || ok === undefined) {
+    return (
+      <div className="health-item">
+        <strong>{label}</strong>
+        <span className="muted">未检查</span>
+      </div>
+    )
+  }
+  return (
+    <div className="health-item">
+      <strong>{label}</strong>
+      {ok
+        ? <span className="test-chip ok"><Icon name="check" /> 正常</span>
+        : <span className="test-chip bad"><Icon name="x" /> 异常</span>}
     </div>
   )
 }

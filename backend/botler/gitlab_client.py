@@ -517,6 +517,26 @@ class GitLabClient:
         logger.info("注册 webhook: project=%s hook=%s", project_id, created["id"])
         return created
 
+    def update_webhook(self, project_id: int, hook_id: int, url: str,
+                       secret: str) -> dict:
+        """更新项目 webhook 配置（保持回调 URL，刷新事件开关与 secret）。
+
+        issue #265 仓库健康巡检自动修复用：平台 webhook 已存在但 secret
+        不匹配 / 事件开关被改动时，按原回调 URL 更新配置，而不是按当前
+        client 的默认回调地址新建（部署环境 Botler 回调地址可能与
+        gitlab_url 不同，新建会注册到错误地址）。
+        """
+        updated = self._request(
+            "PUT", f"/projects/{project_id}/hooks/{hook_id}",
+            json={
+                "url": url, "issues_events": True,
+                "push_events": False, "token": secret,
+                "enable_ssl_verification": False,
+            })
+        assert isinstance(updated, dict)
+        logger.info("更新 webhook 配置: project=%s hook=%s", project_id, hook_id)
+        return updated
+
     def unregister_webhook(self, project_id: int) -> int:
         """注销平台注册的 webhook，返回删除个数。"""
         url = self.webhook_url()

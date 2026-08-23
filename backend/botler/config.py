@@ -461,6 +461,17 @@ class Settings:
     alert_disk_low: bool = True
     alert_disk_min_free_mb: int = 512
     alert_throttle_seconds: int = 3600
+    # 仓库健康巡检（issue #265）：定时检查每个启用仓库的 webhook 有效性 /
+    # token 有效性 / 项目可达性，结果落库 repo_health 表（历史保留），异常
+    # 聚合通知（in_app 网页通知 + webhook 推送，按 alerts.throttle_seconds
+    # 节流防刷屏）。设置页「仓库健康巡检」卡片可配置：
+    #   enabled          巡检总开关（默认开启）
+    #   interval_seconds 巡检间隔（秒，默认 21600 = 6 小时）
+    #   auto_repair      webhook 缺失 / secret 不匹配时自动重新注册
+    #                    （默认开启）
+    inspection_enabled: bool = True
+    inspection_interval_seconds: int = 21600
+    inspection_auto_repair: bool = True
 
 
 
@@ -505,6 +516,9 @@ KNOWN_FIELDS = {
                "queue_backlog_threshold", "queue_stall_minutes",
                "notify_token_invalid", "notify_token_expiry", "notify_disk_low",
                "disk_min_free_mb", "throttle_seconds"},
+    # 仓库健康巡检（issue #265）：enabled = 巡检总开关；interval_seconds =
+    # 巡检间隔（秒）；auto_repair = webhook 缺失/secret 不匹配时自动重新注册
+    "inspection": {"enabled", "interval_seconds", "auto_repair"},
     # 操作审计日志（issue #260）：admin_usernames = 管理员 SSO 用户名名单
     "audit_logs": {"admin_usernames"},
 }
@@ -560,6 +574,7 @@ SECTION_SCHEMAS: dict[str, SectionSchema] = {
                            trim=("endpoint", "public_base_url")),
     "usage": SectionSchema(fields=tuple(KNOWN_FIELDS["usage"])),
     "alerts": SectionSchema(fields=tuple(KNOWN_FIELDS["alerts"])),
+    "inspection": SectionSchema(fields=tuple(KNOWN_FIELDS["inspection"])),
     "labels": SectionSchema(fields=("custom",)),
     "audit_logs": SectionSchema(fields=("admin_usernames",)),
     "repos": SectionSchema(fields=(), replace_list=True),
@@ -723,6 +738,7 @@ class ConfigManager:
         minio = data.get("minio", {}) or {}
         usage = data.get("usage", {}) or {}
         alerts = data.get("alerts", {}) or {}
+        inspection = data.get("inspection", {}) or {}
         failure_classify = data.get("failure_classify", {}) or {}
 
         repos = []
@@ -911,6 +927,11 @@ class ConfigManager:
             alert_disk_low=bool(alerts.get("notify_disk_low", True)),
             alert_disk_min_free_mb=max(1, int(alerts.get("disk_min_free_mb", 512))),
             alert_throttle_seconds=max(60, int(alerts.get("throttle_seconds", 3600))),
+            inspection_enabled=bool(inspection.get("enabled", True)),
+            # 巡检间隔下限 5 分钟，避免误配极短间隔压垮 GitLab API
+            inspection_interval_seconds=max(
+                300, int(inspection.get("interval_seconds", 21600))),
+            inspection_auto_repair=bool(inspection.get("auto_repair", True)),
             webhook_enabled=bool(webhook.get("enabled", False)),
             webhook_url=str(webhook.get("url", "")).strip(),
             webhook_content_type=str(webhook.get("content_type", "")).strip()

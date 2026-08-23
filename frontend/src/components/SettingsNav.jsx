@@ -36,6 +36,7 @@ export const SETTING_KEYWORDS = {
   'settings-ui': ['ui', '时区', 'timezone', '显示'],
   'settings-notifications': ['notification', '通知', '浏览器'],
   'settings-alerts': ['alert', '告警', '失败率', '队列', 'token', '磁盘', '阈值'],
+  'settings-inspection': ['inspection', '巡检', '健康', 'webhook', 'auto_repair', '间隔'],
   'settings-webhook': ['webhook', '推送', '消息'],
   'settings-auto-issue': ['auto_issue', '失败', '上报', 'issue', 'bug'],
   'settings-claude': ['claude', '命令', '参数', 'anthropic', 'command'],
