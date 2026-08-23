@@ -2011,6 +2011,23 @@ body:has(.drawer-overlay) {
   /* apple-design：表面材质化入场（缩放+位移+淡入，而非生硬闪现） */
   animation: surface-in var(--dur) var(--ease-spring);
 }
+/* issue #458：添加 Issue 弹窗滚动布局——弹窗内容超过可视高（max-height
+   80vh）时，头部标题固定在顶部、取消/创建 Issue 按钮固定在底部，中间
+   表单区（标题/描述/图片附件/分配人/标签）独立上下滚动。
+   结构：.modal 本身是 flex column（max-height 80vh 承托），
+   .add-issue-body 是表单滚动区（flex 撑满剩余高度 + overflow-y: auto），
+   .modal-header / .modal-footer 是其兄弟节点、位于滚动区外，天然固定在
+   顶部/底部；仅作用于添加 Issue 弹窗，不影响仓库设置等其他 .modal 使用者 */
+.modal.add-issue .add-issue-body {
+  flex: 1 1 auto;      /* 撑满弹窗剩余高度 */
+  min-height: 0;       /* flex 子项允许收缩（默认 min-height:auto 会阻止滚动） */
+  overflow-y: auto;    /* 中间表单区独立滚动 */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3); /* 与 .modal 原有字段间距一致 */
+  /* 滚动到边界时滚动不穿透到背后页面（与右侧边栏抽屉行为一致） */
+  overscroll-behavior: contain;
+}
 .modal-header {
   display: flex;
   align-items: center;

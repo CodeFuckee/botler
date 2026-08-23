@@ -257,6 +257,10 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
           <div className="alert alert-error">{loadError}</div>
         ) : (
           <>
+            {/* issue #458：中间表单区（标题/描述/图片附件/分配人/标签）放入
+                可滚动容器 .add-issue-body；头部标题与尾部取消/创建按钮是
+                弹窗 flex 列的直接子节点，固定在顶部/底部不随内容滚动 */}
+            <div className="add-issue-body">
             <label className="edit-field">
               Issue 标题
               <span className="add-issue-title-row">
@@ -363,6 +367,7 @@ export default function AddIssueModal({ repo, onClose, onCreated }) {
             <div className="muted small">必填 · 仅可选仓库已有标签</div>
 
             {error && <div className="alert alert-error">{error}</div>}
+            </div>
 
             <div className="modal-footer">
               <button className="btn" onClick={onClose}>取消</button>

@@ -6,6 +6,20 @@
 
 ### Added
 
+- **「添加 Issue」弹窗滚动布局（issue #458）**：
+  - 弹窗内容超过可视高（max-height 80vh）时，头部标题固定在顶部、取消/创建
+    Issue 按钮固定在底部，中间表单区（标题/描述/图片附件/分配人/标签）独立
+    上下滚动——`.modal.add-issue` 保持 flex 列布局，表单字段收进
+    `.add-issue-body` 滚动容器（`overflow-y: auto` + `flex: 1` +
+    `min-height: 0`），`.modal-header` / `.modal-footer` 位于滚动区外天然
+    固定；`overscroll-behavior: contain` 隔离滚动不穿透到底层页面；规则限定
+    `.modal.add-issue` 作用域，不影响仓库设置等其他弹窗；
+  - 测试：`frontend/tests/overview-add-issue-scroll.test.mjs`（styles.css
+    源码级滚动规则/作用域限定 + 渲染结构：五类字段位于滚动区内、头/尾在滚动区
+    外 + 加载中/加载失败边界，5 用例）、`frontend/e2e/tests/add-issue-scroll.spec.js`
+    （真实浏览器：滚动区真实可滚动、滚动前后头部/尾部坐标固定、底部取消/创建
+    按钮始终在视口内，1 用例）。
+
 - **右侧边栏抽屉「回到顶部」按钮（issue #457）**：
   - 前端在 `BackToTop.jsx` 新增容器滚动版组件 `ScrollContainerBackToTop`
     （复用全局版的显示阈值 / 减弱动态效果 / 无障碍 / i18n 逻辑）：所有
