@@ -42,6 +42,27 @@ def _to_float(value) -> float | None:
         return None
 
 
+def compute_cache_hit_rate(hit_tokens, miss_tokens) -> float | None:
+    """计算 DeepSeek 提示词缓存命中率（issue #473）。
+
+    输入为 usage chunk 的 prompt_cache_hit_tokens / prompt_cache_miss_tokens
+    （DeepSeek OpenAI 兼容字段），返回命中率百分比（0~100，保留 1 位小数）。
+    两者都无/为 0（缓存未启用或非 dsh 引擎）→ None（前端不展示缓存行）。
+    数值可能以字符串到达（SDK 透传），统一转 int 防御（转不了视为无数据）。
+    """
+    try:
+        hit = None if hit_tokens is None else int(hit_tokens)
+        miss = None if miss_tokens is None else int(miss_tokens)
+    except (TypeError, ValueError):
+        return None
+    if hit is None or miss is None:
+        return None
+    total = hit + miss
+    if total <= 0:
+        return None
+    return round(hit / total * 100, 1)
+
+
 def normalize_model_name(model) -> str:
     """模型名归一化（小写、去空白），用于单价表匹配。"""
     if not isinstance(model, str):
@@ -145,13 +166,16 @@ def extract_dsh_usage(events) -> dict | None:
     deepseek-harness runtime 在每次模型调用结束时会发
     session.event → event.data.chunk.type == "usage"（chunk.usage 为
     DeepSeek OpenAI 兼容字段：prompt_tokens / completion_tokens /
-    total_tokens）。一个会话可能有多次模型调用（多回合/工具循环），
-    这里逐事件累加（total 缺失时按 prompt + completion 兜底）。
+    total_tokens / prompt_cache_hit_tokens / prompt_cache_miss_tokens，
+    其中 prompt_tokens = 缓存命中 + 未命中，issue #473 用于缓存命中率）。
+    一个会话可能有多次模型调用（多回合/工具循环），这里逐事件累加
+    （total 缺失时按 prompt + completion 兜底）。
     事件列表为空 / 无 usage chunk → None。
     """
     if not isinstance(events, list):
         return None
     prompt = completion = total = 0
+    cache_hit = cache_miss = 0
     found = False
     for event in events:
         if not isinstance(event, dict) or event.get("type") != "assistant/chunk":
@@ -169,6 +193,8 @@ def extract_dsh_usage(events) -> dict | None:
         prompt += p
         completion += c
         total += t
+        cache_hit += _to_int(usage.get("prompt_cache_hit_tokens"))
+        cache_miss += _to_int(usage.get("prompt_cache_miss_tokens"))
         found = True
     if not found:
         return None
@@ -176,11 +202,15 @@ def extract_dsh_usage(events) -> dict | None:
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "total_tokens": total or (prompt + completion),
+        "prompt_cache_hit_tokens": cache_hit,
+        "prompt_cache_miss_tokens": cache_miss,
         "model": None,
         "sdk_cost": None,
         "raw_usage": {"prompt_tokens": prompt,
                       "completion_tokens": completion,
-                      "total_tokens": total or (prompt + completion)},
+                      "total_tokens": total or (prompt + completion),
+                      "prompt_cache_hit_tokens": cache_hit,
+                      "prompt_cache_miss_tokens": cache_miss},
     }
 
 

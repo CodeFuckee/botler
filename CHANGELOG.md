@@ -287,6 +287,25 @@
 
 ### Added
 
+- **任务执行详情展示 DeepSeek 缓存命中率（issue #473）**：
+  - 需求：deepseek harness 引擎的 usage chunk 含 DeepSeek 缓存字段
+    （`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，即提示词缓存
+    命中/未命中 token），此前只聚合 prompt/completion/total tokens，缓存
+    命中率数据被丢弃，任务执行详情（含执行详情右边栏）看不到缓存效果；
+  - 后端：`botler/usage.py` 的 `extract_dsh_usage` 逐事件累加缓存命中与
+    未命中 token 并写入 raw_usage（存量任务无该字段不报错），新增纯函数
+    `compute_cache_hit_rate`（命中率百分比，保留 1 位小数；无缓存数据
+    返回 None）；`GET /api/tasks/{id}` 的 usage 对象新增
+    `cache_hit_tokens` / `cache_miss_tokens` / `cache_hit_rate` 三个字段；
+  - 前端：`UsageCard`（任务详情页与执行详情右边栏 TaskDetailDrawer 共用）
+    在 `cache_hit_rate` 非空时新增「缓存命中率」行（百分比 + 命中/未命中
+    明细，悬停查看完整信息），列表用量摘要 tooltip 附带缓存命中率；
+    claude/hermes 引擎或缓存未启用（无缓存数据）不展示该行、不报错；
+  - 测试：后端 9 个新用例（usage 聚合缓存字段、compute_cache_hit_rate
+    边界：全命中/全未命中/零值/None/字符串、API 三字段返回与无缓存兜底），
+    前端 5 个新用例（UsageCard 缓存行渲染/隐藏、UsageSummary tooltip、
+    右边栏渲染 UsageCard 断言），全量测试无回归。
+
 - **灵感批量转 issue（多选 + 转前预览编辑）（issue #247）**：
   - 需求：灵感转 issue 此前只能一条条操作（点「添加 Issue」→ 确认），
     攒了一周的灵感无法一次批量转派活；转之前也不能预览/编辑标题与描述

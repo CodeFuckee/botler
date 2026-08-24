@@ -10,7 +10,12 @@
 // 3. 无 usage 数据（null）→ 显示「无数据」不崩溃；
 // 4. 无单价（estimated_cost=null）→ 显示「未估算（未配置单价）」；
 // 5. UsageCard 的 fmtTokens / fmtCost 纯函数格式化正确；
-// 6. styles.css 提供 usage-card 样式。
+// 6. styles.css 提供 usage-card 样式；
+// 7. 缓存命中率（issue #473）：dsh 任务 usage 含 cache_hit_rate 时展示
+//    「缓存命中率」行（百分比 + 命中/未命中明细）；claude/hermes 或
+//    缓存未启用（cache_hit_rate=null）不展示该行，不报错；
+// 8. TaskDetailDrawer（执行详情右边栏）渲染 <UsageCard>，缓存命中率
+//    随卡片一并展示在右边栏。
 import { after, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -35,7 +40,7 @@ const vite = await createServer({
 })
 const { api } = await vite.ssrLoadModule('/src/api.js')
 const { default: TaskDetail } = await vite.ssrLoadModule('/src/pages/TaskDetail.jsx')
-const { default: UsageCard, fmtTokens, fmtCost } =
+const { default: UsageCard, UsageSummary, fmtTokens, fmtCost } =
   await vite.ssrLoadModule('/src/components/UsageCard.jsx')
 const { MemoryRouter } = await vite.ssrLoadModule('react-router-dom')
 
@@ -169,6 +174,77 @@ test('UsageCard：无单价（estimated_cost=null）只展示 token 数', () => 
   assert.match(text, /150/)
 })
 
+test('UsageCard：dsh 任务展示缓存命中率与命中/未命中明细', () => {
+  const usage = {
+    engine: 'dsh', model: 'deepseek-v4-flash',
+    prompt_tokens: 100, completion_tokens: 50, total_tokens: 150,
+    estimated_cost: null, currency: 'USD',
+    cache_hit_tokens: 90, cache_miss_tokens: 10, cache_hit_rate: 90.0,
+    raw_usage: {},
+  }
+  let renderer = null
+  TestRenderer.act(() => {
+    renderer = TestRenderer.create(React.createElement(UsageCard, { usage }))
+  })
+  const text = allText(renderer)
+  assert.match(text, /缓存命中率/)
+  assert.match(text, /90%/)
+  assert.match(text, /命中 90/)
+  assert.match(text, /未命中 10/)
+})
+
+test('UsageCard：无缓存数据（claude 等）不展示缓存行', () => {
+  const usage = {
+    engine: 'claude', model: 'claude-3-5',
+    prompt_tokens: 170, completion_tokens: 30, total_tokens: 200,
+    estimated_cost: 0.5, currency: 'USD',
+    cache_hit_tokens: null, cache_miss_tokens: null, cache_hit_rate: null,
+    raw_usage: {},
+  }
+  let renderer = null
+  TestRenderer.act(() => {
+    renderer = TestRenderer.create(React.createElement(UsageCard, { usage }))
+  })
+  const text = allText(renderer)
+  assert.ok(!text.includes('缓存命中率'), '无缓存数据不应渲染缓存行')
+  assert.match(text, /claude-3-5/)
+})
+
+test('UsageCard：缓存未启用（命中率 null 但字段为 0）不展示缓存行', () => {
+  const usage = {
+    engine: 'dsh', model: 'deepseek-v4-flash',
+    prompt_tokens: 100, completion_tokens: 50, total_tokens: 150,
+    estimated_cost: null, currency: 'USD',
+    cache_hit_tokens: 0, cache_miss_tokens: 0, cache_hit_rate: null,
+    raw_usage: {},
+  }
+  let renderer = null
+  TestRenderer.act(() => {
+    renderer = TestRenderer.create(React.createElement(UsageCard, { usage }))
+  })
+  const text = allText(renderer)
+  assert.ok(!text.includes('缓存命中率'), '缓存未启用不应渲染缓存行')
+})
+
+test('UsageSummary：有缓存命中率时摘要 tooltip 附带缓存信息', () => {
+  const usage = {
+    engine: 'dsh', model: 'deepseek-v4-flash',
+    prompt_tokens: 100, completion_tokens: 50, total_tokens: 150,
+    estimated_cost: null, currency: 'USD',
+    cache_hit_tokens: 90, cache_miss_tokens: 10, cache_hit_rate: 90.0,
+    raw_usage: {},
+  }
+  let renderer = null
+  TestRenderer.act(() => {
+    renderer = TestRenderer.create(React.createElement(UsageSummary, { usage }))
+  })
+  const text = allText(renderer)
+  assert.match(text, /150\s+tokens/, '摘要应显示 total tokens（JSX 空白归一）')
+  const json = renderer.toJSON()
+  assert.match(json.props.title, /缓存 90%/, '摘要 tooltip 应附带缓存命中率')
+  assert.match(json.props.title, /100 输入 \/ 50 输出/, '摘要 tooltip 应含输入/输出 tokens')
+})
+
 // ---- TaskDetail 页面集成 ----
 
 test('TaskDetail：有 usage 数据时渲染用量卡片', withEventSource(async () => {
@@ -200,6 +276,13 @@ test('TaskDetail：无 usage 数据时显示「无数据」不报错', withEvent
     await TestRenderer.act(() => renderer.unmount())
   }
 }))
+
+test('TaskDetailDrawer（执行详情右边栏）渲染 UsageCard 展示用量与缓存', () => {
+  const drawerSrc = readFileSync(path.join(ROOT, 'src/components/TaskDetailDrawer.jsx'), 'utf8')
+  assert.match(drawerSrc, /<UsageCard usage=\{task\.usage\} \/>/,
+    '右边栏应渲染 UsageCard（含缓存命中率展示）')
+  assert.match(drawerSrc, /import UsageCard/, '右边栏应导入 UsageCard')
+})
 
 test('styles.css 提供用量卡片样式', () => {
   assert.match(styles, /\.usage-card\s*\{/, '应有用量卡片容器样式')

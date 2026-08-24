@@ -161,6 +161,40 @@ class TestExtractDshUsage:
         assert extract_dsh_usage(None) is None
 
 
+    def test_accumulates_cache_tokens(self):
+        """usage chunk 含 DeepSeek 缓存字段时逐事件累加进 raw_usage。"""
+        events = [
+            {"type": "assistant/chunk", "data": {"chunk": {
+                "type": "usage", "usage": {"prompt_tokens": 100,
+                                           "completion_tokens": 50,
+                                           "total_tokens": 150,
+                                           "prompt_cache_hit_tokens": 90,
+                                           "prompt_cache_miss_tokens": 10}}}},
+            {"type": "assistant/chunk", "data": {"chunk": {
+                "type": "usage", "usage": {"prompt_tokens": 20,
+                                           "completion_tokens": 10,
+                                           "total_tokens": 30,
+                                           "prompt_cache_hit_tokens": 10,
+                                           "prompt_cache_miss_tokens": 10}}}},
+        ]
+        u = extract_dsh_usage(events)
+        assert u["prompt_cache_hit_tokens"] == 100
+        assert u["prompt_cache_miss_tokens"] == 20
+        assert u["raw_usage"]["prompt_cache_hit_tokens"] == 100
+        assert u["raw_usage"]["prompt_cache_miss_tokens"] == 20
+
+    def test_cache_tokens_missing_keeps_zeros(self):
+        """usage chunk 无缓存字段（如 DeepSeek 未开启缓存）→ 缓存字段为 0 不报错。"""
+        events = [{"type": "assistant/chunk", "data": {"chunk": {
+            "type": "usage", "usage": {"prompt_tokens": 5,
+                                       "completion_tokens": 3,
+                                       "total_tokens": 8}}}}]
+        u = extract_dsh_usage(events)
+        assert u is not None
+        assert u["prompt_cache_hit_tokens"] == 0
+        assert u["prompt_cache_miss_tokens"] == 0
+        assert u["raw_usage"]["prompt_cache_hit_tokens"] == 0
+
 # ---- usage 模块：费用估算 ----
 
 class TestEstimateCost:
@@ -393,6 +427,61 @@ class TestTaskUsageAPI:
         tasks = {t["id"]: t for t in r.json()["tasks"]}
         assert tasks[tid]["usage"]["total_tokens"] == 15
 
+    def test_task_detail_includes_cache_rate(self, client):
+        """dsh 任务 raw_usage 含缓存字段 → API 返回命中/未命中与命中率。"""
+        api_client, db = client
+        rid = _mk_repo(db)
+        tid = _mk_task(db, rid)
+        raw = {"prompt_tokens": 100, "completion_tokens": 50,
+               "total_tokens": 150, "prompt_cache_hit_tokens": 90,
+               "prompt_cache_miss_tokens": 10}
+        db.save_task_usage(tid, engine="dsh", model="deepseek-v4-flash",
+                           prompt_tokens=100, completion_tokens=50,
+                           total_tokens=150, estimated_cost=None,
+                           currency="USD", raw_usage=json.dumps(raw))
+        r = api_client.get(f"/api/tasks/{tid}")
+        assert r.status_code == 200
+        usage = r.json()["usage"]
+        assert usage["cache_hit_tokens"] == 90
+        assert usage["cache_miss_tokens"] == 10
+        assert usage["cache_hit_rate"] == 90.0
+
+    def test_task_detail_no_cache_rate_is_none(self, client):
+        """raw_usage 无缓存字段（claude/hermes/旧任务）→ 缓存字段为 None。"""
+        api_client, db = client
+        rid = _mk_repo(db)
+        tid = _mk_task(db, rid)
+        db.save_task_usage(tid, engine="claude", model="m",
+                           prompt_tokens=10, completion_tokens=5,
+                           total_tokens=15, estimated_cost=None,
+                           currency="USD",
+                           raw_usage=json.dumps({"input_tokens": 10}))
+        r = api_client.get(f"/api/tasks/{tid}")
+        assert r.status_code == 200
+        usage = r.json()["usage"]
+        assert usage["cache_hit_tokens"] is None
+        assert usage["cache_miss_tokens"] is None
+        assert usage["cache_hit_rate"] is None
+
+    def test_task_detail_cache_rate_zero_no_rate(self, client):
+        """缓存字段为 0（缓存未启用）→ 命中率为 None（前端不显示缓存行）。"""
+        api_client, db = client
+        rid = _mk_repo(db)
+        tid = _mk_task(db, rid)
+        raw = {"prompt_tokens": 10, "completion_tokens": 5,
+               "total_tokens": 15, "prompt_cache_hit_tokens": 0,
+               "prompt_cache_miss_tokens": 0}
+        db.save_task_usage(tid, engine="dsh", model="n",
+                           prompt_tokens=10, completion_tokens=5,
+                           total_tokens=15, estimated_cost=None,
+                           currency="USD", raw_usage=json.dumps(raw))
+        r = api_client.get(f"/api/tasks/{tid}")
+        assert r.status_code == 200
+        usage = r.json()["usage"]
+        assert usage["cache_hit_tokens"] == 0
+        assert usage["cache_miss_tokens"] == 0
+        assert usage["cache_hit_rate"] is None
+
     def test_usage_stats_endpoint(self, client):
         api_client, db = client
         rid = _mk_repo(db)
@@ -409,3 +498,34 @@ class TestTaskUsageAPI:
         # 过滤 + 非法日期 400
         assert api_client.get("/api/usage/stats?engine=hermes").json()["summary"]["task_count"] == 0
         assert api_client.get("/api/usage/stats?since=bad").status_code == 400
+
+
+# ---- 缓存命中率（issue #473：deepseek harness 缓存命中率展示）----
+
+class TestComputeCacheHitRate:
+    def test_normal_rate(self):
+        """常规命中率：hit/(hit+miss) 百分比，保留 1 位小数。"""
+        from botler.usage import compute_cache_hit_rate
+        assert compute_cache_hit_rate(90, 10) == 90.0
+        assert compute_cache_hit_rate(1, 99) == 1.0
+        assert compute_cache_hit_rate(2, 3) == 40.0
+
+    def test_all_hit_or_all_miss(self):
+        """全命中 100%，全未命中 0%。"""
+        from botler.usage import compute_cache_hit_rate
+        assert compute_cache_hit_rate(10, 0) == 100.0
+        assert compute_cache_hit_rate(0, 10) == 0.0
+
+    def test_no_cache_data_returns_none(self):
+        """无缓存数据（两者皆 0 / 缺省）→ None（前端隐藏该行）。"""
+        from botler.usage import compute_cache_hit_rate
+        assert compute_cache_hit_rate(0, 0) is None
+        assert compute_cache_hit_rate(None, None) is None
+        assert compute_cache_hit_rate(None, 5) is None
+        assert compute_cache_hit_rate(5, None) is None
+        assert compute_cache_hit_rate("", "") is None
+
+    def test_string_input_coerced(self):
+        """token 数值以字符串形式到达时也能计算（防御解析）。"""
+        from botler.usage import compute_cache_hit_rate
+        assert compute_cache_hit_rate("90", "10") == 90.0

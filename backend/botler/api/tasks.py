@@ -23,6 +23,7 @@ from botler.executor import (
 )
 from botler.failure_classify import category_advice
 from botler.repo_params import effective_task_params
+from botler.usage import compute_cache_hit_rate
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -72,6 +73,9 @@ def _usage_to_dict(row) -> dict | None:
 
     raw_usage 为引擎采集的原始 usage JSON（claude usage / dsh 聚合 /
     hermes 会话计数器），解析失败返回 None 不报错；无记录返回 None。
+    dsh 引擎的 raw_usage 含 prompt_cache_hit_tokens / prompt_cache_miss_tokens
+    （issue #473），据此计算缓存命中率百分比（无缓存数据为 None，前端
+    不展示缓存行）。
     """
     if row is None:
         return None
@@ -81,6 +85,10 @@ def _usage_to_dict(row) -> dict | None:
             raw = json.loads(row["raw_usage"])
         except (ValueError, TypeError):
             raw = None
+    cache_hit = cache_miss = None
+    if isinstance(raw, dict):
+        cache_hit = raw.get("prompt_cache_hit_tokens")
+        cache_miss = raw.get("prompt_cache_miss_tokens")
     return {
         "engine": row["engine"] or "",
         "model": row["model"] or None,
@@ -89,6 +97,9 @@ def _usage_to_dict(row) -> dict | None:
         "total_tokens": row["total_tokens"],
         "estimated_cost": row["estimated_cost"],
         "currency": row["currency"] or "USD",
+        "cache_hit_tokens": cache_hit,
+        "cache_miss_tokens": cache_miss,
+        "cache_hit_rate": compute_cache_hit_rate(cache_hit, cache_miss),
         "raw_usage": raw,
     }
 
