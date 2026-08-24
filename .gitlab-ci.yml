@@ -1041,8 +1041,17 @@ backend:test:
       Write-Host "=== 3. 安装项目依赖 ==="
       # issue #209：按 requirements.lock.txt（uv pip compile 全量钉死）安装，
       # requirements.txt 仅为顶层约束声明，锁文件为实际安装依据
-      & uv pip install -r requirements.lock.txt -i $env:PIP_INDEX_URL
+      # Windows 兼容（issue #469）：uvloop 无 Windows 实现（uvicorn[standard]
+      # 传递依赖，锁文件在 Linux 上 compile 生成，Windows 源码构建直接抛
+      # RuntimeError，流水线 #1394/#1395 实测失败）。安装时过滤掉 uvloop 行；
+      # uvicorn 在 Windows 自动回退 asyncio 默认事件循环，backend:test 运行
+      # pytest 不依赖 uvloop，行为不受影响。
+      $WIN_LOCK = Join-Path $env:TEMP "requirements.windows.lock.txt"
+      Get-Content requirements.lock.txt | Where-Object { $_ -notmatch '^uvloop==' } |
+        Set-Content -Path $WIN_LOCK -Encoding utf8
+      & uv pip install -r $WIN_LOCK -i $env:PIP_INDEX_URL
       if ($LASTEXITCODE -ne 0) { throw "uv pip install 失败（exit $LASTEXITCODE）" }
+      Remove-Item -Force $WIN_LOCK
       $STEP3_END = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
       Write-Host "⏱️  步骤3 (安装依赖) 用时: $($STEP3_END - $STEP3_START) 秒"
 

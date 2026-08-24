@@ -32,6 +32,13 @@
     `.backend_setup_windows`（`$env:PATH` 追加、`$ErrorActionPreference =
     "Stop"`、环境信息输出），`backend:test` 改用它，其他 Linux job 继续
     使用 `.backend_setup` 不受影响；
+  - 修复流水线 #1394/#1395：Windows runner 上 `uv pip install
+    -r requirements.lock.txt` 构建 `uvloop` 失败（uvloop 无 Windows 实现，
+    uvicorn[standard] 传递依赖，锁文件在 Linux 上 compile 生成，Windows
+    源码构建直接抛 `RuntimeError: uvloop does not support Windows`）。
+    安装步骤将锁文件中的 `uvloop` 行过滤后安装（uvicorn 在 Windows 自动
+    回退 asyncio 默认事件循环，backend:test 运行 pytest 不依赖 uvloop，
+    行为不受影响）；Linux job（.backend_setup）与生产部署仍使用完整锁文件；
   - 测试：`ci/test_backend_test_config.py` 配置合约回归扩至 4 用例
     （新增 before_script 必须为 pwsh 语法、不得含 bash 语法的断言），
     ci/ 目录 22 用例全通过，GitLab CI lint 校验通过。
