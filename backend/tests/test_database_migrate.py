@@ -516,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 27, f"user_version 应推进到 27（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health），实际 {ver}"
+        assert ver == 28, f"user_version 应推进到 28（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -606,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 27, f"user_version 应推进到 27（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health），实际 {ver}"
+        assert ver == 28, f"user_version 应推进到 28（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
@@ -671,7 +671,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols, "旧库应补出 tasks.environment 列"
-        assert ver == 27, f"user_version 应推进到 27（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health），实际 {ver}"
+        assert ver == 28, f"user_version 应推进到 28（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商），实际 {ver}"
 
     def test_new_db_has_environment_column(self, tmp_path):
         """新库建表语句应直接含 environment 列（无需迁移）。"""
@@ -680,7 +680,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols
-        assert ver == 27
+        assert ver == 28
 
     def test_set_task_status_accepts_environment(self, tmp_path):
         """set_task_status 应能写入 environment（_TASK_FIELDS 白名单）。"""
@@ -738,7 +738,7 @@ class TestTaskProgressLedger:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "task_progress" in tables, "旧库应补出 task_progress 表"
-        assert ver == 27
+        assert ver == 28
 
     def test_record_and_latest_per_step(self, tmp_path):
         """record/list/latest：只增不改快照式，latest 取每步最新状态。"""
@@ -834,6 +834,34 @@ class TestMigrateTaskBaseSha:
         task_id = db.create_task(repo_id, 42, 1, "标题")
         db.set_task_status(task_id, None, base_sha="a" * 40)
         assert db.get_task(task_id)["base_sha"] == "a" * 40
+
+
+class TestMigrateInspirationChatProvider:
+    """issue #249：旧灵感表补 chat_provider 持久化列。"""
+
+    def test_old_db_gets_chat_provider_column(self, tmp_path):
+        path = tmp_path / "old249.db"
+        _build_old_db(path)
+        conn = sqlite3.connect(str(path))
+        conn.execute("PRAGMA user_version = 27")
+        conn.commit()
+        conn.close()
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(inspirations)")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "chat_provider" in cols
+        assert ver == 28
+
+    def test_new_db_persists_chat_provider_and_clear(self, tmp_path):
+        db = Database(str(tmp_path / "new249.db"))
+        repo = db.upsert_repo(249, "demo", "https://example.com/demo.git")
+        inspiration = db.create_inspiration(repo, "选择模型")
+        assert db.set_inspiration_chat_provider(inspiration, "gemini")
+        assert db.get_inspiration(inspiration)["chat_provider"] == "gemini"
+        assert db.set_inspiration_chat_provider(inspiration, None)
+        assert db.get_inspiration(inspiration)["chat_provider"] is None
+        assert not db.set_inspiration_chat_provider(999, "gemini")
 
 
 class TestMigrateFailureCategory:

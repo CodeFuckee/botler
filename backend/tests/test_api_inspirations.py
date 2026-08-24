@@ -816,6 +816,109 @@ def _add_inspiration(db, repo_id=1):
     return db.create_inspiration(repo, "灵感内容")
 
 
+class TestInspirationChatProvider:
+    """灵感对话供应商选择接口（issue #249）。"""
+
+    def test_list_enabled_providers_and_saved_selection(self, chat_env):
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        tc.app.state.ctx.config.update_section("ai_providers", [
+            {"name": "DeepSeek 快速", "provider": "deepseek", "model": "deepseek-chat",
+             "api_key": "sk-d", "enabled": True},
+            {"name": "OpenAI 深度", "provider": "openai", "model": "gpt-4o",
+             "api_key": "sk-o", "enabled": True},
+            {"name": "无 Key", "provider": "gemini", "model": "gemini-pro",
+             "api_key": "", "enabled": True},
+            {"name": "已停用", "provider": "qwen", "model": "qwen-max",
+             "api_key": "sk-q", "enabled": False},
+        ])
+        r = tc.get(f"/api/inspirations/{insp_id}/chat-providers")
+        assert r.status_code == 200
+        assert r.json() == {
+            "selected": "deepseek",
+            "providers": [
+                {"name": "DeepSeek 快速", "provider": "deepseek", "model": "deepseek-chat"},
+                {"name": "OpenAI 深度", "provider": "openai", "model": "gpt-4o"},
+            ],
+        }
+
+    def test_empty_provider_list_guides_settings(self, client):
+        tc, db = client
+        insp_id = _add_inspiration(db)
+        r = tc.get(f"/api/inspirations/{insp_id}/chat-providers")
+        assert r.status_code == 200
+        assert r.json() == {"selected": None, "providers": []}
+
+    def test_save_provider_persists_and_clear_keeps_history(self, chat_env):
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        db.add_inspiration_message(insp_id, "user", "历史问题")
+        db.add_inspiration_message(insp_id, "assistant", "历史回答")
+        tc.app.state.ctx.config.update_section("ai_providers", [
+            {"name": "DeepSeek", "provider": "deepseek", "api_key": "sk-d", "enabled": True},
+            {"name": "OpenAI", "provider": "openai", "api_key": "sk-o", "enabled": True},
+        ])
+        r = tc.put(f"/api/inspirations/{insp_id}/chat-provider", json={"provider": "openai"})
+        assert r.status_code == 200
+        assert r.json()["chat_provider"] == "openai"
+        assert db.get_inspiration(insp_id)["chat_provider"] == "openai"
+        assert [m["content"] for m in db.list_inspiration_messages(insp_id)] == ["历史问题", "历史回答"]
+        r = tc.put(f"/api/inspirations/{insp_id}/chat-provider", json={"provider": None})
+        assert r.status_code == 200
+        assert r.json()["chat_provider"] is None
+
+    def test_save_unknown_or_unavailable_provider_rejected(self, chat_env):
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        tc.app.state.ctx.config.update_section("ai_providers", [
+            {"name": "DeepSeek", "provider": "deepseek", "api_key": "sk-d", "enabled": True},
+            {"name": "停用 OpenAI", "provider": "openai", "api_key": "sk-o", "enabled": False},
+        ])
+        for provider in ("openai", "missing"):
+            r = tc.put(f"/api/inspirations/{insp_id}/chat-provider", json={"provider": provider})
+            assert r.status_code == 400
+            assert "供应商" in r.json()["detail"]
+
+    def test_saved_unavailable_provider_falls_back_for_send(self, chat_env):
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        db.set_inspiration_chat_provider(insp_id, "openai")
+        tc.app.state.ctx.config.update_section("ai_providers", [
+            {"name": "DeepSeek", "provider": "deepseek", "api_key": "sk-d", "enabled": True},
+            {"name": "OpenAI", "provider": "openai", "api_key": "sk-o", "enabled": False},
+        ])
+        r = tc.post(f"/api/inspirations/{insp_id}/messages", json={"content": "回退测试"})
+        assert r.status_code == 201
+        assert StubChatClient.instances[-1].kwargs["provider"] == "deepseek"
+
+    def test_send_optional_provider_routes_without_losing_context(self, chat_env):
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        tc.app.state.ctx.config.update_section("ai_providers", [
+            {"name": "DeepSeek", "provider": "deepseek", "api_key": "sk-d", "enabled": True},
+            {"name": "OpenAI", "provider": "openai", "api_key": "sk-o", "enabled": True},
+        ])
+        db.add_inspiration_message(insp_id, "user", "旧问题")
+        db.add_inspiration_message(insp_id, "assistant", "旧回答")
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "新问题", "provider": "openai"})
+        assert r.status_code == 201
+        assert StubChatClient.instances[-1].kwargs["provider"] == "openai"
+        assert StubChatClient.instances[-1].chat_calls[-1][-3:] == [
+            {"role": "user", "content": "旧问题"},
+            {"role": "assistant", "content": "旧回答"},
+            {"role": "user", "content": "新问题"},
+        ]
+
+    def test_send_unavailable_optional_provider_rejected_without_new_messages(self, chat_env):
+        tc, db = chat_env
+        insp_id = _add_inspiration(db)
+        r = tc.post(f"/api/inspirations/{insp_id}/messages",
+                    json={"content": "hi", "provider": "openai"})
+        assert r.status_code == 400
+        assert db.list_inspiration_messages(insp_id) == []
+
+
 class TestInspirationChat:
     """GET/POST /api/inspirations/{id}/messages（issue #166）。"""
 

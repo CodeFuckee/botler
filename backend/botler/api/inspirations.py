@@ -80,6 +80,11 @@ class InspirationUpdate(BaseModel):
 
 class InspirationChatMessage(BaseModel):
     content: str = Field(description="向 AI agent 发送的消息内容")
+    provider: str | None = Field(default=None, description="可选 AI 供应商标识")
+
+
+class InspirationChatProvider(BaseModel):
+    provider: str | None = Field(default=None, description="供应商标识；null 清除选择")
 
 
 def _validate_content(content: str) -> str:
@@ -136,6 +141,7 @@ def _row_to_dict(row) -> dict:
         "repo_id": row["repo_id"],
         "repo_name": row["repo_name"],
         "content": row["content"],
+        "chat_provider": row["chat_provider"] if "chat_provider" in row.keys() else None,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -363,6 +369,68 @@ def _require_inspiration(c, inspiration_id: int):
     return insp
 
 
+def _available_chat_providers(settings) -> list[dict]:
+    """返回所有启用且有 Key 的对话供应商，隐藏 API Key。"""
+    result = []
+    for item in getattr(settings, "ai_providers", None) or []:
+        if (isinstance(item, dict) and bool(item.get("enabled", True))
+                and str(item.get("api_key") or "").strip()):
+            result.append({
+                "name": str(item.get("name") or item.get("provider") or "AI 供应商"),
+                "provider": str(item.get("provider") or "").strip(),
+                "model": str(item.get("model") or "").strip(),
+            })
+    return [item for item in result if item["provider"]]
+
+
+def _select_chat_provider(settings, requested: str | None,
+                          saved: str | None) -> dict | None:
+    """按请求参数、灵感保存值、首个可用项顺序解析供应商。"""
+    from ..chat_models import resolve_chat_provider
+    available = _available_chat_providers(settings)
+    by_provider = {item["provider"]: item for item in available}
+    key = str(requested or saved or "").strip()
+    if key and key in by_provider:
+        return next(p for p in (getattr(settings, "ai_providers", None) or [])
+                    if isinstance(p, dict) and str(p.get("provider") or "").strip() == key
+                    and bool(p.get("enabled", True))
+                    and str(p.get("api_key") or "").strip())
+    # 显式 provider 是用户本次请求的硬选择，失效时返回可理解的 400；
+    # 灵感记录中的历史选择失效则回退首个可用项，避免配置变更后无法继续对话。
+    if requested is not None and str(requested or "").strip():
+        raise HTTPException(400, f"指定的 AI 供应商不可用：{key}")
+    return resolve_chat_provider(settings)
+
+
+@router.get("/{inspiration_id}/chat-providers")
+def inspiration_chat_providers(request: Request, inspiration_id: int):
+    """返回可选对话供应商及该灵感当前保存的选择。"""
+    c = request.app.state.ctx
+    insp = _require_inspiration(c, inspiration_id)
+    providers = _available_chat_providers(c.config.get())
+    selected = insp["chat_provider"] if insp["chat_provider"] in {
+        p["provider"] for p in providers} else (providers[0]["provider"] if providers else None)
+    return {"selected": selected, "providers": providers}
+
+
+@router.put("/{inspiration_id}/chat-provider")
+def update_inspiration_chat_provider(request: Request, inspiration_id: int,
+                                     body: InspirationChatProvider):
+    """保存/清除灵感对话供应商选择，不影响既有消息。"""
+    c = request.app.state.ctx
+    insp = _require_inspiration(c, inspiration_id)
+    provider = str(body.provider or "").strip() or None
+    if provider is not None:
+        available = {p["provider"] for p in _available_chat_providers(c.config.get())}
+        if provider not in available:
+            raise HTTPException(400, f"指定的 AI 供应商不可用：{provider}")
+    if not c.db.set_inspiration_chat_provider(inspiration_id, provider):
+        raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
+    row = c.db.get_inspiration(inspiration_id)
+    assert row is not None
+    return {"chat_provider": row["chat_provider"]}
+
+
 @router.get("/{inspiration_id}/messages")
 def inspiration_messages(request: Request, inspiration_id: int):
     """返回灵感与 AI agent 的对话历史（issue #166），按时间升序。
@@ -398,10 +466,10 @@ def send_inspiration_message(request: Request, inspiration_id: int,
         raise HTTPException(400, "消息内容不能为空")
     if len(content) > MAX_CHAT_CONTENT_LEN:
         raise HTTPException(400, f"消息内容不能超过 {MAX_CHAT_CONTENT_LEN} 字")
-    # 对话模型：复用设置页「AI API 供应商」第一个启用且 Key 非空的项
-    from ..chat_models import ChatModelClient, ChatModelError, resolve_chat_provider
+    # 对话模型按显式参数 → 灵感保存值 → 首个可用项回退，保持旧兼容行为。
+    from ..chat_models import ChatModelClient, ChatModelError
     settings = c.config.get()
-    provider_cfg = resolve_chat_provider(settings)
+    provider_cfg = _select_chat_provider(settings, body.provider, insp["chat_provider"])
     if provider_cfg is None:
         raise HTTPException(
             400, "未配置 AI 对话模型：请先在设置页「AI API 供应商」添加"

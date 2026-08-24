@@ -284,10 +284,11 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 探讨（完善想法、补充边界场景、评估可行性、给出分步落地建议）；对话输入框采用
 > codex 风格（issue #443）：文本框与圆形发送按钮融合为单一圆角容器，输入随
 > 内容自动增高，Enter 发送、Shift+Enter 换行。对话历史
-> 保存到本地数据库。对话模型复用设置页「AI API 供应商」（ai_providers）
-> 配置的文本对话模型——取列表第一个启用且 API Key 非空的项（支持 DeepSeek /
-> OpenAI / Gemini / Anthropic 等，未配置时给出中文提示引导到设置页）；AI
-> 回复失败时输入保留可重试。
+> 保存到本地数据库。对话面板顶部可选择所有已启用且 API Key 非空的
+> 「AI API 供应商」（显示 provider / model）；选择会保存到当前灵感记录，
+> 刷新或重新打开后保持。切换不会删除历史消息，新消息才会使用所选模型；已保存
+> 的供应商被停用/删除时自动回退首个可用项。未配置可用供应商时下拉显示设置页引导；
+> AI 回复失败时输入保留可重试。
 
 > 概览页「开放 Issue」板块支持**批量关闭 Issue**（issue #412/#414）：默认不显示
 > 全选或逐项勾选框；点击「批量关闭」后才进入选择模式，可勾选当前列表中的一个或多个
@@ -1045,8 +1046,10 @@ POST   /api/inspirations              记录一条灵感（repo_id + content 必
 PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）
 DELETE /api/inspirations/{id}         删除灵感（issue #131）
 POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143/#153/#162）：灵感内容同时作为标题与描述，默认标签 feature + ui，分配人 = 仓库用户（仓库设置页读取 remote url 得到的用户名，按项目成员解析为 GitLab 用户 id；未配置/解析失败则不指定分配人）；写操作必须配置 owner token，创建成功后清概览缓存并从灵感列表删除该灵感（issue #162，失败保留可重试）
+GET    /api/inspirations/{id}/chat-providers  返回当前灵感可选的已启用且 API Key 非空供应商（仅 name/provider/model）及当前选择（issue #249）
+PUT    /api/inspirations/{id}/chat-provider   保存或清除当前灵感的对话供应商选择（`{provider}`；null 清除，issue #249）
 GET    /api/inspirations/{id}/messages   返回灵感与 AI agent 的对话历史（按时间升序；issue #166）
-POST   /api/inspirations/{id}/messages   向 AI agent 发送一条消息并返回回复（issue #166）：用户消息 + AI 回复成对保存到本地数据库，对话模型复用设置页「AI API 供应商」第一个启用且 API Key 非空的项（未配置返回 400 引导设置）；AI 调用失败返回 502 并回滚已保存的用户消息（对话历史保持成对完整，前端保留输入可重试）
+POST   /api/inspirations/{id}/messages   向 AI agent 发送一条消息并返回回复（可选 `provider` 指定本次模型；否则优先当前灵感已保存选择，再回退第一个启用且 API Key 非空的项，issue #249）：用户消息 + AI 回复成对保存到本地数据库；未配置返回 400 引导设置；AI 调用失败返回 502 并回滚已保存的用户消息（对话历史保持成对完整，前端保留输入可重试）
 POST   /webhook/gitlab                GitLab webhook 入口
 ```
 

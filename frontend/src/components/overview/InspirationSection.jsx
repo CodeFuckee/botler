@@ -30,6 +30,7 @@ export default function InspirationSection({
   addIssueFromInspiration, addingIssueInspIds, openInspirationChat,
   submitNewInspiration, newInspirationDrafts, setNewInspirationDrafts,
   chatInspiration, closeInspirationChat, chatLoading, chatMessages,
+  chatProviders, chatProvider, changeChatProvider,
   chatSending, chatDraft, setChatDraft, chatError, setChatError,
   sendInspirationChat,
 }) {
@@ -194,6 +195,26 @@ export default function InspirationSection({
             <div className="chat-subject" title={chatInspiration.content}>
               <span className="muted">{tr('overview.chatRepo', { name: chatInspiration.repo_name || '—' })}</span>
               <p className="chat-subject-content">{chatInspiration.content}</p>
+            </div>
+            <div className="chat-provider-bar">
+              <label htmlFor="chat-provider-select">{tr('overview.chatProvider')}</label>
+              {chatProviders.length > 0 ? (
+                <select id="chat-provider-select" className="chat-provider-select"
+                        value={chatProvider || ''}
+                        onChange={(e) => changeChatProvider(e.target.value)}
+                        disabled={chatLoading || chatSending}>
+                  {chatProviders.map((provider) => (
+                    <option key={provider.provider} value={provider.provider}>
+                      {provider.provider} / {provider.model || '默认模型'} · {provider.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="chat-provider-empty">
+                  {tr('overview.chatNoProviders')}{' '}
+                  <a href="/settings#settings-ai-providers">{tr('overview.chatGoSettings')}</a>
+                </span>
+              )}
             </div>
             {/* issue #457：chat-drawer 自身 overflow: hidden 不滚动，
                 实际滚动容器是 chat-body——回到顶部按钮的 ref 必须指向

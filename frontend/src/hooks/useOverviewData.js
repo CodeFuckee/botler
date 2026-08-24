@@ -98,6 +98,8 @@ export function useOverviewData() {
   // 对象（null=面板关闭）、消息列表、输入草稿、发送中/加载中/错误状态
   const [chatInspiration, setChatInspiration] = useState(null)
   const [chatMessages, setChatMessages] = useState([])
+  const [chatProviders, setChatProviders] = useState([])
+  const [chatProvider, setChatProvider] = useState(null)
   const [chatLoading, setChatLoading] = useState(false)
   const [chatDraft, setChatDraft] = useState('')
   const [chatSending, setChatSending] = useState(false)
@@ -545,11 +547,23 @@ export function useOverviewData() {
   const openInspirationChat = useCallback(async (ins) => {
     setChatInspiration(ins)
     setChatMessages([])
+    setChatProviders([])
+    setChatProvider(null)
     setChatLoading(true)
     setChatError('')
     try {
-      const d = await api.get(`/api/inspirations/${ins.id}/messages`)
-      setChatMessages(d.messages || [])
+      // 历史消息是对话主链路；供应商列表失败不能遮蔽既有历史。
+      const history = await api.get(`/api/inspirations/${ins.id}/messages`)
+      setChatMessages(history.messages || [])
+      try {
+        const providerData = await api.get(`/api/inspirations/${ins.id}/chat-providers`)
+        setChatProviders(providerData.providers || [])
+        setChatProvider(providerData.selected || null)
+      } catch (_e) {
+        // 渐进部署时旧后端尚无新接口：保留空下拉的设置页引导。
+        setChatProviders([])
+        setChatProvider(null)
+      }
     } catch (e) {
       setChatError(e.message)
     } finally {
@@ -561,9 +575,28 @@ export function useOverviewData() {
   const closeInspirationChat = useCallback(() => {
     setChatInspiration(null)
     setChatMessages([])
+    setChatProviders([])
+    setChatProvider(null)
     setChatDraft('')
     setChatError('')
   }, [])
+
+  // 切换供应商：立即保存到灵感记录，历史消息只读不变。
+  const changeChatProvider = useCallback(async (provider) => {
+    if (!chatInspiration || provider === chatProvider) return
+    const previous = chatProvider
+    setChatProvider(provider || null)
+    setChatError('')
+    try {
+      const d = await api.put(`/api/inspirations/${chatInspiration.id}/chat-provider`, {
+        provider: provider || null,
+      })
+      setChatProvider(d.chat_provider || null)
+    } catch (e) {
+      setChatProvider(previous)
+      setChatError(e.message)
+    }
+  }, [chatInspiration, chatProvider])
 
   // 发送消息：POST 后端保存用户消息并调 AI 回复，成功后 append
   // 用户消息 + AI 回复到消息列表并清空输入；失败保留输入可重试
@@ -574,7 +607,8 @@ export function useOverviewData() {
     setChatSending(true)
     setChatError('')
     try {
-      const d = await api.post(`/api/inspirations/${chatInspiration.id}/messages`, { content })
+      const payload = chatProvider ? { content, provider: chatProvider } : { content }
+      const d = await api.post(`/api/inspirations/${chatInspiration.id}/messages`, payload)
       setChatMessages((prev) => prev.concat(d.messages || []))
       setChatDraft('')
     } catch (e) {
@@ -582,7 +616,7 @@ export function useOverviewData() {
     } finally {
       setChatSending(false)
     }
-  }, [chatSending, chatInspiration, chatDraft])
+  }, [chatSending, chatInspiration, chatDraft, chatProvider])
 
   // 对话面板 Esc 关闭（SSR 测试环境无 document 时跳过，与 AddIssueModal
   // 一致）；面板关闭后移除监听，避免误关其他弹窗
@@ -685,7 +719,7 @@ export function useOverviewData() {
     editingInspiration, setEditingInspiration,
     editInspirationDraft, setEditInspirationDraft,
     addingIssueInspIds, inspirationCreatedIssue, setInspirationCreatedIssue,
-    chatInspiration, chatMessages, chatLoading,
+    chatInspiration, chatMessages, chatProviders, chatProvider, chatLoading,
     chatDraft, setChatDraft, chatSending, chatError,
     dsBalance, dsBalanceError, dsRate,
     issueFilter, setIssueFilter,
@@ -701,7 +735,7 @@ export function useOverviewData() {
     toggleInspirationRepo, loadMoreInspirations,
     submitNewInspiration, saveInspiration, deleteInspiration,
     addIssueFromInspiration,
-    openInspirationChat, closeInspirationChat, sendInspirationChat,
+    openInspirationChat, closeInspirationChat, changeChatProvider, sendInspirationChat,
     reconcileRepo, introspectRepo, discoverRepo,
   }
 }

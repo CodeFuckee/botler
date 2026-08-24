@@ -331,6 +331,7 @@ CREATE TABLE IF NOT EXISTS inspirations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   repo_id INTEGER NOT NULL REFERENCES repos(id),
   content TEXT NOT NULL,
+  chat_provider TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -869,6 +870,14 @@ class Database:
                 "ON repo_health(repo_id, check_time)")
             conn.execute("PRAGMA user_version = 27")
             ver = 27
+        if ver < 28:
+            # issue #249：灵感记录保存 AI 对话供应商选择；旧库补列，
+            # 新库由 _SCHEMA 直接创建，空值保持原有首个可用供应商行为。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(inspirations)")}
+            if "chat_provider" not in cols:
+                conn.execute("ALTER TABLE inspirations ADD COLUMN chat_provider TEXT")
+            conn.execute("PRAGMA user_version = 28")
+            ver = 28
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1192,6 +1201,15 @@ class Database:
             cur = conn.execute(
                 """UPDATE inspirations SET content=?, updated_at=datetime('now')
                    WHERE id=?""", (content, inspiration_id))
+            return cur.rowcount > 0
+
+    def set_inspiration_chat_provider(self, inspiration_id: int,
+                                      provider: str | None) -> bool:
+        """保存灵感对话供应商；传 None 清除选择，记录不存在返回 False。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                "UPDATE inspirations SET chat_provider=? WHERE id=?",
+                (provider, inspiration_id))
             return cur.rowcount > 0
 
     def delete_inspiration(self, inspiration_id: int) -> bool:
