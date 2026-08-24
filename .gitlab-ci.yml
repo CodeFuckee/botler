@@ -945,14 +945,13 @@ harmony:build:
     expire_in: 1 week
 
 # --- 后端：Python 测试（uv 高速包管理）---
-# 在 gitlab-runner 机器（code01）上直接运行（shell executor），
-# 不依赖 Docker，与 Shipyard 的 backend:test 同模式。
+# 在带 windows 标签的 GitLab Runner 上运行（issue #469），
+# 不再使用 code01 标签的 runner；不依赖 Docker。
 backend:test:
   extends: [.backend_setup, .docs_only_skip]
   stage: build
   tags:
-    - linux
-    - code01
+    - windows
   timeout: 30m
   # 覆盖率提取正则（issue #210）：解析 pytest-cov term-missing 日志的
   # TOTAL 行，驱动项目覆盖率徽章与流水线页面覆盖率展示（GitLab 17+ 由
@@ -971,12 +970,26 @@ backend:test:
       # uv 缓存目录（CI 缓存持久化，加速后续构建）
       export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
 
+      # 平台检测（issue #469：本 job 在带 windows 标签的 runner 上运行，
+      # 脚本需同时兼容 Windows Git Bash 与 Linux shell）
+      IS_WINDOWS=0
+      case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+      esac
+      echo "运行平台: $(uname -s 2>/dev/null || echo unknown)（IS_WINDOWS=${IS_WINDOWS}）"
+
       STEP1_START=$(date +%s)
       echo "=== 1. 确保 uv 可用 ==="
       if ! command -v uv >/dev/null 2>&1; then
-        # PEP 668 保护阻止系统级 pip install，使用 --break-system-packages
-        pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        if [ "${IS_WINDOWS}" = "1" ]; then
+          # Windows：官方 PowerShell 安装脚本（uv install.ps1，装到 %USERPROFILE%\.local\bin）
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex" >/dev/null 2>&1 || \
+            pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || true
+        else
+          # PEP 668 保护阻止系统级 pip install，使用 --break-system-packages
+          pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+        fi
       fi
       export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
       echo "uv: $(uv --version)"
@@ -986,11 +999,17 @@ backend:test:
       STEP2_START=$(date +%s)
       echo "=== 2. 创建/复用虚拟环境 ==="
       # shell executor 工作目录跨 job 持久化，.venv 复用；全新环境才创建
-      if [ ! -x .venv/bin/python ]; then
+      # Windows 上 uv venv 生成 .venv/Scripts/python.exe，Linux 生成 .venv/bin/python
+      if [ ! -x .venv/bin/python ] && [ ! -x .venv/Scripts/python.exe ]; then
         rm -rf .venv
         uv venv .venv
       fi
-      PYTHON=".venv/bin/python"
+      if [ -x .venv/bin/python ]; then
+        PYTHON=".venv/bin/python"
+      else
+        PYTHON=".venv/Scripts/python.exe"
+      fi
+      echo "PYTHON=${PYTHON}"
       STEP2_END=$(date +%s)
       echo "⏱️  步骤2 (虚拟环境) 用时: $((STEP2_END - STEP2_START)) 秒"
 
@@ -1012,7 +1031,14 @@ backend:test:
       ulimit -n 65535 2>/dev/null || echo "⚠️ 无法提升 ulimit -n，继续使用系统默认值"
       echo "→ 当前文件描述符上限 ulimit -n: $(ulimit -n)"
       PYTEST_WORKERS="${PYTEST_WORKERS:-1}"
-      PYTEST_BASETEMP="/tmp/botler-pytest-${CI_PIPELINE_ID:-local}-${CI_JOB_ID:-local}"
+      if [ "${IS_WINDOWS}" = "1" ]; then
+        # Windows：pytest 临时目录用本机 %TEMP%（Git Bash 的 /tmp 亦可，显式用 %TEMP% 更稳）
+        PYTEST_BASETEMP="${TEMP:-/tmp}/botler-pytest-${CI_PIPELINE_ID:-local}-${CI_JOB_ID:-local}"
+      else
+        # 测试临时 SQLite 文件必须落在本机文件系统（共享文件系统锁协商会触发
+        # sqlite3.OperationalError: locking protocol，流水线 #1352）
+        PYTEST_BASETEMP="/tmp/botler-pytest-${CI_PIPELINE_ID:-local}-${CI_JOB_ID:-local}"
+      fi
       rm -rf "$PYTEST_BASETEMP"
       mkdir -p "$PYTEST_BASETEMP"
       if [ -d tests ]; then

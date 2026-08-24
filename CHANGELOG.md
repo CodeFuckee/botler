@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **CI：backend:test 阶段迁移至带 windows 标签的 runner 上运行（issue #469）**：
+  - `backend:test` job 的 tags 由 `linux + code01` 改为 `windows`，不再在
+    code01 标签的 GitLab Runner 上运行（在 runner 16：windows/dotnet 标签、
+    platform=windows 上执行）；
+  - 脚本增加跨平台适配（兼容 Windows Git Bash 与 Linux shell）：平台检测
+    （`uname -s` 识别 MINGW/MSYS/CYGWIN）、uv 安装（Windows 走官方
+    PowerShell 安装脚本 `install.ps1`，Linux 维持 pip/curl 安装）、虚拟环境
+    Python 路径（Windows `.venv/Scripts/python.exe` / Linux `.venv/bin/python`）、
+    pytest 临时目录（Windows 用 `%TEMP%`，Linux 维持 `/tmp`）；
+  - 测试：`ci/test_backend_test_config.py` 配置合约回归 2 用例通过，
+    GitLab CI lint 校验通过。
+
 ### Fixed
 
 - **修复 CI 流水线 sync_wiki_to_github 阶段持续失败（issue #464）**：
