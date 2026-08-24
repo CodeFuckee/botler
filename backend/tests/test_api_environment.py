@@ -96,6 +96,25 @@ class TestUpgradeApi:
         assert data["version"] == "2.0.0"
         assert data["restarting"] is True
 
+    def test_upgrade_already_up_to_date_no_restart(self, client, monkeypatch):
+        """已是最新版本（issue #470）→ 返回 already_up_to_date 且不重启。"""
+        tc, tmp_path = client
+        monkeypatch.setattr(
+            "botler.environment.upgrade_tool",
+            lambda key: {"key": key, "name": "DeepSeek Harness SDK",
+                         "upgraded": False, "already_up_to_date": True,
+                         "version": "0.1.1rc1"})
+        monkeypatch.setattr(
+            "botler.environment.schedule_restart",
+            lambda delay=2.0: (_ for _ in ()).throw(
+                AssertionError("已是最新时不应调度重启")))
+        resp = tc.post("/api/environment/upgrade", json={"key": "dsh"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["already_up_to_date"] is True
+        assert data["restarting"] is False
+
     def test_upgrade_unknown_tool_400(self, client, monkeypatch):
         """未知工具 → 400 携带可读错误信息。"""
         tc, tmp_path = client

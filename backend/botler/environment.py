@@ -118,7 +118,11 @@ def _detect_module(tool: dict, base: dict) -> dict:
         return base
     base["installed"] = True
     try:
-        base["version"] = parse_version(pkg_version(pkg))
+        # issue #470：pip 包版本保留完整 PEP 440 版本号（含 rc 等预发布
+        # 后缀），不做 parse_version 截断——截断会使 rc 版本与 PyPI 最新
+        # 版本比较永远不等（up_to_date 恒为 False），前端永远显示
+        # 「可升级」，且升级后页面版本号看起来「没有变化」。
+        base["version"] = pkg_version(pkg)
     except (PackageNotFoundError, ModuleNotFoundError, ValueError) as e:
         logger.warning("读取 %s 版本失败: %s", tool["key"], e)
     return base
@@ -230,6 +234,18 @@ def find_tool(tool_key: str) -> dict | None:
     return next((t for t in TOOLS if t["key"] == tool_key), None)
 
 
+# pypi 工具（dsh SDK 等）pip 镜像源（issue #470）：默认 pip 源（清华）
+# 未同步 rc 预发布版，升级会静默 "already satisfied" 假成功；显式走
+# 阿里源（与 deploy/install-dsh-sdk.sh / Dockerfile 部署基线一致），
+# 可用 DSH_INDEX_URL 环境变量覆盖（内网代理场景）。
+DSH_INDEX_URL_DEFAULT = "https://mirrors.aliyun.com/pypi/simple"
+
+
+def _pip_index_url() -> str:
+    """pypi 工具升级/安装的 pip 镜像源：DSH_INDEX_URL 优先，缺省阿里源。"""
+    return os.environ.get("DSH_INDEX_URL") or DSH_INDEX_URL_DEFAULT
+
+
 def _upgrade_command(tool: dict) -> list[str]:
     """按发布源构造升级命令（npm / pypi）；无发布源抛 UpgradeError。"""
     source = tool.get("latest_source")
@@ -239,8 +255,14 @@ def _upgrade_command(tool: dict) -> list[str]:
             raise UpgradeError("未找到 npm 命令，无法升级 npm 全局工具")
         return [npm, "install", "-g", f"{tool['latest_pkg']}@latest"]
     if source == "pypi":
-        # 使用 botler 当前解释器升级进程内 pip 包，保证升级进同一环境
-        return [sys.executable, "-m", "pip", "install", "-U", tool["latest_pkg"]]
+        # 使用 botler 当前解释器升级进程内 pip 包，保证升级进同一环境。
+        # issue #470：dsh SDK 为 rc 预发布版，必须 --pre 允许预发布版本，
+        # 并显式指定镜像源——默认 pip 源（清华）不同步 rc 版，不带源时
+        # pip 静默 "already satisfied" 退出码 0，造成「显示升级成功但
+        # 版本号未变」的假成功（源与部署基线 deploy/install-dsh-sdk.sh
+        # 一致，DSH_INDEX_URL 可覆盖）。
+        return [sys.executable, "-m", "pip", "install", "-U", "--pre",
+                tool["latest_pkg"], "-i", _pip_index_url()]
     raise UpgradeError(f"工具「{tool['name']}」没有可用的自动升级途径")
 
 
@@ -346,6 +368,17 @@ def upgrade_tool(tool_key: str, timeout: int = UPGRADE_TIMEOUT) -> dict:
         raise UpgradeError(f"未知工具: {tool_key}")
     if tool.get("latest_source") == "github":
         return _upgrade_gh(tool)
+    # issue #470：pypi 工具（dsh SDK）先比对已装版本与 PyPI 最新版，
+    # 已是最新直接返回（不执行 pip、不重启），避免「显示升级成功但
+    # 版本号未变」的假成功。比对失败（网络异常等）不阻断正常升级。
+    if tool.get("latest_source") == "pypi":
+        detected = detect_tool(tool, timeout=10)
+        latest = fetch_latest(tool, timeout=8)
+        if (detected.get("installed") and latest
+                and detected.get("version") == latest):
+            return {"key": tool["key"], "name": tool["name"],
+                    "upgraded": False, "already_up_to_date": True,
+                    "version": detected.get("version")}
     return _run_upgrade_command(tool, _upgrade_command(tool), timeout)
 
 
@@ -410,8 +443,11 @@ def _install_command(tool: dict) -> list[str]:
             raise InstallError("未找到 npm 命令，无法安装 npm 全局工具")
         return [npm, "install", "-g", f"{tool['latest_pkg']}@latest"]
     if source == "pypi":
-        # 使用 botler 当前解释器安装进程内 pip 包，保证装进同一环境
-        return [sys.executable, "-m", "pip", "install", tool["latest_pkg"]]
+        # 使用 botler 当前解释器安装进程内 pip 包，保证装进同一环境。
+        # issue #470：dsh SDK 为 rc 预发布版，必须 --pre 允许预发布版本，
+        # 并显式指定镜像源（与升级同策略，DSH_INDEX_URL 可覆盖）。
+        return [sys.executable, "-m", "pip", "install", "--pre",
+                tool["latest_pkg"], "-i", _pip_index_url()]
     raise InstallError(f"工具「{tool['name']}」没有可用的自动安装途径")
 
 

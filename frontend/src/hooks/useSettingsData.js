@@ -174,8 +174,14 @@ export function useSettingsData() {
   const upgradeEnvTool = async (key) => {
     setUpgradingKey(key); setUpgradeNote(''); setUpgradeError('')
     try {
-      await api.post('/api/environment/upgrade', { key })
-      setUpgradeNote('升级成功，服务正在自动重启，请稍后刷新页面')
+      const res = await api.post('/api/environment/upgrade', { key })
+      // issue #470：后端判定已是最新版本时不重启，提示用户无需升级，
+      // 避免「显示升级成功但版本号没变化」的误导
+      if (res && res.already_up_to_date) {
+        setUpgradeNote('已是最新版本，无需升级')
+      } else {
+        setUpgradeNote('升级成功，服务正在自动重启，请稍后刷新页面')
+      }
     } catch (e) {
       setUpgradeError(e.message || '升级失败')
     } finally {

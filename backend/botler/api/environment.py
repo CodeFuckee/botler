@@ -51,7 +51,11 @@ def upgrade_tool_api(request: Request, body: UpgradeBody):
     record_audit(request, c.db, "environment.upgrade", "environment",
                  key, {"name": result.get("name"),
                        "version": result.get("version")})
-    result["restarting"] = environment.schedule_restart(delay=2.0)
+    # issue #470：已是最新版本时无实际变更，不调度重启（避免无意义
+    # 重启；且「升级成功」提示改为前端展示「已是最新」）
+    result["restarting"] = (
+        False if result.get("already_up_to_date")
+        else environment.schedule_restart(delay=2.0))
     result["ok"] = True
     return result
 

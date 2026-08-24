@@ -69,6 +69,34 @@
 
 ### Fixed
 
+- **修复设置页升级 dsh 显示「升级成功」但重启后版本号不变（issue #470）**：
+  - 现象：设置页「本地环境检测」对 dsh（DeepSeek Harness SDK）点「升级」，
+    提示「升级成功，服务正在自动重启」，但重启后版本号没有任何变化；
+  - 根因（三层叠加）：
+    - `_detect_module` 用 `parse_version` 把 pip 包版本截断为 `x.y.z`，
+      rc 预发布版（如 `0.1.1rc1`）被截成 `0.1.1`，与 `fetch_latest`
+      返回的完整版本（`0.1.1rc1`）比较永远不等 → `up_to_date` 恒为
+      False，前端永远显示「可升级」；
+    - pypi 升级/安装命令（`pip install -U deepseek-harness-sdk`）不带
+      `--pre`、不带镜像源，运行时容器默认 pip 源为清华源（未同步 rc
+      预发布版，最新仅 `0.1.0rc7`，阿里源/官方 PyPI 已有 `0.1.1rc1`），
+      源上无更新版本时 pip 输出 `Requirement already satisfied` 且退出码
+      0 → 后端判定「升级成功」，实际未安装到最新版；
+  - 修复：
+    - pip 包检测保留完整 PEP 440 版本号（不再截断 rc 后缀），页面正确
+      显示 `0.1.1rc1` 且已是最新时正确显示「已是最新」；
+    - pypi 升级/安装命令显式 `--pre`（允许预发布版）+ `-i` 镜像源
+      （`DSH_INDEX_URL` 环境变量优先，缺省阿里源，与
+      `deploy/install-dsh-sdk.sh` / Dockerfile 部署基线一致）；
+    - `upgrade_tool` 对 pypi 工具升级前先比对已装版本与 PyPI 最新版，
+      已是最新直接返回 `already_up_to_date`（不执行 pip、不调度重启），
+      前端据此提示「已是最新版本，无需升级」；
+  - 测试：`TestDshPrereleaseRegression` 新增 7 用例（rc 版本保留、rc 最新
+    版 up_to_date、升级/安装命令含 `--pre` + 镜像源、已是最新短路、最新
+    查询失败不阻断），API 层新增「已是最新不重启」用例，更新 3 处受影响
+    断言，`tests/test_environment.py` 73 用例 + `test_api_environment.py`
+    12 用例全通过。
+
 - **修复 CI 运行后端测试时生产页面卡顿、设置加载不出（issue #467）**：
   - 现象：每次 CI 流水线运行期间（尤其后端测试/构建阶段），生产环境的
     页面非常卡顿、设置加载不出，用户多次反馈未根治；
