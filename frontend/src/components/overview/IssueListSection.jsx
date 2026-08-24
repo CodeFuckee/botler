@@ -406,6 +406,9 @@ export default function IssueListSection({
                               className={'issue-layout-option' + (issueLayout === l.key ? ' active' : '')}
                               title={tr(`overview.layoutHint.${l.key}`)} aria-pressed={issueLayout === l.key}
                               onClick={() => setIssueLayout(l.key)}>
+                        {/* issue #479：布局切换按钮图标——「仓库卡片」网格
+                            图标、「单列分组」列表图标，与文字并排垂直居中 */}
+                        <Icon name={l.key === 'cards' ? 'layoutGrid' : 'layoutList'} />
                         {tr(`overview.layoutBy.${l.key}`)}
                       </button>
                     ))}

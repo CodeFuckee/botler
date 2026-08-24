@@ -37,15 +37,16 @@ function renderIcon(name, props) {
 // issue #297：新增 upload（仓库页「同步到 GitLab」按钮）语义名，同步补入清单
 // issue #324：新增 chevronLeft（左侧边栏「折叠/展开」开关）与 menu（移动端
 //   汉堡按钮）两个语义名，同步补入清单
+// issue #479：新增 layoutGrid / layoutList（概览页开放 issue 布局切换
+//   按钮——「仓库卡片」网格图标 /「单列分组」列表图标），同步补入清单
 const EXPECTED_NAMES = [
   'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle', 'checkSquare',
   'chevronDown', 'chevronLeft', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
   'externalLink', 'eye', 'fileText', 'flag', 'folder', 'folderOpen', 'gripVertical',
-  'hourglass', 'image',
-  'lightbulb', 'lock', 'menu', 'message', 'mic', 'package', 'pencil', 'pin',
-  'keyboard', 'plus', 'refresh', 'rocket', 'search', 'settings', 'sparkles', 'square',
-  'tag', 'terminal', 'trash', 'upload', 'user', 'wallet', 'warning', 'wrench',
-  'x', 'xCircle',
+  'hourglass', 'image', 'keyboard', 'layoutGrid', 'layoutList', 'lightbulb', 'lock', 'menu',
+  'message', 'mic', 'package', 'pencil', 'pin', 'plus', 'refresh', 'rocket', 'search',
+  'settings', 'sparkles', 'square', 'tag', 'terminal', 'trash', 'upload', 'user', 'wallet',
+  'warning', 'wrench', 'x', 'xCircle',
 ]
 
 test('ICONS 映射完整：全部语义名齐全且渲染为 svg', () => {

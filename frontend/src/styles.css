@@ -3762,6 +3762,56 @@ body:has(.drawer-overlay) {
   margin-left: auto;
 }
 
+/* issue #479：开放 issue 布局切换按钮——从 issue #471 引入时的无样式
+   裸按钮升级为 apple-design 分段控件（segmented control）：托盘
+   （.issue-filter-layouts）内嵌两个选项，「仓库卡片」/「单列分组」各配
+   网格/列表图标；选中项主色弱底高亮，当前布局一眼可辨；所有颜色走
+   CSS 变量，深浅色主题（issue #217）自动适配 */
+.issue-filter-layouts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.issue-layout-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.issue-layout-option:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.issue-layout-option:active {
+  transform: translateY(1px) scale(0.98);
+}
+.issue-layout-option:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.issue-layout-option.active {
+  background: var(--primary-weak);
+  color: var(--primary);
+}
+
 .issue-list {
   list-style: none;
   margin: 0;

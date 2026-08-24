@@ -6,6 +6,24 @@
 
 ### Changed
 
+- **概览页开放 Issue 布局切换按钮美化（issue #479）**：
+  - `.issue-filter-layouts` 布局切换从 issue #471 引入时的无样式裸按钮升级为
+    apple-design 分段控件（segmented control）：托盘（`--bg-card` 背景 +
+    `--border` 细边框 + `--radius` 圆角 + 4px 内边距）内嵌「仓库卡片 /
+    单列分组」两个选项，选中项 `--primary-weak` 主色弱底 + `--primary`
+    主色文字高亮，当前布局一眼可辨；
+  - 选项按钮 inline-flex 图标文字垂直居中（gap 4px），hover 背景
+    `--bg-hover` / 文字 `--text`，active 按下微缩放
+    `translateY(1px) scale(0.98)`（与 .btn 一致），focus-visible
+    `--focus-ring` 焦点环，过渡走 `--dur-fast` + `--ease-out`；
+  - 布局选项新增语义图标：Icon.jsx 新增 `layoutGrid`（仓库卡片=网格）/
+    `layoutList`（单列分组=列表）两个 Lucide 语义名，按钮图标 + 文字并排；
+  - 全部颜色/背景经 CSS 变量引用，深浅色主题（issue #217）自动适配；
+  - 测试：新增 `frontend/tests/overview-layout-toggle-style.test.mjs`
+    （托盘/选项基础规则、pill 外观、动效、hover/active/focus、选中态、
+    图标映射、主题安全 10 用例），`icons.test.mjs` 语义名清单同步补入
+    `layoutGrid` / `layoutList`。
+
 - **概览页开放 Issue 组件：issue 内容一行显示不下时改为多行显示，取消省略号截断（issue #476）**：
   - `.issue-link` 移除 `white-space: nowrap` / `text-overflow: ellipsis` / `overflow: hidden`
     三个截断属性，长标题在列内自然换行多行展示，不再以省略号截断（issue #81 的
