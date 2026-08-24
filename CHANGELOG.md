@@ -95,7 +95,28 @@
 
 ### Added
 
-- **设置页「本地环境检测」支持一键升级可升级工具并自动重启（issue #465）**：
+- **概览页三个右边栏支持拖拽调整宽度（issue #466）**：
+  - 需求：概览页右侧边栏——issue 详情右边栏 / CI/CD 流水线右边栏 / 灵感 AI
+    对话右边栏，在视口宽度足够（>860px，跟随项目移动断点）的情况下，用户可
+    拖动右边栏的左侧来改变右边栏宽度；
+  - 实现：新增 `useDrawerResize` hook + `ResizableDrawer` 容器组件（复用
+    `.drawer` 右侧抽屉体系，类名不变不影响既有样式选择器）——抽屉左缘渲染
+    8px 拖拽手柄（`cursor: col-resize`、`touch-action: none`，hover/键盘
+    聚焦/拖拽中显示主色竖条提示），拖拽用 Pointer Events（window 级
+    pointermove/pointerup/pointercancel，拖动中锁定 body 文本选择并保持
+    col-resize 光标）；宽度钳制到 `[320, floor(92vw)]`（与 `.drawer`
+    `max-width: 92vw` 对齐），拖拽/键盘调整结束写入 localStorage（按抽屉
+    类型区分 key：`botler.overview.drawerWidth.issue/.pipeline/.chat`，
+    刷新/重开保持）；手柄 `role="separator"` 可聚焦，ArrowLeft/ArrowRight
+    步进 16px 键盘调整（无障碍）；窄视口（≤860px）不渲染手柄，宽度走 CSS
+    默认（`max-width: 92vw` 兜底）;
+  - 测试：`frontend/tests/overview-drawer-resize.test.mjs` 15 用例——纯函数
+    （860px 断点判定 / 92vw 上限 / 320 下限钳制 / 非法存储回退 / 非法输入
+    回退）、三个抽屉接入断言、宽/窄视口手柄渲染、拖拽流
+    （pointerdown→move→up 更新并持久化、超界钳制）、键盘流
+    （ArrowRight/Left 步进与下界钳制）、localStorage 挂载即应用。
+
+
   - 需求：设置页本地环境检测卡片对「有可升级版本」（已安装且最新版本已知但
     非最新）的工具显示「升级」按钮，点击后升级到最新版本并重启服务使新版本
     生效（进程内依赖如 dsh SDK 需重启后加载）；

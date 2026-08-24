@@ -4,6 +4,7 @@ import { useRef } from 'react'
 import { useI18n } from '../../i18n.jsx'
 import { Icon } from '../Icon.jsx'
 import { ScrollContainerBackToTop } from '../BackToTop.jsx'
+import ResizableDrawer, { CHAT_DRAWER_WIDTH_KEY } from '../ResizableDrawer.jsx'  // issue #466：聊天抽屉拖拽调整宽度
 import { fmtAgo } from '../../api.js'
 import { INSPIRATION_POLL_MS } from '../../lib/overview.jsx'
 
@@ -182,8 +183,9 @@ export default function InspirationSection({
           灵感（遮罩点击 / × / Esc 关闭，从右侧滑入） */}
       {chatInspiration && (
         <div className="drawer-overlay" onClick={closeInspirationChat}>
-          <div className="drawer chat-drawer" role="dialog" aria-modal="true"
-               onClick={(e) => e.stopPropagation()}>
+          <ResizableDrawer drawerClass="chat-drawer" dialog
+                           storageKey={CHAT_DRAWER_WIDTH_KEY}
+                           onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <strong><Icon name="message" /> {tr('overview.chatTitle')}</strong>
               <button type="button" className="btn modal-close"
@@ -240,7 +242,7 @@ export default function InspirationSection({
                 {chatSending ? <Icon name="hourglass" /> : <Icon name="arrowUp" />}
               </button>
             </form>
-          </div>
+          </ResizableDrawer>
         </div>
       )}
     </>

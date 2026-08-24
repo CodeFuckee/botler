@@ -553,7 +553,11 @@ test('源码：灵感条目有「对话」按钮，调用 GET/POST /api/inspirat
                '打开面板应 GET /api/inspirations/{id}/messages 加载历史')
   assert.match(overview, /api\.post\(`\/api\/inspirations\/\$\{chatInspiration\.id\}\/messages`/,
                '发送消息应 POST /api/inspirations/{id}/messages')
-  assert.match(overview, /drawer chat-drawer/, '应渲染对话面板为右侧边栏抽屉（drawer chat-drawer）')
+  // issue #466：对话面板右侧边栏抽屉由 ResizableDrawer 容器统一渲染
+  // （基础类名 .drawer + drawerClass 追加 chat-drawer，结构重构但右侧
+  // 抽屉形态不变）
+  assert.match(overview, /<ResizableDrawer\s+drawerClass="chat-drawer"/,
+               '对话面板应经 ResizableDrawer 渲染为右侧边栏抽屉（chat-drawer）')
   assert.match(overview, /drawer-overlay/, '应使用右侧抽屉遮罩（drawer-overlay）')
   assert.ok(!overview.includes('chat-modal'), '对话面板不应再使用居中 modal（chat-modal）')
   assert.match(overview, /chat-msg-user/, '用户消息应有独立气泡样式')

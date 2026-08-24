@@ -24,6 +24,7 @@ import Zoom from 'yet-another-react-lightbox/plugins/zoom'
 import Counter from 'yet-another-react-lightbox/plugins/counter'
 import Captions from 'yet-another-react-lightbox/plugins/captions'
 import { ScrollContainerBackToTop } from './BackToTop.jsx'
+import ResizableDrawer, { PIPELINE_DRAWER_WIDTH_KEY } from './ResizableDrawer.jsx'  // issue #466：右边栏拖拽调整宽度
 import { api } from '../api.js'
 import { shortSha, fmtTime, fmtSeconds, fmtSize } from '../api.js'
 
@@ -139,9 +140,9 @@ export default function PipelineDrawer({ entry, onClose }) {
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
-      <div className="drawer pipeline-drawer" role="dialog" aria-modal="true"
-           ref={drawerRef}
-           onClick={(e) => e.stopPropagation()}>
+      <ResizableDrawer drawerClass="pipeline-drawer" dialog ref={drawerRef}
+                       storageKey={PIPELINE_DRAWER_WIDTH_KEY}
+                       onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong className="issue-drawer-title">
             <Icon name="rocket" /> {repoName} — CI/CD 流水线
@@ -329,7 +330,7 @@ export default function PipelineDrawer({ entry, onClose }) {
           </>
         )}
       <ScrollContainerBackToTop containerRef={drawerRef} />
-      </div>
+      </ResizableDrawer>
     </div>
   )
 }

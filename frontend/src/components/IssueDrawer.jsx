@@ -53,6 +53,7 @@ import { api, fmtTime, fmtSeconds } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import Markdown, { linkifyCommits } from './Markdown.jsx'
 import TaskDetailDrawer from './TaskDetailDrawer.jsx'  // issue #167：任务执行详情第二层右边栏
+import ResizableDrawer, { ISSUE_DRAWER_WIDTH_KEY } from './ResizableDrawer.jsx'  // issue #466：右边栏拖拽调整宽度
 import { loadTimelineEnabled, buildMergedTimeline } from '../lib/notesTimeline.js'  // issue #342：评论/活动合并时间线开关；issue #351：标记活动并入时间线排序
 import { buildLabelEvents, labelEventText } from '../lib/labelEvents.js'  // issue #349：标记活动（谁添加/移除了标记）归一化与文案
 
@@ -1025,7 +1026,9 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
-      <div className="drawer issue-drawer" ref={drawerRef} onClick={(e) => e.stopPropagation()}>
+      <ResizableDrawer drawerClass="issue-drawer" ref={drawerRef}
+                       storageKey={ISSUE_DRAWER_WIDTH_KEY}
+                       onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong className="issue-drawer-title">
             #{i.iid} {i.title || '—'}
@@ -1218,7 +1221,7 @@ export default function IssueDrawer({ issue, repoName, onClose, onIssueClosed,
           {drawerActions}
         </div>
         <ScrollContainerBackToTop containerRef={drawerRef} />
-      </div>
+      </ResizableDrawer>
       {/* issue #167：任务执行详情第二层右边栏——叠加在本层抽屉之上，
           遮罩点击/×/Esc 关闭；project_id/iid 与 repoName 传给第二层
           用于拉取该 issue 的任务执行记录 */}

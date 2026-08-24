@@ -1664,6 +1664,42 @@ code {
 body:has(.drawer-overlay) {
   overflow: hidden;
 }
+/* issue #466：右侧边栏拖拽调整宽度手柄——悬浮于抽屉左缘（宽 8px
+   整高，绝对定位于 .drawer 自身），cursor: col-resize 提示可拖拽；
+   仅视口宽度 > 860px（项目移动断点）时由 ResizableDrawer 渲染；
+   hover/键盘聚焦/拖拽中显示主色竖条提示。touch-action: none 保证
+   触屏指针事件由拖拽逻辑接管（不被浏览器滚动吞掉）。手柄在抽屉
+   padding 区内侧（.drawer overflow-y: auto 会裁掉伸出左缘的部分，
+   因此不向外延伸，左缘 8px 即吸附在抽屉边缘） */
+.drawer-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 20;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.drawer-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.drawer-resize-handle:hover::after,
+.drawer-resize-handle:focus-visible::after,
+.drawer-resize-handle.dragging::after {
+  background: var(--primary);
+  opacity: 0.5;
+}
+
 /* issue #85：issue 详情右边栏——复用 drawer 基础样式，加宽容纳正文 */
 .issue-drawer {
   width: 640px;
