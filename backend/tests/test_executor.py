@@ -992,6 +992,46 @@ class TestSucceededAddsBotDoneLabel:
         assert labels_calls == []
 
 
+class TestIsEffectiveResultComment:
+    """is_effective_result_comment（issue #480）：bot 已留评论是否为有效
+    结果评论——正文含完成标记才算，空/文件引用字面量/领取提示不算。
+    """
+
+    def test_empty_and_whitespace_invalid(self):
+        from botler.executor import is_effective_result_comment
+        assert is_effective_result_comment("") is False
+        assert is_effective_result_comment("   \n  ") is False
+        assert is_effective_result_comment(None) is False
+
+    def test_local_file_ref_literal_invalid(self):
+        """glab -f @file 字面量泄漏形态（任务 #692 事故现场）。"""
+        from botler.executor import is_effective_result_comment
+        assert is_effective_result_comment(
+            "@/tmp/issue473_comment.md") is False
+        assert is_effective_result_comment("@./result.txt") is False
+        assert is_effective_result_comment("@summary.log") is False
+
+    def test_claim_notice_invalid(self):
+        from botler.executor import is_effective_result_comment
+        assert is_effective_result_comment(
+            "🤖 Botler 已收到该 issue，开始处理中…") is False
+
+    def test_completion_markers_valid(self):
+        from botler.executor import is_effective_result_comment
+        assert is_effective_result_comment(
+            "【开发完成摘要】\n开发已完成，请验证。") is True
+        assert is_effective_result_comment(
+            "🤖 Botler 自动回复：任务已完成。\n## 结果摘要") is True
+        assert is_effective_result_comment("开发已完成，请确认后关闭") is True
+        assert is_effective_result_comment("已完成。") is True
+        assert is_effective_result_comment(
+            "平台已打 bot-done 标签，请人工验证") is True
+
+    def test_mention_without_marker_invalid(self):
+        from botler.executor import is_effective_result_comment
+        assert is_effective_result_comment("@chenkaidi 感谢反馈") is False
+
+
 class TestSucceededResultComment:
     """issue #79：任务成功收尾由平台兜底写结果评论。
 
@@ -1003,12 +1043,15 @@ class TestSucceededResultComment:
     """
 
     def _comment_mock(self, executor, tmp_path, last_author=None,
-                      bot_id=7):
+                      bot_id=7, last_body="【开发完成摘要】开发已完成"):
         comments = []
+        note = None if last_author is None else {
+            "author": {"id": last_author}, "body": last_body}
         executor.gitlab = SimpleNamespace(
             find_commit_for_issue=lambda pid, iid: "deadbeef" * 5,
             add_labels=lambda *a, **k: None,
             last_note_author_id=lambda pid, iid: last_author,
+            last_note=lambda pid, iid: note,
             get_bot_id=lambda: bot_id,
             add_comment=lambda pid, iid, body: comments.append((pid, iid, body)))
         executor._log_file = lambda tid: tmp_path / f"task_{tid}.log"
@@ -1049,6 +1092,82 @@ class TestSucceededResultComment:
 
         assert comments == []
         assert db.get_task(task_id)["status"] == "succeeded"
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("不重复写" in m for m in logs)
+
+    def test_reposts_comment_when_last_bot_comment_is_local_file_ref(
+            self, executor, tmp_path):
+        """issue #480 复现：bot 最后评论是本地文件引用字面量（任务 #692 的
+        glab -f @file 泄漏成 @/tmp/issue473_comment.md）→ 不是有效结果评论，
+        平台必须补写兜底完成评论，不能只按作者判重跳过。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = self._comment_mock(
+            executor, tmp_path, last_author=7, bot_id=7,
+            last_body="@/tmp/issue473_comment.md")
+
+        db.claim_task(task_id)
+        output = json.dumps({"result": "开发完成，全部测试通过"},
+                            ensure_ascii=False)
+        executor._finish_succeeded(task_id, output)
+
+        # 修复前：判重只看作者（bot）→ 跳过 → comments == [] → 断言失败（复现 bug）
+        assert len(comments) == 1
+        pid, iid, body = comments[0]
+        assert (pid, iid) == (42, 1)
+        assert "任务已完成" in body
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("补写" in m for m in logs)
+
+    def test_reposts_comment_when_last_bot_comment_is_claim_notice(
+            self, executor, tmp_path):
+        """bot 最后评论只是领取提示「开始处理中…」→ 非结果评论，平台补写。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = self._comment_mock(
+            executor, tmp_path, last_author=7, bot_id=7,
+            last_body="🤖 Botler 已收到该 issue，开始处理中…")
+
+        db.claim_task(task_id)
+        executor._finish_succeeded(task_id, "ok")
+
+        assert len(comments) == 1
+        logs = [l["message"] for l in db.list_logs(task_id)]
+        assert any("补写" in m for m in logs)
+
+    def test_reposts_comment_when_last_bot_comment_is_empty(self, executor,
+                                                           tmp_path):
+        """bot 最后评论为空正文 → 非结果评论，平台补写。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        comments = self._comment_mock(
+            executor, tmp_path, last_author=7, bot_id=7, last_body="   ")
+
+        db.claim_task(task_id)
+        executor._finish_succeeded(task_id, "ok")
+
+        assert len(comments) == 1
+
+    def test_skips_comment_when_last_bot_comment_has_completion_marker(
+            self, executor, tmp_path):
+        """bot 最后评论是 §1.3 模板结果评论（含「开发完成摘要」）→ 不重复写。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        summary = ("【开发完成摘要】\n"
+                   "Issue：[缓存命中率](https://gitlab.example.com/x/-/issues/473)\n"
+                   "修改文件列表：\n- backend/botler/usage.py\n"
+                   "提交Commit：1945574\n说明：开发已完成，请人工验证后手动关闭本Issue。")
+        comments = self._comment_mock(
+            executor, tmp_path, last_author=7, bot_id=7, last_body=summary)
+
+        db.claim_task(task_id)
+        executor._finish_succeeded(task_id, "ok")
+
+        assert comments == []
         logs = [l["message"] for l in db.list_logs(task_id)]
         assert any("不重复写" in m for m in logs)
 

@@ -606,7 +606,13 @@ DEFAULT_TEMPLATE = """你是 {repo_name} 仓库的 AI 维护者。请处理以�
    可能是 main / master 等，不要假设分支名）：
    git add -A && git commit -m "fix: 解决（issue #{issue_iid}）" && git push origin HEAD
 4. 推送成功后，在 issue 上留结果评论（平台会自动打 bot-done 标签）；
-   不要关闭该 issue——关闭动作留给用户确认后手动执行（模版库规范）
+   不要关闭该 issue——关闭动作留给用户确认后手动执行（模版库规范）。
+   留评论的 glab 用法（任务 #692 踩坑）：正文较长时先写入本地文件再
+   `glab api "projects/{project_id}/issues/{issue_iid}/notes" -F "body=@/tmp/comment.md"`
+   读取——必须用大写 `-F/--field`（自动读文件），小写 `-f/--raw-field`
+   会把 `@文件` 当字面量发送，GitLab 上只显示 `@/tmp/comment.md` 而非正文。
+   发完用 `glab api "projects/{project_id}/issues/{issue_iid}/notes"` 核对
+   最后一条评论确实包含完成摘要，而不是文件路径字面量。
 5. 提交信息严禁 `fix: #N` / `fixes #N` / `closes #N` / `resolves #N` 等
    「关闭关键词 + #编号」写法：GitLab 实例开启了 autoclose 机制，命中
    默认关闭模式会在推送后自动关闭 issue（用户侧表现为「agent 自己

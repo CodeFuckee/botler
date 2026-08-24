@@ -297,6 +297,64 @@ class TestLastNoteAuthorId:
         assert client.last_note_author_id(42, 7) == 1
 
 
+class TestLastNote:
+    """last_note（issue #480）：成功收尾判重需要读取 bot 最后一条评论的
+    正文（判断是否有效结果评论），作者与正文一次拉取。
+    """
+
+    def _stub(self, client: GitLabClient, notes: list[dict]) -> list[str]:
+        captured: list = []
+
+        def fake_paged(path, **kwargs):
+            captured.append((path, kwargs))
+            return notes
+
+        client._paged = fake_paged
+        return captured
+
+    def test_returns_last_non_system_note_with_body(self):
+        """返回最后一条非系统评论的完整 note（含 author 与 body）。"""
+        client = make_client()
+        self._stub(client, [
+            {"id": 1, "system": True, "author": {"id": 1}, "body": "事件"},
+            {"id": 2, "system": False, "author": {"id": 99},
+             "body": "🤖 Botler 已收到该 issue，开始处理中…"},
+            {"id": 3, "system": True, "author": {"id": 7}, "body": "事件"},
+            {"id": 4, "system": False, "author": {"id": 7},
+             "body": "@/tmp/issue473_comment.md"},
+        ])
+        note = client.last_note(42, 7)
+        assert note is not None
+        assert note["id"] == 4
+        assert note["author"]["id"] == 7
+        assert note["body"] == "@/tmp/issue473_comment.md"
+
+    def test_skips_trailing_system_notes(self):
+        """最后一条是 system 评论时向前找最近的普通评论。"""
+        client = make_client()
+        self._stub(client, [
+            {"id": 2, "system": False, "author": {"id": 99},
+             "body": "开发完成"},
+            {"id": 3, "system": True, "author": {"id": 1}, "body": "事件"},
+        ])
+        note = client.last_note(42, 7)
+        assert note is not None
+        assert note["author"]["id"] == 99
+        assert note["body"] == "开发完成"
+
+    def test_no_notes_returns_none(self):
+        client = make_client()
+        self._stub(client, [])
+        assert client.last_note(42, 7) is None
+
+    def test_only_system_notes_returns_none(self):
+        client = make_client()
+        self._stub(client, [
+            {"id": 1, "system": True, "author": {"id": 1}, "body": "事件"},
+        ])
+        assert client.last_note(42, 7) is None
+
+
 class TestListOpenIssues:
     """list_open_issues（issue #64 扩展）：新增 order_by/sort/limit 透传，
     默认值不变保持向后兼容（reconciler 等既有调用不受影响）。"""

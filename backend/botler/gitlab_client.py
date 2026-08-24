@@ -838,12 +838,13 @@ class GitLabClient:
         assert isinstance(issue, dict)
         return issue
 
-    def last_note_author_id(self, project_id: int, iid: int) -> int | None:
-        """最后一条非系统评论的作者 id；无发言（仅系统事件/无评论）返回 None。
+    def last_note(self, project_id: int, iid: int) -> dict | None:
+        """最后一条非系统评论的 note 对象（含 author/body）；无发言返回 None。
 
-        领取判定（issue #34）用：bot 提问/处理完留评论后用户未回复时，
-        最后发言人是 bot 本人，领取方应跳过；用户回复后（或新任务无评论）
-        才允许领取。系统评论（assigned/labeled 等事件）不算「发言」。
+        issue #480：成功收尾判重需要读取 bot 最后一条评论的正文（判断
+        是否为有效结果评论，避免任务 #692 的 `glab -f @file` 字面量泄漏
+        被误判为「已留结果评论」），作者与正文一次拉取。系统评论
+        （assigned/labeled 等事件）不算「发言」。
         """
         notes = self._paged(
             f"/projects/{project_id}/issues/{iid}/notes",
@@ -851,10 +852,23 @@ class GitLabClient:
         for note in reversed(notes):
             if note.get("system"):
                 continue
-            author_id = (note.get("author") or {}).get("id")
-            if author_id is not None:
-                return author_id
+            if (note.get("author") or {}).get("id") is None:
+                # 异常数据结构（无 author 字段）继续向前找（同旧行为）
+                continue
+            return note
         return None
+
+    def last_note_author_id(self, project_id: int, iid: int) -> int | None:
+        """最后一条非系统评论的作者 id；无发言（仅系统事件/无评论）返回 None。
+
+        领取判定（issue #34）用：bot 提问/处理完留评论后用户未回复时，
+        最后发言人是 bot 本人，领取方应跳过；用户回复后（或新任务无评论）
+        才允许领取。系统评论（assigned/labeled 等事件）不算「发言」。
+        """
+        note = self.last_note(project_id, iid)
+        if note is None:
+            return None
+        return (note.get("author") or {}).get("id")
 
     def is_issue_open(self, project_id: int, iid: int) -> bool:
         issue = self.get_issue(project_id, iid)

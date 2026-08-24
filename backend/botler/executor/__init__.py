@@ -114,6 +114,31 @@ __all__ = [
     "HermesSdkNotInstalledError",
 ]
 
+# 有效结果评论的完成标记（issue #480）：平台兜底判重只看作者曾踩坑——
+# 任务 #692 的 agent 用 `glab api ... -f "body=@/tmp/issue473_comment.md"`
+# 发评论（glab 1.36 的 `-f/--raw-field` 不展开 `@file`，只有 `-F/--field`
+# 才读文件），GitLab 收到的正文是字面量 `@/tmp/issue473_comment.md`，真实
+# 摘要没写回 issue，而平台判重按作者（bot）直接跳过 → 结果评论永久缺失。
+# 这里以「正文含完成标记」为准：agent §1.3 模板「【开发完成摘要】」、
+# 平台兜底模板「任务已完成/开发已完成/bot-done」等均为有效结果评论；
+# 空评论、本地文件引用字面量、领取提示「开始处理中…」等一律不算。
+_COMPLETION_MARKERS = ("开发完成摘要", "开发已完成", "任务已完成",
+                       "已完成", "bot-done")
+
+
+def is_effective_result_comment(body: str) -> bool:
+    """判断 bot 已留评论是否为「有效的结果评论」（issue #480）。
+
+    True：正文非空且含完成标记（agent/平台结果评论模板的特征文案）；
+    False：空/纯空白、本地文件引用字面量（`@/tmp/xxx.md` 等 glab -f
+    @file 泄漏形态）、「开始处理中…」领取提示等无效正文。
+    """
+    text = (body or "").strip()
+    if not text:
+        return False
+    return any(marker in text for marker in _COMPLETION_MARKERS)
+
+
 class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
     """Claude Code 执行器主类（issue #192 拆分后保留引擎分发与状态机编排）。
 
@@ -926,8 +951,28 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         except Exception:  # noqa: BLE001 查询失败/无该方法不阻塞防重
             pass
         if last_author in bot_ids:
-            self.db.add_log(task["id"], "info", "Claude 已留结果评论，平台不重复写")
-            return
+            # issue #480：判重升级为「内容感知」——bot 最后一条评论必须是
+            # 有效的结果评论（正文含完成标记）才算「Claude 已留」；空评论、
+            # 本地文件引用字面量（glab -f @file 泄漏成 @/tmp/xxx.md）、
+            # 「开始处理中…」领取提示等无效正文一律不判重，平台继续补写
+            # 兜底完成评论（任务 #692 因此漏写结果，issue 上没有真实摘要）。
+            last_note = None
+            try:
+                last_note = self._call_with_fallback(
+                    repo, lambda c: c.last_note(project_id, issue_iid))[0]
+            except (GitLabError, AttributeError):
+                # 旧客户端/测试桩无 last_note 方法：保持原作者判重逻辑
+                pass
+            if last_note is not None and not is_effective_result_comment(
+                    last_note.get("body") or ""):
+                self.db.add_log(
+                    task["id"], "warn",
+                    "bot 已留评论但正文不是有效结果评论（空/占位/文件引用"
+                    "字面量），平台补写完成评论")
+            else:
+                self.db.add_log(task["id"], "info",
+                                "Claude 已留结果评论，平台不重复写")
+                return
         body = self._build_report_comment(task, output, repo=repo)
         if not body.strip():
             # 兜底：渲染为空（极端场景）时保留最小可读文案，不写空评论

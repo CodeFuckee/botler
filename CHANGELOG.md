@@ -81,6 +81,27 @@
 
 ### Fixed
 
+- **修复任务成功结果评论未写回 issue（issue #480）**：
+  - 现象：任务 #692（issue #473）收尾时，agent 用
+    `glab api ... -f "body=@/tmp/issue473_comment.md"` 发评论，GitLab 上只显示
+    字面量 `@/tmp/issue473_comment.md`，真实开发完成摘要没有写回 issue；
+  - 根因一（agent 侧）：glab 1.36 的 `-f/--raw-field` 不展开 `@文件`（只有
+    `-F/--field` 才自动读文件），`@/tmp/xxx.md` 被当字面量正文发送；
+  - 根因二（平台侧）：`_leave_success_comment`（issue #79 的兜底判重）只按
+    「最后一条非系统评论作者是 bot」判重、不看正文——垃圾正文（文件引用
+    字面量 / 空评论 / 「开始处理中…」领取提示）被误判为「Claude 已留结果
+    评论」而跳过，平台兜底完成评论永远不写，结果摘要永久缺失；
+  - 修复：`GitLabClient.last_note` 新增返回最后一条非系统评论（作者 + 正文），
+    `_leave_success_comment` 判重升级为内容感知——新增纯函数
+    `is_effective_result_comment`，bot 最后评论须含完成标记（开发完成摘要 /
+    开发已完成 / 任务已完成 / 已完成 / bot-done）才判重，无效正文一律补写
+    兜底完成评论；`DEFAULT_TEMPLATE` 补充 glab `-F`（读文件）vs `-f`（字面量）
+    用法指引（任务 #692 踩坑备忘）；
+  - 测试：`test_executor.py` 新增文件引用字面量/领取提示/空评论补写、
+    完成标记不重复写、`is_effective_result_comment` 纯函数用例；
+    `test_gitlab_client.py` 新增 `last_note` 用例；`last_note_author_id`
+    重构为委托 `last_note`，原行为不变。
+
 - **修复右侧边栏拖拽手柄随抽屉内容滚动，页面下方只剩一半手柄（issue #475）**：
   - 现象：右侧边栏（issue 详情 / 流水线 / 灵感对话 / 任务执行详情）左缘的
     左右拖拽手柄（`.drawer-resize-handle`），在抽屉内容滚动时会一起滚走，
