@@ -331,6 +331,10 @@ CREATE TABLE IF NOT EXISTS inspirations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   repo_id INTEGER NOT NULL REFERENCES repos(id),
   content TEXT NOT NULL,
+  label TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  linked_issue_iid INTEGER,
+  linked_issue_url TEXT,
   chat_provider TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
@@ -882,6 +886,27 @@ class Database:
                 conn.execute("ALTER TABLE inspirations ADD COLUMN chat_provider TEXT")
             conn.execute("PRAGMA user_version = 28")
             ver = 28
+        if ver < 29:
+            # issue #246：灵感标签分类、筛选与归档——inspirations 表新增
+            # label（单标签，可空）、archived（软删除，默认 0 未归档）、
+            # linked_issue_iid / linked_issue_url（转 issue 时选择「保留
+            # 灵感并关联」写入的 issue 关联信息）。旧库补列；新库由
+            # _SCHEMA 直接创建，空值保持既有行为（无标签、未归档、无关联）。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(inspirations)")}
+            if "label" not in cols:
+                conn.execute("ALTER TABLE inspirations ADD COLUMN label TEXT")
+            if "archived" not in cols:
+                conn.execute(
+                    "ALTER TABLE inspirations ADD COLUMN archived "
+                    "INTEGER NOT NULL DEFAULT 0")
+            if "linked_issue_iid" not in cols:
+                conn.execute(
+                    "ALTER TABLE inspirations ADD COLUMN linked_issue_iid INTEGER")
+            if "linked_issue_url" not in cols:
+                conn.execute(
+                    "ALTER TABLE inspirations ADD COLUMN linked_issue_url TEXT")
+            conn.execute("PRAGMA user_version = 29")
+            ver = 29
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1116,32 +1141,61 @@ class Database:
                    JOIN repos r ON r.id = i.repo_id
                    ORDER BY i.updated_at DESC, i.id DESC""").fetchall()
 
-    def count_inspirations_by_repo(self) -> dict[int, int]:
-        """返回每个仓库的灵感数量，供概览轻量轮询使用（issue #219）。"""
+    def count_inspirations_by_repo(
+            self, archived: int | None = 0) -> dict[int, int]:
+        """返回每个仓库的灵感数量，供概览轻量轮询使用（issue #219）。
+
+        archived（issue #246）：0=只统计未归档（默认，概览默认隐藏归档）、
+        1=只统计归档、None=全部。"""
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT repo_id, COUNT(*) AS total FROM inspirations GROUP BY repo_id"
-            ).fetchall()
+            if archived is None:
+                rows = conn.execute(
+                    "SELECT repo_id, COUNT(*) AS total FROM inspirations "
+                    "GROUP BY repo_id").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT repo_id, COUNT(*) AS total FROM inspirations "
+                    "WHERE archived = ? GROUP BY repo_id", (archived,)).fetchall()
         return {row["repo_id"]: row["total"] for row in rows}
 
-    def list_inspirations_page(self, repo_id: int, offset: int, limit: int) -> list[sqlite3.Row]:
-        """按稳定的更新时间倒序读取一个仓库的灵感分页（issue #219）。"""
-        with self._conn() as conn:
-            return conn.execute(
-                """SELECT i.*, r.name AS repo_name FROM inspirations i
-                   JOIN repos r ON r.id = i.repo_id
-                   WHERE i.repo_id = ?
-                   ORDER BY i.updated_at DESC, i.id DESC
-                   LIMIT ? OFFSET ?""",
-                (repo_id, limit, offset),
-            ).fetchall()
+    def list_inspirations_page(self, repo_id: int, offset: int, limit: int,
+                               label: str | None = None,
+                               archived: int | None = 0) -> list[sqlite3.Row]:
+        """按稳定的更新时间倒序读取一个仓库的灵感分页（issue #219）。
 
-    def count_inspirations(self, repo_id: int) -> int:
-        """返回指定仓库的灵感总数（issue #219）。"""
+        label（issue #246）：非空时按单标签精确过滤；archived：0=只未
+        归档（默认，概览默认隐藏归档）、1=只归档、None=全部。"""
         with self._conn() as conn:
-            return conn.execute(
-                "SELECT COUNT(*) FROM inspirations WHERE repo_id = ?", (repo_id,)
-            ).fetchone()[0]
+            sql = """SELECT i.*, r.name AS repo_name FROM inspirations i
+                     JOIN repos r ON r.id = i.repo_id
+                     WHERE i.repo_id = ?"""
+            params: list = [repo_id]
+            if archived is not None:
+                sql += " AND i.archived = ?"
+                params.append(archived)
+            if label:
+                sql += " AND i.label = ?"
+                params.append(label)
+            sql += " ORDER BY i.updated_at DESC, i.id DESC LIMIT ? OFFSET ?"
+            params += [limit, offset]
+            return conn.execute(sql, params).fetchall()
+
+    def count_inspirations(self, repo_id: int, label: str | None = None,
+                           archived: int | None = 0) -> int:
+        """返回指定仓库的灵感总数（issue #219）。
+
+        label / archived 过滤语义与 list_inspirations_page 一致（issue
+        #246）：archived 默认 0=只未归档，None=全部。"""
+        with self._conn() as conn:
+            sql = "SELECT COUNT(*) FROM inspirations WHERE repo_id = ?"
+            params: list = [repo_id]
+            if archived is not None:
+                sql += " AND archived = ?"
+                params.append(archived)
+            if label:
+                sql += " AND label = ?"
+                params.append(label)
+            return conn.execute(sql, params).fetchone()[0]
 
     def search_tasks(self, term: str, limit: int = 10) -> list[TaskRow]:
         """按 issue 标题/编号模糊匹配任务（issue #216 全局搜索）。
@@ -1191,20 +1245,25 @@ class Database:
                    JOIN repos r ON r.id = i.repo_id
                    WHERE i.id = ?""", (inspiration_id,)).fetchone()
 
-    def create_inspiration(self, repo_id: int, content: str) -> int:
-        """创建灵感，返回新记录 id。"""
+    def create_inspiration(self, repo_id: int, content: str,
+                          label: str | None = None) -> int:
+        """创建灵感，返回新记录 id；label 为单标签（issue #246），
+        None 表示无标签。"""
         with self._conn(write=True) as conn:
             cur = conn.execute(
-                """INSERT INTO inspirations (repo_id, content)
-                   VALUES (?, ?)""", (repo_id, content))
+                """INSERT INTO inspirations (repo_id, content, label)
+                   VALUES (?, ?, ?)""", (repo_id, content, label))
             return cur.lastrowid
 
-    def update_inspiration(self, inspiration_id: int, content: str) -> bool:
-        """更新灵感内容并刷新 updated_at；记录不存在返回 False。"""
+    def update_inspiration(self, inspiration_id: int, content: str,
+                          label: str | None = None) -> bool:
+        """更新灵感内容与标签并刷新 updated_at；label 为 None 表示清除
+        标签（issue #246）；记录不存在返回 False。"""
         with self._conn(write=True) as conn:
             cur = conn.execute(
-                """UPDATE inspirations SET content=?, updated_at=datetime('now')
-                   WHERE id=?""", (content, inspiration_id))
+                """UPDATE inspirations
+                   SET content=?, label=?, updated_at=datetime('now')
+                   WHERE id=?""", (content, label, inspiration_id))
             return cur.rowcount > 0
 
     def set_inspiration_chat_provider(self, inspiration_id: int,
@@ -1214,6 +1273,34 @@ class Database:
             cur = conn.execute(
                 "UPDATE inspirations SET chat_provider=? WHERE id=?",
                 (provider, inspiration_id))
+            return cur.rowcount > 0
+
+    def set_inspiration_archived(self, inspiration_id: int,
+                                 archived: bool) -> bool:
+        """归档/取消归档灵感（issue #246 软删除）：archived=True 归档
+        （默认不再展示，可开关查看），False 取消归档；刷新 updated_at
+        （归档是内容变化，与编辑刷新排序一致）；记录不存在返回 False。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                """UPDATE inspirations
+                   SET archived=?, updated_at=datetime('now')
+                   WHERE id=?""", (1 if archived else 0, inspiration_id))
+            return cur.rowcount > 0
+
+    def set_inspiration_issue_link(self, inspiration_id: int,
+                                   iid: int, web_url: str | None) -> bool:
+        """保留灵感并关联：写入转 issue 后创建的 issue 关联（issue #246）。
+
+        转 issue 时选择「保留灵感并关联」后调用——灵感留在列表，卡片
+        展示「已关联 issue #N」链接（linked_issue_iid / url）；重复转
+        issue 会覆盖为新 issue 关联。刷新 updated_at；记录不存在返回
+        False。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                """UPDATE inspirations
+                   SET linked_issue_iid=?, linked_issue_url=?,
+                       updated_at=datetime('now')
+                   WHERE id=?""", (iid, web_url, inspiration_id))
             return cur.rowcount > 0
 
     def delete_inspiration(self, inspiration_id: int) -> bool:

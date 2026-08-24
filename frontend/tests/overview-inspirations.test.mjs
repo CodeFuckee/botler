@@ -75,8 +75,12 @@ const INSPIRATIONS_PAYLOAD = {
 // ---- 数据流源码断言 ----
 
 test('源码：灵感板块轮询 /api/inspirations/overview 并使用独立轮询常量', () => {
-  assert.match(overview, /api\.get\('\/api\/inspirations\/overview', \{ silent: true \}\)/,
-               '应调用 /api/inspirations/overview 聚合接口（轮询静默，issue #226）')
+  // issue #246：overview 请求可带 archived/label 筛选参数（默认无参保持
+  // 旧 URL）；源码断言改为「聚合接口 URL + 静默轮询」分离校验
+  assert.match(overview, /'\/api\/inspirations\/overview'\s*\+/,
+               '应拼接 /api/inspirations/overview 聚合接口（可带筛选参数，issue #246）')
+  assert.match(overview, /api\.get\(inspirationUrl, \{ silent: true \}\)/,
+               '应调用 overview 聚合接口（轮询静默，issue #226）')
   assert.match(overview, /INSPIRATION_POLL_MS/, '应使用 INSPIRATION_POLL_MS 轮询常量')
   assert.equal(INSPIRATION_POLL_MS, 15000, '灵感板块轮询间隔应为 15 秒')
 })
@@ -366,8 +370,8 @@ test('交互：编辑 → 保存调 PUT，取消退出编辑态', async () => {
       await new Promise((resolve) => setTimeout(resolve, 10))
     })
     assert.equal(r.putCalls.length, 1, '应调用一次 PUT')
-    assert.deepEqual(r.putCalls[0], ['/api/inspirations/11', { content: '支持批量处理 issue（改）' }],
-                     'PUT 参数应为 {content}')
+    assert.deepEqual(r.putCalls[0], ['/api/inspirations/11', { content: '支持批量处理 issue（改）', label: '' }],
+                     'PUT 参数应为 {content, label}（issue #246 编辑标签，空串=清除）')
     // 取消路径：再次进入编辑后点取消
     const editBtn2 = findEditButton(r.renderer)
     await TestRenderer.act(async () => { editBtn2.props.onClick() })
@@ -405,14 +409,31 @@ test('交互：删除调 DELETE 并刷新列表', async () => {
 
 // ---- issue #143：灵感一键提交为 GitLab issue ----
 
-// 在已挂载的 Overview 中点击第 index 条灵感的「添加 Issue」按钮
-async function clickAddIssue(renderer, index = 0) {
+// 在已挂载的 Overview 中点击第 index 条灵感的「添加 Issue」按钮：
+// issue #246 起点击先弹出「保留灵感并关联」确认弹窗，点确认后才提交
+// （keep=false 保持旧删除行为，keep=true 保留灵感并关联）
+async function clickAddIssue(renderer, index = 0, keep = false) {
   const btns = renderer.root.findAll(
     (n) => n.type === 'button'
       && String(n.props.className || '').includes('inspiration-add-issue-btn'))
   assert.ok(btns.length > index, `找不到第 ${index} 个「添加 Issue」按钮`)
   await TestRenderer.act(async () => {
     btns[index].props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+  const checkbox = renderer.root.findAll(
+    (n) => String(n.props.className || '').includes('inspiration-keep-checkbox'))[0]
+  if (checkbox && keep) {
+    await TestRenderer.act(async () => {
+      checkbox.props.onChange({ target: { checked: true } })
+    })
+  }
+  const confirmBtn = renderer.root.findAll(
+    (n) => n.type === 'button'
+      && String(n.props.className || '').includes('inspiration-keep-confirm-btn'))[0]
+  assert.ok(confirmBtn, '点击「添加 Issue」后应出现保留确认弹窗')
+  await TestRenderer.act(async () => {
+    confirmBtn.props.onClick()
     await new Promise((resolve) => setTimeout(resolve, 10))
   })
   return btns[index]
@@ -428,8 +449,11 @@ test('源码：「添加 Issue」按钮位于「编辑」按钮左侧', () => {
 })
 
 test('源码：一键提交调用 POST /api/inspirations/{id}/add-issue 并刷新灵感列表', () => {
-  assert.match(overview, /api\.post\(`\/api\/inspirations\/\$\{ins\.id\}\/add-issue`\)/,
+  // issue #246：转 issue 提交带 keep_inspiration（保留灵感并关联），
+  // 默认 false 保持旧删除行为
+  assert.match(overview, /api\.post\(\s*`\/api\/inspirations\/\$\{insp\.id\}\/add-issue`/,
                '应调用 POST /api/inspirations/{id}/add-issue')
+  assert.match(overview, /keep_inspiration/, '提交应带 keep_inspiration 参数')
   // issue #162：创建成功后端已删除该灵感，前端应刷新灵感列表移除条目
   // （不等 15 秒轮询）；成功提示保留展示新 issue 链接
   const fnStart = overview.indexOf('const addIssueFromInspiration')
@@ -499,15 +523,21 @@ test('交互：提交中按钮禁用，重复点击只发一次请求', async ()
     return { id: 99 }
   })
   try {
-    const btn = await clickAddIssue(r.renderer, 0)
-    // 请求进行中：按钮应禁用（防重复提交）
-    assert.equal(btn.props.disabled, true, '请求中按钮应禁用')
+    // 点击「添加 Issue」打开确认弹窗
+    const addBtn = findButton(r.renderer, 'inspiration-add-issue-btn')
+    await TestRenderer.act(async () => {
+      addBtn.props.onClick()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    // 点击确认后请求 pending：确认按钮应禁用（防重复提交）
+    const confirmBtn = findButton(r.renderer, 'inspiration-keep-confirm-btn')
+    await TestRenderer.act(async () => { confirmBtn.props.onClick() })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(confirmBtn.props.disabled, true, '请求中确认按钮应禁用')
     // 重复点击（disabled 仅阻止浏览器事件，测试直接调用 onClick 模拟
     // 极端并发）——handler 内置 addingIssueInspIds 守卫，只发一次请求
-    const btn2 = r.renderer.root.findAll(
-      (n) => n.type === 'button'
-        && String(n.props.className || '').includes('inspiration-add-issue-btn'))[0]
-    await TestRenderer.act(async () => { btn2.props.onClick() })
+    const confirmBtn2 = findButton(r.renderer, 'inspiration-keep-confirm-btn')
+    await TestRenderer.act(async () => { confirmBtn2.props.onClick() })
     await new Promise((resolve) => setTimeout(resolve, 10))
     assert.equal(r.postCalls.length, 1, '重复点击不应发起第二次请求')
     // 释放挂起请求

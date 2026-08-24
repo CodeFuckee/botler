@@ -91,6 +91,8 @@ export function useOverviewData() {
   const [editingInspiration, setEditingInspiration] = useState(null)
   // 编辑框草稿内容
   const [editInspirationDraft, setEditInspirationDraft] = useState('')
+  // issue #246：编辑框单标签草稿（空串=无标签），保存时一并提交
+  const [editInspirationLabel, setEditInspirationLabel] = useState('')
   // 一键提交为 GitLab issue 的灵感 id 集合（issue #143）：请求中按钮
   // 禁用防重复提交
   const [addingIssueInspIds, setAddingIssueInspIds] = useState({})
@@ -100,6 +102,14 @@ export function useOverviewData() {
   // 批量预览面板（打开/草稿列表/提交中/结果/错误）——草稿每条含灵感对象
   // 与可编辑的标题/描述/标签（逗号分隔字符串）/目标仓库 id，未编辑时
   // 与单条接口默认行为一致（标题=描述=内容、标签 feature+ui、原仓库）
+  // issue #246：灵感标签筛选与归档开关——labelFilter 为空串=全部标签；
+  // showArchived=false 时概览只展示未归档（默认隐藏归档），true 时查看
+  // 归档条目。筛选/开关变化后清空展开与分页缓存并按新条件重新加载。
+  const [inspirationLabelFilter, setInspirationLabelFilter] = useState('')
+  const [inspirationShowArchived, setInspirationShowArchived] = useState(false)
+  // 转 issue 保留确认弹窗（issue #246）：{insp, keep}，非空时展示——
+  // 点击「添加 Issue」先确认是否「保留灵感并关联」，确认后提交
+  const [inspirationKeepDraft, setInspirationKeepDraft] = useState(null)
   const [inspirationSelectionMode, setInspirationSelectionMode] = useState(false)
   const [selectedInspirationIds, setSelectedInspirationIds] = useState([])
   const [batchConvertOpen, setBatchConvertOpen] = useState(false)
@@ -419,21 +429,37 @@ export function useOverviewData() {
   // 提交成功后手动刷新，轮询兜底多标签页并发场景
   const loadInspirations = useCallback(async () => {
     try {
-      const d = await api.get('/api/inspirations/overview', { silent: true })
+      // issue #246：按标签筛选 + 归档开关——label 非空时过滤单标签，
+      // showArchived=true 时请求 archived=1 查看归档（默认 0 隐藏归档）
+      const qs = []
+      if (inspirationLabelFilter) {
+        qs.push('label=' + encodeURIComponent(inspirationLabelFilter))
+      }
+      if (inspirationShowArchived) qs.push('archived=1')
+      const inspirationUrl = '/api/inspirations/overview'
+        + (qs.length ? '?' + qs.join('&') : '')
+      const d = await api.get(inspirationUrl, { silent: true })
       // 轮询只更新仓库元数据与计数；已展开的分页缓存不被全量响应覆盖。
       setInspirationRepos(d.repos || [])
       setInspirationError('')
     } catch (e) {
       setInspirationError(e.message)
     }
-  }, [])
+  }, [inspirationLabelFilter, inspirationShowArchived])
 
   // 按仓库展开后才读取首个分页；重复点击/并发加载不会重复发请求。
   const loadInspirationPage = useCallback(async (repo, offset = 0, append = false) => {
     if (inspirationPageLoading[repo.repo_id]) return
     setInspirationPageLoading((prev) => ({ ...prev, [repo.repo_id]: true }))
     try {
-      const d = await api.get(`/api/inspirations/pages/${repo.repo_id}?offset=${offset}&limit=${INSPIRATION_PAGE_SIZE}`, { silent: true })
+      // issue #246：分页与概览同一筛选语义（标签 + 归档状态）
+      const qs = []
+      if (inspirationLabelFilter) {
+        qs.push('label=' + encodeURIComponent(inspirationLabelFilter))
+      }
+      if (inspirationShowArchived) qs.push('archived=1')
+      const extra = qs.length ? '&' + qs.join('&') : ''
+      const d = await api.get(`/api/inspirations/pages/${repo.repo_id}?offset=${offset}&limit=${INSPIRATION_PAGE_SIZE}${extra}`, { silent: true })
       setInspirationPages((prev) => ({
         ...prev,
         [repo.repo_id]: {
@@ -448,7 +474,7 @@ export function useOverviewData() {
     } finally {
       setInspirationPageLoading((prev) => ({ ...prev, [repo.repo_id]: false }))
     }
-  }, [inspirationPageLoading])
+  }, [inspirationPageLoading, inspirationLabelFilter, inspirationShowArchived])
 
   const toggleInspirationRepo = useCallback((repo) => {
     const expanded = !!expandedInspirationRepoIds[repo.repo_id]
@@ -465,12 +491,69 @@ export function useOverviewData() {
     if (page?.has_more) loadInspirationPage(repo, page.inspirations.length, true)
   }, [inspirationPages, loadInspirationPage])
 
+  // ---- issue #246：标签筛选 / 归档开关 / 归档操作 ----
+
+  // 按给定条件立即重拉概览（筛选/开关变化不等 15 秒轮询）
+  const reloadInspirationsWith = useCallback(async (label, showArchived) => {
+    const qs = []
+    if (label) qs.push('label=' + encodeURIComponent(label))
+    if (showArchived) qs.push('archived=1')
+    const inspirationUrl = '/api/inspirations/overview'
+      + (qs.length ? '?' + qs.join('&') : '')
+    try {
+      const d = await api.get(inspirationUrl, { silent: true })
+      setInspirationRepos(d.repos || [])
+      setInspirationError('')
+    } catch (e) {
+      setInspirationError(e.message)
+    }
+  }, [])
+
+  // 切换标签筛选：更新状态并清空展开/分页缓存（旧缓存属于上一筛选条件）
+  const changeInspirationLabelFilter = useCallback((label) => {
+    setInspirationLabelFilter(label)
+    setExpandedInspirationRepoIds({})
+    setInspirationPages({})
+    reloadInspirationsWith(label, inspirationShowArchived)
+  }, [reloadInspirationsWith, inspirationShowArchived])
+
+  // 切换归档开关：归档视图只显示归档条目（隐藏新增表单），切换后清空
+  // 展开/分页缓存并重新加载（旧缓存属于上一视图）
+  const toggleInspirationShowArchived = useCallback((show) => {
+    setInspirationShowArchived(show)
+    setExpandedInspirationRepoIds({})
+    setInspirationPages({})
+    reloadInspirationsWith(inspirationLabelFilter, show)
+  }, [reloadInspirationsWith, inspirationLabelFilter])
+
   // 写操作后废弃该仓库的分页缓存；若用户正展开查看，则立即重读第一页，
   // 防止 15 秒轮询只更新计数而列表仍显示删除/编辑前的旧条目。
   const invalidateInspirationPage = useCallback((repoId) => {
     setInspirationPages((prev) => ({ ...prev, [repoId]: undefined }))
     if (expandedInspirationRepoIds[repoId]) loadInspirationPage({ repo_id: repoId })
   }, [expandedInspirationRepoIds, loadInspirationPage])
+
+  // 归档灵感（软删除，issue #246）：归档后默认不再展示，可开关查看
+  const archiveInspiration = useCallback(async (insp) => {
+    try {
+      await api.post(`/api/inspirations/${insp.id}/archive`)
+      invalidateInspirationPage(insp.repo_id)
+      await loadInspirations()
+    } catch (e) {
+      setInspirationError(e.message)
+    }
+  }, [loadInspirations, invalidateInspirationPage])
+
+  // 取消归档：从归档视图恢复到正常列表
+  const unarchiveInspiration = useCallback(async (insp) => {
+    try {
+      await api.post(`/api/inspirations/${insp.id}/unarchive`)
+      invalidateInspirationPage(insp.repo_id)
+      await loadInspirations()
+    } catch (e) {
+      setInspirationError(e.message)
+    }
+  }, [loadInspirations, invalidateInspirationPage])
 
   // DeepSeek 账户余额（issue #138）：后端代调 deepseek user/balance，
   // API Key 明文不流转到前端（与 ai_providers 掩码同安全策略）；
@@ -600,20 +683,26 @@ export function useOverviewData() {
     }
   }, [newInspirationDrafts, loadInspirations, invalidateInspirationPage])
 
-  // 保存编辑：PUT 更新内容，成功后退出编辑态并刷新列表
+  // 保存编辑：PUT 更新内容与标签（issue #246 空串=清除标签），成功后
+  // 退出编辑态并刷新列表
   const saveInspiration = useCallback(async (insp) => {
     const content = editInspirationDraft.trim()
     if (!content) return
     try {
-      await api.put('/api/inspirations/' + insp.id, { content })
+      await api.put('/api/inspirations/' + insp.id, {
+        content,
+        label: editInspirationLabel,
+      })
       setEditingInspiration(null)
       setEditInspirationDraft('')
+      setEditInspirationLabel('')
       invalidateInspirationPage(insp.repo_id)
       await loadInspirations()
     } catch (e) {
       setInspirationError(e.message)
     }
-  }, [editInspirationDraft, loadInspirations, invalidateInspirationPage])
+  }, [editInspirationDraft, editInspirationLabel,
+      loadInspirations, invalidateInspirationPage])
 
   // 删除灵感：DELETE 后刷新列表
   const deleteInspiration = useCallback(async (insp) => {
@@ -628,18 +717,41 @@ export function useOverviewData() {
 
   // 将灵感一键提交为 GitLab issue（issue #143）：灵感内容作为 issue
   // 的标题与描述，通过 GitLab API 创建，默认标签 feature + ui；成功后
-  // 刷新开放 issue 列表并展示新 issue 链接
-  // issue #162：创建成功后端已删除该灵感，同时刷新灵感列表移除条目
-  // （不等 15 秒轮询，避免条目残留误导重复提交）
-  const addIssueFromInspiration = useCallback(async (ins) => {
-    if (addingIssueInspIds[ins.id]) return // 请求中禁止重复提交
-    setAddingIssueInspIds((prev) => ({ ...prev, [ins.id]: true }))
+  // 刷新开放 issue 列表并展示新 issue 链接。
+  // issue #246：点击先弹出「保留灵感并关联」确认弹窗（keep 勾选默认
+  // 不选=创建成功后删除灵感，保持 issue #162 旧行为；勾选=保留灵感并
+  // 写入 issue 关联，卡片展示「已关联 issue #N」链接）。
+  const addIssueFromInspiration = useCallback((ins) => {
+    setInspirationKeepDraft({ insp: ins, keep: false })
+  }, [])
+
+  // 关闭保留确认弹窗（遮罩 / × / 取消）
+  const closeInspirationKeepModal = useCallback(() => {
+    setInspirationKeepDraft(null)
+  }, [])
+
+  // 弹窗内勾选「保留灵感并关联」
+  const setInspirationKeepValue = useCallback((keep) => {
+    setInspirationKeepDraft((prev) => (prev ? { ...prev, keep } : prev))
+  }, [])
+
+  // 确认转 issue：按弹窗 keep 值提交；成功后刷新开放 issue 与灵感列表
+  // （keep=true 灵感保留并关联，keep=false 灵感已删除——均需刷新列表）
+  const confirmAddIssueWithKeep = useCallback(async () => {
+    const draft = inspirationKeepDraft
+    if (!draft) return
+    const { insp, keep } = draft
+    if (addingIssueInspIds[insp.id]) return // 请求中禁止重复提交
+    setAddingIssueInspIds((prev) => ({ ...prev, [insp.id]: true }))
     setInspirationCreatedIssue(null)
     try {
-      const created = await api.post(`/api/inspirations/${ins.id}/add-issue`)
+      const created = await api.post(
+        `/api/inspirations/${insp.id}/add-issue`,
+        { keep_inspiration: keep })
       setInspirationCreatedIssue(created)
       setInspirationError('')
-      invalidateInspirationPage(ins.repo_id)
+      setInspirationKeepDraft(null)
+      invalidateInspirationPage(insp.repo_id)
       await loadIssues()
       await loadInspirations()
     } catch (e) {
@@ -647,9 +759,10 @@ export function useOverviewData() {
       // 不刷新灵感列表——条目保留可重试，避免界面闪烁
       setInspirationError(e.message)
     } finally {
-      setAddingIssueInspIds((prev) => ({ ...prev, [ins.id]: false }))
+      setAddingIssueInspIds((prev) => ({ ...prev, [insp.id]: false }))
     }
-  }, [addingIssueInspIds, loadIssues, loadInspirations, invalidateInspirationPage])
+  }, [inspirationKeepDraft, addingIssueInspIds, loadIssues,
+      loadInspirations, invalidateInspirationPage])
 
   // ---- 批量转 issue（issue #247）：多选灵感 → 预览编辑 → 逐条提交 ----
 
@@ -688,6 +801,7 @@ export function useOverviewData() {
         description: ins.content,
         labels: 'feature, ui',
         repo_id: ins.repo_id,
+        keep_inspiration: false, // issue #246：批量保留灵感并关联（默认删除）
       }))
     setBatchDrafts(drafts)
     setBatchResult(null)
@@ -741,6 +855,9 @@ export function useOverviewData() {
         if (description !== d.inspiration.content) item.description = description
         if (labels.join(',') !== 'feature,ui') item.labels = labels
         if (d.repo_id !== d.inspiration.repo_id) item.repo_id = d.repo_id
+        // issue #246：勾选「保留灵感」的条目保留并关联（后端默认删除，
+        // 仅 true 时传字段保持旧接口兼容）
+        if (d.keep_inspiration) item.keep_inspiration = true
         return item
       })
       const res = await api.post('/api/inspirations/batch-add-issues', { items })
@@ -956,7 +1073,7 @@ export function useOverviewData() {
     expandedInspirationRepoIds, inspirationPages, inspirationPageLoading,
     newInspirationDrafts, setNewInspirationDrafts,
     editingInspiration, setEditingInspiration,
-    editInspirationDraft, setEditInspirationDraft,
+    editInspirationDraft, setEditInspirationDraft, editInspirationLabel, setEditInspirationLabel,
     addingIssueInspIds, inspirationCreatedIssue, setInspirationCreatedIssue,
     chatInspiration, chatMessages, chatProviders, chatProvider, chatLoading,
     chatDraft, setChatDraft, chatSending, chatError,
@@ -976,6 +1093,11 @@ export function useOverviewData() {
     toggleInspirationRepo, loadMoreInspirations,
     submitNewInspiration, saveInspiration, deleteInspiration,
     addIssueFromInspiration,
+    inspirationLabelFilter, changeInspirationLabelFilter,
+    inspirationShowArchived, toggleInspirationShowArchived,
+    archiveInspiration, unarchiveInspiration,
+    inspirationKeepDraft, closeInspirationKeepModal,
+    setInspirationKeepValue, confirmAddIssueWithKeep,
     inspirationSelectionMode, selectedInspirationIds,
     enterInspirationSelectionMode, exitInspirationSelectionMode,
     toggleInspirationSelected, openBatchConvert,

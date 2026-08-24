@@ -123,9 +123,13 @@ async function setDesc(renderer, value) {
     descInput(renderer).props.onChange({ target: { value } })
   })
 }
-// 勾选第一个标签（表单校验必填）
+// 勾选第一个标签（表单校验必填）：限定在「添加 Issue」弹窗内查找——
+// 概览页灵感板块新增的归档开关 checkbox 渲染在弹窗之前，取全局第一个
+// 会命中无关控件（issue #246 归档开关导致崩溃）
 async function checkFirstLabel(renderer) {
-  const checkbox = renderer.root.findAll(
+  const modal = renderer.root.findAll(
+    (n) => String(n.props.className || '').includes('modal add-issue'))[0]
+  const checkbox = (modal || renderer.root).findAll(
     (n) => n.type === 'input' && n.props.type === 'checkbox')[0]
   await TestRenderer.act(async () => { checkbox.props.onChange() })
 }

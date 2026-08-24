@@ -1465,3 +1465,237 @@ class TestOverviewPagination:
         assert tc.get(f"/api/inspirations/pages/{repo}?offset=-1").status_code == 422
         assert tc.get(f"/api/inspirations/pages/{repo}?limit=0").status_code == 422
         assert tc.get(f"/api/inspirations/pages/{repo}").status_code == 400
+
+
+# ---- issue #246：灵感标签分类、筛选与归档 ----
+# 灵感表新增 label（单标签）与 archived（软删除）；概览默认隐藏归档，
+# 可按标签筛选；转 issue 时可选择保留灵感并关联（不删除）。
+
+class TestInspirationLabel:
+    """灵感打标签：创建/更新带 label，空与超长边界。"""
+
+    def test_create_with_label(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        r = tc.post("/api/inspirations",
+                    json={"repo_id": repo, "content": "灵感", "label": "待验证"})
+        assert r.status_code == 201
+        assert r.json()["label"] == "待验证"
+        assert r.json()["archived"] == 0
+
+    def test_create_label_stripped(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        r = tc.post("/api/inspirations",
+                    json={"repo_id": repo, "content": "灵感", "label": "  待验证  "})
+        assert r.status_code == 201
+        assert r.json()["label"] == "待验证"
+
+    def test_create_without_label_defaults_none(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        r = tc.post("/api/inspirations", json={"repo_id": repo, "content": "灵感"})
+        assert r.status_code == 201
+        assert r.json()["label"] is None
+
+    def test_create_label_too_long(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        r = tc.post("/api/inspirations",
+                    json={"repo_id": repo, "content": "灵感", "label": "长" * 51})
+        assert r.status_code == 400
+
+    def test_update_sets_and_clears_label(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        insp_id = db.create_inspiration(repo, "灵感")
+        r = tc.put(f"/api/inspirations/{insp_id}", json={"content": "灵感", "label": "已规划"})
+        assert r.status_code == 200
+        assert r.json()["label"] == "已规划"
+        # 传空串清除标签
+        r = tc.put(f"/api/inspirations/{insp_id}", json={"content": "灵感", "label": ""})
+        assert r.status_code == 200
+        assert r.json()["label"] is None
+
+    def test_update_label_too_long(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        insp_id = db.create_inspiration(repo, "灵感")
+        r = tc.put(f"/api/inspirations/{insp_id}",
+                   json={"content": "灵感", "label": "长" * 51})
+        assert r.status_code == 400
+
+    def test_row_fields_include_label_and_archived(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        insp_id = db.create_inspiration(repo, "灵感", label="待验证")
+        r = tc.get("/api/inspirations/overview?limit=100")
+        item = r.json()["repos"][0]["inspirations"][0]
+        assert item["id"] == insp_id
+        assert item["label"] == "待验证"
+        assert item["archived"] == 0
+        assert item["linked_issue_iid"] is None
+        assert item["linked_issue_url"] is None
+
+
+class TestInspirationArchive:
+    """归档/取消归档：默认隐藏归档、可开关查看。"""
+
+    def test_archive_and_unarchive(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        insp_id = db.create_inspiration(repo, "灵感")
+        r = tc.post(f"/api/inspirations/{insp_id}/archive")
+        assert r.status_code == 200
+        assert r.json()["archived"] == 1
+        r = tc.post(f"/api/inspirations/{insp_id}/unarchive")
+        assert r.status_code == 200
+        assert r.json()["archived"] == 0
+
+    def test_archive_not_found(self, client):
+        tc, db = client
+        r = tc.post("/api/inspirations/999/archive")
+        assert r.status_code == 404
+        r = tc.post("/api/inspirations/999/unarchive")
+        assert r.status_code == 404
+
+    def test_overview_hides_archived_by_default(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        id1 = db.create_inspiration(repo, "未归档灵感")
+        id2 = db.create_inspiration(repo, "已归档灵感")
+        db.set_inspiration_archived(id2, True)
+        r = tc.get("/api/inspirations/overview?limit=100")
+        items = r.json()["repos"][0]["inspirations"]
+        assert [x["id"] for x in items] == [id1]
+        assert r.json()["repos"][0]["inspiration_total"] == 1
+        assert r.json()["repos"][0]["archived_total"] == 1
+
+    def test_overview_archived_view(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        db.create_inspiration(repo, "未归档灵感")
+        id2 = db.create_inspiration(repo, "已归档灵感")
+        db.set_inspiration_archived(id2, True)
+        r = tc.get("/api/inspirations/overview?limit=100&archived=1")
+        items = r.json()["repos"][0]["inspirations"]
+        assert [x["id"] for x in items] == [id2]
+
+    def test_pages_archived_filter(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        id1 = db.create_inspiration(repo, "未归档灵感")
+        id2 = db.create_inspiration(repo, "已归档灵感")
+        db.set_inspiration_archived(id2, True)
+        r = tc.get(f"/api/inspirations/pages/{repo}")
+        assert [x["id"] for x in r.json()["inspirations"]] == [id1]
+        assert r.json()["total"] == 1
+        r = tc.get(f"/api/inspirations/pages/{repo}?archived=1")
+        assert [x["id"] for x in r.json()["inspirations"]] == [id2]
+        assert r.json()["total"] == 1
+
+
+class TestInspirationFilter:
+    """按标签筛选（overview 与分页）。"""
+
+    def test_overview_label_filter(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        id1 = db.create_inspiration(repo, "A", label="待验证")
+        db.create_inspiration(repo, "B", label="已规划")
+        id3 = db.create_inspiration(repo, "C", label="待验证")
+        r = tc.get("/api/inspirations/overview?limit=100&label=待验证")
+        items = r.json()["repos"][0]["inspirations"]
+        assert sorted(x["id"] for x in items) == [id1, id3]
+        r = tc.get("/api/inspirations/overview?limit=100&label=不存在")
+        assert r.json()["repos"][0]["inspirations"] == []
+
+    def test_overview_label_filter_respects_archived(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        id1 = db.create_inspiration(repo, "A", label="待验证")
+        id2 = db.create_inspiration(repo, "B", label="待验证")
+        db.set_inspiration_archived(id2, True)
+        r = tc.get("/api/inspirations/overview?limit=100&label=待验证")
+        assert [x["id"] for x in r.json()["repos"][0]["inspirations"]] == [id1]
+        r = tc.get("/api/inspirations/overview?limit=100&label=待验证&archived=1")
+        assert [x["id"] for x in r.json()["repos"][0]["inspirations"]] == [id2]
+
+    def test_pages_label_filter(self, client):
+        tc, db = client
+        repo = _add_repo(db, 1, "botler")
+        id1 = db.create_inspiration(repo, "A", label="待验证")
+        db.create_inspiration(repo, "B", label="已规划")
+        r = tc.get(f"/api/inspirations/pages/{repo}?label=待验证")
+        assert [x["id"] for x in r.json()["inspirations"]] == [id1]
+        assert r.json()["total"] == 1
+
+
+class TestAddIssueKeepInspiration:
+    """转 issue 可选保留灵感并关联（issue #246，默认仍删除保持旧行为）。"""
+
+    def test_default_still_deletes_inspiration(self, edit_env):
+        tc, gitlab, db = edit_env
+        repo = _add_repo(db, 1, "botler", enabled=True)
+        insp_id = db.create_inspiration(repo, "默认删除")
+        r = tc.post(f"/api/inspirations/{insp_id}/add-issue")
+        assert r.status_code == 201
+        assert db.get_inspiration(insp_id) is None
+
+    def test_keep_inspiration_preserves_and_links(self, edit_env):
+        tc, gitlab, db = edit_env
+        repo = _add_repo(db, 1, "botler", enabled=True)
+        insp_id = db.create_inspiration(repo, "保留灵感")
+        r = tc.post(f"/api/inspirations/{insp_id}/add-issue",
+                    json={"keep_inspiration": True})
+        assert r.status_code == 201
+        row = db.get_inspiration(insp_id)
+        assert row is not None, "keep_inspiration=true 时应保留灵感"
+        assert row["linked_issue_iid"] == 99
+        assert row["linked_issue_url"] == (
+            "https://gitlab.example.com/x/-/issues/99")
+
+    def test_keep_inspiration_response_keeps_issue_contract(self, edit_env):
+        """响应契约不变：仍返回精简 issue 对象（前端展示成功提示与跳转
+        链接）；保留的灵感关联通过列表刷新读到（数据库行断言见
+        test_keep_inspiration_preserves_and_links）。"""
+        tc, gitlab, db = edit_env
+        repo = _add_repo(db, 1, "botler", enabled=True)
+        insp_id = db.create_inspiration(repo, "保留灵感")
+        r = tc.post(f"/api/inspirations/{insp_id}/add-issue",
+                    json={"keep_inspiration": True})
+        assert r.status_code == 201
+        item = r.json()
+        assert item["iid"] == 99
+        assert item["web_url"] == "https://gitlab.example.com/x/-/issues/99"
+        assert db.get_inspiration(insp_id) is not None
+
+    def test_keep_inspiration_overwrites_previous_link(self, edit_env):
+        """已有关联的灵感再次转 issue 时更新为新 issue 关联。"""
+        tc, gitlab, db = edit_env
+        repo = _add_repo(db, 1, "botler", enabled=True)
+        insp_id = db.create_inspiration(repo, "保留灵感")
+        tc.post(f"/api/inspirations/{insp_id}/add-issue",
+                json={"keep_inspiration": True})
+        tc.post(f"/api/inspirations/{insp_id}/add-issue",
+                json={"keep_inspiration": True})
+        row = db.get_inspiration(insp_id)
+        assert row["linked_issue_iid"] == 99
+        assert len(gitlab.create_calls) == 2
+
+    def test_batch_keep_inspiration_per_item(self, edit_env):
+        tc, gitlab, db = edit_env
+        repo = _add_repo(db, 1, "botler", enabled=True)
+        keep_id = db.create_inspiration(repo, "保留")
+        delete_id = db.create_inspiration(repo, "删除")
+        r = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [
+                {"inspiration_id": keep_id, "keep_inspiration": True},
+                {"inspiration_id": delete_id, "keep_inspiration": False},
+            ],
+        })
+        assert r.status_code == 200
+        assert r.json()["summary"] == {"succeeded": 2, "failed": 0}
+        assert db.get_inspiration(keep_id) is not None
+        assert db.get_inspiration(keep_id)["linked_issue_iid"] == 99
+        assert db.get_inspiration(delete_id) is None

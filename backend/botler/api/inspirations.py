@@ -68,6 +68,10 @@ router = APIRouter(prefix="/inspirations", tags=["inspirations"])
 # 灵感内容长度上限（去除首尾空白后）：随手笔记场景的合理上限
 MAX_CONTENT_LEN = 5000
 
+# 灵感单标签长度上限（issue #246）：本地标签，去首尾空白后非空且
+# 不超过该长度；GitLab 标签名上限 255，本地随手分类取更紧凑的 50
+MAX_LABEL_LEN = 50
+
 # 批量转 issue 单次上限（issue #247）：避免一次请求过大拖垮 owner 接口
 # 与本地数据库；多选模式选中数受此约束，超限前端提示分批提交
 MAX_BATCH_ITEMS = 50
@@ -83,10 +87,13 @@ CHAT_TIMEOUT = 60.0
 class InspirationCreate(BaseModel):
     repo_id: int = Field(description="仓库本地 id（repos.id）")
     content: str = Field(description="灵感内容")
+    label: str | None = Field(default=None, description="可选单标签（issue #246）")
 
 
 class InspirationUpdate(BaseModel):
     content: str = Field(description="灵感内容")
+    label: str | None = Field(default=None,
+                              description="可选单标签；空串/None 清除（issue #246）")
 
 
 class InspirationChatMessage(BaseModel):
@@ -96,17 +103,30 @@ class InspirationChatMessage(BaseModel):
 
 class BatchAddIssueItem(BaseModel):
     """批量转 issue 单条条目（issue #247）：灵感 id 必填，标题/描述/
-    标签/目标仓库为可选覆盖——未传则沿用单条接口默认行为（标题=描述=
-    灵感内容、标签 feature+ui、目标仓库=灵感所属仓库）。"""
+    标签/目标仓库/是否保留为可选覆盖——未传则沿用单条接口默认行为
+    （标题=描述=灵感内容、标签 feature+ui、目标仓库=灵感所属仓库、
+    转 issue 后删除灵感；issue #246 起可传 keep_inspiration=true 保留
+    灵感并关联 issue）。"""
     inspiration_id: int = Field(description="灵感本地 id（inspirations.id）")
     title: str | None = Field(default=None, description="可选：覆盖 issue 标题")
     description: str | None = Field(default=None, description="可选：覆盖 issue 描述")
     labels: list[str] | None = Field(default=None, description="可选：覆盖标签列表")
     repo_id: int | None = Field(default=None, description="可选：覆盖目标仓库 id")
+    keep_inspiration: bool = Field(
+        default=False, description="可选：true 保留灵感并关联 issue（默认删除，issue #246）")
 
 
 class BatchAddIssueRequest(BaseModel):
     items: list[BatchAddIssueItem] = Field(description="待批量转 issue 的灵感条目")
+
+
+class AddIssueFromInspiration(BaseModel):
+    """灵感一键转 issue 的可选参数（issue #246）：keep_inspiration=true
+    时保留灵感并写入 issue 关联（不删除），默认 false 保持旧行为（创建
+    成功后删除灵感，issue #162）。"""
+    keep_inspiration: bool = Field(
+        default=False,
+        description="true 保留灵感并关联创建的 issue；默认 false 删除")
 
 
 class InspirationChatProvider(BaseModel):
@@ -120,6 +140,19 @@ def _validate_content(content: str) -> str:
         raise HTTPException(400, "灵感内容不能为空")
     if len(text) > MAX_CONTENT_LEN:
         raise HTTPException(400, f"灵感内容不能超过 {MAX_CONTENT_LEN} 字")
+    return text
+
+
+def _validate_label(label: str | None) -> str | None:
+    """校验并规范化灵感单标签（issue #246）：None/去除首尾空白后为空 →
+    None（无标签）；超长 → 400。"""
+    if label is None:
+        return None
+    text = label.strip()
+    if not text:
+        return None
+    if len(text) > MAX_LABEL_LEN:
+        raise HTTPException(400, f"标签不能超过 {MAX_LABEL_LEN} 字")
     return text
 
 
@@ -167,6 +200,10 @@ def _row_to_dict(row) -> dict:
         "repo_id": row["repo_id"],
         "repo_name": row["repo_name"],
         "content": row["content"],
+        "label": row["label"] if "label" in row.keys() else None,
+        "archived": bool(row["archived"]) if "archived" in row.keys() else False,
+        "linked_issue_iid": row["linked_issue_iid"] if "linked_issue_iid" in row.keys() else None,
+        "linked_issue_url": row["linked_issue_url"] if "linked_issue_url" in row.keys() else None,
         "chat_provider": row["chat_provider"] if "chat_provider" in row.keys() else None,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -177,18 +214,27 @@ def _row_to_dict(row) -> dict:
 def inspiration_overview(
     request: Request,
     limit: int = Query(default=0, ge=0, le=100),
+    label: str | None = Query(default=None, description="按单标签过滤（issue #246）"),
+    archived: int = Query(default=0, ge=0, le=1,
+                          description="0=只未归档（默认，隐藏归档）；1=只归档"),
 ):
     """返回轻量概览及可选首屏页（issue #219）。
 
     默认只返回各仓库的灵感总数，避免 15 秒轮询传输和渲染全部长期积累
     的灵感。传入 ``limit`` 时，每仓库最多附带该数量的最新灵感，保持
     兼容需要首屏预览的调用方；详情由独立分页接口按仓库按需读取。
+
+    issue #246：默认只统计/返回未归档灵感（archived=0），前端归档
+    开关打开后传 archived=1 查看归档条目；label 非空时按单标签精确
+    过滤。archived_total 始终返回归档计数（前端在标题旁展示「归档 N
+    条」入口）。
     """
     c = request.app.state.ctx
     repos = c.db.list_repos()
     if not c.config.get().ui_show_disabled_repos:
         repos = [r for r in repos if r["enabled"]]
-    totals = c.db.count_inspirations_by_repo()
+    totals = c.db.count_inspirations_by_repo(archived=archived)
+    archived_totals = c.db.count_inspirations_by_repo(archived=1)
     return {
         "repos": [
             {
@@ -197,9 +243,12 @@ def inspiration_overview(
                 "enabled": bool(r["enabled"]),
                 "priority": r["priority"],
                 "inspiration_total": total,
+                "archived_total": archived_totals.get(r["id"], 0),
                 "inspirations": [
                     _row_to_dict(row)
-                    for row in (c.db.list_inspirations_page(r["id"], 0, limit) if limit else [])
+                    for row in (c.db.list_inspirations_page(
+                        r["id"], 0, limit, label=label, archived=archived)
+                        if limit else [])
                 ],
                 "inspiration_has_more": total > limit,
             }
@@ -215,12 +264,20 @@ def inspiration_page(
     repo_id: int,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
+    label: str | None = Query(default=None, description="按单标签过滤（issue #246）"),
+    archived: int = Query(default=0, ge=0, le=1,
+                          description="0=只未归档（默认）；1=只归档"),
 ):
-    """按仓库懒加载灵感页，按 ``updated_at DESC, id DESC`` 稳定排序。"""
+    """按仓库懒加载灵感页，按 ``updated_at DESC, id DESC`` 稳定排序。
+
+    issue #246：默认只返回未归档灵感（archived=0），与概览默认隐藏
+    归档一致；label 非空时按单标签精确过滤，总数/分页同一过滤语义。
+    """
     c = request.app.state.ctx
     _require_repo(c, repo_id)
-    total = c.db.count_inspirations(repo_id)
-    rows = c.db.list_inspirations_page(repo_id, offset, limit)
+    total = c.db.count_inspirations(repo_id, label=label, archived=archived)
+    rows = c.db.list_inspirations_page(
+        repo_id, offset, limit, label=label, archived=archived)
     return {
         "repo_id": repo_id,
         "offset": offset,
@@ -236,7 +293,8 @@ def create_inspiration(request: Request, body: InspirationCreate):
     c = request.app.state.ctx
     _require_repo(c, body.repo_id)
     content = _validate_content(body.content)
-    insp_id = c.db.create_inspiration(body.repo_id, content)
+    insp_id = c.db.create_inspiration(
+        body.repo_id, content, label=_validate_label(body.label))
     row = c.db.get_inspiration(insp_id)
     assert row is not None  # 刚插入的记录必然可查
     # issue #478：灵感新增 → 广播 inspiration 事件（前端 SSE 驱动刷新）
@@ -249,7 +307,8 @@ def update_inspiration(request: Request, inspiration_id: int,
                        body: InspirationUpdate):
     c = request.app.state.ctx
     content = _validate_content(body.content)
-    if not c.db.update_inspiration(inspiration_id, content):
+    if not c.db.update_inspiration(
+            inspiration_id, content, label=_validate_label(body.label)):
         raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
     row = c.db.get_inspiration(inspiration_id)
     assert row is not None
@@ -268,15 +327,45 @@ def delete_inspiration(request: Request, inspiration_id: int):
     return None
 
 
+def _set_inspiration_archived(request: Request, inspiration_id: int,
+                              archived: bool) -> dict:
+    """归档/取消归档共用的实现：软删除（issue #246）——归档灵感默认
+    不在概览展示（可开关查看），比删除安全且保留历史。更新成功后广播
+    inspiration 事件（前端 SSE 驱动刷新）。"""
+    c = request.app.state.ctx
+    if not c.db.set_inspiration_archived(inspiration_id, archived):
+        raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
+    row = c.db.get_inspiration(inspiration_id)
+    assert row is not None  # 刚更新的记录必然可查
+    # issue #478：灵感归档状态变化 → 广播 inspiration 事件
+    global_bus.publish({"type": "inspiration"})
+    return _row_to_dict(row)
+
+
+@router.post("/{inspiration_id}/archive")
+def archive_inspiration(request: Request, inspiration_id: int):
+    """归档灵感（issue #246）：软删除，默认不再展示，可开关查看。"""
+    return _set_inspiration_archived(request, inspiration_id, True)
+
+
+@router.post("/{inspiration_id}/unarchive")
+def unarchive_inspiration(request: Request, inspiration_id: int):
+    """取消归档灵感（issue #246）：从归档视图恢复到正常列表。"""
+    return _set_inspiration_archived(request, inspiration_id, False)
+
+
 def _submit_inspiration_as_issue(c, insp, repo=None, *, title=None,
-                                    description=None, labels=None) -> dict:
+                                    description=None, labels=None,
+                                    keep_inspiration=False) -> dict:
     """把单条灵感提交为 GitLab issue 的核心逻辑（issue #247 提取，单条
     接口与批量接口共用，保证「单条转 issue 行为不变」）。
 
     语义与单条 add-issue 完全一致：标题=描述=灵感内容（去首尾空白），
     默认标签 feature + ui，分配人 = 仓库用户（issue #153/#159），走
     owner token（_issue_edit_call，issue #130，绝不回退 bot token）；
-    创建成功后清空概览缓存并删除该灵感（issue #162）。失败抛
+    创建成功后清空概览缓存；默认删除该灵感（issue #162），keep_
+    inspiration=True 时保留灵感并写入 issue 关联（issue #246，卡片
+    展示「已关联 issue #N」链接，可再次编辑/转 issue）。失败抛
     HTTPException（400/404/502），调用方按需捕获映射为单条失败。
 
     repo 为空时用灵感所属仓库；批量预览面板可传目标仓库行覆盖（issue
@@ -366,17 +455,30 @@ def _submit_inspiration_as_issue(c, insp, repo=None, *, title=None,
         # owner client 可能指向不可达 host（配置的 GitLab 地址异常）
         raise HTTPException(502, f"创建 issue 网络错误: {str(e)[:200]}") from e
     clear_issue_cache()
-    # issue #162：创建成功即从灵感列表删除——灵感已转为 GitLab issue，
-    # 保留会诱导重复点击产生重复 issue（每次提交都会新建一个 issue）。
-    # 删除属本地数据库操作（刚查过该行必然存在），正常不会失败；仍
-    # 防御性捕获并告警，不阻塞返回成功——issue 创建成功是主流程结果。
-    # 所有失败路径（GitLab 故障 / 未配置 owner token / 仓库禁用等）
-    # 均不会走到这里，灵感保留可重试。
-    try:
-        c.db.delete_inspiration(insp["id"])
-    except Exception as e:
-        logger.warning("灵感提交 issue 成功后删除灵感失败（id=%s）: %s",
-                       insp["id"], str(e)[:200])
+    if keep_inspiration:
+        # issue #246：保留灵感并关联——写回创建的 issue 关联信息
+        # （iid / web_url），前端卡片展示「已关联 issue #N」链接；
+        # 灵感留在列表，可继续编辑/再次转 issue（重复转 issue 会覆盖
+        # 为最新关联）。关联属本地数据库操作，失败仅告警不阻塞返回
+        # 成功——issue 创建成功是主流程结果。
+        try:
+            c.db.set_inspiration_issue_link(
+                insp["id"], issue.get("iid"), issue.get("web_url"))
+        except Exception as e:
+            logger.warning("灵感保留并关联 issue 失败（id=%s）: %s",
+                           insp["id"], str(e)[:200])
+    else:
+        # issue #162：创建成功即从灵感列表删除——灵感已转为 GitLab
+        # issue，保留会诱导重复点击产生重复 issue（每次提交都会新建
+        # 一个 issue）。删除属本地数据库操作（刚查过该行必然存在），
+        # 正常不会失败；仍防御性捕获并告警，不阻塞返回成功——issue
+        # 创建成功是主流程结果。所有失败路径（GitLab 故障 / 未配置
+        # owner token / 仓库禁用等）均不会走到这里，灵感保留可重试。
+        try:
+            c.db.delete_inspiration(insp["id"])
+        except Exception as e:
+            logger.warning("灵感提交 issue 成功后删除灵感失败（id=%s）: %s",
+                           insp["id"], str(e)[:200])
     # issue #478：灵感转 issue 后灵感列表变化 → 广播 inspiration 事件
     # （issue 事件已由 clear_issue_cache 发布）
     global_bus.publish({"type": "inspiration"})
@@ -385,7 +487,10 @@ def _submit_inspiration_as_issue(c, insp, repo=None, *, title=None,
 
 
 @router.post("/{inspiration_id}/add-issue", status_code=201)
-def add_issue_from_inspiration(request: Request, inspiration_id: int):
+def add_issue_from_inspiration(
+    request: Request, inspiration_id: int,
+    body: AddIssueFromInspiration | None = None,
+):
     """将灵感一键提交为 GitLab issue（issue #143）。
 
     概览页灵感条目「添加 Issue」按钮点击后调用：灵感内容同时作为
@@ -395,13 +500,18 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
     读取兜底并写回，解析为 GitLab 用户 id；未配置/解析失败不指定
     分配人）；通过 GitLab API 在灵感所属仓库创建。
 
+    issue #246：body 可选传 keep_inspiration=true —— 创建成功后保留
+    灵感并写入 issue 关联（卡片展示「已关联 issue #N」链接），默认
+    不传/传 false 保持旧行为（删除灵感，issue #162）。
+
     写操作与概览页其他 issue 编辑一致（_issue_edit_call）：必须使用
     owner token，绝不回退 bot token——未配置 owner token 返回 400 并
     引导设置；token 失效/权限不足返回 502。创建成功后清空概览缓存并
-    删除该灵感（issue #162：灵感已转为 GitLab issue，成功推送后从灵感
-    列表移除，避免重复提交；删除为本地数据库操作，失败仅告警不阻塞
-    返回成功），前端刷新开放 issue 列表即可看到新 issue。返回精简后
-    的 issue 对象（含 iid/web_url，供前端展示创建成功提示与跳转链接）。
+    （默认）删除该灵感（issue #162：灵感已转为 GitLab issue，成功推送
+    后从灵感列表移除，避免重复提交；删除为本地数据库操作，失败仅告警
+    不阻塞返回成功），前端刷新开放 issue 列表即可看到新 issue。返回
+    精简后的 issue 对象（含 iid/web_url，供前端展示创建成功提示与
+    跳转链接）。
 
     错误映射：灵感不存在 → 404；所属仓库不存在/已软删除 → 400；仓库
     未启用 → 400（与概览页添加 issue 弹窗一致）；GitLab 创建失败 →
@@ -411,7 +521,8 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
     insp = c.db.get_inspiration(inspiration_id)
     if insp is None:
         raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
-    return _submit_inspiration_as_issue(c, insp)
+    keep = bool(body and body.keep_inspiration)
+    return _submit_inspiration_as_issue(c, insp, keep_inspiration=keep)
 
 
 @router.post("/batch-add-issues", status_code=200)
@@ -468,7 +579,7 @@ def batch_add_issues(request: Request, body: BatchAddIssueRequest):
             issue = _submit_inspiration_as_issue(
                 c, insp, repo,
                 title=item.title, description=item.description,
-                labels=item.labels)
+                labels=item.labels, keep_inspiration=item.keep_inspiration)
             succeeded.append({
                 "inspiration_id": item.inspiration_id,
                 "issue": issue,

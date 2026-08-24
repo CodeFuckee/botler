@@ -4125,6 +4125,157 @@ body:has(.drawer-overlay) {
   font-size: 16px;
   margin: 0 0 var(--space-1);
 }
+
+/* issue #246：灵感标签筛选栏 + 归档开关（板块头部，位于描述文案上方） */
+.inspiration-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.inspiration-label-filter-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary, #666);
+}
+.inspiration-label-filter {
+  min-width: 140px;
+  max-width: 220px;
+}
+.inspiration-archive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-secondary, #666);
+  user-select: none;
+}
+.inspiration-archive-toggle input {
+  accent-color: var(--primary, #2563eb);
+}
+.inspiration-archived-count {
+  margin-left: 2px;
+}
+
+/* issue #246：灵感条目标签徽章（单标签胶囊） */
+.inspiration-label-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin: 0 0 var(--space-1);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--primary, #2563eb);
+  background: color-mix(in srgb, var(--primary, #2563eb) 10%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* issue #246：已归档条目（弱化显示 + 「已归档」徽章） */
+.inspiration-item-archived {
+  opacity: 0.72;
+}
+.inspiration-item-archived .inspiration-content {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+.inspiration-archived-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary, #666);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.inspiration-content-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* issue #246：转 issue 保留灵感后的关联链接 */
+.inspiration-linked-issue {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 var(--space-1);
+  font-size: 12px;
+  color: var(--primary, #2563eb);
+  text-decoration: none;
+}
+.inspiration-linked-issue:hover {
+  text-decoration: underline;
+}
+
+/* issue #246：编辑态标签输入 */
+.inspiration-label-input {
+  margin-top: 6px;
+  width: 100%;
+}
+
+/* issue #246：转 issue 保留确认弹窗 */
+.inspiration-keep-modal {
+  max-width: 480px;
+}
+.inspiration-keep-body {
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+.inspiration-keep-content {
+  margin: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+}
+.inspiration-keep-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+.inspiration-keep-checkbox-label input {
+  accent-color: var(--primary, #2563eb);
+}
+.inspiration-keep-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+/* issue #246：批量预览面板每条「保留灵感并关联」勾选 */
+.inspiration-batch-keep {
+  display: flex;
+  align-items: center;
+}
+.inspiration-batch-keep-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.inspiration-batch-keep-label input {
+  accent-color: var(--primary, #2563eb);
+}
 .inspirations-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

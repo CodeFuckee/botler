@@ -7,6 +7,7 @@
 // - 例外：供应商品牌 logo（providers.jsx 的内联 SVG 圆底图形）属于品牌标识，
 //   Lucide 无对应图形，不在图标替换范围内。
 import {
+  Archive, ArchiveRestore,
   ArrowLeft, ArrowUp, BarChart3, Bot, Brain, Check, CheckCircle2, CheckSquare, ChevronDown,
   ChevronLeft, ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Eye,
   FileText, Flag, Folder, FolderOpen, GripVertical, Hourglass,
@@ -18,6 +19,8 @@ import {
 
 // 语义名 → Lucide 图标映射（全量 Lucide 系列）
 export const ICONS = {
+  archive: Archive,
+  archiveRestore: ArchiveRestore,
   arrowLeft: ArrowLeft,
   arrowUp: ArrowUp,
   chart: BarChart3,

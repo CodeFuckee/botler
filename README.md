@@ -279,9 +279,16 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 原来一样，放在开放 issue 组件的下方；issue #184 曾改为右侧常驻边栏，本次
 > 回退该布局调整）。为避免长期积累的灵感拖慢首屏，概览数据加载只获取每仓库的
 > 总数；有灵感的仓库默认折叠，点击后按每页 20 条懒加载并可继续“加载更多”，
-> 排序始终为 `updated_at` 降序（issue #219）。每条灵感提供「添加 Issue」按钮
+> 排序始终为 `updated_at` 降序（issue #219）。issue #246 起支持**标签分类、筛选
+> 与归档**：每条灵感可打单标签（编辑时输入，候选来自已有标签 + 自由文本），板块
+> 头部可按标签筛选、可打开「查看归档」开关查看归档条目（归档灵感默认隐藏，归档
+> 比删除安全、保留历史）；每条灵感提供「归档 / 取消归档」按钮（软删除，不丢
+> 历史）。每条灵感提供「添加 Issue」按钮
 > （issue #143）：灵感内容同时作为标题与描述一键提交为 GitLab issue（默认标签
-> feature + ui，分配人 = 仓库用户，issue #153）；issue #247 起支持**批量转 issue**——
+> feature + ui，分配人 = 仓库用户，issue #153）；issue #246 起点击后先弹出确认
+> 弹窗，可勾选「保留灵感并关联」——创建成功后灵感不删除并在卡片展示「已关联
+> issue #N」链接（默认不勾选，保持创建成功后删除的旧行为，issue #162）；
+> issue #247 起支持**批量转 issue**——
 > 标题行「多选」按钮进入多选模式后勾选多条灵感，点「转为 Issue」弹出批量预览面板，
 > 每条可单独编辑标题/描述/标签/目标仓库（或「全部应用默认」统一重置），逐条提交后
 > 展示「N 成功 / M 失败」汇总与逐条失败原因：成功项创建 issue 并从灵感列表移除，
@@ -1058,13 +1065,15 @@ POST   /api/issues/{project_id}/{iid}/prioritize 排队任务一键置顶（概�
 GET    /api/issues/{project_id}/members      项目成员清单（概览页右边栏负责人下拉数据源：GitLab members/all + user_id 补齐，issue #303）
 PUT    /api/issues/{project_id}/{iid}/assignee  更新 issue 负责人（assignee_id 为 GitLab 用户 id，null 清除负责人；同步 GitLab，成功后清缓存并返回更新后负责人列表，issue #303）
 GET    /api/issues/{project_id}/{iid}/detail  issue 评论与活动详情（评论/系统活动分区，最多 100 条，issue #97；含 label_events 字段——标记活动事件（谁添加/移除了哪个标记，独立拉取 resource_label_events，最多 100 条，失败降级空列表），概览页右边栏展示（分开显示独立区块、合并时间线模式下并入时间线），issue #349/#351；含 engine 字段——该 issue 最近任务实际使用的执行引擎，issue #120；含 task_id 字段——该 issue 最近一条任务记录 id，已执行过才有值，从未执行/尚未派发为 null，概览页右边栏「任务」行展示，issue #290；含 task_duration_seconds 字段——该 issue 最近任务完成耗时秒数（finished_at - created_at），仅成功终态任务有值，其余为 null，概览页右边栏「完成耗时」行展示，issue #300）
-GET    /api/inspirations/overview[?limit=0..100]  轻量灵感概览：所有未软删除仓库 + 每仓库总数；默认不返回条目，传 limit 时每仓库最多附带该数量最新条目（仓库按优先级、灵感按 updated_at/id 降序；issue #219）
-GET    /api/inspirations/pages/{repo_id}?offset=&limit=  按仓库懒加载灵感分页（默认 20、最大 100），返回 total / has_more，排序同上（issue #219）
-POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；默认仅存本地数据库，issue #131）
-PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）
+GET    /api/inspirations/overview[?limit=0..100][&label=&archived=]  轻量灵感概览：所有未软删除仓库 + 每仓库总数（含 archived_total 归档计数）；默认不返回条目，传 limit 时每仓库最多附带该数量最新条目（仓库按优先级、灵感按 updated_at/id 降序；issue #219）；issue #246 起支持 `label`（按单标签精确过滤）与 `archived`（0=只未归档默认 / 1=只归档）参数
+GET    /api/inspirations/pages/{repo_id}?offset=&limit=[&label=&archived=]  按仓库懒加载灵感分页（默认 20、最大 100），返回 total / has_more，排序同上；label / archived 过滤语义与 overview 一致（issue #219/#246）
+POST   /api/inspirations              记录一条灵感（repo_id + content 必填；内容去首尾空白后非空且 ≤ 5000 字；可选 label 单标签，去首尾空白、空=无标签、≤ 50 字；默认仅存本地数据库，issue #131/#246）
+PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at；可选 label，空串/None=清除标签，issue #131/#246）
 DELETE /api/inspirations/{id}         删除灵感（issue #131）
-POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143/#153/#162）：灵感内容同时作为标题与描述，默认标签 feature + ui，分配人 = 仓库用户（仓库设置页读取 remote url 得到的用户名，按项目成员解析为 GitLab 用户 id；未配置/解析失败则不指定分配人）；写操作必须配置 owner token，创建成功后清概览缓存并从灵感列表删除该灵感（issue #162，失败保留可重试）
-POST   /api/inspirations/batch-add-issues  批量将灵感转为 GitLab issue（issue #247）：items 每条含 inspiration_id 与可选覆盖字段（title / description / labels / repo_id），逐条调用与单条 add-issue 完全一致的核心逻辑（未覆盖字段沿用默认：标题=描述=内容、标签 feature+ui、目标仓库=灵感所属仓库）；单条失败不阻断其余条目，成功项删除灵感、失败项保留并逐条返回原因；响应含 succeeded / failed 数组与 summary 计数（前端展示「N 成功 / M 失败」）；同一灵感 id 去重、单次上限 50 条
+POST   /api/inspirations/{id}/archive     归档灵感（issue #246 软删除）：归档后默认不再展示（可开关查看），返回更新后的灵感行
+POST   /api/inspirations/{id}/unarchive   取消归档灵感（issue #246）：从归档视图恢复到正常列表
+POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143/#153/#162/#246）：灵感内容同时作为标题与描述，默认标签 feature + ui，分配人 = 仓库用户（仓库设置页读取 remote url 得到的用户名，按项目成员解析为 GitLab 用户 id；未配置/解析失败则不指定分配人）；可选 body `{keep_inspiration}`——true 创建成功后保留灵感并写入 issue 关联（卡片展示「已关联 issue #N」链接），默认 false 保持删除旧行为；写操作必须配置 owner token，创建成功后清概览缓存（issue #162，失败保留可重试）
+POST   /api/inspirations/batch-add-issues  批量将灵感转为 GitLab issue（issue #247/#246）：items 每条含 inspiration_id 与可选覆盖字段（title / description / labels / repo_id / keep_inspiration），逐条调用与单条 add-issue 完全一致的核心逻辑（未覆盖字段沿用默认：标题=描述=内容、标签 feature+ui、目标仓库=灵感所属仓库、转 issue 后删除灵感）；单条失败不阻断其余条目，成功项（默认）删除灵感、勾选保留的条目保留并关联 issue、失败项保留并逐条返回原因；响应含 succeeded / failed 数组与 summary 计数（前端展示「N 成功 / M 失败」）；同一灵感 id 去重、单次上限 50 条
 GET    /api/inspirations/{id}/chat-providers  返回当前灵感可选的已启用且 API Key 非空供应商（仅 name/provider/model）及当前选择（issue #249）
 PUT    /api/inspirations/{id}/chat-provider   保存或清除当前灵感的对话供应商选择（`{provider}`；null 清除，issue #249）
 GET    /api/inspirations/{id}/messages   返回灵感与 AI agent 的对话历史（按时间升序；issue #166）

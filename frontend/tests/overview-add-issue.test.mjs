@@ -135,7 +135,12 @@ async function fillForm(renderer, title, withLabel = true) {
     titleInput.props.onChange({ target: { value: title } })
   })
   if (withLabel) {
-    const checkbox = renderer.root.findAll(
+    // 限定在「添加 Issue」弹窗内查找标签勾选框：概览页灵感板块新增的
+    // 归档开关等 checkbox 会出现在弹窗之前，直接取全局第一个会命中
+    // 无关控件（issue #246 归档开关导致 fillForm 崩溃）
+    const modal = renderer.root.findAll(
+      (n) => String(n.props.className || '').includes('modal add-issue'))[0]
+    const checkbox = (modal || renderer.root).findAll(
       (n) => n.type === 'input' && n.props.type === 'checkbox')[0]
     await TestRenderer.act(async () => { checkbox.props.onChange() })
   }

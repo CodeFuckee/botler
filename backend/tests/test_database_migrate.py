@@ -516,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 28, f"user_version 应推进到 28（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商），实际 {ver}"
+        assert ver == 29, f"user_version 应推进到 29（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -606,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 28, f"user_version 应推进到 28（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商），实际 {ver}"
+        assert ver == 29, f"user_version 应推进到 29（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
@@ -671,7 +671,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols, "旧库应补出 tasks.environment 列"
-        assert ver == 28, f"user_version 应推进到 28（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商），实际 {ver}"
+        assert ver == 29, f"user_version 应推进到 29（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列），实际 {ver}"
 
     def test_new_db_has_environment_column(self, tmp_path):
         """新库建表语句应直接含 environment 列（无需迁移）。"""
@@ -680,7 +680,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols
-        assert ver == 28
+        assert ver == 29
 
     def test_set_task_status_accepts_environment(self, tmp_path):
         """set_task_status 应能写入 environment（_TASK_FIELDS 白名单）。"""
@@ -738,7 +738,7 @@ class TestTaskProgressLedger:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "task_progress" in tables, "旧库应补出 task_progress 表"
-        assert ver == 28
+        assert ver == 29
 
     def test_record_and_latest_per_step(self, tmp_path):
         """record/list/latest：只增不改快照式，latest 取每步最新状态。"""
@@ -851,7 +851,7 @@ class TestMigrateInspirationChatProvider:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(inspirations)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "chat_provider" in cols
-        assert ver == 28
+        assert ver == 29
 
     def test_new_db_persists_chat_provider_and_clear(self, tmp_path):
         db = Database(str(tmp_path / "new249.db"))
@@ -862,6 +862,117 @@ class TestMigrateInspirationChatProvider:
         assert db.set_inspiration_chat_provider(inspiration, None)
         assert db.get_inspiration(inspiration)["chat_provider"] is None
         assert not db.set_inspiration_chat_provider(999, "gemini")
+
+
+class TestMigrateInspirationLabelArchive:
+    """issue #246：灵感表补 label / archived / issue 关联列（标签分类、筛选与归档）。"""
+
+    def _build_v28_db(self, path):
+        """手工构造 v28 旧库：含 v28 结构 inspirations 表（无 label/archived/linked 列）。"""
+        conn = sqlite3.connect(str(path))
+        conn.executescript(V7_SCHEMA)
+        conn.execute(
+            """CREATE TABLE inspirations (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 repo_id INTEGER NOT NULL REFERENCES repos(id),
+                 content TEXT NOT NULL,
+                 chat_provider TEXT,
+                 created_at TEXT DEFAULT (datetime('now')),
+                 updated_at TEXT DEFAULT (datetime('now'))
+               )""")
+        conn.execute("PRAGMA user_version = 28")
+        conn.commit()
+        conn.close()
+
+    def test_old_db_gets_label_archive_issue_link_columns(self, tmp_path):
+        """旧库（user_version=28）初始化后应补出 label/archived/关联列。"""
+        path = tmp_path / "old246.db"
+        self._build_v28_db(path)
+        db = Database(str(path))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(inspirations)")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "label" in cols
+        assert "archived" in cols
+        assert "linked_issue_iid" in cols
+        assert "linked_issue_url" in cols
+        assert ver == 29
+
+    def test_new_db_has_label_archive_columns(self, tmp_path):
+        """新库建表语句应直接含 label/archived/关联列（无需迁移）。"""
+        db = Database(str(tmp_path / "new246.db"))
+        with db._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(inspirations)")}
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert "label" in cols
+        assert "archived" in cols
+        assert "linked_issue_iid" in cols
+        assert "linked_issue_url" in cols
+        assert ver == 29
+
+    def test_create_with_label_and_archive_flow(self, tmp_path):
+        """创建带标签的灵感；归档/取消归档；记录不存在返回 False。"""
+        db = Database(str(tmp_path / "flow246.db"))
+        repo_id = db.upsert_repo(246, "botler", "https://x/botler.git")
+        insp_id = db.create_inspiration(repo_id, "内容", label="待验证")
+        row = db.get_inspiration(insp_id)
+        assert row["label"] == "待验证"
+        assert row["archived"] == 0
+        assert db.set_inspiration_archived(insp_id, True)
+        assert db.get_inspiration(insp_id)["archived"] == 1
+        assert db.set_inspiration_archived(insp_id, False)
+        assert db.get_inspiration(insp_id)["archived"] == 0
+        assert not db.set_inspiration_archived(999, True)
+
+    def test_update_inspiration_label_set_and_clear(self, tmp_path):
+        """更新标签；传 None 清除标签。"""
+        db = Database(str(tmp_path / "label246.db"))
+        repo_id = db.upsert_repo(246, "botler", "https://x/botler.git")
+        insp_id = db.create_inspiration(repo_id, "内容")
+        assert db.update_inspiration(insp_id, "内容", label="已规划")
+        assert db.get_inspiration(insp_id)["label"] == "已规划"
+        assert db.update_inspiration(insp_id, "内容", label=None)
+        assert db.get_inspiration(insp_id)["label"] is None
+
+    def test_set_inspiration_issue_link(self, tmp_path):
+        """保留灵感并关联：写入 issue 关联信息。"""
+        db = Database(str(tmp_path / "link246.db"))
+        repo_id = db.upsert_repo(246, "botler", "https://x/botler.git")
+        insp_id = db.create_inspiration(repo_id, "内容")
+        assert db.set_inspiration_issue_link(
+            insp_id, 88, "https://x/-/issues/88")
+        row = db.get_inspiration(insp_id)
+        assert row["linked_issue_iid"] == 88
+        assert row["linked_issue_url"] == "https://x/-/issues/88"
+        assert not db.set_inspiration_issue_link(999, 1, "x")
+
+    def test_list_page_filters_label_and_archived(self, tmp_path):
+        """分页列表支持 label / archived 过滤（默认只未归档）。"""
+        db = Database(str(tmp_path / "f246.db"))
+        repo_id = db.upsert_repo(246, "botler", "https://x/botler.git")
+        id1 = db.create_inspiration(repo_id, "A", label="待验证")
+        id2 = db.create_inspiration(repo_id, "B", label="已实现")
+        db.set_inspiration_archived(id2, True)
+        assert [r["id"] for r in db.list_inspirations_page(repo_id, 0, 20)] == [id1]
+        assert [r["id"] for r in db.list_inspirations_page(
+            repo_id, 0, 20, archived=1)] == [id2]
+        assert [r["id"] for r in db.list_inspirations_page(
+            repo_id, 0, 20, label="待验证")] == [id1]
+        assert db.list_inspirations_page(
+            repo_id, 0, 20, label="待验证", archived=1) == []
+
+    def test_count_by_archived(self, tmp_path):
+        """计数按归档状态区分（默认只统计未归档）。"""
+        db = Database(str(tmp_path / "c246.db"))
+        repo_id = db.upsert_repo(246, "botler", "https://x/botler.git")
+        db.create_inspiration(repo_id, "A")
+        id2 = db.create_inspiration(repo_id, "B")
+        db.set_inspiration_archived(id2, True)
+        assert db.count_inspirations_by_repo()[repo_id] == 1
+        assert db.count_inspirations_by_repo(archived=1)[repo_id] == 1
+        assert db.count_inspirations(repo_id) == 1
+        assert db.count_inspirations(repo_id, archived=1) == 1
+        assert db.count_inspirations(repo_id, archived=None) == 2
 
 
 class TestMigrateFailureCategory:

@@ -40,6 +40,9 @@ function renderIcon(name, props) {
 // issue #479：新增 layoutGrid / layoutList（概览页开放 issue 布局切换
 //   按钮——「仓库卡片」网格图标 /「单列分组」列表图标），同步补入清单
 const EXPECTED_NAMES = [
+  // issue #246：archive / archiveRestore——灵感「归档 / 取消归档」按钮与
+  // 归档开关图标，同步补入语义清单
+  'archive', 'archiveRestore',
   'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle', 'checkSquare',
   'chevronDown', 'chevronLeft', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
   'externalLink', 'eye', 'fileText', 'flag', 'folder', 'folderOpen', 'gripVertical',

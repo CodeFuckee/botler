@@ -442,6 +442,38 @@
 
 ### Added
 
+- **灵感支持标签分类、筛选与归档；转 issue 可选保留灵感并关联（issue #246）**：
+  - 需求：灵感目前只有 content + 增删改，多了以后只能翻列表找、无法分类；
+    不想再处理的灵感只能删除（不可恢复）；转 issue 后灵感被自动删除，缺少
+    「保留映射」能力。本次为标签分类与归档（保留历史）能力，是「灵感 ↔ issue
+    保留映射」的第一步；
+  - 后端：`inspirations` 表新增 `label`（单标签，可空）、`archived`（软删除，
+    默认 0 未归档）、`linked_issue_iid` / `linked_issue_url`（转 issue 保留灵感
+    时写入的 issue 关联）四列（`database.py` 迁移 v29，新库 `_SCHEMA` 同步）；
+    灵感创建/更新支持可选 `label`（去首尾空白、空串/None=无标签、上限 50 字，
+    超长 400）；新增 `POST /api/inspirations/{id}/archive` 与 `/unarchive`
+    （软删除，404 不存在）；`overview` / `pages` 接口新增 `archived`（0=只未
+    归档默认，1=只归档）与 `label`（按单标签精确过滤）参数，概览响应新增
+    `archived_total` 归档计数，计数/分页与列表同一过滤语义；
+    `POST /{id}/add-issue` 与批量 `batch-add-issues` 的条目新增可选
+    `keep_inspiration`（默认 false 保持删除旧行为；true 创建成功后保留灵感并
+    写入 issue 关联，卡片展示「已关联 issue #N」链接，重复转 issue 覆盖为最新
+    关联）；
+  - 前端：灵感板块头部新增标签筛选下拉（候选来自已加载灵感标签 + 自由输入）
+    与「查看归档」开关（默认隐藏归档，归档视图显示「归档 N 条」入口、隐藏
+    新增表单）；灵感卡片新增标签徽章、归档/取消归档按钮、「已归档」标记与
+    关联 issue 链接；编辑态新增单标签输入（datalist 候选 + 自由文本）；
+    点击「添加 Issue」先弹出「保留灵感并关联」确认弹窗（勾选保留则转 issue
+    后不删除灵感），批量预览面板每条新增「保留灵感并关联」勾选；Icon.jsx
+    新增 `archive` / `archiveRestore` 语义图标；
+  - 测试：后端 29 个新用例（迁移 v29 补列、创建/更新标签边界、归档/取消
+    归档、overview/pages 标签与归档过滤、add-issue/batch 的 keep_inspiration
+    保留并关联/默认删除），前端新增
+    `frontend/tests/overview-inspiration-label-archive.test.mjs` 15 用例
+    （源码断言/渲染/交互）；既有前端测试适配（灵感 add-issue 改为弹窗确认、
+    PUT 带 label、归档开关成为渲染树首个 checkbox 后 fillForm 限定弹窗内查找、
+    ICONS 语义清单补入新图标），全量测试无 regression。
+
 - **任务执行详情展示 DeepSeek 缓存命中率（issue #473）**：
   - 需求：deepseek harness 引擎的 usage chunk 含 DeepSeek 缓存字段
     （`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，即提示词缓存

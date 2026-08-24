@@ -35,6 +35,13 @@ export default function InspirationSection({
   batchConvertOpen, batchDrafts, batchSubmitting, batchResult, batchError, setBatchError,
   updateBatchDraft, resetBatchDraftToDefault, applyBatchDefaults,
   submitBatchConvert, closeBatchConvert,
+  // issue #246：标签筛选 / 归档开关 / 归档操作 / 转 issue 保留确认
+  inspirationLabelFilter, changeInspirationLabelFilter,
+  inspirationShowArchived, toggleInspirationShowArchived,
+  archiveInspiration, unarchiveInspiration,
+  inspirationKeepDraft, closeInspirationKeepModal,
+  setInspirationKeepValue, confirmAddIssueWithKeep,
+  editInspirationLabel, setEditInspirationLabel,
   chatInspiration, closeInspirationChat, chatLoading, chatMessages,
   chatProviders, chatProvider, changeChatProvider,
   chatSending, chatDraft, setChatDraft, chatError, setChatError,
@@ -43,6 +50,18 @@ export default function InspirationSection({
   // issue #457：AI 对话抽屉滚动容器 ref——右下角「回到顶部」按钮定位/监听于此
   const chatDrawerRef = useRef(null)
   const { tr } = useI18n()
+  // issue #246：标签筛选候选 = 已加载灵感条目的标签去重排序（含分页缓存），
+  // 标签输入 datalist 复用同一候选（既有标签快速选择，也允许自由输入）
+  const labelOptions = Array.from(new Set(
+    inspirationRepos.flatMap((r) => (r.inspirations || [])
+      .concat(inspirationPages[r.repo_id]?.inspirations || [])
+      .map((ins) => ins.label)
+      .filter(Boolean))
+  )).sort()
+  // 归档总数（概览响应 archived_total 汇总）：未归档视图在筛选栏提示
+  // 「归档 N 条」入口，引导用户打开归档开关查看
+  const archivedCount = inspirationRepos.reduce(
+    (sum, r) => sum + (typeof r.archived_total === 'number' ? r.archived_total : 0), 0)
   return (
     <>
           <section className="inspirations-section">
@@ -55,6 +74,35 @@ export default function InspirationSection({
                   ? <><Icon name="checkSquare" /> {tr('overview.inspirationSelectModeExit')}</>
                   : <><Icon name="checkSquare" /> {tr('overview.inspirationSelectMode')}</>}
               </button>
+            </div>
+            <div className="inspiration-filter-bar">
+              <label className="inspiration-label-filter-wrap"
+                     title={tr('overview.inspirationLabelFilterTitle')}>
+                <Icon name="tag" />
+                <select className="input inspiration-label-filter"
+                        value={inspirationLabelFilter}
+                        onChange={(e) => changeInspirationLabelFilter(e.target.value)}
+                        aria-label={tr('overview.inspirationLabelFilter')}>
+                  <option value="">{tr('overview.inspirationLabelAll')}</option>
+                  {labelOptions.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="inspiration-archive-toggle"
+                     title={tr('overview.inspirationShowArchivedTitle')}>
+                <input type="checkbox" className="inspiration-archive-checkbox"
+                       checked={inspirationShowArchived}
+                       onChange={(e) => toggleInspirationShowArchived(e.target.checked)} />
+                <Icon name={inspirationShowArchived ? 'archive' : 'archiveRestore'} />
+                {tr('overview.inspirationShowArchived')}
+                {!inspirationShowArchived && archivedCount > 0 && (
+                  <span className="muted small inspiration-archived-count"
+                        title={tr('overview.archivedCountTitle')}>
+                    {tr('overview.archivedCount', { n: archivedCount })}
+                  </span>
+                )}
+              </label>
             </div>
             <p className="muted">{tr('overview.inspirationsDesc')}</p>
             {inspirationError && (
@@ -136,7 +184,9 @@ export default function InspirationSection({
                     ) : (
                       <ul className="inspiration-list">
                         {items.map((ins) => (
-                          <li key={ins.id} className="inspiration-item">
+                          <li key={ins.id}
+                              className={'inspiration-item'
+                                + (ins.archived ? ' inspiration-item-archived' : '')}>
                             {inspirationSelectionMode && (
                               <label className="inspiration-select-label"
                                      title={tr('overview.inspirationSelectItem')}>
@@ -152,6 +202,18 @@ export default function InspirationSection({
                                           value={editInspirationDraft}
                                           onChange={(e) => setEditInspirationDraft(e.target.value)}
                                           rows={3} />
+                                {/* issue #246：单标签输入——datalist 提供已有
+                                    标签候选，也允许自由输入；空串=无标签 */}
+                                <input className="input inspiration-label-input"
+                                       list="inspiration-label-options"
+                                       value={editInspirationLabel}
+                                       onChange={(e) => setEditInspirationLabel(e.target.value)}
+                                       placeholder={tr('overview.inspirationLabelPlaceholder')} />
+                                <datalist id="inspiration-label-options">
+                                  {labelOptions.map((name) => (
+                                    <option key={name} value={name} />
+                                  ))}
+                                </datalist>
                                 <div className="inspiration-actions">
                                   <button type="button" className="btn btn-small inspiration-save-btn"
                                           onClick={() => saveInspiration(ins)}
@@ -160,12 +222,38 @@ export default function InspirationSection({
                                           onClick={() => {
                                             setEditingInspiration(null)
                                             setEditInspirationDraft('')
+                                            setEditInspirationLabel('')
                                           }}>{tr('common.cancel')}</button>
                                 </div>
                               </div>
                             ) : (
                               <>
-                                <p className="inspiration-content">{ins.content}</p>
+                                <div className="inspiration-content-row">
+                                  <p className="inspiration-content">{ins.content}</p>
+                                  {ins.archived && (
+                                    <span className="inspiration-archived-badge"
+                                          title={tr('overview.inspirationArchivedBadgeTitle')}>
+                                      <Icon name="archive" /> {tr('overview.inspirationArchivedBadge')}
+                                    </span>
+                                  )}
+                                </div>
+                                {ins.label && (
+                                  <span className="inspiration-label-badge"
+                                        title={tr('overview.inspirationLabelBadgeTitle')}>
+                                    <Icon name="tag" /> {ins.label}
+                                  </span>
+                                )}
+                                {/* issue #246：转 issue 时选择「保留灵感并关联」
+                                    后展示的 issue 关联链接 */}
+                                {ins.linked_issue_url && ins.linked_issue_iid != null && (
+                                  <a className="inspiration-linked-issue"
+                                     href={ins.linked_issue_url}
+                                     target="_blank" rel="noreferrer"
+                                     title={tr('overview.inspirationLinkedIssueTitle')}>
+                                    <Icon name="externalLink" />
+                                    {tr('overview.inspirationLinkedIssue', { n: ins.linked_issue_iid })}
+                                  </a>
+                                )}
                                 <div className="inspiration-meta">
                                   <span className="inspiration-time" title={tr('overview.lastUpdated')}>
                                     {fmtAgo(ins.updated_at) || '—'}
@@ -180,11 +268,29 @@ export default function InspirationSection({
                                     <button type="button" className="inspiration-action-btn inspiration-chat-btn"
                                             title={tr('overview.inspirationChatTitle')}
                                             onClick={() => openInspirationChat(ins)}><Icon name="message" /> {tr('overview.chat')}</button>
+                                    {/* issue #246：归档/取消归档按钮——归档视图
+                                        显示「取消归档」，正常视图显示「归档」 */}
+                                    {ins.archived ? (
+                                      <button type="button"
+                                              className="inspiration-action-btn inspiration-unarchive-btn"
+                                              title={tr('overview.inspirationUnarchiveTitle')}
+                                              onClick={() => unarchiveInspiration(ins)}>
+                                        <Icon name="archiveRestore" /> {tr('overview.inspirationUnarchive')}
+                                      </button>
+                                    ) : (
+                                      <button type="button"
+                                              className="inspiration-action-btn inspiration-archive-btn"
+                                              title={tr('overview.inspirationArchiveTitle')}
+                                              onClick={() => archiveInspiration(ins)}>
+                                        <Icon name="archive" /> {tr('overview.inspirationArchive')}
+                                      </button>
+                                    )}
                                     <button type="button" className="inspiration-action-btn"
                                             title={tr('overview.editInspirationTitle')}
                                             onClick={() => {
                                               setEditingInspiration(ins)
                                               setEditInspirationDraft(ins.content)
+                                              setEditInspirationLabel(ins.label || '')
                                             }}><Icon name="pencil" /> {tr('common.edit')}</button>
                                     <button type="button" className="inspiration-action-btn inspiration-delete-btn"
                                             title={tr('overview.deleteInspirationTitle')}
@@ -205,7 +311,9 @@ export default function InspirationSection({
                     )}
                     </>
                     })()}
-                    {/* 随手记录表单：内容去首尾空白非空才允许提交 */}
+                    {/* 随手记录表单：内容去首尾空白非空才允许提交；归档
+                        视图只查看历史，不提供新增入口（issue #246） */}
+                    {inspirationShowArchived ? null : (
                     <form className="inspiration-add-form"
                           onSubmit={(e) => { e.preventDefault(); submitNewInspiration(r.repo_id) }}>
                       <textarea className="input inspiration-textarea"
@@ -216,6 +324,7 @@ export default function InspirationSection({
                       <button type="submit" className="btn btn-small inspiration-add-btn"
                               disabled={!(newInspirationDrafts[r.repo_id] || '').trim()}><Icon name="plus" /> {tr('overview.record')}</button>
                     </form>
+                    )}
                   </div>
                 ))}
               </div>
@@ -287,6 +396,18 @@ export default function InspirationSection({
                       ))}
                     </select>
                   </label>
+                  {/* issue #246：批量条目可选「保留灵感并关联」——勾选后转
+                      issue 成功不删除灵感（与单条保留语义一致） */}
+                  <label className="inspiration-batch-field inspiration-batch-keep">
+                    <span className="muted small" />
+                    <span className="inspiration-batch-keep-label">
+                      <input type="checkbox" className="inspiration-batch-keep-checkbox"
+                             checked={!!draft.keep_inspiration}
+                             onChange={(e) => updateBatchDraft(index, { keep_inspiration: e.target.checked })}
+                             disabled={batchSubmitting} />
+                      {tr('overview.inspirationBatchKeepLabel')}
+                    </span>
+                  </label>
                   {batchResult && (batchResult.failed || []).some((f) => f.inspiration_id === draft.inspiration.id) && (
                     <div className="inspiration-batch-item-error" role="alert">
                       <Icon name="warning" />{' '}
@@ -341,6 +462,51 @@ export default function InspirationSection({
                     : <><Icon name="pin" /> {tr('overview.inspirationBatchSubmit')}</>}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* issue #246：转 issue 保留确认弹窗——点击「添加 Issue」后弹出，
+          勾选「保留灵感并关联」则创建成功后保留灵感并展示关联链接，
+          不勾选保持旧行为（创建成功后删除灵感，issue #162） */}
+      {inspirationKeepDraft && (
+        <div className="modal-overlay" onClick={closeInspirationKeepModal}>
+          <div className="modal inspiration-keep-modal" role="dialog"
+               aria-modal="true" aria-label={tr('overview.inspirationKeepTitle')}
+               onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <strong><Icon name="pin" /> {tr('overview.inspirationKeepTitle')}</strong>
+              <button type="button" className="btn modal-close"
+                      onClick={closeInspirationKeepModal} title={tr('common.close')}
+                      aria-label={tr('common.close')}><Icon name="x" /></button>
+            </div>
+            <div className="inspiration-keep-body">
+              <p className="inspiration-keep-content"
+                 title={inspirationKeepDraft.insp.content}>
+                {inspirationKeepDraft.insp.content}
+              </p>
+              <label className="inspiration-keep-checkbox-label"
+                     title={tr('overview.inspirationKeepLabelTitle')}>
+                <input type="checkbox" className="inspiration-keep-checkbox"
+                       checked={!!inspirationKeepDraft.keep}
+                       onChange={(e) => setInspirationKeepValue(e.target.checked)} />
+                <Icon name="archiveRestore" /> {tr('overview.inspirationKeepLabel')}
+              </label>
+            </div>
+            <div className="inspiration-keep-footer">
+              <button type="button" className="btn btn-small inspiration-keep-cancel-btn"
+                      onClick={closeInspirationKeepModal}>
+                {tr('common.cancel')}
+              </button>
+              <button type="button"
+                      className="btn btn-small btn-primary inspiration-keep-confirm-btn"
+                      onClick={confirmAddIssueWithKeep}
+                      disabled={!!addingIssueInspIds[inspirationKeepDraft.insp.id]}>
+                {addingIssueInspIds[inspirationKeepDraft.insp.id]
+                  ? <><Icon name="hourglass" /> {tr('overview.submitting')}</>
+                  : <><Icon name="pin" /> {tr('overview.inspirationKeepConfirm')}</>}
+              </button>
             </div>
           </div>
         </div>
