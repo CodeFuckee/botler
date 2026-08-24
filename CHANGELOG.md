@@ -14,7 +14,17 @@
     （`uname -s` 识别 MINGW/MSYS/CYGWIN）、uv 安装（Windows 走官方
     PowerShell 安装脚本 `install.ps1`，Linux 维持 pip/curl 安装）、虚拟环境
     Python 路径（Windows `.venv/Scripts/python.exe` / Linux `.venv/bin/python`）、
-    pytest 临时目录（Windows 用 `%TEMP%`，Linux 维持 `/tmp`）；
+    pytest 临时目录统一用 `/tmp`（Linux 原生；Windows Git Bash 的 `/tmp`
+    映射到本机用户临时目录，同样落在本地文件系统）；
+  - 修复假绿：Windows runner 默认 shell 为 pwsh（PowerShell），bash 语法脚本
+    在 pwsh 下逐行报错、pytest 静默不执行但 job 仍返回 success（流水线 #1393
+    实测复盘）。`shell:` 非 GitLab CI job 关键字（job 级无法覆盖 runner 的
+    shell 配置），因此将 `backend:test` 脚本整体重写为 PowerShell 语法
+    （pwsh）：平台检测改为 `$IsWindows` 语义的 Windows 环境信息输出、uv
+    安装走官方 `install.ps1`（Invoke-RestMethod + Invoke-Expression）、虚拟
+    环境 Python 用 `.venv\Scripts\python.exe`、pytest 临时目录用
+    `$env:TEMP`（本机用户临时目录），关键命令显式检查 `$LASTEXITCODE`，
+    失败即 throw 阻断（杜绝假绿）；
   - 测试：`ci/test_backend_test_config.py` 配置合约回归 2 用例通过，
     GitLab CI lint 校验通过。
 

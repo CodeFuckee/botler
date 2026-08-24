@@ -952,6 +952,10 @@ backend:test:
   stage: build
   tags:
     - windows
+  # Windows runner 默认 shell 为 pwsh（PowerShell 7）。job 级无法覆盖 runner
+  # 的 shell 配置（`shell:` 不是 GitLab CI job 关键字），脚本必须用 PowerShell
+  # 语法实现（issue #469 流水线 #1393 实测：bash 语法在 pwsh 下逐行报错、
+  # pytest 静默不执行但 job 仍返回 success 假绿）。
   timeout: 30m
   # 覆盖率提取正则（issue #210）：解析 pytest-cov term-missing 日志的
   # TOTAL 行，驱动项目覆盖率徽章与流水线页面覆盖率展示（GitLab 17+ 由
@@ -963,119 +967,111 @@ backend:test:
       - backend/.uv-cache/
     policy: pull-push
   script:
-    - JOB_START_TIME=$(date +%s)
+    - $JOB_START_TIME = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     - |
-      set -e
+      $ErrorActionPreference = "Stop"
 
       # uv 缓存目录（CI 缓存持久化，加速后续构建）
-      export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
+      $env:UV_CACHE_DIR = "$env:CI_PROJECT_DIR/backend/.uv-cache"
 
-      # 平台检测（issue #469：本 job 在带 windows 标签的 runner 上运行，
-      # 脚本需同时兼容 Windows Git Bash 与 Linux shell）
-      IS_WINDOWS=0
-      case "$(uname -s 2>/dev/null)" in
-        MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
-      esac
-      echo "运行平台: $(uname -s 2>/dev/null || echo unknown)（IS_WINDOWS=${IS_WINDOWS}）"
+      Write-Host "运行平台: Windows (pwsh, $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription))"
 
-      STEP1_START=$(date +%s)
-      echo "=== 1. 确保 uv 可用 ==="
-      if ! command -v uv >/dev/null 2>&1; then
-        if [ "${IS_WINDOWS}" = "1" ]; then
-          # Windows：官方 PowerShell 安装脚本（uv install.ps1，装到 %USERPROFILE%\.local\bin）
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex" >/dev/null 2>&1 || \
-            pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || true
-        else
-          # PEP 668 保护阻止系统级 pip install，使用 --break-system-packages
-          pip install uv -i ${PIP_INDEX_URL} -q --break-system-packages 2>/dev/null || \
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-        fi
-      fi
-      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-      echo "uv: $(uv --version)"
-      STEP1_END=$(date +%s)
-      echo "⏱️  步骤1 (确保 uv) 用时: $((STEP1_END - STEP1_START)) 秒"
+      # ============ 步骤 1：确保 uv 可用 ============
+      $STEP1_START = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      Write-Host "=== 1. 确保 uv 可用 ==="
+      if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+        # Windows：官方 PowerShell 安装脚本（install.ps1，装到 %USERPROFILE%\.local\bin）
+        try {
+          Invoke-Expression (Invoke-RestMethod https://astral.sh/uv/install.ps1) -ErrorAction Stop
+        } catch {
+          Write-Host "⚠️ uv 官方安装脚本失败（$_），尝试 pip 安装兜底..."
+          try {
+            & python -m pip install uv -i $env:PIP_INDEX_URL -q --break-system-packages
+            if ($LASTEXITCODE -ne 0) { throw "pip 安装 uv 退出码 $LASTEXITCODE" }
+          } catch {
+            Write-Host "⚠️ pip 安装 uv 失败（$_）"
+          }
+        }
+      }
+      $env:PATH = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:PATH"
+      Write-Host "uv: $(& uv --version 2>&1)"
+      $STEP1_END = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      Write-Host "⏱️  步骤1 (确保 uv) 用时: $($STEP1_END - $STEP1_START) 秒"
 
-      STEP2_START=$(date +%s)
-      echo "=== 2. 创建/复用虚拟环境 ==="
+      # ============ 步骤 2：创建/复用虚拟环境 ============
+      $STEP2_START = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      Write-Host "=== 2. 创建/复用虚拟环境 ==="
       # shell executor 工作目录跨 job 持久化，.venv 复用；全新环境才创建
-      # Windows 上 uv venv 生成 .venv/Scripts/python.exe，Linux 生成 .venv/bin/python
-      if [ ! -x .venv/bin/python ] && [ ! -x .venv/Scripts/python.exe ]; then
-        rm -rf .venv
-        uv venv .venv
-      fi
-      if [ -x .venv/bin/python ]; then
-        PYTHON=".venv/bin/python"
-      else
-        PYTHON=".venv/Scripts/python.exe"
-      fi
-      echo "PYTHON=${PYTHON}"
-      STEP2_END=$(date +%s)
-      echo "⏱️  步骤2 (虚拟环境) 用时: $((STEP2_END - STEP2_START)) 秒"
+      # Windows 上 uv venv 生成 .venv/Scripts/python.exe
+      if (-not (Test-Path ".venv\Scripts\python.exe")) {
+        if (Test-Path ".venv") { Remove-Item -Recurse -Force ".venv" }
+        & uv venv .venv
+        if ($LASTEXITCODE -ne 0) { throw "uv venv 创建失败（exit $LASTEXITCODE）" }
+      }
+      $PYTHON = ".venv\Scripts\python.exe"
+      Write-Host "PYTHON=$PYTHON"
+      $STEP2_END = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      Write-Host "⏱️  步骤2 (虚拟环境) 用时: $($STEP2_END - $STEP2_START) 秒"
 
-      STEP3_START=$(date +%s)
-      echo "=== 3. 安装项目依赖 ==="
+      # ============ 步骤 3：安装项目依赖 ============
+      $STEP3_START = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      Write-Host "=== 3. 安装项目依赖 ==="
       # issue #209：按 requirements.lock.txt（uv pip compile 全量钉死）安装，
       # requirements.txt 仅为顶层约束声明，锁文件为实际安装依据
-      uv pip install -r requirements.lock.txt -i ${PIP_INDEX_URL}
-      STEP3_END=$(date +%s)
-      echo "⏱️  步骤3 (安装依赖) 用时: $((STEP3_END - STEP3_START)) 秒"
+      & uv pip install -r requirements.lock.txt -i $env:PIP_INDEX_URL
+      if ($LASTEXITCODE -ne 0) { throw "uv pip install 失败（exit $LASTEXITCODE）" }
+      $STEP3_END = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      Write-Host "⏱️  步骤3 (安装依赖) 用时: $($STEP3_END - $STEP3_START) 秒"
 
-      STEP4_START=$(date +%s)
-      echo "=== 4. 运行测试（pytest-xdist 并行 + pytest-cov 覆盖率，issue #210/#211）==="
-      # Shell executor 的工作目录位于共享文件系统。pytest 默认将 tmp_path
-      # 建在项目目录下，SQLite 即使在单 worker 时也可能在该文件系统的锁
-      # 协商中触发 sqlite3.OperationalError: locking protocol（流水线 #1352）。
-      # 每个作业改用本机 /tmp 的独立 basetemp，确保所有测试临时数据库落在
-      # 本地文件系统；默认仍串行执行，需要诊断并行问题时可显式覆盖 worker。
-      ulimit -n 65535 2>/dev/null || echo "⚠️ 无法提升 ulimit -n，继续使用系统默认值"
-      echo "→ 当前文件描述符上限 ulimit -n: $(ulimit -n)"
-      PYTEST_WORKERS="${PYTEST_WORKERS:-1}"
-      if [ "${IS_WINDOWS}" = "1" ]; then
-        # Windows：pytest 临时目录用本机 %TEMP%（Git Bash 的 /tmp 亦可，显式用 %TEMP% 更稳）
-        PYTEST_BASETEMP="${TEMP:-/tmp}/botler-pytest-${CI_PIPELINE_ID:-local}-${CI_JOB_ID:-local}"
-      else
-        # 测试临时 SQLite 文件必须落在本机文件系统（共享文件系统锁协商会触发
-        # sqlite3.OperationalError: locking protocol，流水线 #1352）
-        PYTEST_BASETEMP="/tmp/botler-pytest-${CI_PIPELINE_ID:-local}-${CI_JOB_ID:-local}"
-      fi
-      rm -rf "$PYTEST_BASETEMP"
-      mkdir -p "$PYTEST_BASETEMP"
-      if [ -d tests ]; then
-        echo "→ pytest 临时目录: ${PYTEST_BASETEMP}"
-        echo "→ pytest-xdist 并行 worker 数: ${PYTEST_WORKERS}（CPU 核数: $(nproc)）"
-        $PYTHON -m pytest tests/ -v --tb=short -n "${PYTEST_WORKERS}" \
-          --basetemp="$PYTEST_BASETEMP" \
-          --cov=botler --cov-report=term-missing --cov-report=xml \
-          --cov-fail-under=70 \
+      # ============ 步骤 4：运行测试 ============
+      $STEP4_START = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      Write-Host "=== 4. 运行测试（pytest-xdist 并行 + pytest-cov 覆盖率，issue #210/#211）==="
+      # 测试临时 SQLite 文件必须落在本机文件系统（共享文件系统锁协商会触发
+      # sqlite3.OperationalError: locking protocol，流水线 #1352）。
+      # Windows 用 %TEMP%（本机用户临时目录），落在本地文件系统。
+      $PYTEST_WORKERS = if ($env:PYTEST_WORKERS) { $env:PYTEST_WORKERS } else { "1" }
+      $PYTEST_BASETEMP = Join-Path $env:TEMP "botler-pytest-$env:CI_PIPELINE_ID-$env:CI_JOB_ID"
+      if (Test-Path $PYTEST_BASETEMP) { Remove-Item -Recurse -Force $PYTEST_BASETEMP }
+      New-Item -ItemType Directory -Path $PYTEST_BASETEMP -Force | Out-Null
+      if (Test-Path "tests") {
+        Write-Host "→ pytest 临时目录: $PYTEST_BASETEMP"
+        Write-Host "→ pytest-xdist 并行 worker 数: $PYTEST_WORKERS"
+        & $PYTHON -m pytest tests/ -v --tb=short -n "$PYTEST_WORKERS" `
+          --basetemp="$PYTEST_BASETEMP" `
+          --cov=botler --cov-report=term-missing --cov-report=xml `
+          --cov-fail-under=70 `
           --junitxml=junit.xml
-      else
-        echo "⚠️  未发现 tests/ 目录，执行语法与导入冒烟检查"
-        $PYTHON -m compileall botler -q && echo "✓ 语法检查通过"
+        if ($LASTEXITCODE -ne 0) { throw "pytest 失败（exit $LASTEXITCODE）" }
+      } else {
+        Write-Host "⚠️  未发现 tests/ 目录，执行语法与导入冒烟检查"
+        & $PYTHON -m compileall botler -q
+        if ($LASTEXITCODE -ne 0) { throw "compileall 失败（exit $LASTEXITCODE）" }
+        Write-Host "✓ 语法检查通过"
         # ⚠️ 不 import botler.main：模块级 create_app() 会加载 config.yaml，
         #    凭据环境变量（GITLAB_BOT_TOKEN 等）在 CI 中未设置会导致
         #    ValueError。仅导入无副作用的顶层包。
-        $PYTHON -c "import botler; print('✓ botler 包导入成功 (v' + botler.__version__ + ')')"
-      fi
-      STEP4_END=$(date +%s)
-      echo "⏱️  步骤4 (运行测试) 用时: $((STEP4_END - STEP4_START)) 秒"
+        & $PYTHON -c "import botler; print('✓ botler 包导入成功 (v' + botler.__version__ + ')')"
+        if ($LASTEXITCODE -ne 0) { throw "botler 包导入失败（exit $LASTEXITCODE）" }
+      }
+      $STEP4_END = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      Write-Host "⏱️  步骤4 (运行测试) 用时: $($STEP4_END - $STEP4_START) 秒"
 
-      JOB_END_TIME=$(date +%s)
-      DURATION=$((JOB_END_TIME - JOB_START_TIME))
-      echo "========================================="
-      echo "⏱️  [backend:test] 总用时: ${DURATION} 秒 ($(($DURATION / 60)) 分 $((DURATION % 60)) 秒)"
-      echo "========================================="
-      echo ""
-      echo "========== 各步骤耗时汇总 =========="
-      echo "  步骤1 (确保 uv):          $((STEP1_END - STEP1_START)) 秒"
-      echo "  步骤2 (虚拟环境):         $((STEP2_END - STEP2_START)) 秒"
-      echo "  步骤3 (安装依赖):         $((STEP3_END - STEP3_START)) 秒"
-      echo "  步骤4 (运行测试):         $((STEP4_END - STEP4_START)) 秒"
-      echo "========================================="
+      $JOB_END_TIME = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      $DURATION = $JOB_END_TIME - $JOB_START_TIME
+      Write-Host "========================================="
+      Write-Host "⏱️  [backend:test] 总用时: ${DURATION} 秒 ($([math]::Floor($DURATION / 60)) 分 $($DURATION % 60) 秒)"
+      Write-Host "========================================="
+      Write-Host ""
+      Write-Host "========== 各步骤耗时汇总 =========="
+      Write-Host "  步骤1 (确保 uv):          $($STEP1_END - $STEP1_START) 秒"
+      Write-Host "  步骤2 (虚拟环境):         $($STEP2_END - $STEP2_START) 秒"
+      Write-Host "  步骤3 (安装依赖):         $($STEP3_END - $STEP3_START) 秒"
+      Write-Host "  步骤4 (运行测试):         $($STEP4_END - $STEP4_START) 秒"
+      Write-Host "========================================="
       # 并行前后耗时对比（issue #211 验收标准）：改造前串行基线 2112 例用时 327 秒
-      # （流水线 #1169，2026-08-19 实测）；本次并行（worker=${PYTEST_WORKERS}）用时见上。
-      echo "📊 并行对比（issue #211）：改造前串行基线 327 秒 → 本次并行 $((STEP4_END - STEP4_START)) 秒"
-      echo "   （基线：流水线 #1169 backend:test 步骤4，2112 passed in 324.70s）"
+      # （流水线 #1169，2026-08-19 实测）；本次并行（worker=$PYTEST_WORKERS）用时见上。
+      Write-Host "📊 并行对比（issue #211）：改造前串行基线 327 秒 → 本次并行 $($STEP4_END - $STEP4_START) 秒"
+      Write-Host "   （基线：流水线 #1169 backend:test 步骤4，2112 passed in 324.70s）"
   # 覆盖率报告（issue #210）：上传 GitLab coverage_report，MR 页面展示
   # 覆盖率对比；when: always 保证即使阈值未达（job 失败）报告也可下载查看
   artifacts:
