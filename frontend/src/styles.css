@@ -1733,13 +1733,13 @@ body:has(.drawer-overlay) {
   gap: 8px;
   flex-shrink: 0;
 }
-/* issue #331：issue 详情 / 流水线详情右边栏头部操作区固定在顶部——
-   「关闭 issue / 查看执行的详情 / 在 GitLab 中打开 / 关闭右边栏」按钮
-   放在右边栏顶部，并且固定在顶部，不随右边栏内容滚动而滚动（与移动端
-   底部操作栏 sticky 常驻对称）。负 margin 抵消 .drawer 的 padding，
-   头部背景铺满抽屉顶部边缘，滚动内容从头部下方经过时被不透明背景遮住；
-   限定两个抽屉（.issue-drawer / .pipeline-drawer），不波及第二层
-   任务执行详情抽屉与其他 .modal-header 使用者 */
+/* issue #331 + #477：issue 详情 / 流水线详情 / 任务执行详情右边栏
+   头部操作区固定在顶部——「关闭 issue / 查看执行的详情 / 在 GitLab 中
+   打开 / 关闭右边栏」按钮放在右边栏顶部，并且固定在顶部，不随右边栏
+   内容滚动而滚动（与移动端底部操作栏 sticky 常驻对称）。负 margin 抵消
+   .drawer 的 padding，头部背景铺满抽屉顶部边缘，滚动内容从头部下方经过
+   时被不透明背景遮住；限定三个抽屉（.issue-drawer / .pipeline-drawer /
+   .task-detail-drawer），不波及裸 .modal-header 等其他使用者 */
 .issue-drawer .modal-header {
   position: sticky;
   /* issue #335：top 必须为负的 --space-4（与负 margin 同值）——实测
@@ -1756,6 +1756,17 @@ body:has(.drawer-overlay) {
 .pipeline-drawer .modal-header {
   position: sticky;
   /* issue #335：同 issue 抽屉——top 取负的 --space-4 抵消 .drawer padding，
+     使头部边框盒紧贴抽屉顶部（top: 0 会留 16px 空隙、滚动时内容露出） */
+  top: calc(-1 * var(--space-4));
+  z-index: 5;
+  background: var(--bg-card);
+  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;
+  padding: var(--space-4);
+}
+.task-detail-drawer .modal-header {
+  position: sticky;
+  /* issue #335 同款 + issue #477：任务执行详情第二层右边栏头部标题与
+     关闭按钮同样固定在顶部——top 取负的 --space-4 抵消 .drawer padding，
      使头部边框盒紧贴抽屉顶部（top: 0 会留 16px 空隙、滚动时内容露出） */
   top: calc(-1 * var(--space-4));
   z-index: 5;

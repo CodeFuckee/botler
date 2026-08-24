@@ -1,14 +1,16 @@
-// 概览页右边栏头部操作区固定在顶部测试（issue #331）：
-// issue 详情右边栏与流水线详情右边栏的操作按钮——「关闭 issue」、
-// 「查看执行的详情」、「在 GitLab 中打开」、「关闭右边栏（×）」——
-// 放在右边栏顶部，并且固定在顶部，不随右边栏内容滚动而滚动。
+// 概览页右边栏头部操作区固定在顶部测试（issue #331 + #477）：
+// issue 详情右边栏、流水线详情右边栏、任务执行详情第二层右边栏的
+// 顶部标题与操作按钮——「关闭 issue / 查看执行的详情 / 在 GitLab 中
+// 打开 / 关闭右边栏（×）」——放在右边栏顶部，并且固定在顶部，不随
+// 右边栏内容滚动而滚动。
 //
 // 断言（styles.css 源码级 + 组件渲染级）：
-// 1. styles.css：.issue-drawer .modal-header 与 .pipeline-drawer
-//    .modal-header 为 sticky 顶部固定（position: sticky / top: 0 /
-//    z-index / 不透明背景遮住滚过的内容）；
-// 2. 固定规则限定 issue 与流水线两个抽屉，不波及 .task-detail-drawer
-//    （任务执行详情第二层右边栏，不在本 issue 范围）；
+// 1. styles.css：.issue-drawer .modal-header、.pipeline-drawer
+//    .modal-header 与 .task-detail-drawer .modal-header 为 sticky
+//    顶部固定（position: sticky / top: 负的 --space-4 / z-index /
+//    不透明背景遮住滚过的内容）；
+// 2. 固定规则限定三个抽屉（issue 详情 / 流水线详情 / 任务执行详情），
+//    不波及裸 .modal-header 等其他使用者；
 // 3. IssueDrawer：关闭 issue / 查看执行的详情 / 在 GitLab 中打开 /
 //    × 关闭按钮均渲染于头部 .issue-drawer-actions（.modal-header 内）；
 // 4. PipelineDrawer：「在 GitLab 中打开」+ × 关闭按钮渲染于头部
@@ -86,11 +88,22 @@ test('styles.css：流水线详情右边栏头部操作区 sticky 固定在顶�
   assert.match(body, /background/, '流水线抽屉头部应有不透明背景（遮住滚过的内容）')
 })
 
-test('styles.css：固定规则限定两个抽屉，不波及第二层与其他 modal-header 使用者', () => {
-  // 第二层任务执行详情抽屉（.task-detail-drawer）不在本 issue 范围，
-  // 其头部不应被新增 sticky 规则命中
-  assert.ok(!/\.task-detail-drawer\s+\.modal-header/.test(styles),
-            '不应为第二层抽屉新增 sticky 头部规则')
+test('styles.css：任务执行详情第二层右边栏头部 sticky 固定在顶部（issue #477）', () => {
+  const body = ruleBody(styles, '\\.task-detail-drawer\\s+\\.modal-header', 'position')
+  assert.match(body, /position:\s*sticky/, '任务执行详情抽屉头部应 sticky（不随内容滚动）')
+  // issue #335 同款：top 必须为负的 --space-4（抵消 .drawer padding），
+  // 否则头部与抽屉顶部留空隙、滚动时内容文字从空隙露出
+  assert.match(body, /top:\s*calc\(-1 \* var\(--space-4\)\)/,
+               '任务执行详情抽屉头部应吸附抽屉顶部（top 抵消 padding，无空隙）')
+  assert.match(body, /z-index/, '任务执行详情抽屉头部应浮于滚动内容之上（z-index）')
+  assert.match(body, /background/, '任务执行详情抽屉头部应有不透明背景（遮住滚过的内容）')
+})
+
+test('styles.css：固定规则限定三个抽屉，不波及裸 modal-header 使用者（issue #477）', () => {
+  // 任务执行详情第二层抽屉（.task-detail-drawer，issue #477）与 issue/
+  // 流水线抽屉同为右侧边栏，头部固定规则同样限定在抽屉选择器内
+  assert.ok(/\.task-detail-drawer\s+\.modal-header/.test(styles),
+            '应为任务执行详情抽屉新增 sticky 头部规则（issue #477）')
   // 固定规则必须带抽屉限定选择器，不能是裸 .modal-header（会被弹窗/其他
   // 抽屉误伤）
   assert.ok(!/^\s*\.modal-header\s*\{[^}]*position:\s*sticky/m.test(styles),

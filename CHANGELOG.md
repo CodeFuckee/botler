@@ -135,6 +135,22 @@
       等共 25 用例；本地 Linux 开发与 backend:mypy 门禁（linux/code01
       runner）不受影响，仍全量执行。
 
+- **任务执行详情右边栏头部标题与关闭按钮固定在顶部（issue #477）**：
+  - 概览页 issue 抽屉「查看执行的详情」弹出的第二层右边栏
+    （`.task-detail-drawer`）顶部标题（「任务执行详情 — #iid 标题」）与
+    × 关闭按钮改为 sticky 固定在抽屉顶部，不随右边栏内容滚动而滚动——
+    与 issue 详情右边栏（`.issue-drawer`，issue #331）及流水线详情右边栏
+    （`.pipeline-drawer`）行为一致；`styles.css` 新增
+    `.task-detail-drawer .modal-header` sticky 规则（`position: sticky` +
+    `top: calc(-1 * var(--space-4))` 抵消 `.drawer` padding 紧贴抽屉顶部 +
+    `z-index: 5` + 不透明背景遮住滚过的内容，issue #335 同款参数）；
+  - 测试：`frontend/tests/overview-drawer-actions-sticky.test.mjs` 更新固定
+    规则断言（原「不波及任务执行详情抽屉」改为「三个抽屉均固定」）并新增
+    `.task-detail-drawer .modal-header` sticky 源码断言；新增 e2e
+    `frontend/e2e/tests/task-detail-drawer-sticky.spec.js`（真实 Chromium
+    打开第二层抽屉，断言 computed style 为 sticky、滚动前后头部坐标不变、
+    头部紧贴抽屉顶部无空隙、滚动后顶部条带命中头部而非内容）。
+
 ### Fixed
 
 - **修复任务成功结果评论未写回 issue（issue #480）**：
