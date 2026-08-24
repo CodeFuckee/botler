@@ -1,6 +1,7 @@
 """本地环境检测模块测试（issue #22）：工具安装检测 / 版本解析 / 最新版本查询。"""
 
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -684,6 +685,9 @@ class TestInstallTool:
 class TestInstallGh:
     """gh 安装（issue #468）：GitHub release 二进制下载安装到 PATH 目录。"""
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="gh 二进制安装目标 /usr/local/bin 为 Linux 专属，Windows 路径语义（反斜杠）不同，跳过（issue #468）")
     def test_gh_binary_install_to_usr_local_bin(self, monkeypatch):
         """下载最新 release 二进制并原子写入 /usr/local/bin/gh。"""
         monkeypatch.setattr("botler.environment.sys.platform", "linux")
