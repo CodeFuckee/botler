@@ -1829,6 +1829,32 @@ deploy_to_code01:
       else
         echo "✓ data/backend/config.yaml 存在"
       fi
+      # 3b2. GitLab bot token 同步（issue #481）：生产 config.yaml/.env
+      # 的 bot_token 曾长期停留在陈旧失效值（所有 GitLab API 401 → 对账
+      # 每 5 分钟失败、启动失败、概览数据拿不到 → 页面加载不出/卡顿），
+      # 而 CI 变量 GITLAB_BOT_TOKEN 才是有效 token。修复前「.env 已存在
+      # 则保留」导致失效 token 永不过期。每次部署把 CI 变量同步进 .env
+      # 与 config.yaml，token 轮换后自动生效（脚本行为见
+      # ci/test_gitlab_token_sync.py）。
+      if [ -n "${GITLAB_BOT_TOKEN:-}" ]; then
+        "$STABLE_DIR/backend/.venv/bin/python" \
+          "$STABLE_DIR/deploy/sync-gitlab-credentials.py" "$DATA_DIR" \
+          || { dbg STEP3b2 "FAIL: GitLab token 同步失败"; echo "错误：GitLab bot token 同步失败"; exit 1; }
+        # 同步后立即验证：token 无效则拒绝带病部署（deploy 不允许假绿）
+        SYNCED_TOKEN=$(grep "^GITLAB_BOT_TOKEN=" "$DATA_DIR/backend/.env" | cut -d= -f2- | tr -d '\r\n')
+        HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -H "PRIVATE-TOKEN: $SYNCED_TOKEN" "${CI_SERVER_URL}/api/v4/user")
+        if [ "$HTTP_CODE" = "200" ]; then
+          echo "✓ 同步后 GitLab token 验证通过（GET /user → 200）"
+          dbg STEP3b2 "OK: token 验证通过"
+        else
+          echo "❌ 同步后 GitLab token 仍无效（HTTP ${HTTP_CODE}），拒绝带病部署"
+          dbg STEP3b2 "FAIL: token 验证 HTTP ${HTTP_CODE}"
+          exit 1
+        fi
+      else
+        echo "⚠️  CI 变量 GITLAB_BOT_TOKEN 未注入，跳过 token 同步"
+        dbg STEP3b2 "SKIP: GITLAB_BOT_TOKEN 未注入"
+      fi
       # 3c. symlink 桥接（构建目录 backend/.env / backend/workspace →
       #     data/；构建目录遗留的旧数据文件移除，以 data/ 为准）
       for link in .env workspace; do
@@ -1908,7 +1934,12 @@ deploy_to_code01:
       pm2 delete ${APP_NAME} >/dev/null 2>&1 || true
       # ⚠️ 配置文件必须是 .cjs：job 目录在 botler 项目下（package.json 含
       # type: module），.js 会被当作 ESM 解析导致 require 未定义
-      pm2 start "$STABLE_DIR/deploy/botler.config.cjs" >> "$DBG_LOG" 2>&1 || { dbg STEP6 "FAIL: pm2 start"; echo "错误：pm2 start 失败"; exit 1; }
+      # ⚠️ 用净化环境启动（issue #481）：pm2 fork 会把调用方 shell 的
+      # 环境整包传给生产进程——裸 pm2 start 会让生产继承 CI_JOB_TOKEN
+      #（作业结束即失效）/ CI_PROJECT_DIR（指向构建目录）/ GITLAB_CI=true
+      # 等，曾致 git 凭据误用 403（issue #18）。pm2-clean-env.py 剔除
+      # CI_*/GITLAB_CI/GIT_CONFIG_* 后再启动。
+      python3 "$STABLE_DIR/deploy/pm2-clean-env.py" start "$STABLE_DIR/deploy/botler.config.cjs" >> "$DBG_LOG" 2>&1 || { dbg STEP6 "FAIL: pm2 start"; echo "错误：pm2 start 失败"; exit 1; }
       pm2 save >/dev/null 2>&1 || true
       dbg STEP6 "OK"
       sleep 3

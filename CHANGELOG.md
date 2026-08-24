@@ -153,6 +153,36 @@
 
 ### Fixed
 
+- **修复「backend:test 已迁移到另一台服务器，但运行该阶段时生产页面仍卡顿」的历史遗留问题（issue #481）**：
+  - 深入诊断结论：backend:test 已确实迁移到 windows 标签 runner（runner
+    id=16，流水线 #1428 实证在 Windows 机器上跑 pytest，code01 空闲），
+    迁移本身不是剩余卡顿的来源；真正根因是生产 botler 的 GitLab bot token
+    长期失效（`data/backend/config.yaml` 与 `.env` 中的 `bot_token` 已被
+    GitLab 拒绝，实测 GET /user → 401，错误日志持续一周以上共 23884 行），
+    生产应用所有 GitLab API 操作（对账每 5 分钟、应用启动、issue/流水线
+    概览数据聚合、webhook issue 事件）全部 401 失败 → 页面数据加载不出/
+    卡顿。此前 #461（renice/ionice）、#467（稳定部署目录）、#469（迁移
+    backend:test）修的都是 CI 与生产同机的资源争抢，从未同步这个持续
+    存在的失效 token，因此「一直没修好」；
+  - 次要根因：deploy job 在 CI job shell 里裸 `pm2 start`，生产进程继承
+    CI_JOB_ID / CI_JOB_TOKEN（作业结束即失效）/ CI_PROJECT_DIR（指向会被
+    清理的构建目录）/ GITLAB_CI=true 等污染环境（曾致 git 凭据误用 403，
+    issue #18）；build 阶段 frontend:build / harmony:build / backend:mypy
+    与 e2e/performance 阶段仍与生产同机运行（缓存命中时轻量，冷缓存时
+    重负载）；
+  - 修复：deploy job 新增第 3b2 步「GitLab bot token 同步」——用 CI 变量
+    `GITLAB_BOT_TOKEN`（有效 token）覆盖写入 `data/backend/.env` 与
+    `data/backend/config.yaml`（`deploy/sync-gitlab-credentials.py`，幂等、
+    原子写、token 未注入时跳过），同步后立即用 `GET /user` 验证，token
+    无效则拒绝带病部署；第 6 步 `pm2 start` 改经 `deploy/pm2-clean-env.py`
+    净化环境（剔除 CI_*/GITLAB_CI/GIT_CONFIG_*）后再启动，生产进程不再
+    继承失效的作业凭据；
+  - 测试：新增 `ci/test_gitlab_token_sync.py`（deploy 必须调用同步脚本 +
+    脚本行为：覆盖陈旧 .env/config.yaml、保留其他字段、token 缺失跳过、
+    幂等）与 `ci/test_pm2_env_clean.py`（deploy 必须净化环境启动 pm2 +
+    clean_env 剔除 CI 变量保留运行环境），修复前 7 个用例失败复现缺陷，
+    修复后 ci/ 32 用例全通过。
+
 - **修复任务成功结果评论未写回 issue（issue #480）**：
   - 现象：任务 #692（issue #473）收尾时，agent 用
     `glab api ... -f "body=@/tmp/issue473_comment.md"` 发评论，GitLab 上只显示
