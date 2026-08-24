@@ -6,6 +6,18 @@
 
 ### Changed
 
+- **概览页开放 Issue 组件：issue 内容一行显示不下时改为多行显示，取消省略号截断（issue #476）**：
+  - `.issue-link` 移除 `white-space: nowrap` / `text-overflow: ellipsis` / `overflow: hidden`
+    三个截断属性，长标题在列内自然换行多行展示，不再以省略号截断（issue #81 的
+    「单行省略」策略改为「多行换行」）；
+  - 保留块级 `display: block`（整行可点击、宽度撑满），并保留 `.issue-main`
+    `flex:1 + min-width:0`、`.issue-side` `flex-shrink:0` 布局约束，右侧更新时间/
+    评论数/置顶按钮不被压缩或遮挡；
+  - 测试：`frontend/tests/overview-issue-overflow.test.mjs` 断言更新为「块级显示 +
+    允许多行换行 + 无省略号/nowrap/overflow:hidden」；新增 e2e 用例
+    `frontend/e2e/tests/overview-issue-title-wrap.spec.js` 验证真实浏览器中长标题
+    换行多行、全文可见无横向溢出。
+
 - **CI：backend:test 阶段迁移至带 windows 标签的 runner 上运行（issue #469）**：
   - `backend:test` job 的 tags 由 `linux + code01` 改为 `windows`，不再在
     code01 标签的 GitLab Runner 上运行（在 runner 16：windows/dotnet 标签、

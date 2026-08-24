@@ -1,14 +1,13 @@
-// 概览页「开放 Issue」板块长标题溢出测试（issue #81）：issue 标题文字
-// 超出开放 issue 的范围，遮挡右侧评论数与更新时间。
+// 概览页「开放 Issue」板块长标题展示测试（issue #81 → issue #476）。
 //
-// 根因：.issue-link 是 inline <a>，inline 元素上 overflow:hidden 与
-// text-overflow:ellipsis 不生效，长标题直接横向溢出；.issue-main 缺
-// flex:1，宽度计算不可靠。
-//
-// 断言（styles.css 源码断言，与 tasks-responsive-cols.test.mjs 风格一致）：
-// 1. .issue-link 显式声明块级显示（block/inline-block），使 ellipsis 生效；
-// 2. .issue-link 保留 overflow:hidden + text-overflow:ellipsis + nowrap；
-// 3. .issue-main 声明 flex:1（占据除右侧元信息外的全部宽度）；
+// issue #81：.issue-link 原为 inline <a>，inline 元素上 overflow:hidden 与
+// text-overflow:ellipsis 不生效，长标题直接横向溢出遮挡右侧评论数与更新时间，
+// 修复为块级化 + 单行 ellipsis 截断。
+// issue #476：产品调整——issue 内容一行显示不下时改为多行显示，取消省略号
+// 截断。因此本测试改为断言：
+// 1. .issue-link 仍显式声明块级显示（block），整行可点击、宽度撑满；
+// 2. .issue-link 不再声明 nowrap / text-overflow:ellipsis（允许自然换行多行）；
+// 3. .issue-main 声明 flex:1（占据除右侧元信息外的全部宽度）+ min-width:0；
 // 4. .issue-side 保持 flex-shrink:0（评论数/时间不被压缩）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,14 +25,19 @@ function cssRule(css, cls) {
   return rule[1]
 }
 
-test('issue 标题链接为块级显示，长标题 ellipsis 生效（复现 issue #81）', () => {
+test('issue 标题链接为块级显示且允许多行换行，不再单行省略号截断（issue #476）', () => {
   const link = cssRule(styles, 'issue-link')
-  // inline 元素上 text-overflow:ellipsis 不生效——必须显式块级化
+  // 块级化保留：整行可点击、宽度撑满（issue #81 的布局基础）
   assert.match(link, /display\s*:\s*(block|inline-block)/,
-               '.issue-link 应声明块级 display，否则 ellipsis 对 inline 元素无效')
-  assert.match(link, /overflow\s*:\s*hidden/, '.issue-link 应保留 overflow:hidden')
-  assert.match(link, /text-overflow\s*:\s*ellipsis/, '.issue-link 应保留 text-overflow:ellipsis')
-  assert.match(link, /white-space\s*:\s*nowrap/, '.issue-link 应保留 white-space:nowrap')
+               '.issue-link 应声明块级 display')
+  // 多行显示：不再禁止换行 / 省略号 / 溢出裁切（issue #476 取消单行省略号展示）。
+  // 用 ^ 行首锚定 + m 标志匹配属性声明本身，避免命中注释里的字样。
+  assert.doesNotMatch(link, /^\s*white-space\s*:\s*nowrap/m,
+                      '.issue-link 不应声明 white-space:nowrap——需允许多行换行')
+  assert.doesNotMatch(link, /^\s*text-overflow\s*:\s*ellipsis/m,
+                      '.issue-link 不应声明 text-overflow:ellipsis——取消省略号展示')
+  assert.doesNotMatch(link, /^\s*overflow\s*:\s*hidden/m,
+                      '.issue-link 不应声明 overflow:hidden——避免裁掉换行后的内容')
 })
 
 test('issue 主列 flex:1 占据剩余宽度，右侧元信息不被遮挡', () => {

@@ -3915,11 +3915,10 @@ body:has(.drawer-overlay) {
   color: inherit;
   text-decoration: none;
   /* issue #81：inline 元素上 text-overflow:ellipsis 不生效，
-     块级化后长标题才截断为省略号，不遮挡右侧评论数与时间 */
+     块级化后长标题才可正确截断/换行，不遮挡右侧评论数与时间；
+     issue #476：标题一行显示不下时改为多行显示，取消省略号截断——
+     去掉 nowrap / ellipsis / overflow:hidden 后文本自然换行 */
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   /* issue #85：标题由 <a> 改为 <button>（点击打开右边栏，
      不再直接跳转 GitLab）——重置按钮默认样式，保留文本外观 */
   background: none;
