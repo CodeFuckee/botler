@@ -69,7 +69,27 @@
 
 ### Fixed
 
-- **修复统计页未撑满窗口宽度（issue #474）**：
+- **修复右侧边栏拖拽手柄随抽屉内容滚动，页面下方只剩一半手柄（issue #475）**：
+  - 现象：右侧边栏（issue 详情 / 流水线 / 灵感对话 / 任务执行详情）左缘的
+    左右拖拽手柄（`.drawer-resize-handle`），在抽屉内容滚动时会一起滚走，
+    页面滚到下方时手柄只剩一半可见，拖拽调整宽度不便；
+  - 根因：`.drawer` 自身是滚动容器（`overflow-y: auto`），同时又是手柄的
+    定位参考系（`position: relative` + `will-change: transform` 都会建立
+    包含块）——绝对定位的手柄以滚动容器为包含块时，会随容器内容一起滚动；
+  - 修复：`ResizableDrawer` 外层新增非滚动定位外壳 `.drawer-shell`
+    （`position: relative`、`height: 100%`，自身不滚动），拖拽手柄改渲染在
+    `.drawer` 之外、外壳之内——滚动容器与手柄定位参考系解耦，抽屉内容
+    滚动时手柄整高固定于抽屉左缘；滑入动画上移到外壳（`.drawer-shell`），
+    抽屉与手柄整体从右滑入（外壳内 `.drawer` 动画取消，避免二次位移）；
+    移动端（≤860px）全宽规则同步迁移到外壳，Tasks 页直接使用 `.drawer`
+    的场景保留原规则；
+  - 测试：`overview-drawer-resize.test.mjs` 新增 2 用例（手柄渲染于
+    `.drawer-shell` 内而非滚动容器 `.drawer` 内的结构断言、`.drawer-shell`
+    样式定位参考系断言），e2e 新增 `drawer-resize-handle-scroll.spec.js`
+    真实浏览器回归——滚动抽屉内容后手柄 top 位移 < 2px，前端全量 1713
+    用例 + 后端全量 pytest 通过。
+
+- **修复统计页未撑满窗口宽度（issue #474）**：：
   - 现象：统计看板页在宽屏下内容区右侧留白大，未撑满窗口可用宽度；
   - 根因：`.stats-page` 样式固定 `max-width: 1080px`，而全局内容容器
     `.content` 在宽屏（≥1440px 视口）下可放大至 `max(1440px,

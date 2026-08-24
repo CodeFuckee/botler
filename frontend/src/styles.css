@@ -1655,6 +1655,23 @@ code {
   /* apple-design：从右滑入（空间一致性——退出应沿同路径向右） */
   animation: drawer-in 240ms var(--ease-spring);
 }
+/* issue #475：抽屉外壳——非滚动定位外壳，作为拖拽手柄的定位参考系。
+   .drawer 自身既是滚动容器（overflow-y: auto）又是手柄原本的定位参考系
+   （position: relative + will-change: transform），绝对定位的手柄会随
+   抽屉内容一起滚动（页面滚到下方时只剩一半手柄可见）。外壳自身不滚动、
+   整高撑开，手柄定位于外壳左缘，抽屉内容滚动时手柄保持固定。
+   滑入动画由外壳承担：抽屉与手柄整体从右滑入，避免手柄先到位的错位。 */
+.drawer-shell {
+  position: relative;
+  height: 100%;
+  animation: drawer-in 240ms var(--ease-spring);
+  will-change: transform, opacity;
+}
+.drawer-shell .drawer {
+  /* 滑入动画已由外壳承担，避免抽屉在外壳内二次位移 */
+  animation: none;
+}
+
 /* issue #348：右侧边栏（抽屉）打开时锁定主页面滚动——抽屉打开时只
    显示抽屉自身的竖直滚动条，不再出现「主页滚动条 + 抽屉滚动条」双
    滚动条（.drawer-overlay 虽 fixed 全屏覆盖，但主页面 body 仍可滚动、
@@ -5285,6 +5302,18 @@ body:has(.drawer-overlay) {
      flex-shrink: 0（实测必需）：.drawer 是 .drawer-overlay（flex）的子项，
      width:100% 的百分比基准在 flex 布局下会退化为内容宽度（实测 375px
      视口抽屉被压到 243px），显式禁止收缩才真正全宽 */
+  .drawer-shell {
+    width: 100%;
+    max-width: 100%;
+    flex-shrink: 0;
+  }
+  .drawer-shell .drawer {
+    width: 100%;
+    max-width: 100%;
+    flex-shrink: 0;
+  }
+  /* issue #475：.drawer 基础全宽规则保留——Tasks 页等直接使用
+     .drawer（未套 .drawer-shell）的场景仍需 flex-shrink: 0 */
   .drawer {
     width: 100%;
     max-width: 100%;

@@ -402,3 +402,38 @@ test('键盘下界钳制：ArrowLeft 到 320 后不再减小', async () => {
     fake.restore()
   }
 })
+
+// ---- issue #475：拖拽手柄不得随抽屉内容滚动 ----
+// 背景：.drawer 自身是滚动容器（overflow-y: auto），若手柄绝对定位在
+// .drawer 内（.drawer 同时是 position: relative 定位参考系），抽屉内容
+// 滚动时手柄会一起滚走（页面下方只剩一半手柄）。修复：ResizableDrawer
+// 外层套 .drawer-shell（非滚动定位外壳），手柄渲染在 .drawer 之外、
+// 外壳之内——滚动容器与定位参考系解耦。
+test('拖拽手柄渲染在 .drawer 滚动容器之外（.drawer-shell 内）', async () => {
+  const { renderer, fake } = await renderDrawer({ innerWidth: 1440 })
+  try {
+    const handle = findHandle(renderer)
+    assert.ok(handle, '宽视口应渲染拖拽手柄')
+    const drawer = findDrawer(renderer)
+    assert.ok(drawer, '应渲染 .drawer issue-drawer 容器')
+    // 手柄不应是 .drawer 的后代（否则会随抽屉内容滚动）
+    const inDrawer = drawer.findAll(
+      (n) => String(n.props.className || '').startsWith('drawer-resize-handle')
+    )
+    assert.equal(inDrawer.length, 0, '手柄不得位于滚动容器 .drawer 内部')
+    // 手柄应在 .drawer-shell 外壳内（外壳是 position: relative 的非滚动参考系）
+    const shell = renderer.root.findAll(
+      (n) => String(n.props.className || '') === 'drawer-shell'
+    )
+    assert.ok(shell.length > 0, '应渲染 .drawer-shell 外壳')
+  } finally {
+    fake.restore()
+  }
+})
+
+test('styles.css 提供 .drawer-shell（非滚动定位外壳，手柄定位参考系）', () => {
+  const shellRule = styles.match(/^\.drawer-shell\s*\{([^}]*)\}/m)
+  assert.ok(shellRule, 'styles.css 缺少 .drawer-shell 规则')
+  assert.match(shellRule[1], /position\s*:\s*relative/, '外壳应 position: relative（手柄定位参考系）')
+  assert.doesNotMatch(shellRule[1], /overflow/, '外壳自身不应滚动（滚动由内部 .drawer 承担）')
+})

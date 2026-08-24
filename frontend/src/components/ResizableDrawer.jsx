@@ -11,6 +11,13 @@
 // 抽屉基础类名 .drawer 由本组件统一输出，传入 drawerClass 追加具体抽屉类
 // （.issue-drawer / .pipeline-drawer / .chat-drawer），不影响既有 CSS
 // 选择器（.drawer-overlay / .issue-drawer .modal-header 等）。
+//
+// issue #475：拖拽手柄必须渲染在 .drawer 滚动容器之外——.drawer 自身是
+// overflow-y: auto 的滚动容器，又是手柄的定位参考系（position: relative +
+// will-change: transform），绝对定位的手柄会随抽屉内容一起滚动（页面滚到
+// 下方时只剩一半手柄可见）。因此外层套 .drawer-shell（position: relative、
+// 自身不滚动）作为手柄的定位参考系，手柄作为 .drawer 的兄弟节点渲染于
+// 外壳内，抽屉内容滚动时手柄保持整高固定。
 import { forwardRef } from 'react'
 import { useDrawerResize } from '../hooks/useDrawerResize.js'
 // 存储 key 由 hook 模块统一定义，此处 re-export 供各抽屉导入
@@ -26,14 +33,19 @@ const ResizableDrawer = forwardRef(function ResizableDrawer(
     drawerRef: ref,
   })
   return (
-    <div className={'drawer ' + drawerClass} ref={ref}
-         style={width != null ? { width } : undefined}
-         role={dialog ? 'dialog' : undefined}
-         aria-modal={dialog ? 'true' : undefined}
-         onClick={onClick}>
-      {/* 拖拽手柄：绝对定位于抽屉左缘（宽 8px 整高），窄视口不渲染 */}
+    /* issue #475：非滚动定位外壳——手柄的绝对定位参考系。
+       .drawer 内部 overflow-y: auto 滚动，外壳本身不滚动，
+       手柄位于外壳内、.drawer 之外，内容滚动时手柄不跟随 */
+    <div className="drawer-shell" onClick={(e) => e.stopPropagation()}>
+      <div className={'drawer ' + drawerClass} ref={ref}
+           style={width != null ? { width } : undefined}
+           role={dialog ? 'dialog' : undefined}
+           aria-modal={dialog ? 'true' : undefined}
+           onClick={onClick}>
+        {children}
+      </div>
+      {/* 拖拽手柄：绝对定位于外壳左缘（宽 8px 整高），窄视口不渲染 */}
       {resizable && <div {...handleProps} />}
-      {children}
     </div>
   )
 })
