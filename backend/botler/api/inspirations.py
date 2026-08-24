@@ -418,7 +418,7 @@ def update_inspiration_chat_provider(request: Request, inspiration_id: int,
                                      body: InspirationChatProvider):
     """保存/清除灵感对话供应商选择，不影响既有消息。"""
     c = request.app.state.ctx
-    insp = _require_inspiration(c, inspiration_id)
+    _require_inspiration(c, inspiration_id)
     provider = str(body.provider or "").strip() or None
     if provider is not None:
         available = {p["provider"] for p in _available_chat_providers(c.config.get())}
