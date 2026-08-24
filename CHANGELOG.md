@@ -6,6 +6,21 @@
 
 ### Fixed
 
+- **修复 CI 流水线 sync_wiki_to_github 阶段持续失败（issue #464）**：
+  - 现象：GitLab Wiki（8 个页面）与 GITHUB_PUSH_TOKEN 均正常，但每次 main push
+    流水线的 sync_wiki_to_github 阶段均失败红名——git clone GitHub Wiki 返回
+    `Repository not found`（GitHub 服务器 404，流水线 #1353/#1354/#1381 等多次实测）；
+  - 根因：GitHub 仓库 CodeFuckee/botler 的 Wiki Git 端点（botler.wiki.git）不存在，
+    GitHub API `has_wiki` 虽为 True 但 Wiki 仓库实际未初始化，属外部依赖未就绪；
+    作业脚本此前未识别该场景，直接以 exit 128 失败；
+  - 修复：作业脚本对 GitHub Wiki clone 增加外部依赖容错——捕获 stderr 识别
+    `Repository not found` 时输出明确诊断与人工操作指引（GitHub Settings > Features
+    启用 Wiki 并创建首个页面）并以 exit 0 跳过本次同步，不再红名失败；其余真实克隆
+    故障（网络/权限等）仍如实失败红名暴露。GitHub 侧初始化 Wiki 后自动恢复同步，
+    allow_failure: true 保留作为意外故障兜底；
+  - 测试：`ci/test_wiki_sync_github_endpoint.py`（fake git 模拟 GitHub Wiki 端点
+    不存在 → 断言 exit 0 + 跳过提示；模拟真实故障 → 断言如实失败），
+    `ci/test_wiki_sync_config.py` 配置合约回归，共 4 用例通过。
 - **小尺寸手机（375px）下 issue 详情右边栏底部操作栏五个按钮被拆成两行（issue #463）**：
   - 现象：概览页 issue 详情右边栏底部操作栏（`.drawer-bottom-actions`，issue #270
     移动端下沉按钮）在 ≤860px 断点使用 `flex-wrap: wrap`，375px 竖屏下「关闭

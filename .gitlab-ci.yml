@@ -2135,12 +2135,14 @@ sync_wiki_to_github:
   tags:
     - linux
     - code01
-  # ⚠️ allow_failure（issue #445 收尾）：目标 GitHub 仓库 CodeFuckee/botler
-  # 尚未在 Settings > Features 启用 Wiki（对应 wiki Git 端点不存在，2026-08
-  # 实测返回 "Repository not found"，流水线 #1353/#1354 均因此失败）。该失败
-  # 属外部依赖、需人工在 GitHub 侧启用 Wiki 后才能恢复，不应阻断整个流水线；
-  # 保留 allow_failure: false 会令每次 main push 都全红。置为 true 后作业仍
-  # 照常运行并红名显示失败（不静默），人工启用 Wiki 后即自动转绿。
+  # ⚠️ allow_failure（issue #445 收尾 + issue #464 修复）：目标 GitHub 仓库
+  # CodeFuckee/botler 的 Wiki Git 端点（botler.wiki.git）不存在时，git clone
+  # 返回 GitHub 服务器错误 "Repository not found"（2026-08 实测流水线
+  # #1353/#1354/#1381 均因此失败）。issue #464 起作业内建外部依赖容错：
+  # 检测到该错误时输出明确诊断提示并以 exit 0 跳过本次同步（不再红名失败），
+  # GitHub 侧初始化 Wiki 后自动恢复；其余真实故障（网络/权限/push 冲突）仍
+  # 如实失败红名暴露。allow_failure: true 保留作为意外故障的兜底，不阻断
+  # 后续 release 阶段。
   allow_failure: true
   dependencies: []
   variables:
@@ -2176,9 +2178,30 @@ sync_wiki_to_github:
       git clone --quiet "${GITLAB_WIKI_URL}" "${SOURCE_DIR}"
 
       # GitHub 必须先在仓库 Settings > Features 中启用 Wiki，才能存在该 Git 端点。
+      # ⚠️ 外部依赖容错（issue #464）：GitHub Wiki 仓库未初始化时（botler.wiki.git
+      # 端点不存在，clone 返回 GitHub 服务器错误 "Repository not found"），本次
+      # 跳过并输出明确诊断提示，不把「外部依赖未就绪」误报为流水线故障；GitHub
+      # 侧初始化 Wiki 后自动恢复正常同步。其余克隆失败（网络/权限等真实故障）
+      # 仍如实失败红名暴露，便于及时发现处理。
+      set +e
       git clone --quiet \
         "https://x-access-token:${GITHUB_PUSH_TOKEN}@github.com/CodeFuckee/botler.wiki.git" \
-        "${TARGET_DIR}"
+        "${TARGET_DIR}" 2>"${WORK_DIR}/github-wiki-clone.err"
+      GITHUB_WIKI_CLONE_EXIT=$?
+      set -e
+      if [ "${GITHUB_WIKI_CLONE_EXIT}" -ne 0 ]; then
+        if grep -q "Repository not found" "${WORK_DIR}/github-wiki-clone.err"; then
+          echo "⚠️ GitHub Wiki 仓库不存在（Repository not found），本次跳过同步"
+          echo "   原因：GitHub 仓库 CodeFuckee/botler 的 Wiki 未初始化（Settings > Features"
+          echo "         未启用 Wiki，或从未创建任何 Wiki 页面，botler.wiki.git 端点尚不存在）"
+          echo "   处理：请人工在 https://github.com/CodeFuckee/botler/settings 启用 Wiki"
+          echo "         并创建首个页面；就绪后本作业自动恢复正常同步，无需改动流水线。"
+          exit 0
+        fi
+        echo "❌ 克隆 GitHub Wiki 仓库失败："
+        cat "${WORK_DIR}/github-wiki-clone.err"
+        exit 1
+      fi
 
       # 清空目标工作树（保留 .git），再复制来源的全部已跟踪页面与附件。
       # git archive 不会携带 .git，因而不会覆盖 GitHub Wiki 的仓库元数据。
