@@ -134,10 +134,13 @@ test('桌面端不受影响：单列规则仅存在于 860px 断点内，桌面�
   assert.match(base, /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(280px,\s*1fr\)\)/,
                '桌面 .issues-list 应保持 auto-fit 自适应列网格')
   // 单列规则只能出现在 860px 断点内（从断点块提取后，其余文件区域不得再有
-  // 针对 .issues-list 的 1fr 覆盖）
+  // 针对 .issues-list 的 1fr 覆盖）。
+  // issue #471 例外：布局切换的「单列分组」类 .issues-list.issues-list-column
+  // 允许在桌面存在单列 grid（用户主动切换的展示布局，非响应式覆盖），
+  // 负向前瞻排除该专属类，默认 .issues-list 仍不得被单列覆盖。
   const outside = styles.replace(mobileMediaBlock(styles), '')
-  const singleCol = outside.match(/\.issues-list[^{]*\{[^}]*grid-template-columns:\s*1fr/)
-  assert.ok(!singleCol, '文件其余区域不得再有 .issues-list 单列覆盖（桌面不受影响）')
+  const defaultSingleCol = outside.match(/\.issues-list(?![-.])[^{]*\{[^}]*grid-template-columns:\s*1fr/)
+  assert.ok(!defaultSingleCol, '文件其余区域不得再有默认 .issues-list 单列覆盖（桌面不受影响）')
 })
 
 test('桌面端不受影响：抽屉基础规则保持 520px/92vw 上限（断点外）', () => {

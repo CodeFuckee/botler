@@ -377,5 +377,16 @@
   "nav.watermarkTodayTitle": "View succeeded tasks",
   "nav.maintenanceMode": "Maintenance",
   "nav.maintenanceModeTitle": "Maintenance mode is on: new tasks are paused, running tasks continue, dispatch resumes after it is turned off",
-  "overview.maintenanceBanner": "Maintenance mode is on: new tasks are paused, running tasks continue, and dispatch resumes automatically after it is turned off. You can turn it off under Settings → Task scheduling."
+  "overview.maintenanceBanner": "Maintenance mode is on: new tasks are paused, running tasks continue, and dispatch resumes automatically after it is turned off. You can turn it off under Settings → Task scheduling.",
+  "overview.layout": "Layout",
+  "overview.layoutTitle": "Switch open-issue display layout (repo cards / grouped column)",
+  "overview.layoutAria": "Select open-issue layout",
+  "overview.layoutBy.cards": "Repo cards",
+  "overview.layoutBy.column": "Grouped column",
+  "overview.layoutHint.cards": "One card per repository, issues grouped by bot status inside (default)",
+  "overview.layoutHint.column": "All repository issues in a single column, grouped per repository, groups collapsible",
+  "overview.expandRepo": "Expand this repository group",
+  "overview.collapseRepo": "Collapse this repository group",
+  "overview.expandRepoHint": "Expand this repository group to show its issues",
+  "overview.collapseRepoHint": "Collapse this repository group to hide its issues"
 }

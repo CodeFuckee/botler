@@ -3414,6 +3414,24 @@ body:has(.drawer-overlay) {
   box-shadow: var(--shadow-pop);
   transform: translateY(-1px);
 }
+/* issue #471：单列分组布局——所有仓库 issue 同一列展示，同仓库 issue
+   归为一个分组，分组头复用 .issue-repo-head（折叠开关/仓库名/优先级/
+   计数/操作按钮），折叠后隐藏组内 issue 列表、保留组头 */
+.issues-list.issues-list-column {
+  grid-template-columns: 1fr;
+}
+.issue-repo-group {
+  min-width: 0;
+}
+/* issue #471：单列分组组头——折叠开关与仓库名同处首行（卡片布局中
+   .issue-repo-name 独占整行以适配窄卡片；单列布局宽度充足，去掉
+   flex-basis: 100% 让开关+仓库名+计数同一行排布）。
+   用独立类名 .issue-repo-group-name 覆盖，避免影响 .issue-repo-name
+   基础规则（overview-repo-name-wrap 测试契约：独占首行/任意断行） */
+.issue-repo-group-name {
+  flex-basis: auto;
+  min-width: 0;
+}
 /* issue #102：头部允许换行——竖屏平板窄卡片（auto-fit 降为 1 列
    ≈280px）中仓库名不再被优先级/计数/添加按钮等固定项压缩至不可见 */
 .issue-repo-head {
@@ -3654,7 +3672,8 @@ body:has(.drawer-overlay) {
 
 /* issue #285：分组折叠开关——图标按钮，悬浮高亮提示可交互；折叠态
    分组隐藏组内 issue 列表但保留组标题与计数 */
-.issue-group-toggle {
+.issue-group-toggle,
+.issue-repo-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3668,7 +3687,8 @@ body:has(.drawer-overlay) {
   border-radius: var(--radius);
   transition: color 0.15s ease, background-color 0.15s ease;
 }
-.issue-group-toggle:hover {
+.issue-group-toggle:hover,
+.issue-repo-toggle:hover {
   color: var(--text);
   background: var(--bg-soft);
 }

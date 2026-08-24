@@ -510,3 +510,89 @@ export function eventToLine(e) {
   return e.text || ''
 }
 
+
+// ---- issue #471：开放 issue 布局切换 ----
+// 概览页「开放 Issue」板块支持切换展示布局：默认「仓库卡片」（每个仓库
+// 一张卡片，卡片内按 bot 状态分组，宽屏多列网格）；新增「单列分组」——
+// 所有仓库 issue 在同一列展示，同一个仓库的 issue 归为一个分组，分组
+// 可折叠/展开。布局偏好存 localStorage（键 botler.overview.layout），
+// 刷新后保持。
+export const ISSUE_LAYOUT_STORAGE_KEY = 'botler.overview.layout'
+
+// 布局选项：cards=仓库卡片（默认）；column=单列分组。label 为 UI 展示
+// 文案（i18n key 见 overview.layoutBy.<key>），hint 为悬浮说明
+// （overview.layoutHint.<key>）
+export const ISSUE_LAYOUTS = [
+  { key: 'cards', label: '仓库卡片',
+    hint: '每个仓库一张卡片，卡片内按 bot 状态分组展示（默认布局）' },
+  { key: 'column', label: '单列分组',
+    hint: '所有仓库 issue 同一列展示，同仓库 issue 归为一个分组，分组可折叠展开' },
+]
+
+// 读取布局偏好：localStorage 兼容对象（测试可注入）；无存储环境或
+// getItem 抛异常（隐私模式）时回默认「仓库卡片」。未知布局键（手改/
+// 旧版本写入）同样回默认，不抛错
+export function loadIssueLayout(storage) {
+  try {
+    if (!storage) return 'cards'
+    const raw = storage.getItem(ISSUE_LAYOUT_STORAGE_KEY)
+    if (!raw) return 'cards'
+    return ISSUE_LAYOUTS.some((l) => l.key === raw) ? raw : 'cards'
+  } catch {
+    return 'cards'
+  }
+}
+
+// 保存布局偏好：只接受 ISSUE_LAYOUTS 已知布局键；存储不可用或 setItem
+// 抛异常时静默忽略，不影响页面使用
+export function saveIssueLayout(storage, layout) {
+  try {
+    if (!storage || !layout) return
+    if (!ISSUE_LAYOUTS.some((l) => l.key === layout)) return
+    storage.setItem(ISSUE_LAYOUT_STORAGE_KEY, layout)
+  } catch {
+    /* 无存储环境：静默忽略 */
+  }
+}
+
+// ---- issue #471：单列分组布局的仓库分组折叠 ----
+// 单列分组布局下每个仓库是一个分组，分组头带折叠开关（chevronRight/
+// chevronDown），折叠后隐藏组内 issue 列表、保留组头（仓库名/优先级/
+// 计数/操作按钮）；折叠偏好存 localStorage（键
+// botler.overview.collapsedRepos），刷新后保持。键统一用仓库 id 的
+// 字符串形式（数字/字符串类型差异防误匹配，与 runningIssueKeys 同源
+// 防御）。toggle 复用 toggleGroupCollapsed（纯 Set 切换语义一致）。
+export const REPO_COLLAPSE_STORAGE_KEY = 'botler.overview.collapsedRepos'
+
+// 读取仓库折叠偏好：localStorage 兼容对象（测试可注入）；无存储环境或
+// getItem 抛异常（隐私模式）时返回空 Set（全展开）。值须为 JSON 数组
+// 且元素为字符串（仓库 id 以字符串存储，数字/布尔/null 等异常元素剔除；
+// 仓库 id 集合来自后端动态数据，不做已知集合校验）
+export function loadCollapsedRepos(storage) {
+  const out = new Set()
+  try {
+    if (!storage) return out
+    const raw = storage.getItem(REPO_COLLAPSE_STORAGE_KEY)
+    if (!raw) return out
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return out
+    for (const k of parsed) {
+      if (typeof k === 'string' && k) out.add(k)
+    }
+  } catch {
+    /* 无存储环境/损坏数据：静默回退全展开 */
+  }
+  return out
+}
+
+// 保存仓库折叠偏好：只写字符串元素数组；存储不可用或 setItem 抛异常时
+// 静默忽略，不影响页面使用
+export function saveCollapsedRepos(storage, collapsed) {
+  try {
+    if (!storage || !collapsed) return
+    const keys = Array.from(collapsed).filter((k) => typeof k === 'string' && k)
+    storage.setItem(REPO_COLLAPSE_STORAGE_KEY, JSON.stringify(keys))
+  } catch {
+    /* 无存储环境：静默忽略 */
+  }
+}

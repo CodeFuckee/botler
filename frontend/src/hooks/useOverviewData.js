@@ -20,6 +20,10 @@ import {
   saveIssueFilter,
   loadCollapsedGroups,
   saveCollapsedGroups,
+  loadIssueLayout,
+  saveIssueLayout,
+  loadCollapsedRepos,
+  saveCollapsedRepos,
   loadIssueSort,
   saveIssueSort,
   sortIssuesByMethod,
@@ -141,6 +145,26 @@ export function useOverviewData() {
     saveCollapsedGroups(typeof localStorage !== 'undefined' ? localStorage : null,
                         collapsedGroups)
   }, [collapsedGroups])
+
+  // issue #471：开放 issue 布局偏好——「仓库卡片」（默认）/「单列分组」。
+  // 初值从 localStorage 恢复（无存储环境/未知布局回默认），变更时持久化
+  const [issueLayout, setIssueLayout] = useState(() =>
+    loadIssueLayout(typeof localStorage !== 'undefined' ? localStorage : null))
+
+  useEffect(() => {
+    saveIssueLayout(typeof localStorage !== 'undefined' ? localStorage : null,
+                    issueLayout)
+  }, [issueLayout])
+
+  // issue #471：单列分组布局的仓库分组折叠偏好——初值从 localStorage
+  // 恢复（无存储环境/解析失败回全展开），变更时持久化，刷新后保持
+  const [collapsedRepos, setCollapsedRepos] = useState(() =>
+    loadCollapsedRepos(typeof localStorage !== 'undefined' ? localStorage : null))
+
+  useEffect(() => {
+    saveCollapsedRepos(typeof localStorage !== 'undefined' ? localStorage : null,
+                       collapsedRepos)
+  }, [collapsedRepos])
 
   // issue #286：开放 issue 排序偏好——初值从 localStorage 恢复（无存储
   // 环境/损坏数据回默认「调度器执行顺序」），变更时持久化，刷新后保持
@@ -724,6 +748,8 @@ export function useOverviewData() {
     dsBalance, dsBalanceError, dsRate,
     issueFilter, setIssueFilter,
     collapsedGroups, setCollapsedGroups,
+    issueLayout, setIssueLayout,
+    collapsedRepos, setCollapsedRepos,
     issueSort, setIssueSort,
     manualOrders, manualSaving, manualErrors, setManualErrors,
     dragFrom, setDragFrom, dragOverIndex, setDragOverIndex,

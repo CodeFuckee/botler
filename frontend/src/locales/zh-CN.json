@@ -377,5 +377,16 @@
   "nav.watermarkTodayTitle": "查看已成功完成的任务",
   "nav.maintenanceMode": "维护中",
   "nav.maintenanceModeTitle": "维护模式已开启：新任务暂停派发，运行中任务继续执行，关闭后自动恢复",
-  "overview.maintenanceBanner": "维护模式已开启：新任务暂停派发，运行中任务继续执行，关闭后自动恢复。可到「设置 → 任务调度」关闭。"
+  "overview.maintenanceBanner": "维护模式已开启：新任务暂停派发，运行中任务继续执行，关闭后自动恢复。可到「设置 → 任务调度」关闭。",
+  "overview.layout": "布局",
+  "overview.layoutTitle": "切换开放 issue 展示布局（仓库卡片 / 单列分组）",
+  "overview.layoutAria": "选择开放 issue 布局",
+  "overview.layoutBy.cards": "仓库卡片",
+  "overview.layoutBy.column": "单列分组",
+  "overview.layoutHint.cards": "每个仓库一张卡片，卡片内按 bot 状态分组展示（默认布局）",
+  "overview.layoutHint.column": "所有仓库 issue 同一列展示，同仓库 issue 归为一个分组，分组可折叠展开",
+  "overview.expandRepo": "展开该仓库分组",
+  "overview.collapseRepo": "折叠该仓库分组",
+  "overview.expandRepoHint": "展开该仓库分组，展示组内 issue",
+  "overview.collapseRepoHint": "折叠该仓库分组，隐藏组内 issue"
 }
