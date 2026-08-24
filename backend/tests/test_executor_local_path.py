@@ -1,5 +1,7 @@
 """ClaudeExecutor 本地工作区测试：local_path 仓库直接在该文件夹执行。"""
 
+
+import sys
 import os
 import subprocess
 from pathlib import Path
@@ -291,6 +293,7 @@ class TestPrepareWorkspaceDefaultBranchAndPull:
             capture_output=True)
         assert check.returncode != 0, "复现前提不成立：origin/main 不应存在"
         return bare, repo
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows git/文件权限语义差异，POSIX 专属场景跳过（issue #469）")
 
     def test_single_branch_clone_switches_to_default_branch(self, executor, tmp_path):
         """单分支克隆（受限 fetch refspec）缺默认分支跟踪引用时切回不失败。
@@ -660,6 +663,7 @@ class TestPrepareWorkspaceCleanTolerant:
         (symlinks / "window_manager").symlink_to("/root/.pub-cache/never-exists")
         leftover.chmod(0o555)  # 无写权限：git clean 删除内部条目 Permission denied
         return leftover
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows git/文件权限语义差异，POSIX 专属场景跳过（issue #469）")
 
     def test_clean_permission_denied_does_not_fail_task(self, executor, tmp_path):
         """无写权限残留导致 clean 权限失败时，prepare_workspace 应成功并清理干净。

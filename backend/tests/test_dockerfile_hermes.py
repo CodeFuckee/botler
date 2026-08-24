@@ -14,6 +14,9 @@ hermes-agent 源码（源码在 NAS 上经 compose 只读挂载），SDK 安装�
 - 部署文档与 compose 挂载说明同步覆盖。
 """
 
+
+import pytest
+import sys
 from pathlib import Path
 
 
@@ -31,6 +34,7 @@ def _read(path: Path) -> str:
 
 class TestEntrypoint:
     """docker-entrypoint.sh：存在 / 可执行 / 幂等安装 / fail fast。"""
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 无 exec 权限位，entrypoint 可执行性断言仅适用 POSIX（issue #469）")
 
     def test_entrypoint_exists_and_executable(self):
         assert ENTRYPOINT.is_file(), "缺少 docker-entrypoint.sh"

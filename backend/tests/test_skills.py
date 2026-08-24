@@ -14,6 +14,8 @@
 - resolve_skill_dir：合法技能解析、非法名（/ \\ ..）/ 不存在返回 None。
 """
 
+
+import sys
 from pathlib import Path
 
 import pytest
@@ -84,6 +86,7 @@ class TestEngineSkillsRoots:
         plugin.skills_dir = [str(fake_home / "a"), str(fake_home / "b")]
         assert skills.engine_skills_roots("my_engine", plugin) == [
             fake_home / "a", fake_home / "b"]
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows Path.expanduser 用 USERPROFILE 而非 HOME，~ 展开语义不同（issue #469）")
 
     def test_external_plugin_tilde_expand(self, fake_home, monkeypatch):
         monkeypatch.setenv("HOME", str(fake_home))

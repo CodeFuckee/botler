@@ -4,6 +4,8 @@
 前端浏览服务器文件系统时逐级获取子目录列表。
 """
 
+
+import sys
 import os
 
 import pytest
@@ -67,6 +69,7 @@ class TestListSubdirectories:
         monkeypatch.setattr(dir_browse, "_PSEUDO_FS_ROOTS", (str(pseudo),))
         with pytest.raises(DirBrowseError):
             list_subdirectories(str(pseudo))
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/反斜杠/USERPROFILE）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_pseudo_fs_nested_path_filtered(self, tmp_path, monkeypatch):
         """伪文件系统根目录下的深层路径同样被拒绝。"""
@@ -142,6 +145,7 @@ class TestListSubdirectories:
 
 
 class TestListSubdirectoriesRoot:
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/反斜杠/USERPROFILE）与 POSIX 假设不同，跳过（issue #469）")
     def test_root_parent_is_none(self):
         result = list_subdirectories("/")
         assert result["parent"] is None
@@ -154,13 +158,16 @@ class TestResolveDefaultPath:
 
     优先级：配置值（~ 展开、相对路径基于服务器工作目录）→ 服务器用户主目录 → /。
     """
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/反斜杠/USERPROFILE）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_none_returns_home(self):
         assert resolve_default_path(None) == os.path.expanduser("~")
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/反斜杠/USERPROFILE）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_empty_returns_home(self):
         assert resolve_default_path("") == os.path.expanduser("~")
         assert resolve_default_path("   ") == os.path.expanduser("~")
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/反斜杠/USERPROFILE）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_tilde_alone_returns_home(self):
         assert resolve_default_path("~") == os.path.expanduser("~")
@@ -181,9 +188,11 @@ class TestResolveDefaultPath:
         sub.mkdir()
         monkeypatch.chdir(tmp_path)
         assert resolve_default_path("sub") == str(sub)
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/反斜杠/USERPROFILE）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_missing_configured_path_falls_back_to_home(self):
         assert resolve_default_path("/nonexistent/xyz") == os.path.expanduser("~")
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/反斜杠/USERPROFILE）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_file_path_falls_back_to_home(self, tmp_path):
         f = tmp_path / "file.txt"

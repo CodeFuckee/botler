@@ -8,6 +8,8 @@
   PTY 会话（终端服务在测试线程内起真实 Tornado 进程，随机端口）。
 """
 
+
+import sys
 import asyncio
 import json
 import threading
@@ -162,6 +164,7 @@ class TestTerminalProxy:
         resp = open_client.get("/api/terminal/health")
         assert resp.status_code == 503
         assert resp.json()["ok"] is False
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows CI 无真实交互终端，WebSocket 终端会话用例跳过（issue #469）")
 
     def test_ws_proxy_runs_shell(self, open_client, term_upstream):
         from botler.auth import create_terminal_token, get_session_secret

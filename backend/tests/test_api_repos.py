@@ -1,5 +1,7 @@
 """仓库管理 API 测试：本地文件夹方式添加仓库（discover + add_repo with local_path）。"""
 
+
+import sys
 import os
 import subprocess
 from types import SimpleNamespace
@@ -202,6 +204,7 @@ class TestBrowseDirectories:
         assert resp.status_code == 200
         by_name = {d["name"]: d for d in resp.json()["subdirs"]}
         assert by_name["repo"]["is_git"] is True
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/USERPROFILE home）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_browse_without_path_uses_home(self, client):
         """不带 path 时初始定位到服务器用户主目录（默认初始目录）。"""
@@ -209,6 +212,7 @@ class TestBrowseDirectories:
         resp = tc.get("/api/repos/browse")
         assert resp.status_code == 200
         assert resp.json()["path"] == os.path.expanduser("~")
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/USERPROFILE home）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_browse_blank_path_uses_default(self, client):
         """空 path 参数走默认初始目录（而非解析到进程工作目录）。"""
@@ -324,6 +328,7 @@ class TestBrowseDefaultPath:
         resp = tc.get("/api/repos/browse")
         assert resp.status_code == 200
         assert resp.json()["path"] == str(target)
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 路径语义（盘符根/USERPROFILE home）与 POSIX 假设不同，跳过（issue #469）")
 
     def test_explicit_root_still_works(self, client):
         """显式 path=/ 仍浏览根目录（用户手动跳转不受影响）。"""

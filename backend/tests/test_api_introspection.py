@@ -19,6 +19,7 @@
 """
 
 import base64
+import os
 from types import SimpleNamespace
 
 import httpx
@@ -297,7 +298,9 @@ class TestIntrospect:
         messages = StubChatClient.instances[0].chat_calls[0]
         assert messages[0]["role"] == "system"
         user_content = messages[1]["content"]
-        assert "src/main.py" in user_content
+        # Windows 兼容（issue #469）：本地文件树路径分隔符随平台
+        # （src\main.py），断言改为平台无关的 os.sep 拼接。
+        assert "src" + os.sep + "main.py" in user_content
         assert "README.md" in user_content
         assert "测试项目" in user_content
         assert "package.json" in user_content

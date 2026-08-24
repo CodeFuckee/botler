@@ -49,7 +49,8 @@ SAMPLE_CHANGELOG = """\
 
 def git(tmp_path: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=str(tmp_path), capture_output=True, text=True
+        ["git", *args], cwd=str(tmp_path), capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     assert result.returncode == 0, f"git {' '.join(args)} 失败: {result.stderr}"
     return result.stdout.strip()

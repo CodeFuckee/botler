@@ -11,6 +11,8 @@ credential store 优先于 GIT_ASKPASS——失效 job token 命中后 GitLab �
 远端：job token 一律 403，bot token 正常服务；断言 git 实际发送的凭据。
 """
 
+
+import sys
 import base64
 import http.server
 import os
@@ -198,6 +200,7 @@ def _stale_store_config(tmp_path: Path, url: str, port: int) -> dict:
 
 class TestGitAuth:
     """prepare_workspace 的 git 子进程必须只使用 askpass 的 bot token。"""
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows git credential helper 行为差异，凭据注入场景跳过（issue #469）")
 
     def test_fetch_uses_askpass_bot_token_not_stale_job_token(
             self, executor, git_remote, tmp_path, monkeypatch):
@@ -245,6 +248,7 @@ class TestGitAuth:
             f"git 未使用 bot token: {seen_auth!r}"
         assert JOB_BASIC not in seen_auth, "git 使用了失效 job token"
         assert seen_auth[0] == "", "git 应首先发起无凭据请求（401 后重试）"
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows git credential helper 行为差异，凭据注入场景跳过（issue #469）")
 
     def test_fetch_without_fix_uses_stale_job_token(self, git_remote,
                                                     tmp_path, monkeypatch):

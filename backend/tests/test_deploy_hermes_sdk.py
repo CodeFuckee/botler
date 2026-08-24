@@ -18,6 +18,9 @@ deploy_to_code01 在主依赖安装后自动调用；Docker 部署由 docker-ent
 - 部署文档 / README / runner 安装指引同步指向脚本。
 """
 
+
+import pytest
+import sys
 import re
 from pathlib import Path
 
@@ -55,6 +58,7 @@ def _ci_deploy_job_section() -> str:
 
 class TestInstallScriptBasics:
     """deploy/install-hermes-agent.sh：脚本存在性 / 默认 venv / 源码目录。"""
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 无 exec 权限位，安装脚本可执行性断言仅适用 POSIX（issue #469）")
 
     def test_install_script_exists_and_executable(self):
         """一键脚本存在且带执行权限（可直接 ./ 或 bash 执行）。"""

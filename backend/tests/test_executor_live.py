@@ -279,7 +279,9 @@ class TestReadLogDelta:
 
     def test_half_line_rewind(self, tmp_path):
         f = tmp_path / "task.log"
-        f.write_text("line1\nline2", encoding="utf-8")  # 无结尾换行：line2 是半行
+        # Windows 兼容（issue #469）：显式 newline="\n"，避免文本模式
+        # 把 \n 写成 \r\n 使 offset 断言失败（流水线 #1396 实测 7 vs 6）。
+        f.write_text("line1\nline2", encoding="utf-8", newline="\n")  # 无结尾换行：line2 是半行
         lines, offset = read_log_delta(f, 0)
         assert lines == ["line1"]  # 半行留给下一轮
         assert offset == len("line1\n".encode("utf-8"))

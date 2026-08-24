@@ -11,6 +11,9 @@ docs 约定 config.yaml 是唯一事实来源、Web UI 是编辑它的外壳，�
 磁盘，以磁盘最新内容为基底。
 """
 
+
+import pytest
+import sys
 from pathlib import Path
 
 import yaml
@@ -225,6 +228,7 @@ class TestAtomicSaveAndLoad:
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         assert data["gitlab"]["url"] == "https://gitlab.example.com"
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 文件系统不允许替换被打开的读句柄，POSIX 原子写并发场景跳过（issue #469）")
 
     def test_save_atomic_concurrent_reads_never_partial(self, tmp_path):
         """并发读下 save() 原子写：写入过程中任何时刻读取都能得到完整配置

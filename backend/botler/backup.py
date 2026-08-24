@@ -171,8 +171,17 @@ class BotlerBackup:
         try:
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
                 tmp_db = f.name
-            with sqlite3.connect(self.db_path) as src, sqlite3.connect(tmp_db) as dst:
+            # Windows 兼容（issue #469）：sqlite3.connect 的 with 仅管理事务、
+            # 不关闭连接；POSIX 允许删除被打开的文件，Windows 上连接未关闭时
+            # finally 里 unlink(tmp_db) 会抛 PermissionError [WinError 32]。
+            # 因此备份完成后必须显式 close 两条连接。
+            src = sqlite3.connect(self.db_path)
+            dst = sqlite3.connect(tmp_db)
+            try:
                 src.backup(dst)
+            finally:
+                dst.close()
+                src.close()
 
             files = {"config.yaml": self.config_path, "botler.db": tmp_db}
             manifest = {
@@ -188,7 +197,8 @@ class BotlerBackup:
             try:
                 with tarfile.open(target, "w:gz") as tf:
                     for fname, path in files.items():
-                        _add_bytes(tf, fname, open(path, "rb").read())
+                        with open(path, "rb") as fh:
+                            _add_bytes(tf, fname, fh.read())
                     # MinIO 启用且配置完整：把图片桶全部对象镜像进备份包
                     if store is not None:
                         minio_info = self._backup_minio(tf, store)

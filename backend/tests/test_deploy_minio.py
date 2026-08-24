@@ -17,6 +17,9 @@
 本测试静态校验上述部署产物防回退（参考 test_deploy_dsh_sdk.py 模式）。
 """
 
+
+import pytest
+import sys
 import re
 from pathlib import Path
 
@@ -57,6 +60,7 @@ def _ci_deploy_job_section() -> str:
 
 class TestInstallScriptBasics:
     """deploy/install-minio.sh：脚本存在性 / 版本锁定 / 默认安装目录。"""
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 无 exec 权限位，安装脚本可执行性断言仅适用 POSIX（issue #469）")
 
     def test_install_script_exists_and_executable(self):
         """一键安装脚本存在且带执行权限（可直接 ./ 或 bash 执行）。"""

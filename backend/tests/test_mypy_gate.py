@@ -35,6 +35,10 @@ CORE_MODULES = (
 def _run_mypy(*args: str, cwd: Path = BACKEND_DIR, env_extra: dict | None = None) -> subprocess.CompletedProcess:
     """在 backend/ 下运行 venv 自带的 mypy（与 CI backend:mypy job 同命令）。"""
     env = dict(os.environ)
+    # Windows 兼容（issue #469）：mypy 解析 mypy.ini 用 configparser，
+    # 中文系统默认 GBK 解码 UTF-8 的 ini 抛 UnicodeDecodeError（流水线 #1396
+    # 实测）。PYTHONUTF8=1 强制 UTF-8 模式；Linux 上本就是 UTF-8，无副作用。
+    env.setdefault("PYTHONUTF8", "1")
     if env_extra:
         env.update(env_extra)
     mypy_bin = Path(sys.executable).parent / "mypy"

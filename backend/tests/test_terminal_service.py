@@ -7,6 +7,9 @@
 - 多标签隔离：不同 name 创建独立终端会话。
 """
 
+
+import pytest
+import sys
 import json
 import os
 import tempfile
@@ -70,6 +73,7 @@ class TerminalServiceTest(AsyncHTTPTestCase):
         assert msg is None
         assert ws.close_code == 4001
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows CI 无真实交互终端，终端会话用例跳过（issue #469）")
     @gen_test
     async def test_ws_valid_token_runs_shell(self):
         ws = await websocket_connect(f"ws://127.0.0.1:{self.get_http_port()}/terminal/ws/tab-1?token={self._token()}")
@@ -91,6 +95,7 @@ class TerminalServiceTest(AsyncHTTPTestCase):
         assert "hello-terminal" in got, f"stdout 未包含回显输入: {got!r}"
         ws.close()
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows CI 无真实交互终端，终端会话用例跳过（issue #469）")
     @gen_test
     async def test_multi_tab_terminals_isolated(self):
         # 不同 name = 不同 PTY 会话（terminado NamedTermManager 隔离）

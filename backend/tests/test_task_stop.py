@@ -12,6 +12,8 @@
 （requeue_interrupted 只捞 running/retrying）。
 """
 
+
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -185,6 +187,7 @@ class _FakeProcAlive:
 
 class TestExecutorStop:
     """执行层：停止请求终止 claude 进程组，任务不再重试。"""
+    @pytest.mark.skipif(sys.platform == "win32", reason="os.getpgid 为 POSIX 专属，Windows 无进程组语义（issue #469）")
 
     def test_kill_process_group_sends_sigkill(self, executor, monkeypatch):
         """_kill_process_group：向进程组发 SIGKILL；进程已消失时静默。"""

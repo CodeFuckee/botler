@@ -471,7 +471,10 @@ class TestTaskExecution:
         log_path = tmp_path / "logs" / f"task_{task_id}.log"
         log_path.parent.mkdir(exist_ok=True)
         if log_text:
-            log_path.write_text(log_text, encoding="utf-8")
+            # Windows 兼容（issue #469）：write_text 默认文本模式会
+            # 把 \n 写成 \r\n，使 log_offset 字节断言多 2（流水线 #1396
+            # 实测 145 vs 143）。显式 newline="\n" 保持测试模拟 Unix 日志。
+            log_path.write_text(log_text, encoding="utf-8", newline="\n")
         db.set_task_status(task_id, None, log_path=str(log_path),
                            claude_session_id=session_id)
         return task_id

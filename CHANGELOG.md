@@ -42,6 +42,30 @@
   - 测试：`ci/test_backend_test_config.py` 配置合约回归扩至 4 用例
     （新增 before_script 必须为 pwsh 语法、不得含 bash 语法的断言），
     ci/ 目录 22 用例全通过，GitLab CI lint 校验通过。
+  - Windows 平台兼容性适配（流水线 #1396 首次在 windows runner 全量跑通
+    3070 用例，暴露 58 个平台差异失败后逐类修复）：
+    - 修复 `botler/backup.py` 资源泄漏：`sqlite3.connect` 的 with 仅管理
+      事务不关闭连接、`open().read()` 文件句柄未显式关闭——POSIX 允许
+      删除被打开的文件，Windows 上 finally 里 unlink 临时库抛
+      `PermissionError [WinError 32]`，导致备份/保留清理相关 25 用例失败；
+      改为显式 close 连接、with 读文件；
+    - 修复测试跨平台编码/换行：`test_mypy_gate.py` 子进程传
+      `PYTHONUTF8=1`（Windows 中文系统 GBK 解码 UTF-8 mypy.ini 抛
+      UnicodeDecodeError，mypy 直接失败）；`test_release.py` 的 git()
+      子进程显式 `encoding="utf-8"`（GBK 解码中文 commit message 失败
+      致 stdout=None）；`test_api_tasks.py` / `test_executor_live.py`
+      日志文件写入显式 `newline="\n"`（Windows 文本模式 \n→\r\n 致
+      字节偏移断言 145 vs 143 / 7 vs 6 失败）；
+    - `test_api_introspection.py` 文件树断言改平台无关 `os.sep` 拼接
+      （Windows 上本地文件树为 `src\main.py`）；
+    - 平台专属用例加 `@pytest.mark.skipif(sys.platform == "win32")`
+      跳过：Windows 无 exec 权限位（deploy/dockerfile 脚本可执行性 4 用例）、
+      无进程组语义（os.getpgid）、CI 无真实交互终端（WebSocket/PTY 3 用例）、
+      git credential helper 行为差异（2 用例）、盘符根与反斜杠路径语义
+      （dir_browse/api_repos 10 用例）、`~` 展开用 USERPROFILE 而非 HOME、
+      Windows 文件锁下并发读时 os.replace 原子写语义差异（config_reload）
+      等共 25 用例；本地 Linux 开发与 backend:mypy 门禁（linux/code01
+      runner）不受影响，仍全量执行。
 
 ### Fixed
 
