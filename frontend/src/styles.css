@@ -4861,9 +4861,13 @@ body:has(.drawer-overlay) {
   font-size: 13px;
 }
 
-/* ---- 统计看板页（issue #264）---- */
+/* ---- 统计看板页（issue #264）----
+   issue #474：统计页撑满窗口宽度——不再限制固定 max-width（此前
+   1080px 在宽屏下右侧留白大），改为 width:100% 跟随 .content 容器
+   宽度（宽屏下 max(1440px, 100vw-100px)），与概览/任务等其他页面
+   一致的响应式布局；内部卡片 grid / 表格 / 图表随容器自适应 */
 .stats-page {
-  max-width: 1080px;
+  width: 100%;
 }
 .stats-header {
   display: flex;

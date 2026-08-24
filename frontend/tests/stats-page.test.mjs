@@ -117,6 +117,11 @@ test('Icon.jsx 注册 chart 图标（空态用）', () => {
   assert.match(iconSrc, /chart: BarChart3/, '应注册 chart 语义图标')
 })
 
+test('styles.css：统计页撑满窗口宽度（issue #474，不限制固定 max-width）', () => {
+  assert.doesNotMatch(styles, /\.stats-page\s*\{\s*max-width:\s*1080px/,
+    '统计页不应再设置固定 max-width: 1080px——应跟随 .content 容器宽度（宽屏下撑满窗口可用宽度），避免右侧大面积留白')
+})
+
 test('styles.css 提供统计页样式', () => {
   assert.match(styles, /\.stats-page\s*\{/, '应有页面容器样式')
   assert.match(styles, /\.stats-card\s*\{/, '应有卡片样式')
