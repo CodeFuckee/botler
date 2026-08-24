@@ -123,9 +123,14 @@ class TestCiPm2DeployAutoInstallsSdk:
         assert "install-dsh-sdk.sh" in job
 
     def test_deploy_job_installs_sdk_into_backend_venv(self):
-        """脚本参数指向 backend/.venv（与 pm2 启动的 venv 一致）。"""
+        """脚本参数指向稳定部署目录的 backend/.venv（issue #467）。
+
+        生产进程运行在稳定目录 $STABLE_DIR（= /home/ckd/codes/botler），
+        不再运行在 gitlab-runner 构建目录；SDK 必须装进稳定目录的 venv，
+        与 pm2 启动的 venv 一致（CI 构建目录与生产彻底隔离）。
+        """
         job = _ci_deploy_job_section()
-        assert re.search(r"install-dsh-sdk\.sh\s+backend/\.venv", job)
+        assert re.search(r'install-dsh-sdk\.sh\s+"\$STABLE_DIR/backend/\.venv"', job)
 
     def test_deploy_job_script_failure_blocks_deploy(self):
         """脚本失败必须 exit 1（部署失败），不允许静默跳过。"""

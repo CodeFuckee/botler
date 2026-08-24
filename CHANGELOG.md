@@ -69,6 +69,50 @@
 
 ### Fixed
 
+- **修复 CI 运行后端测试时生产页面卡顿、设置加载不出（issue #467）**：
+  - 现象：每次 CI 流水线运行期间（尤其后端测试/构建阶段），生产环境的
+    页面非常卡顿、设置加载不出，用户多次反馈未根治；
+  - 根因（架构缺陷，三层叠加）：
+    - **生产进程直接运行在 gitlab-runner 构建检出目录**：deploy job 用
+      `pm2 start deploy/botler.config.cjs` 以 `$CI_PROJECT_DIR`（构建目录，
+      如 `/home/ckd/builds/ivcYzZfIS/0/chenkaidi/botler`）为 ROOT 启动生产，
+      生产代码（PYTHONPATH）、全部依赖（`.venv` site-packages）、前端静态
+      资源（`frontend/dist`）都来自构建目录（`/proc/<pid>/maps` 实证）；
+    - **同流水线其他 job 复用构建 slot 并就地变异生产文件**：任一 job 拿到
+      生产所在 slot 即执行 `git fetch`+`git checkout`（重写运行中的源码树）、
+      `.backend_setup` 系列 job（security:deps-python / backend:mypy /
+      lint:backend / performance:backend 等 6 个）执行 `uv pip install -r
+      requirements.lock.txt` 变异生产进程正在 import 的同一个 `.venv`
+      （安装期间新 import 可能读到半写文件 → ImportError/500）、
+      `frontend:build` 的 vite `emptyOutDir: true` 清空重建生产静态资源
+      目录（页面资源 404）——叠加同机 16 核 CPU/磁盘争抢（issue #461 的
+      ionice 缓解在 NVMe `[none]` I/O 调度器下无效，实测 `/sys/block/
+      nvme0n1/queue/scheduler`），页面卡顿、设置加载不出；
+    - **SSO 会话签名密钥不持久化**：`session_secret.key` 存在构建目录
+      `backend/data/`（4 个构建 slot 有 4 个不同密钥，未随 data/ 持久化），
+      deploy 落到新 slot 时 `get_session_secret` 重新生成密钥 → 所有用户
+      会话失效（`pm2-out.log` 10:08:04 重启后 API 全部 401 洪峰实证）→
+      前端跳登录/设置加载不出；
+  - 修复：
+    - **deploy 改为部署到稳定目录** `/home/ckd/codes/botler`（与数据目录
+      data/ 同址）：deploy job 先 `git fetch $CI_REPOSITORY_URL` +
+      `git reset --hard $CI_COMMIT_SHA` 把源码更新到稳定目录，rsync 前端
+      dist，在稳定目录独立 `.venv` 安装主依赖 + dsh/hermes SDK，pm2 从
+      `$STABLE_DIR/deploy/botler.config.cjs` 启动——构建目录只做一次性
+      构建，与生产彻底隔离，CI job 不再变异生产代码/venv/dist；
+    - **会话密钥持久化**：稳定目录 `backend/data` → `data/backend/data`
+      symlink（首次自动迁移旧密钥），跨部署/跨重启用户登录态不失效；
+    - 资源争抢继续由 issue #461 的 renice 缓解（backend:test 已迁独立
+      Windows runner，issue #469）；ionice 在 NVMe none 调度器下无效已在
+      根因中说明（需 root 改调度器，超出 CI 代码可改范围）；
+  - 测试：新增 `ci/test_deploy_stable_dir.py` 2 用例（deploy 必须使用稳定
+    目录、会话密钥必须持久化，修复前均失败复现根因）；同步更新
+    `backend/tests/test_deploy_dsh_sdk.py` / `test_deploy_hermes_sdk.py`
+    的 SDK 安装路径断言（构建目录 venv → 稳定目录 `$STABLE_DIR` venv，
+    旧断言在修复后失败，证明测试有效）；ci/ 目录 24 用例、后端全量
+    pytest 3132 用例、前端 node --test 1703 用例全通过；`.gitlab-ci.yml`
+    经 `ci/lint` API 校验、YAML 解析与 deploy 脚本 `bash -n` 语法检查通过。
+
 - **修复 CI 流水线 sync_wiki_to_github 阶段持续失败（issue #464）**：
   - 现象：GitLab Wiki（8 个页面）与 GITHUB_PUSH_TOKEN 均正常，但每次 main push
     流水线的 sync_wiki_to_github 阶段均失败红名——git clone GitHub Wiki 返回

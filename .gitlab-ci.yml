@@ -52,17 +52,25 @@
 # 部署模型（pm2 部署；issue #7 曾切换 Docker compose，现改回 pm2，
 # 但保留 issue #7 的数据目录修复）：
 #   - 部署目标就是 gitlab-runner 所在机器（10.0.0.122），shell executor
+#   - 生产进程运行在稳定部署目录 /home/ckd/codes/botler（issue #467：
+#     严禁运行在 gitlab-runner 构建目录——构建目录会被同流水线其他 job
+#     复用并就地变异（git checkout 重写源码、uv pip install 变异 .venv、
+#     vite build emptyOutDir 清空 dist），叠加同机 CPU/磁盘争抢导致
+#     「CI 期间生产页面卡顿、设置加载不出」。deploy job 先把构建产物
+#     同步到稳定目录（git 更新源码 + rsync 前端 dist + 独立 venv +
+#     symlink 桥接），pm2 从稳定目录启动，构建目录只做一次性构建）
 #   - 数据目录固定为 /home/ckd/codes/botler/data（CI 显式 export
 #     BOTLER_DATA_DIR，不随 runner 构建目录漂移——构建目录可能被清理，
 #     历史部署数据曾因此丢失）：data/backend/.env、data/backend/config.yaml、
-#     data/backend/botler.db、data/workspace/、data/logs/、data/backups/
-#     等运行时文件天然保留；构建目录/旧代码目录的散落数据首次自动
-#     迁移到 data/
-#   - 构建目录 backend/.env 与 backend/workspace 是指向 data/ 的
-#     symlink（后端 load_dotenv / executor 默认路径硬编码在 backend/
-#     下，无法用环境变量覆盖），由 deploy job 维护，数据本体在 data/
-#   - 前端 dist 由 frontend:build 通过 artifacts 传入，下载位置恰好是
-#     FastAPI 静态托管目录 frontend/dist，无需移动
+#     data/backend/botler.db、data/backend/data/（SSO 会话签名密钥）、
+#     data/workspace/、data/logs/、data/backups/ 等运行时文件天然保留；
+#     构建目录/旧代码目录的散落数据首次自动迁移到 data/
+#   - 稳定目录 backend/.env、backend/workspace、backend/data 是指向
+#     data/ 的 symlink（后端 load_dotenv / executor / 会话密钥默认路径
+#     硬编码在 backend/ 下，无法用环境变量覆盖），由 deploy job 维护，
+#     数据本体在 data/；会话密钥持久化后跨部署/跨重启用户登录态不失效
+#   - 前端 dist 由 frontend:build 通过 artifacts 传入 deploy job，再
+#     rsync 到稳定目录 frontend/dist（FastAPI 静态托管目录）
 #   - 凭据（data/backend/.env，gitignore 排除）不入库、不进日志
 # ================================================================
 
@@ -1616,6 +1624,15 @@ deploy_to_code01:
       GBT=$([ -n "${GITLAB_BOT_TOKEN:-}" ] && echo 已注入 || echo 未注入)
       WHS=$([ -n "${WEBHOOK_SECRET:-}" ] && echo 已注入 || echo 未注入)
       dbg START "CI_PROJECT_DIR=$CI_PROJECT_DIR 凭据注入状态: GITLAB_BOT_TOKEN=$GBT WEBHOOK_SECRET=$WHS"
+      # 稳定部署目录（issue #467）：生产进程运行目录，与 gitlab-runner
+      # 构建目录（$CI_PROJECT_DIR）彻底隔离——构建目录会被同流水线其他
+      # job 复用并就地变异（git checkout 重写源码、uv pip install 变异
+      # .venv、vite build emptyOutDir 清空 dist），生产跑在构建目录是
+      # 「CI 期间页面卡顿、设置加载不出」的根因。数据目录 data/ 固定
+      # 在稳定目录下（不随构建目录漂移，历史数据曾因此丢失，issue #7）。
+      export BOTLER_DATA_DIR=/home/ckd/codes/botler/data
+      DATA_DIR="$BOTLER_DATA_DIR"
+      STABLE_DIR=/home/ckd/codes/botler
 
       # ================================================================
       # 第 1 步：验证前端构建产物（artifacts 下载位置 = FastAPI 托管目录）
@@ -1625,11 +1642,49 @@ deploy_to_code01:
       ls -la frontend/dist/index.html >> "$DBG_LOG" 2>&1 || { dbg STEP1 "FAIL: frontend/dist/index.html 不存在"; echo "错误：缺少前端构建产物 frontend/dist"; exit 1; }
 
       # ================================================================
-      # 第 2 步：准备后端运行环境（复用跨 job 持久化的 .venv）
+      # 第 2 步：同步代码到稳定部署目录并安装后端运行环境（issue #467）
+      # ⚠️ 生产进程禁止运行在 gitlab-runner 构建目录（$CI_PROJECT_DIR）：
+      #    构建目录会被同一流水线其他 job 复用并就地变异（git checkout
+      #    重写源码、uv pip install 变异 .venv、vite build emptyOutDir
+      #    清空 dist），导致 CI 期间生产页面卡顿、设置加载不出。因此先
+      #    把代码同步到稳定部署目录 $STABLE_DIR，依赖安装进稳定目录
+      #    独立 .venv，pm2 从稳定目录启动——构建目录只做一次性构建，
+      #    与生产彻底隔离。
       # ================================================================
-      dbg STEP2 "准备后端运行环境"
-      echo "=== 2. 准备后端运行环境 ==="
-      cd backend
+      dbg STEP2 "同步代码到稳定部署目录 $STABLE_DIR"
+      echo "=== 2. 同步代码到稳定部署目录 + 安装后端运行环境 ==="
+      mkdir -p "$STABLE_DIR"
+      if [ -d "$STABLE_DIR/.git" ]; then
+        # 用 CI_REPOSITORY_URL（job 级 CI_JOB_TOKEN）拉取，不依赖
+        # 稳定目录 .git/config 里可能失效的旧凭据
+        git -C "$STABLE_DIR" fetch --prune "$CI_REPOSITORY_URL" "$CI_COMMIT_REF_NAME" >> "$DBG_LOG" 2>&1           || { dbg STEP2 "FAIL: git fetch"; echo "错误：稳定目录 git fetch 失败"; exit 1; }
+        git -C "$STABLE_DIR" reset --hard "$CI_COMMIT_SHA" >> "$DBG_LOG" 2>&1           || { dbg STEP2 "FAIL: git reset"; echo "错误：稳定目录 git reset 失败"; exit 1; }
+        echo "✓ 稳定目录已更新到 $CI_COMMIT_SHA"
+      else
+        dbg STEP2 "FAIL: $STABLE_DIR 不是 git 仓库（首次部署需先 clone）"
+        echo "错误：稳定部署目录 $STABLE_DIR 不是 git 仓库"
+        exit 1
+      fi
+      # 前端构建产物（CI artifacts 下载在 $CI_PROJECT_DIR/frontend/dist）
+      # 同步到稳定目录（FastAPI 静态托管目录）
+      rsync -a --delete "$CI_PROJECT_DIR/frontend/dist/" "$STABLE_DIR/frontend/dist/"
+      echo "✓ 前端 dist 已同步到稳定目录"
+      # 会话签名密钥持久化（issue #467）：backend/data → data/backend/data。
+      # 密钥若留在构建目录，deploy 落到新 slot 时重新生成 → 全员会话
+      # 失效（401 洪峰，前端跳登录/设置加载不出）。迁入 data/ 后跨
+      # 部署/跨重启保持用户登录态。
+      mkdir -p "$DATA_DIR/backend/data"
+      if [ -d "$STABLE_DIR/backend/data" ] && [ ! -L "$STABLE_DIR/backend/data" ]; then
+        for f in session_secret.key; do
+          [ -f "$STABLE_DIR/backend/data/$f" ] && mv "$STABLE_DIR/backend/data/$f" "$DATA_DIR/backend/data/"
+        done
+        rm -rf "$STABLE_DIR/backend/data"
+        echo "✓ 旧会话密钥已迁入 $DATA_DIR/backend/data/"
+      fi
+      ln -sfn "$DATA_DIR/backend/data" "$STABLE_DIR/backend/data"
+      echo "✓ backend/data → $DATA_DIR/backend/data（会话密钥持久化）"
+      # 稳定目录独立 venv：主依赖 + dsh/hermes SDK（复用 CI uv 缓存）
+      cd "$STABLE_DIR/backend"
       export UV_CACHE_DIR="$CI_PROJECT_DIR/backend/.uv-cache"
       if ! command -v uv >/dev/null 2>&1; then
         dbg STEP2 "uv 不在 PATH，尝试安装"
@@ -1643,7 +1698,18 @@ deploy_to_code01:
         uv venv .venv
       fi
       uv pip install -r requirements.lock.txt -i ${PIP_INDEX_URL} || { dbg STEP2 "FAIL: uv pip install"; exit 1; }
-      cd ..
+      # 数据目录 symlink 桥接（.env / workspace → data/，数据本体在
+      # data/）。历史遗留的普通文件/目录（如 Docker 部署残留的 root
+      # 属主 backend/.env 目录）先移除再建链（与第 3 步 3c 同逻辑）。
+      for link in .env workspace; do
+        if [ -e "$link" ] && [ ! -L "$link" ]; then
+          rm -rf "$link"
+          echo "✓ 移除稳定目录旧 backend/$link（以 data/ 为准）"
+        fi
+      done
+      ln -sfn "$DATA_DIR/backend/.env" .env
+      ln -sfn "$DATA_DIR/workspace" workspace
+      cd "$CI_PROJECT_DIR"
       dbg STEP2 "OK"
 
       # ================================================================
@@ -1656,7 +1722,7 @@ deploy_to_code01:
       # ================================================================
       dbg STEP2b "安装 deepseek-harness SDK"
       echo "=== 2b. 安装 deepseek-harness SDK（dsh 引擎依赖）==="
-      bash deploy/install-dsh-sdk.sh backend/.venv || { dbg STEP2b "FAIL: dsh SDK 安装失败"; echo "错误：deepseek-harness SDK 安装失败"; exit 1; }
+      bash deploy/install-dsh-sdk.sh "$STABLE_DIR/backend/.venv" || { dbg STEP2b "FAIL: dsh SDK 安装失败"; echo "错误：deepseek-harness SDK 安装失败"; exit 1; }
       dbg STEP2b "OK"
 
       # ================================================================
@@ -1668,7 +1734,7 @@ deploy_to_code01:
       # ================================================================
       dbg STEP2b2 "安装 hermes-agent SDK"
       echo "=== 2b2. 安装 hermes-agent SDK（hermes 引擎依赖，issue #171）==="
-      bash deploy/install-hermes-agent.sh backend/.venv || { dbg STEP2b2 "FAIL: hermes SDK 安装失败"; echo "错误：hermes-agent SDK 安装失败"; exit 1; }
+      bash deploy/install-hermes-agent.sh "$STABLE_DIR/backend/.venv" || { dbg STEP2b2 "FAIL: hermes SDK 安装失败"; echo "错误：hermes-agent SDK 安装失败"; exit 1; }
       dbg STEP2b2 "OK"
 
       # ================================================================
@@ -1842,7 +1908,7 @@ deploy_to_code01:
       pm2 delete ${APP_NAME} >/dev/null 2>&1 || true
       # ⚠️ 配置文件必须是 .cjs：job 目录在 botler 项目下（package.json 含
       # type: module），.js 会被当作 ESM 解析导致 require 未定义
-      pm2 start deploy/botler.config.cjs >> "$DBG_LOG" 2>&1 || { dbg STEP6 "FAIL: pm2 start"; echo "错误：pm2 start 失败"; exit 1; }
+      pm2 start "$STABLE_DIR/deploy/botler.config.cjs" >> "$DBG_LOG" 2>&1 || { dbg STEP6 "FAIL: pm2 start"; echo "错误：pm2 start 失败"; exit 1; }
       pm2 save >/dev/null 2>&1 || true
       dbg STEP6 "OK"
       sleep 3
