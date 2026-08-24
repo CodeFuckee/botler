@@ -1,5 +1,5 @@
 // 右侧边栏（抽屉）拖拽调整宽度 hook（issue #466）：
-// 概览页 issue 详情 / CI/CD 流水线 / 灵感 AI 对话三个右边栏，在视口宽度
+// 概览页 issue 详情 / CI/CD 流水线 / 灵感 AI 对话 / 任务执行详情四个右边栏，在视口宽度
 // 足够（>860px，跟随项目移动断点）的情况下，用户可拖动抽屉左缘改变宽度。
 //
 // 设计：
@@ -29,6 +29,7 @@ export const DRAWER_RESIZE_STEP = 16
 export const ISSUE_DRAWER_WIDTH_KEY = 'botler.overview.drawerWidth.issue'
 export const PIPELINE_DRAWER_WIDTH_KEY = 'botler.overview.drawerWidth.pipeline'
 export const CHAT_DRAWER_WIDTH_KEY = 'botler.overview.drawerWidth.chat'
+export const TASK_DETAIL_DRAWER_WIDTH_KEY = 'botler.overview.drawerWidth.taskDetail'
 
 /** 视口宽度是否足够支持拖拽调整（>860px）；空值/非法输入回退 false（SSR 安全）。 */
 export function canResizeDrawer(viewportWidth) {

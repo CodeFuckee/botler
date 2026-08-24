@@ -435,3 +435,120 @@ test('TaskDetailDrawer 独立渲染：选中任务展示完整详情区', async 
     renderer.unmount()
   }
 })
+
+// ---- issue #472：任务执行详情右边栏可左右拖拽调整宽度 ----
+// 背景：issue #466 为 issue 详情 / 流水线 / 灵感聊天三个右边栏接入
+// ResizableDrawer 支持拖拽调整宽度，但第二层「任务执行详情」抽屉
+// （TaskDetailDrawer）当时未接入，仍为普通 .drawer 容器，无拖拽手柄。
+// 本组用例断言第二层抽屉同样接入 ResizableDrawer 并渲染拖拽手柄。
+
+// 模拟 window（innerWidth + localStorage + 监听记录，与
+// overview-drawer-resize.test.mjs 同约定）
+function installFakeWindow({ innerWidth = 1440, stored = {} } = {}) {
+  const listeners = new Map()
+  const win = {
+    innerWidth,
+    addEventListener(type, cb) {
+      const arr = listeners.get(type) || []
+      arr.push(cb)
+      listeners.set(type, arr)
+    },
+    removeEventListener(type, cb) {
+      const arr = listeners.get(type) || []
+      const i = arr.indexOf(cb)
+      if (i >= 0) arr.splice(i, 1)
+    },
+    localStorage: {
+      getItem: (k) => (k in stored ? stored[k] : null),
+      setItem: (k, v) => { stored[k] = String(v) },
+    },
+  }
+  const hadWin = 'window' in globalThis
+  const orig = globalThis.window
+  globalThis.window = win
+  return {
+    listenersOf(type) { return listeners.get(type) || [] },
+    stored,
+    restore() {
+      if (hadWin) globalThis.window = orig
+      else delete globalThis.window
+    },
+  }
+}
+
+// 直接渲染 TaskDetailDrawer（无任务记录，避免 SSE/执行接口依赖），
+// 前置安装 fake window 控制视口宽度
+async function renderDetailDrawerWide({ innerWidth = 1440, stored = {} } = {}) {
+  const fake = installFakeWindow({ innerWidth, stored })
+  mock.method(api, 'get', async (pathname) => {
+    if (pathname === '/api/issues/1/64/tasks') return { tasks: [], total: 0 }
+    throw new Error('unexpected ' + pathname)
+  })
+  let renderer = null
+  try {
+    await TestRenderer.act(async () => {
+      renderer = TestRenderer.create(
+        React.createElement(MemoryRouter, null,
+          React.createElement(TaskDetailDrawer, { projectId: 1, issueIid: 64,
+                                                  issueTitle: '测试 issue', onClose: () => {} })))
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+  } catch (e) {
+    fake.restore()
+    throw e
+  }
+  return { renderer, fake }
+}
+
+// 第二层抽屉内的拖拽手柄
+function findDetailHandle(renderer) {
+  return renderer.root.findAll(
+    (n) => String(n.props.className || '').startsWith('drawer-resize-handle'))
+}
+
+test('TaskDetailDrawer 源码：接入 ResizableDrawer 支持左右拖拽调整宽度（issue #472）', () => {
+  assert.match(detailSrc, /import ResizableDrawer/,
+    '应导入 ResizableDrawer')
+  assert.match(detailSrc,
+    /<ResizableDrawer\s+drawerClass="task-detail-drawer"/,
+    '抽屉主体应替换为 ResizableDrawer（className 保留 task-detail-drawer）')
+  assert.match(detailSrc,
+    /storageKey=\{TASK_DETAIL_DRAWER_WIDTH_KEY\}/,
+    '应传入任务执行详情抽屉专用宽度存储 key')
+})
+
+test('任务执行详情抽屉宽度存储 key 独立于其他抽屉（issue #472）', async () => {
+  const hook = await vite.ssrLoadModule('/src/hooks/useDrawerResize.js')
+  assert.equal(hook.TASK_DETAIL_DRAWER_WIDTH_KEY,
+    'botler.overview.drawerWidth.taskDetail',
+    '存储 key 应独立（不影响 issue 抽屉已保存宽度）')
+})
+
+test('TaskDetailDrawer 宽视口渲染拖拽手柄，窄视口不渲染（issue #472）', async () => {
+  const wide = await renderDetailDrawerWide({ innerWidth: 1440 })
+  try {
+    const handle = findDetailHandle(wide.renderer)
+    assert.ok(handle.length > 0, '1440px 视口应渲染拖拽手柄（可左右拖动）')
+    assert.equal(handle[0].props.role, 'separator', '手柄应为 separator 角色')
+    assert.equal(handle[0].props['aria-orientation'], 'vertical')
+    assert.equal(handle[0].props.tabIndex, 0, '手柄可聚焦支持键盘调整')
+    // 抽屉容器类名保持 task-detail-drawer
+    const drawer = wide.renderer.root.findAll(
+      (n) => String(n.props.className || '') === 'drawer task-detail-drawer')
+    assert.ok(drawer.length > 0, '应渲染 .drawer task-detail-drawer 容器')
+  } finally {
+    // act 内卸载：flush 抽屉 resize 监听的被动清理后再移除 fake window，
+    // 避免延迟清理访问已删除的 window（与 overview-drawer-resize.test.mjs
+    // 清理约定一致）
+    await TestRenderer.act(() => wide.renderer.unmount())
+    wide.fake.restore()
+  }
+  const narrow = await renderDetailDrawerWide({ innerWidth: 800 })
+  try {
+    assert.equal(findDetailHandle(narrow.renderer).length, 0,
+      '800px 视口不应渲染拖拽手柄（宽度不足）')
+  } finally {
+    await TestRenderer.act(() => narrow.renderer.unmount())
+    narrow.fake.restore()
+  }
+})

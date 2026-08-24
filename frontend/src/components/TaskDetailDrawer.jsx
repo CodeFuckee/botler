@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePolling } from '../hooks/usePolling.js'
 import { Icon } from './Icon.jsx'
 import { ScrollContainerBackToTop } from './BackToTop.jsx'
+import ResizableDrawer, { TASK_DETAIL_DRAWER_WIDTH_KEY } from './ResizableDrawer.jsx'  // issue #472：第二层抽屉同样支持拖拽调整宽度
 import { Link } from 'react-router-dom'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
 import UsageCard from '../components/UsageCard.jsx'
@@ -231,7 +232,9 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
-      <div className="drawer task-detail-drawer" ref={drawerRef} onClick={(e) => e.stopPropagation()}>
+      <ResizableDrawer drawerClass="task-detail-drawer" ref={drawerRef}
+                       storageKey={TASK_DETAIL_DRAWER_WIDTH_KEY}
+                       onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <strong className="issue-drawer-title">
             任务执行详情 — #{issueIid} {issueTitle || '—'}
@@ -421,8 +424,8 @@ export default function TaskDetailDrawer({ projectId, issueIid, issueTitle,
             )}
           </div>
         )}
-      <ScrollContainerBackToTop containerRef={drawerRef} />
-      </div>
+        <ScrollContainerBackToTop containerRef={drawerRef} />
+      </ResizableDrawer>
     </div>
   )
 }

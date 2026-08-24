@@ -14,7 +14,8 @@
 import { forwardRef } from 'react'
 import { useDrawerResize } from '../hooks/useDrawerResize.js'
 // 存储 key 由 hook 模块统一定义，此处 re-export 供各抽屉导入
-export { ISSUE_DRAWER_WIDTH_KEY, PIPELINE_DRAWER_WIDTH_KEY, CHAT_DRAWER_WIDTH_KEY }
+export { ISSUE_DRAWER_WIDTH_KEY, PIPELINE_DRAWER_WIDTH_KEY, CHAT_DRAWER_WIDTH_KEY,
+           TASK_DETAIL_DRAWER_WIDTH_KEY }
   from '../hooks/useDrawerResize.js'
 
 const ResizableDrawer = forwardRef(function ResizableDrawer(

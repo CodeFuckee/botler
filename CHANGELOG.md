@@ -69,6 +69,23 @@
 
 ### Fixed
 
+- **修复概览页 issue 详情右边栏「查看执行的详情」第二层抽屉无法左右拖动（issue #472）**：
+  - 现象：概览页点击 issue 右侧栏的「查看执行的详情」弹出的任务执行详情
+    右边栏（TaskDetailDrawer）没有拖拽手柄，无法像 issue 详情 / 流水线 /
+    灵感对话三个右边栏（issue #466 起）那样左右拖动调整宽度；
+  - 根因：issue #466 为三个右侧边栏接入 `ResizableDrawer`（`useDrawerResize`
+    hook 拖拽调整宽度 + localStorage 持久化），但第二层「任务执行详情」抽屉
+    当时未接入，仍为普通 `.drawer` 容器，未渲染拖拽手柄；
+  - 修复：`TaskDetailDrawer` 抽屉主体改为 `ResizableDrawer`
+    （`drawerClass="task-detail-drawer"` 保留原类名，不影响既有 CSS 选择器
+    与第二层叠加样式），新增独立存储 key `TASK_DETAIL_DRAWER_WIDTH_KEY`
+    （`botler.overview.drawerWidth.taskDetail`）持久化宽度——与 issue / 流水线 /
+    聊天抽屉各自宽度互不干扰，视口 > 860px 时渲染拖拽手柄（拖拽 / 键盘
+    ArrowLeft / ArrowRight 步进调整），窄视口自动隐藏；
+  - 测试：`overview-issue-task-detail-drawer.test.mjs` 新增 3 用例（源码接入
+    ResizableDrawer 断言、存储 key 独立、宽视口渲染拖拽手柄 / 窄视口不渲染），
+    前端全量 1710 用例 + 后端全量 pytest 通过。
+
 - **修复设置页升级 dsh 显示「升级成功」但重启后版本号不变（issue #470）**：
   - 现象：设置页「本地环境检测」对 dsh（DeepSeek Harness SDK）点「升级」，
     提示「升级成功，服务正在自动重启」，但重启后版本号没有任何变化；
