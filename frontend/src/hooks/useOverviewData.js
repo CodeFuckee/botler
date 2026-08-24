@@ -98,6 +98,17 @@ export function useOverviewData() {
   const [addingIssueInspIds, setAddingIssueInspIds] = useState({})
   // 创建成功的 issue 对象（issue #143）：非空时显示成功提示与新 issue 链接
   const [inspirationCreatedIssue, setInspirationCreatedIssue] = useState(null)
+  // 批量转 issue（issue #247）：灵感多选模式（是否开启、已选 id 列表）、
+  // 批量预览面板（打开/草稿列表/提交中/结果/错误）——草稿每条含灵感对象
+  // 与可编辑的标题/描述/标签（逗号分隔字符串）/目标仓库 id，未编辑时
+  // 与单条接口默认行为一致（标题=描述=内容、标签 feature+ui、原仓库）
+  const [inspirationSelectionMode, setInspirationSelectionMode] = useState(false)
+  const [selectedInspirationIds, setSelectedInspirationIds] = useState([])
+  const [batchConvertOpen, setBatchConvertOpen] = useState(false)
+  const [batchDrafts, setBatchDrafts] = useState([])
+  const [batchSubmitting, setBatchSubmitting] = useState(false)
+  const [batchResult, setBatchResult] = useState(null)
+  const [batchError, setBatchError] = useState('')
   // 灵感 AI 对话（issue #166）：与 AI agent 探讨灵感——当前对话的灵感
   // 对象（null=面板关闭）、消息列表、输入草稿、发送中/加载中/错误状态
   const [chatInspiration, setChatInspiration] = useState(null)
@@ -565,6 +576,135 @@ export function useOverviewData() {
     }
   }, [addingIssueInspIds, loadIssues, loadInspirations, invalidateInspirationPage])
 
+  // ---- 批量转 issue（issue #247）：多选灵感 → 预览编辑 → 逐条提交 ----
+
+  // 进入/退出多选模式；退出时清空已选（避免残留选中态误导）
+  const exitInspirationSelectionMode = useCallback(() => {
+    setInspirationSelectionMode(false)
+    setSelectedInspirationIds([])
+  }, [])
+  const enterInspirationSelectionMode = useCallback(() => {
+    setInspirationSelectionMode(true)
+  }, [])
+
+  // 勾选/取消勾选一条灵感（多选模式下每条前的复选框）
+  const toggleInspirationSelected = useCallback((id) => {
+    setSelectedInspirationIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : prev.concat(id))
+  }, [])
+
+  // 打开批量预览面板：把已选灵感（跨仓库，从已加载的分页缓存 + 旧式
+  // 内嵌数组收集）转为可编辑草稿——标题/描述默认=灵感内容、标签默认
+  // feature+ui（逗号分隔）、目标仓库默认=灵感所属仓库
+  const openBatchConvert = useCallback(() => {
+    const byId = {}
+    Object.values(inspirationPages).forEach((page) => {
+      (page?.inspirations || []).forEach((ins) => { byId[ins.id] = ins })
+    })
+    inspirationRepos.forEach((r) => {
+      (r.inspirations || []).forEach((ins) => { byId[ins.id] = ins })
+    })
+    const drafts = selectedInspirationIds
+      .map((id) => byId[id])
+      .filter(Boolean)
+      .map((ins) => ({
+        inspiration: ins,
+        title: ins.content,
+        description: ins.content,
+        labels: 'feature, ui',
+        repo_id: ins.repo_id,
+      }))
+    setBatchDrafts(drafts)
+    setBatchResult(null)
+    setBatchError('')
+    setBatchConvertOpen(true)
+  }, [selectedInspirationIds, inspirationPages, inspirationRepos])
+
+  // 编辑草稿：标题/描述/标签/目标仓库任一项
+  const updateBatchDraft = useCallback((index, patch) => {
+    setBatchDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)))
+  }, [])
+
+  // 单条重置为默认（标题=描述=内容、标签 feature+ui、原仓库）
+  const resetBatchDraftToDefault = useCallback((index) => {
+    setBatchDrafts((prev) => prev.map((d, i) => (i === index ? {
+      ...d,
+      title: d.inspiration.content,
+      description: d.inspiration.content,
+      labels: 'feature, ui',
+      repo_id: d.inspiration.repo_id,
+    } : d)))
+  }, [])
+
+  // 全部应用默认：所有草稿统一重置（批量预览「或统一应用默认」）
+  const applyBatchDefaults = useCallback(() => {
+    setBatchDrafts((prev) => prev.map((d) => ({
+      ...d,
+      title: d.inspiration.content,
+      description: d.inspiration.content,
+      labels: 'feature, ui',
+      repo_id: d.inspiration.repo_id,
+    })))
+  }, [])
+
+  // 提交批量转 issue：POST /api/inspirations/batch-add-issues，payload
+  // 逐条携带与默认值不同的覆盖字段（未编辑字段不传，后端按单条接口
+  // 默认语义处理）；成功后刷新开放 issue 列表与灵感列表、失效相关仓库
+  // 分页缓存并清空已选，面板保留结果展示（N 成功 / M 失败 + 逐条原因）
+  const submitBatchConvert = useCallback(async () => {
+    if (batchSubmitting || batchDrafts.length === 0) return
+    setBatchSubmitting(true)
+    setBatchError('')
+    setBatchResult(null)
+    try {
+      const items = batchDrafts.map((d) => {
+        const item = { inspiration_id: d.inspiration.id }
+        const title = d.title.trim()
+        const description = d.description
+        const labels = d.labels.split(',').map((s) => s.trim()).filter(Boolean)
+        if (title !== d.inspiration.content) item.title = title
+        if (description !== d.inspiration.content) item.description = description
+        if (labels.join(',') !== 'feature,ui') item.labels = labels
+        if (d.repo_id !== d.inspiration.repo_id) item.repo_id = d.repo_id
+        return item
+      })
+      const res = await api.post('/api/inspirations/batch-add-issues', { items })
+      setBatchResult(res)
+      setSelectedInspirationIds([])
+      // 成功项已由后端删除（issue #162 语义）：立即刷新列表移除条目，
+      // 不等 15 秒轮询；开放 issue 列表同步出现新 issue
+      batchDrafts.forEach((d) => invalidateInspirationPage(d.inspiration.repo_id))
+      await loadIssues()
+      await loadInspirations()
+    } catch (e) {
+      // 请求级失败（如接口不存在/网络错误）：面板展示错误，草稿保留可重试
+      setBatchError(e.message)
+    } finally {
+      setBatchSubmitting(false)
+    }
+  }, [batchSubmitting, batchDrafts, invalidateInspirationPage, loadIssues, loadInspirations])
+
+  // 关闭批量预览面板：清空草稿/结果/错误并退出多选模式（勾选已消费，
+  // 残留选中态会误导下一次「转为 Issue」的条目范围）
+  const closeBatchConvert = useCallback(() => {
+    setBatchConvertOpen(false)
+    setBatchDrafts([])
+    setBatchResult(null)
+    setBatchError('')
+    exitInspirationSelectionMode()
+  }, [exitInspirationSelectionMode])
+
+  // 批量预览面板 Esc 关闭（与 AI 对话面板一致；SSR 测试环境无
+  // document 时跳过）
+  useEffect(() => {
+    if (typeof document === 'undefined' || !batchConvertOpen) return
+    const onKey = (e) => {
+      if (e && e.key === 'Escape') closeBatchConvert()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [batchConvertOpen, closeBatchConvert])
+
   // ---- 灵感 AI 对话（issue #166）：与 AI agent 探讨灵感 ----
 
   // 打开对话面板：加载该灵感的历史消息（GET messages），加载中显示提示
@@ -761,6 +901,12 @@ export function useOverviewData() {
     toggleInspirationRepo, loadMoreInspirations,
     submitNewInspiration, saveInspiration, deleteInspiration,
     addIssueFromInspiration,
+    inspirationSelectionMode, selectedInspirationIds,
+    enterInspirationSelectionMode, exitInspirationSelectionMode,
+    toggleInspirationSelected, openBatchConvert,
+    batchConvertOpen, batchDrafts, batchSubmitting, batchResult, batchError, setBatchError,
+    updateBatchDraft, resetBatchDraftToDefault, applyBatchDefaults,
+    submitBatchConvert, closeBatchConvert,
     openInspirationChat, closeInspirationChat, changeChatProvider, sendInspirationChat,
     reconcileRepo, introspectRepo, discoverRepo,
   }

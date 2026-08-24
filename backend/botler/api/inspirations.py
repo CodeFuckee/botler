@@ -22,6 +22,12 @@ GitLab issue——灵感内容作为 issue 标题与描述、默认标签 featur
   解析失败则不指定分配人）；走 owner token（复用 issues 模块的
   _issue_edit_call，绝不回退 bot token），创建成功后清空概览缓存并
   删除该灵感（issue #162：成功推送后从灵感列表移除，失败保留可重试）。
+- POST   /api/inspirations/batch-add-issues（issue #247）：批量将灵感
+  转为 GitLab issue——请求 items 每条含 inspiration_id 与可选覆盖字段
+  （title / description / labels / repo_id），逐条提交且单条失败不阻断
+  其余条目：成功项与单条接口同语义（创建后删除该灵感），失败项保留并
+  在响应中逐条给出失败原因；响应含 succeeded / failed 数组与
+  summary（succeeded / failed 计数），前端据此展示「N 成功 / M 失败」。
 - GET    /api/inspirations/{id}/messages（issue #166）：返回该灵感与
   AI agent 的对话历史（按时间升序）。
 - POST   /api/inspirations/{id}/messages（issue #166）：向 AI agent
@@ -49,7 +55,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..gitlab_client import GitLabError, GITLAB_ISSUE_TITLE_MAX_LEN
-from .issues import _issue_edit_call, _trim_issue, clear_issue_cache
+from .issues import _issue_edit_call, _trim_issue, _normalize_label_names, clear_issue_cache
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,10 @@ router = APIRouter(prefix="/inspirations", tags=["inspirations"])
 
 # 灵感内容长度上限（去除首尾空白后）：随手笔记场景的合理上限
 MAX_CONTENT_LEN = 5000
+
+# 批量转 issue 单次上限（issue #247）：避免一次请求过大拖垮 owner 接口
+# 与本地数据库；多选模式选中数受此约束，超限前端提示分批提交
+MAX_BATCH_ITEMS = 50
 
 # 灵感 AI 对话（issue #166）参数：单条消息长度上限（去除首尾空白后）、
 # 传给模型的上下文最大消息条数（历史过长时截取最近 N 条，防止撑爆
@@ -81,6 +91,21 @@ class InspirationUpdate(BaseModel):
 class InspirationChatMessage(BaseModel):
     content: str = Field(description="向 AI agent 发送的消息内容")
     provider: str | None = Field(default=None, description="可选 AI 供应商标识")
+
+
+class BatchAddIssueItem(BaseModel):
+    """批量转 issue 单条条目（issue #247）：灵感 id 必填，标题/描述/
+    标签/目标仓库为可选覆盖——未传则沿用单条接口默认行为（标题=描述=
+    灵感内容、标签 feature+ui、目标仓库=灵感所属仓库）。"""
+    inspiration_id: int = Field(description="灵感本地 id（inspirations.id）")
+    title: str | None = Field(default=None, description="可选：覆盖 issue 标题")
+    description: str | None = Field(default=None, description="可选：覆盖 issue 描述")
+    labels: list[str] | None = Field(default=None, description="可选：覆盖标签列表")
+    repo_id: int | None = Field(default=None, description="可选：覆盖目标仓库 id")
+
+
+class BatchAddIssueRequest(BaseModel):
+    items: list[BatchAddIssueItem] = Field(description="待批量转 issue 的灵感条目")
 
 
 class InspirationChatProvider(BaseModel):
@@ -236,34 +261,25 @@ def delete_inspiration(request: Request, inspiration_id: int):
     return None
 
 
-@router.post("/{inspiration_id}/add-issue", status_code=201)
-def add_issue_from_inspiration(request: Request, inspiration_id: int):
-    """将灵感一键提交为 GitLab issue（issue #143）。
+def _submit_inspiration_as_issue(c, insp, repo=None, *, title=None,
+                                    description=None, labels=None) -> dict:
+    """把单条灵感提交为 GitLab issue 的核心逻辑（issue #247 提取，单条
+    接口与批量接口共用，保证「单条转 issue 行为不变」）。
 
-    概览页灵感条目「添加 Issue」按钮点击后调用：灵感内容同时作为
-    issue 标题与描述，默认标签 feature + ui（GitLab 创建 issue 时
-    不存在的标签会自动创建），分配人 = 仓库用户（issue #153/#159：
-    优先用仓库表 remote_username，存储值为空时按 remote url 运行时
-    读取兜底并写回，解析为 GitLab 用户 id；未配置/解析失败不指定
-    分配人）；通过 GitLab API 在灵感所属仓库创建。
+    语义与单条 add-issue 完全一致：标题=描述=灵感内容（去首尾空白），
+    默认标签 feature + ui，分配人 = 仓库用户（issue #153/#159），走
+    owner token（_issue_edit_call，issue #130，绝不回退 bot token）；
+    创建成功后清空概览缓存并删除该灵感（issue #162）。失败抛
+    HTTPException（400/404/502），调用方按需捕获映射为单条失败。
 
-    写操作与概览页其他 issue 编辑一致（_issue_edit_call）：必须使用
-    owner token，绝不回退 bot token——未配置 owner token 返回 400 并
-    引导设置；token 失效/权限不足返回 502。创建成功后清空概览缓存并
-    删除该灵感（issue #162：灵感已转为 GitLab issue，成功推送后从灵感
-    列表移除，避免重复提交；删除为本地数据库操作，失败仅告警不阻塞
-    返回成功），前端刷新开放 issue 列表即可看到新 issue。返回精简后
-    的 issue 对象（含 iid/web_url，供前端展示创建成功提示与跳转链接）。
-
-    错误映射：灵感不存在 → 404；所属仓库不存在/已软删除 → 400；仓库
-    未启用 → 400（与概览页添加 issue 弹窗一致）；GitLab 创建失败 →
-    502；网络错误 → 502。
+    repo 为空时用灵感所属仓库；批量预览面板可传目标仓库行覆盖（issue
+    #247）。title / description / labels 为可选覆盖——None 表示沿用
+    默认（标题=描述=内容、标签 feature+ui）；覆盖标题去首尾空白后必须
+    非空并同样受 255 字符截断约束（issue #186）；覆盖描述允许为空
+    （用户主动清空描述时不传正文）；覆盖标签归一化后必须非空。
     """
-    c = request.app.state.ctx
-    insp = c.db.get_inspiration(inspiration_id)
-    if insp is None:
-        raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
-    repo = _require_repo(c, insp["repo_id"])
+    if repo is None:
+        repo = _require_repo(c, insp["repo_id"])
     if not repo["enabled"]:
         raise HTTPException(400, "仓库未启用")
     # 数据库层已保证内容非空（创建/更新时校验），此处去首尾空白后
@@ -308,21 +324,35 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
         except httpx.HTTPError as e:
             logger.warning("灵感提交 issue：解析仓库用户 %s 网络错误，跳过分配人: %s",
                            username, str(e)[:200])
-    # issue #186：GitLab issue 标题硬上限 255 字符（GITLAB_ISSUE_TITLE_MAX_LEN，
-    # 超过则创建接口 400 拒绝 "title is too long"），而描述字段可容纳远超
-    # 255 字符——灵感内容超长时标题截断到上限内并加省略号标记，描述保留
-    # 完整内容（用户可在 GitLab 描述里输入超过 255 字符的正文）。
-    title = content
-    if len(title) > GITLAB_ISSUE_TITLE_MAX_LEN:
-        title = title[:GITLAB_ISSUE_TITLE_MAX_LEN - 1] + "…"
+    # 标题/描述：未覆盖时用灵感内容。issue #186：GitLab issue 标题硬上限
+    # 255 字符（GITLAB_ISSUE_TITLE_MAX_LEN，超过则创建接口 400 拒绝
+    # "title is too long"），而描述字段可容纳远超 255 字符——标题超长时
+    # 截断到上限内并加省略号标记，描述保留完整内容（用户可在 GitLab
+    # 描述里输入超过 255 字符的正文）。覆盖标题去首尾空白后必须非空；
+    # 覆盖描述允许为空字符串（用户主动清空则不传正文）。
+    final_title = content if title is None else title.strip()
+    if not final_title:
+        raise HTTPException(400, "issue 标题不能为空")
+    if len(final_title) > GITLAB_ISSUE_TITLE_MAX_LEN:
+        final_title = final_title[:GITLAB_ISSUE_TITLE_MAX_LEN - 1] + "…"
+    final_description = content if description is None else description
+    # 标签：未覆盖时默认 feature + ui（GitLab 创建 issue 时不存在的标签
+    # 会自动创建）；覆盖时归一化（去空白/去空/去重），归一化后为空 →
+    # 400（空标签提交无意义，与标记编辑接口语义一致）
+    if labels is None:
+        final_labels = list(INSPIRATION_ISSUE_LABELS)
+    else:
+        final_labels = _normalize_label_names(labels)
+        if not final_labels:
+            raise HTTPException(400, "标签不能为空")
     try:
         issue = _issue_edit_call(
             c, repo,
             lambda cl: cl.create_issue(
-                repo["gitlab_project_id"], title,
-                description=content,
+                repo["gitlab_project_id"], final_title,
+                description=final_description,
                 assignee_id=assignee_id,
-                labels=list(INSPIRATION_ISSUE_LABELS)))
+                labels=final_labels))
     except GitLabError as e:
         raise HTTPException(502, f"创建 issue 失败: {e}") from e
     except httpx.HTTPError as e:
@@ -336,12 +366,130 @@ def add_issue_from_inspiration(request: Request, inspiration_id: int):
     # 所有失败路径（GitLab 故障 / 未配置 owner token / 仓库禁用等）
     # 均不会走到这里，灵感保留可重试。
     try:
-        c.db.delete_inspiration(inspiration_id)
+        c.db.delete_inspiration(insp["id"])
     except Exception as e:
         logger.warning("灵感提交 issue 成功后删除灵感失败（id=%s）: %s",
-                       inspiration_id, str(e)[:200])
+                       insp["id"], str(e)[:200])
     # 标签色省略（创建刚完成，前端随即刷新列表从 overview 获取完整数据）
     return _trim_issue(issue, {})
+
+
+@router.post("/{inspiration_id}/add-issue", status_code=201)
+def add_issue_from_inspiration(request: Request, inspiration_id: int):
+    """将灵感一键提交为 GitLab issue（issue #143）。
+
+    概览页灵感条目「添加 Issue」按钮点击后调用：灵感内容同时作为
+    issue 标题与描述，默认标签 feature + ui（GitLab 创建 issue 时
+    不存在的标签会自动创建），分配人 = 仓库用户（issue #153/#159：
+    优先用仓库表 remote_username，存储值为空时按 remote url 运行时
+    读取兜底并写回，解析为 GitLab 用户 id；未配置/解析失败不指定
+    分配人）；通过 GitLab API 在灵感所属仓库创建。
+
+    写操作与概览页其他 issue 编辑一致（_issue_edit_call）：必须使用
+    owner token，绝不回退 bot token——未配置 owner token 返回 400 并
+    引导设置；token 失效/权限不足返回 502。创建成功后清空概览缓存并
+    删除该灵感（issue #162：灵感已转为 GitLab issue，成功推送后从灵感
+    列表移除，避免重复提交；删除为本地数据库操作，失败仅告警不阻塞
+    返回成功），前端刷新开放 issue 列表即可看到新 issue。返回精简后
+    的 issue 对象（含 iid/web_url，供前端展示创建成功提示与跳转链接）。
+
+    错误映射：灵感不存在 → 404；所属仓库不存在/已软删除 → 400；仓库
+    未启用 → 400（与概览页添加 issue 弹窗一致）；GitLab 创建失败 →
+    502；网络错误 → 502。
+    """
+    c = request.app.state.ctx
+    insp = c.db.get_inspiration(inspiration_id)
+    if insp is None:
+        raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
+    return _submit_inspiration_as_issue(c, insp)
+
+
+@router.post("/batch-add-issues", status_code=200)
+def batch_add_issues(request: Request, body: BatchAddIssueRequest):
+    """批量将灵感转为 GitLab issue（issue #247）。
+
+    概览页灵感板块多选后批量提交：请求 items 每条含 inspiration_id
+    与可选覆盖字段（title / description / labels / repo_id），后端
+    逐条调用与单条 add-issue 完全相同的核心逻辑（_submit_inspiration_
+    as_issue）——未传覆盖字段的条目行为与单条接口逐字一致，保证「单条
+    转 issue 行为不变」（验收标准 3）。
+
+    逐条提交且单条失败不阻断其余条目（验收标准 2）：灵感不存在 /
+    仓库不存在或已软删除 / 仓库未启用 / 标题或标签覆盖值非法 / owner
+    token 未配置 / GitLab 创建失败 / 网络错误——均记录为该条失败并
+    继续处理后续条目；成功项按单条接口语义删除灵感（issue #162），
+    失败项保留在列表可重试。响应含 succeeded / failed 数组与
+    summary（计数），前端据此展示「N 成功 / M 失败」汇总与逐条失败
+    原因（验收标准 1/2/4）。
+
+    请求校验：items 非空（400）；items 条数超过 MAX_BATCH_ITEMS（400）；
+    条目缺 inspiration_id 等必填字段 → 422（pydantic）。同一灵感 id
+    在请求中重复出现时只处理首次（去重，避免重复选择产生重复 issue）。
+    """
+    c = request.app.state.ctx
+    items = body.items
+    if not items:
+        raise HTTPException(400, "请至少选择一条灵感")
+    if len(items) > MAX_BATCH_ITEMS:
+        raise HTTPException(
+            400, f"一次最多批量转 {MAX_BATCH_ITEMS} 条灵感，请分批提交")
+    # 同一灵感 id 去重：只处理第一次出现（重复选择不应产生重复 issue）
+    seen: set[int] = set()
+    dedup: list[BatchAddIssueItem] = []
+    for item in items:
+        if item.inspiration_id in seen:
+            continue
+        seen.add(item.inspiration_id)
+        dedup.append(item)
+    succeeded: list[dict] = []
+    failed: list[dict] = []
+    for item in dedup:
+        try:
+            insp = c.db.get_inspiration(item.inspiration_id)
+            if insp is None:
+                raise HTTPException(
+                    404, f"灵感不存在（id={item.inspiration_id}）")
+            # 目标仓库覆盖（issue #247）：传 repo_id 时校验存在且未软删除
+            # （_require_repo），启用校验在核心逻辑内统一执行；未传则用
+            # 灵感所属仓库（单条接口默认行为）
+            repo = None
+            if item.repo_id is not None:
+                repo = _require_repo(c, item.repo_id)
+            issue = _submit_inspiration_as_issue(
+                c, insp, repo,
+                title=item.title, description=item.description,
+                labels=item.labels)
+            succeeded.append({
+                "inspiration_id": item.inspiration_id,
+                "issue": issue,
+            })
+        except HTTPException as e:
+            failed.append({
+                "inspiration_id": item.inspiration_id,
+                "error": str(e.detail),
+            })
+        except (GitLabError, httpx.HTTPError) as e:
+            # 核心逻辑已将两类异常转为 HTTPException，此处兜底防御
+            failed.append({
+                "inspiration_id": item.inspiration_id,
+                "error": f"创建 issue 失败: {e}",
+            })
+        except Exception as e:
+            # 兜底：未知异常不阻断批量，记录单条失败
+            logger.warning("批量转 issue 单条失败（灵感 id=%s）: %s",
+                           item.inspiration_id, str(e)[:200])
+            failed.append({
+                "inspiration_id": item.inspiration_id,
+                "error": f"创建 issue 失败: {str(e)[:200]}",
+            })
+    return {
+        "succeeded": succeeded,
+        "failed": failed,
+        "summary": {
+            "succeeded": len(succeeded),
+            "failed": len(failed),
+        },
+    }
 
 
 # ---- issue #166：灵感与 AI agent 对话 ----

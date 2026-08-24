@@ -279,7 +279,13 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 原来一样，放在开放 issue 组件的下方；issue #184 曾改为右侧常驻边栏，本次
 > 回退该布局调整）。为避免长期积累的灵感拖慢首屏，概览轮询只获取每仓库的
 > 总数；有灵感的仓库默认折叠，点击后按每页 20 条懒加载并可继续“加载更多”，
-> 排序始终为 `updated_at` 降序（issue #219）。每条灵感提供「对话」按钮
+> 排序始终为 `updated_at` 降序（issue #219）。每条灵感提供「添加 Issue」按钮
+> （issue #143）：灵感内容同时作为标题与描述一键提交为 GitLab issue（默认标签
+> feature + ui，分配人 = 仓库用户，issue #153）；issue #247 起支持**批量转 issue**——
+> 标题行「多选」按钮进入多选模式后勾选多条灵感，点「转为 Issue」弹出批量预览面板，
+> 每条可单独编辑标题/描述/标签/目标仓库（或「全部应用默认」统一重置），逐条提交后
+> 展示「N 成功 / M 失败」汇总与逐条失败原因：成功项创建 issue 并从灵感列表移除，
+> 失败项保留可重试。每条灵感提供「对话」按钮
 > （issue #166）：点击后以右侧边栏抽屉打开，即可围绕该灵感与 AI agent 多轮
 > 探讨（完善想法、补充边界场景、评估可行性、给出分步落地建议）；对话输入框采用
 > codex 风格（issue #443）：文本框与圆形发送按钮融合为单一圆角容器，输入随
@@ -1057,6 +1063,7 @@ POST   /api/inspirations              记录一条灵感（repo_id + content 必
 PUT    /api/inspirations/{id}         更新灵感内容（刷新 updated_at，issue #131）
 DELETE /api/inspirations/{id}         删除灵感（issue #131）
 POST   /api/inspirations/{id}/add-issue  将灵感一键提交为 GitLab issue（issue #143/#153/#162）：灵感内容同时作为标题与描述，默认标签 feature + ui，分配人 = 仓库用户（仓库设置页读取 remote url 得到的用户名，按项目成员解析为 GitLab 用户 id；未配置/解析失败则不指定分配人）；写操作必须配置 owner token，创建成功后清概览缓存并从灵感列表删除该灵感（issue #162，失败保留可重试）
+POST   /api/inspirations/batch-add-issues  批量将灵感转为 GitLab issue（issue #247）：items 每条含 inspiration_id 与可选覆盖字段（title / description / labels / repo_id），逐条调用与单条 add-issue 完全一致的核心逻辑（未覆盖字段沿用默认：标题=描述=内容、标签 feature+ui、目标仓库=灵感所属仓库）；单条失败不阻断其余条目，成功项删除灵感、失败项保留并逐条返回原因；响应含 succeeded / failed 数组与 summary 计数（前端展示「N 成功 / M 失败」）；同一灵感 id 去重、单次上限 50 条
 GET    /api/inspirations/{id}/chat-providers  返回当前灵感可选的已启用且 API Key 非空供应商（仅 name/provider/model）及当前选择（issue #249）
 PUT    /api/inspirations/{id}/chat-provider   保存或清除当前灵感的对话供应商选择（`{provider}`；null 清除，issue #249）
 GET    /api/inspirations/{id}/messages   返回灵感与 AI agent 的对话历史（按时间升序；issue #166）

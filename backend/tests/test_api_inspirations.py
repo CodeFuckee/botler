@@ -755,6 +755,289 @@ class TestAddIssueFromInspirationRuntimeRemoteUser:
         assert stub.create_calls[0][1]["assignee_id"] is None
 
 
+# ---- issue #247：批量将灵感转为 GitLab issue ----
+
+class TestBatchAddIssueFromInspirations:
+    """POST /api/inspirations/batch-add-issues（issue #247）：批量转 issue。
+
+    需求：灵感板块多选后批量预览（每条可编辑标题/描述/标签/目标仓库），
+    逐条提交——成功项按单条接口语义删除灵感（issue #162），失败项保留
+    并逐条给出原因；响应含 succeeded / failed 与 summary 计数，前端
+    展示「N 成功 / M 失败」。验收：单条转 issue 行为不变（未覆盖字段的
+    条目与单条接口逐字一致）；部分失败不阻断其余条目。
+    """
+
+    def _seed(self, db, n=2):
+        """插入 n 个仓库，每个仓库一条灵感；返回 (repo_ids, insp_ids)。"""
+        repo_ids = [_add_repo(db, 42 + i, f"repo-{i}", priority=10) for i in range(n)]
+        insp_ids = [db.create_inspiration(r, f"灵感内容{i}") for i, r in enumerate(repo_ids)]
+        return repo_ids, insp_ids
+
+    def test_batch_all_success_defaults(self, edit_env):
+        """正常路径：跨仓库批量提交，未传覆盖字段——每条与单条接口语义
+        一致（标题=描述=内容、标签 feature+ui、目标仓库=灵感所属仓库），
+        全部成功删除灵感，summary 计数正确。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=2)
+
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": insp_ids[0]},
+                      {"inspiration_id": insp_ids[1]}],
+        })
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["summary"] == {"succeeded": 2, "failed": 0}
+        assert [s["inspiration_id"] for s in body["succeeded"]] == insp_ids
+        assert body["failed"] == []
+        # create_issue 调用参数：标题=描述=内容，标签 feature+ui，目标
+        # 仓库为各自灵感所属仓库（gitlab_project_id=42/43）
+        assert len(stub.create_calls) == 2
+        assert stub.create_calls[0][0] == 42
+        assert stub.create_calls[0][1]["title"] == "灵感内容0"
+        assert stub.create_calls[0][1]["description"] == "灵感内容0"
+        assert stub.create_calls[0][1]["labels"] == ["feature", "ui"]
+        assert stub.create_calls[1][0] == 43
+        # issue #162：创建成功即删除灵感，overview 不再展示
+        for iid in insp_ids:
+            assert db.get_inspiration(iid) is None
+        # succeeded 携带精简 issue 对象（iid/web_url 供前端跳转提示）
+        assert body["succeeded"][0]["issue"]["iid"] == 99
+        assert body["succeeded"][0]["issue"]["web_url"].startswith("https://")
+
+    def test_batch_per_item_overrides(self, edit_env):
+        """每条可单独编辑：标题/描述/标签/目标仓库覆盖生效，未覆盖字段
+        沿用默认——批量预览「每条可单独编辑」验收点。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=2)
+        target = _add_repo(db, 99, "target-repo")
+
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [
+                {
+                    "inspiration_id": insp_ids[0],
+                    "title": "  批量标题一  ",
+                    "description": "批量描述一（自定义）",
+                    "labels": ["feature", "bug", "feature"],
+                    "repo_id": target,
+                },
+                {"inspiration_id": insp_ids[1]},
+            ],
+        })
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"] == {"succeeded": 2, "failed": 0}
+        # 条目一：覆盖字段全部生效——标题去首尾空白、描述原文、标签
+        # 归一化去重（feature 只留一个）、目标仓库 = target（project 99）
+        args0 = stub.create_calls[0][1]
+        assert stub.create_calls[0][0] == 99
+        assert args0["title"] == "批量标题一"
+        assert args0["description"] == "批量描述一（自定义）"
+        assert args0["labels"] == ["feature", "bug"]
+        # 条目二：未覆盖 → 单条接口默认行为（标题=描述=内容、默认标签、
+        # 灵感所属仓库）
+        args1 = stub.create_calls[1][1]
+        assert stub.create_calls[1][0] == 43
+        assert args1["title"] == "灵感内容1"
+        assert args1["description"] == "灵感内容1"
+        assert args1["labels"] == ["feature", "ui"]
+
+    def test_batch_title_override_truncated(self, edit_env):
+        """边界（issue #186/#247）：覆盖标题超过 GitLab 标题上限（255
+        字符）时同样截断并加省略号标记，描述保留完整覆盖值。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=1)
+        long_title = "超" * 300
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": insp_ids[0],
+                       "title": long_title,
+                       "description": "短描述"}],
+        })
+        assert resp.status_code == 200
+        assert resp.json()["summary"] == {"succeeded": 1, "failed": 0}
+        args = stub.create_calls[0][1]
+        assert len(args["title"]) == 255
+        assert args["title"].endswith("…")
+        assert long_title.startswith(args["title"][:-1])
+        assert args["description"] == "短描述"
+
+    def test_batch_empty_items_400(self, edit_env):
+        """空 items → 400（无内容可批量）。"""
+        tc, stub, db = edit_env
+        resp = tc.post("/api/inspirations/batch-add-issues", json={"items": []})
+        assert resp.status_code == 400
+        assert "至少选择" in resp.json()["detail"]
+        assert stub.create_calls == []
+
+    def test_batch_too_many_items_400(self, edit_env):
+        """超过 MAX_BATCH_ITEMS（50）条 → 400 拒绝（防一次性大请求）。"""
+        tc, stub, db = edit_env
+        repo = _add_repo(db, 42, "botler")
+        insp_ids = [db.create_inspiration(repo, f"灵感{i}") for i in range(51)]
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": i} for i in insp_ids],
+        })
+        assert resp.status_code == 400
+        assert "50" in resp.json()["detail"]
+        assert stub.create_calls == []
+
+    def test_batch_missing_inspiration_id_422(self, edit_env):
+        """条目缺 inspiration_id（必填）→ 422（pydantic 校验）。"""
+        tc, stub, db = edit_env
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"title": "只有标题"}],
+        })
+        assert resp.status_code == 422
+        assert stub.create_calls == []
+
+    def test_batch_partial_failure_isolation(self, edit_env):
+        """部分失败（验收标准 2）：某条灵感所属仓库禁用 / GitLab 创建
+        故障——失败项不阻断其余条目，成功项照常创建并删除，失败项保留
+        且逐条给出失败原因。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=3)
+        # 条目一：所属仓库未启用 → 400 级失败
+        db.update_repo(repo_ids[0], enabled=False)
+        # 条目二：GitLab 创建故障 → 502 级失败
+        stub.fail_create_projects = {43}
+
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": i} for i in insp_ids],
+        })
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["summary"] == {"succeeded": 1, "failed": 2}
+        assert [s["inspiration_id"] for s in body["succeeded"]] == [insp_ids[2]]
+        # 失败原因逐条返回：仓库未启用 / GitLab 创建失败
+        failed_by_id = {f["inspiration_id"]: f["error"] for f in body["failed"]}
+        assert "未启用" in failed_by_id[insp_ids[0]]
+        assert "创建 issue 失败" in failed_by_id[insp_ids[1]]
+        # 成功项已删除；失败项保留可重试（issue #162 语义）
+        assert db.get_inspiration(insp_ids[2]) is None
+        assert db.get_inspiration(insp_ids[0]) is not None
+        assert db.get_inspiration(insp_ids[1]) is not None
+        # 失败项（仓库禁用）未发起 create_issue；GitLab 故障项发起后被
+        # 拒绝（桩先记录后抛错）；仅成功项真正创建
+        assert len(stub.create_calls) == 2
+        assert stub.create_calls[0][0] == 43
+        assert stub.create_calls[1][0] == 44
+
+    def test_batch_inspiration_not_found_isolated(self, edit_env):
+        """灵感不存在 → 该条失败并继续处理后续条目。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=2)
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": 99999},
+                      {"inspiration_id": insp_ids[1]}],
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["summary"] == {"succeeded": 1, "failed": 1}
+        assert body["failed"][0]["inspiration_id"] == 99999
+        assert "不存在" in body["failed"][0]["error"]
+        assert body["succeeded"][0]["inspiration_id"] == insp_ids[1]
+
+    def test_batch_duplicate_inspiration_id_deduped(self, edit_env):
+        """同一灵感 id 重复出现在 items → 只处理首次（去重，避免重复
+        选择产生重复 issue）。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=1)
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": insp_ids[0]},
+                      {"inspiration_id": insp_ids[0]}],
+        })
+        assert resp.status_code == 200
+        assert resp.json()["summary"] == {"succeeded": 1, "failed": 0}
+        assert len(stub.create_calls) == 1
+
+    def test_batch_empty_title_override_failed(self, edit_env):
+        """覆盖标题去首尾空白后为空 → 该条失败（400 级），其余继续。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=2)
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": insp_ids[0], "title": "   "},
+                      {"inspiration_id": insp_ids[1]}],
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["summary"] == {"succeeded": 1, "failed": 1}
+        assert "标题不能为空" in body["failed"][0]["error"]
+        # 失败项保留
+        assert db.get_inspiration(insp_ids[0]) is not None
+
+    def test_batch_empty_labels_override_failed(self, edit_env):
+        """覆盖标签归一化后为空（纯空白/空串）→ 该条失败；非法标签
+        去空白去重后保留合法部分。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=2)
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": insp_ids[0], "labels": [" ", ""]},
+                      {"inspiration_id": insp_ids[1],
+                       "labels": [" bug ", "feature", "bug"]}],
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["summary"] == {"succeeded": 1, "failed": 1}
+        assert "标签不能为空" in body["failed"][0]["error"]
+        # 条目二：去空白去重后保留 ["bug", "feature"]（保序）
+        args = stub.create_calls[0][1]
+        assert args["labels"] == ["bug", "feature"]
+
+    def test_batch_repo_override_disabled_failed(self, edit_env):
+        """目标仓库覆盖为未启用仓库 → 该条失败（不允许向禁用仓库提交），
+        灵感保留；其余条目照常。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=2)
+        disabled = _add_repo(db, 77, "disabled-repo", enabled=False)
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": insp_ids[0], "repo_id": disabled},
+                      {"inspiration_id": insp_ids[1]}],
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["summary"] == {"succeeded": 1, "failed": 1}
+        assert "未启用" in body["failed"][0]["error"]
+        assert db.get_inspiration(insp_ids[0]) is not None
+
+    def test_batch_without_owner_token_failed(self, client):
+        """未配置 owner token → 每条失败（概览页写操作绝不回退 bot
+        token），灵感全部保留。"""
+        tc, db = client
+        repo_ids, insp_ids = self._seed(db, n=2)
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": i} for i in insp_ids],
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["summary"] == {"succeeded": 0, "failed": 2}
+        for f in body["failed"]:
+            assert "owner token" in f["error"]
+        for iid in insp_ids:
+            assert db.get_inspiration(iid) is not None
+
+    def test_batch_invalidates_overview_cache(self, edit_env):
+        """批量创建成功后清空概览缓存（与单条接口一致）：下一次
+        overview 请求重新拉取，前端创建成功立即刷新可见新 issue。"""
+        tc, stub, db = edit_env
+        repo_ids, insp_ids = self._seed(db, n=1)
+        stub.issues_by_project = {42: [{
+            "iid": 1, "title": "旧 issue", "state": "opened",
+            "updated_at": None, "created_at": None,
+            "web_url": "https://gitlab.example.com/x/-/issues/1",
+            "description": None, "labels": [], "author": None,
+            "milestone": None, "assignees": [], "user_notes_count": 0,
+        }]}
+        tc.get("/api/issues/overview")
+        assert len(stub.calls) == 1
+        resp = tc.post("/api/inspirations/batch-add-issues", json={
+            "items": [{"inspiration_id": insp_ids[0]}],
+        })
+        assert resp.status_code == 200
+        tc.get("/api/issues/overview")
+        assert len(stub.calls) == 2  # 缓存已失效，重新拉取
+
+
 # ---- issue #166：灵感与 AI agent 对话 ----
 
 class StubChatClient:

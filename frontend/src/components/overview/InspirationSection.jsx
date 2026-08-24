@@ -29,6 +29,13 @@ export default function InspirationSection({
   saveInspiration, deleteInspiration,
   addIssueFromInspiration, addingIssueInspIds, openInspirationChat,
   submitNewInspiration, newInspirationDrafts, setNewInspirationDrafts,
+  // issue #247：批量转 issue——多选模式/已选列表/预览面板状态与操作
+  inspirationSelectionMode, selectedInspirationIds,
+  enterInspirationSelectionMode, exitInspirationSelectionMode,
+  toggleInspirationSelected, openBatchConvert,
+  batchConvertOpen, batchDrafts, batchSubmitting, batchResult, batchError, setBatchError,
+  updateBatchDraft, resetBatchDraftToDefault, applyBatchDefaults,
+  submitBatchConvert, closeBatchConvert,
   chatInspiration, closeInspirationChat, chatLoading, chatMessages,
   chatProviders, chatProvider, changeChatProvider,
   chatSending, chatDraft, setChatDraft, chatError, setChatError,
@@ -40,7 +47,16 @@ export default function InspirationSection({
   return (
     <>
           <section className="inspirations-section">
-            <h2><Icon name="lightbulb" /> {tr('overview.inspirationsTitle')}</h2>
+            <div className="inspiration-section-head">
+              <h2><Icon name="lightbulb" /> {tr('overview.inspirationsTitle')}</h2>
+              <button type="button" className="btn btn-small inspiration-select-mode-btn"
+                      onClick={inspirationSelectionMode ? exitInspirationSelectionMode : enterInspirationSelectionMode}
+                      aria-pressed={inspirationSelectionMode}>
+                {inspirationSelectionMode
+                  ? <><Icon name="checkSquare" /> {tr('overview.inspirationSelectModeExit')}</>
+                  : <><Icon name="checkSquare" /> {tr('overview.inspirationSelectMode')}</>}
+              </button>
+            </div>
             <p className="muted">{tr('overview.inspirationsDesc', { seconds: INSPIRATION_POLL_MS / 1000 })}</p>
             {inspirationError && (
               <div className="alert alert-error" onClick={() => setInspirationError('')}>{inspirationError}</div>
@@ -54,6 +70,24 @@ export default function InspirationSection({
                   {'issue #' + inspirationCreatedIssue.iid}
                 </a>
                 {tr('overview.defaultLabels')}
+              </div>
+            )}
+            {inspirationSelectionMode && (
+              <div className="inspiration-batch-toolbar" role="toolbar"
+                   aria-label={tr('overview.inspirationBatchToolbar')}>
+                <span className="muted small">
+                  {tr('overview.selectedInspirationCount', { n: selectedInspirationIds.length })}
+                </span>
+                <button type="button" className="btn btn-small inspiration-batch-convert-btn"
+                        onClick={openBatchConvert}
+                        disabled={selectedInspirationIds.length === 0}
+                        title={tr('overview.inspirationBatchConvertTitle')}>
+                  <Icon name="pin" /> {tr('overview.inspirationBatchConvert')}
+                </button>
+                <button type="button" className="btn btn-small inspiration-batch-cancel-btn"
+                        onClick={exitInspirationSelectionMode}>
+                  {tr('common.cancel')}
+                </button>
               </div>
             )}
             {inspirationRepos.length === 0 ? (
@@ -104,6 +138,15 @@ export default function InspirationSection({
                       <ul className="inspiration-list">
                         {items.map((ins) => (
                           <li key={ins.id} className="inspiration-item">
+                            {inspirationSelectionMode && (
+                              <label className="inspiration-select-label"
+                                     title={tr('overview.inspirationSelectItem')}>
+                                <input type="checkbox"
+                                       className="inspiration-select-checkbox"
+                                       checked={selectedInspirationIds.includes(ins.id)}
+                                       onChange={() => toggleInspirationSelected(ins.id)} />
+                              </label>
+                            )}
                             {editingInspiration && editingInspiration.id === ins.id ? (
                               <div className="inspiration-edit">
                                 <textarea className="input inspiration-textarea"
@@ -179,6 +222,130 @@ export default function InspirationSection({
               </div>
             )}
           </section>
+
+      {/* issue #247：批量转 issue 预览面板——多选灵感后弹出，每条可
+          单独编辑标题/描述/标签/目标仓库（或「全部应用默认」统一重置），
+          逐条提交后展示「N 成功 / M 失败」汇总与逐条失败原因；遮罩点击
+          / × / Esc 关闭 */}
+      {batchConvertOpen && (
+        <div className="modal-overlay" onClick={closeBatchConvert}>
+          <div className="modal inspiration-batch-modal" role="dialog"
+               aria-modal="true" aria-label={tr('overview.inspirationBatchTitle', { n: batchDrafts.length })}
+               onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <strong><Icon name="pin" /> {tr('overview.inspirationBatchTitle', { n: batchDrafts.length })}</strong>
+              <button type="button" className="btn modal-close"
+                      onClick={closeBatchConvert} title={tr('common.close')}
+                      aria-label={tr('common.close')}><Icon name="x" /></button>
+            </div>
+            <div className="inspiration-batch-body">
+              {batchDrafts.length === 0 ? (
+                <p className="muted small">{tr('overview.inspirationBatchEmpty')}</p>
+              ) : batchDrafts.map((draft, index) => (
+                <div key={draft.inspiration.id} className="inspiration-batch-item"
+                     data-inspiration-id={draft.inspiration.id}>
+                  <div className="inspiration-batch-item-head">
+                    <span className="muted small">
+                      {tr('overview.inspirationBatchRepo', { name: draft.inspiration.repo_name || tr('common.deleted') })}
+                    </span>
+                    <button type="button" className="btn btn-small inspiration-batch-reset-btn"
+                            onClick={() => resetBatchDraftToDefault(index)}
+                            disabled={batchSubmitting}>
+                      {tr('overview.inspirationBatchReset')}
+                    </button>
+                  </div>
+                  <label className="inspiration-batch-field">
+                    <span className="muted small">{tr('overview.inspirationBatchTitleLabel')}</span>
+                    <input className="input inspiration-batch-title" type="text"
+                           value={draft.title}
+                           onChange={(e) => updateBatchDraft(index, { title: e.target.value })}
+                           disabled={batchSubmitting} />
+                  </label>
+                  <label className="inspiration-batch-field">
+                    <span className="muted small">{tr('overview.inspirationBatchDescLabel')}</span>
+                    <textarea className="input inspiration-batch-desc" rows={2}
+                              value={draft.description}
+                              onChange={(e) => updateBatchDraft(index, { description: e.target.value })}
+                              disabled={batchSubmitting} />
+                  </label>
+                  <label className="inspiration-batch-field">
+                    <span className="muted small">{tr('overview.inspirationBatchLabelsLabel')}</span>
+                    <input className="input inspiration-batch-labels" type="text"
+                           value={draft.labels}
+                           onChange={(e) => updateBatchDraft(index, { labels: e.target.value })}
+                           disabled={batchSubmitting} />
+                  </label>
+                  <label className="inspiration-batch-field">
+                    <span className="muted small">{tr('overview.inspirationBatchRepoLabel')}</span>
+                    <select className="input inspiration-batch-repo"
+                            value={draft.repo_id}
+                            onChange={(e) => updateBatchDraft(index, { repo_id: Number(e.target.value) })}
+                            disabled={batchSubmitting}>
+                      {inspirationRepos.map((r) => (
+                        <option key={r.repo_id} value={r.repo_id}>
+                          {r.repo_name || tr('common.deleted')}{r.enabled === false ? `（${tr('common.disabled')}）` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {batchResult && (batchResult.failed || []).some((f) => f.inspiration_id === draft.inspiration.id) && (
+                    <div className="inspiration-batch-item-error" role="alert">
+                      <Icon name="warning" />{' '}
+                      {tr('overview.inspirationBatchFailure', {
+                        msg: (batchResult.failed || []).find((f) => f.inspiration_id === draft.inspiration.id).error,
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {batchError && (
+              <div className="alert alert-error inspiration-batch-error" role="alert"
+                   onClick={() => setBatchError('')}>{batchError}</div>
+            )}
+            {batchResult && (
+              <div className={'inspiration-batch-result'
+                   + (batchResult.failed.length ? ' inspiration-batch-result-error' : '')}
+                   role="status">
+                <div>
+                  {tr('overview.inspirationBatchSummary', {
+                    n: batchResult.succeeded.length, m: batchResult.failed.length,
+                  })}
+                </div>
+                {batchResult.failed.length > 0 && (
+                  <div className="inspiration-batch-result-failures">
+                    {batchResult.failed.map((f) => (
+                      <div key={f.inspiration_id}>
+                        {tr('overview.inspirationBatchFailureDetail', { id: f.inspiration_id, msg: f.error })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="inspiration-batch-footer">
+              <button type="button" className="btn btn-small inspiration-batch-apply-defaults-btn"
+                      onClick={applyBatchDefaults} disabled={batchSubmitting || batchDrafts.length === 0}>
+                {tr('overview.inspirationBatchApplyDefaults')}
+              </button>
+              <div className="inspiration-batch-actions">
+                <button type="button" className="btn btn-small inspiration-batch-close-btn"
+                        onClick={closeBatchConvert} disabled={batchSubmitting}>
+                  {tr('common.cancel')}
+                </button>
+                <button type="button" className="btn btn-small btn-primary inspiration-batch-submit-btn"
+                        onClick={submitBatchConvert}
+                        disabled={batchSubmitting || batchDrafts.length === 0 || !!batchResult}
+                        title={batchResult ? tr('overview.inspirationBatchSubmitted') : ''}>
+                  {batchSubmitting
+                    ? <><Icon name="hourglass" /> {tr('overview.inspirationBatchSubmitting')}</>
+                    : <><Icon name="pin" /> {tr('overview.inspirationBatchSubmit')}</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* issue #166/#184：灵感 AI 对话右侧抽屉——与 AI agent 探讨当前
           灵感（遮罩点击 / × / Esc 关闭，从右侧滑入） */}

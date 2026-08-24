@@ -38,7 +38,7 @@ function renderIcon(name, props) {
 // issue #324：新增 chevronLeft（左侧边栏「折叠/展开」开关）与 menu（移动端
 //   汉堡按钮）两个语义名，同步补入清单
 const EXPECTED_NAMES = [
-  'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle',
+  'arrowLeft', 'arrowUp', 'bot', 'brain', 'chart', 'check', 'checkCircle', 'checkSquare',
   'chevronDown', 'chevronLeft', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
   'externalLink', 'eye', 'fileText', 'flag', 'folder', 'folderOpen', 'gripVertical',
   'hourglass', 'image',

@@ -4195,6 +4195,138 @@ body:has(.drawer-overlay) {
   cursor: not-allowed;
 }
 
+/* ---- issue #247：灵感批量转 issue——多选模式 + 批量预览面板 ----
+   多选按钮在板块标题行右侧；多选模式下每条灵感前出现复选框、板块顶部
+   出现批量工具栏（已选计数 + 转为 Issue + 取消）；批量预览面板为居中
+   弹窗（modal，比默认 640px 更宽以容纳每条 4 个编辑字段），body 区域
+   独立滚动，底部固定提交/取消操作。 */
+.inspiration-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.inspiration-section-head h2 {
+  margin: 0;
+}
+.inspiration-select-mode-btn[aria-pressed='true'] {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.inspiration-batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2);
+  margin-bottom: var(--space-3);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.inspiration-select-label {
+  display: inline-flex;
+  align-items: center;
+  margin-right: var(--space-2);
+  cursor: pointer;
+}
+.inspiration-select-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+/* 批量预览弹窗：比默认 modal（640px）更宽，容纳每条四个编辑字段 */
+.inspiration-batch-modal {
+  width: min(880px, 94vw);
+}
+.inspiration-batch-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overscroll-behavior: contain;
+}
+.inspiration-batch-item {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--bg-card);
+}
+.inspiration-batch-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.inspiration-batch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.inspiration-batch-field .input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.inspiration-batch-item-error {
+  font-size: 12.5px;
+  color: var(--danger, #c0392b);
+  background: color-mix(in srgb, var(--danger, #c0392b) 8%, transparent);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+}
+.inspiration-batch-error {
+  margin-top: var(--space-2);
+}
+.inspiration-batch-result {
+  font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.inspiration-batch-result-error {
+  color: var(--err);
+  border-color: var(--err);
+}
+.inspiration-batch-result-failures {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.inspiration-batch-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+.inspiration-batch-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.inspiration-batch-submit-btn:disabled,
+.inspiration-batch-convert-btn:disabled,
+.inspiration-batch-close-btn:disabled,
+.inspiration-batch-reset-btn:disabled,
+.inspiration-batch-apply-defaults-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ---- issue #166/#184：灵感 AI 对话——与 AI agent 探讨灵感 ----
    右侧边栏抽屉形式（issue #184），复用 .drawer 右侧抽屉体系（与
    issue 详情右边栏 issue #85 一致）：从右侧滑入；抽屉自身不滚动，
