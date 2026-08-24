@@ -320,7 +320,9 @@ def _upgrade_gh(tool: dict) -> dict:
     try:
         with open(tmp, "wb") as f:
             f.write(payload)
-        os.chmod(tmp, 0o755)
+        # nosec B103：gh 发行版二进制本身即 0755 可执行权限位，此处按
+        # 原样恢复可执行权限（文件是临时路径，替换后立即生效，无越权风险）
+        os.chmod(tmp, 0o755)  # nosec B103
         os.replace(tmp, current)
     except OSError as e:
         raise UpgradeError(f"替换 gh 可执行文件失败（需要写权限）: {e}") from None
