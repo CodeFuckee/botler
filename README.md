@@ -979,6 +979,15 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 `{diff_stat}` `{test_summary}` `{commit_link}` `{commit_sha}` `{duration}` `{result_summary}` `{error_message}` `{log_tail}` 占位符
 （仅评论模版生效，渲染后为空的段落自动隐藏）：留空保存即恢复内置默认。
 
+**模板版本历史与回滚（issue #262）**：全局默认 / 中断恢复 / 结果评论 /
+仓库级覆盖模版每次保存都会生成新版本（**相同内容重复保存不产生新版本**），
+Web UI「模版」页展示当前版本号与最近修改时间，「历史版本」面板可查看全部
+历史（版本号 / 保存时间 / 备注 / 内容预览）并一键回滚；回滚前有确认弹窗，
+回滚后立即生效（任务使用回滚后的旧版模版），且回滚本身会生成一条带
+「回滚到版本 N」备注的新版本记录。版本历史存于本地 SQLite 的
+`template_versions` 表（数据库迁移 v30），与模板生效源（config.yaml /
+repos 表）解耦，仓库删除后其版本历史仍保留。
+
 ## API 一览
 
 ```
@@ -1004,6 +1013,8 @@ POST   /api/labels/{name}/sync 标记库页默认标签「同步到所有仓库�
 POST   /api/labels/sync-all  标记库页「一键同步全部」按钮（issue #358）：一次调用把**全部默认标签**同步到已添加的全部仓库（**含启用与未启用的**）——每个标签的语义与单标签同步（issue #307）一致（缺失才创建、已存在不覆盖、单仓库失败尽力而为）；身份 per-repo client 优先、无 token 回退全局 bot token；返回 {total_repos, labels, total_created, total_already_exists, total_failed}
    读取仓库 remote url 获取仓库用户（remote url userinfo 用户名，如 https://user:token@host/... 的 user；读取顺序：local_path 的 git remote → workspace 克隆 → 存储 url；结果落库并作为灵感「添加 Issue」的默认分配人，issue #153）
 GET/PUT /api/repos/{id}/template      仓库模版
+GET    /api/template-versions        模板版本历史（issue #262）：?key=global:default|global:resume|global:comment|repo:{repo_id}&limit=N，返回 versions（最新在前）与 latest（当前最新版本，前端展示版本号/时间）
+POST   /api/template-versions/{id}/rollback  回滚到指定历史版本（issue #262）：按版本 key 写回 config.yaml templates 段 / repos.prompt_template，回滚立即生效并生成带「回滚到版本 N」备注的新版本；版本不存在 404、仓库已删除 404、未知 key 400
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）
 GET    /api/audit-logs                 审计日志分页查询（issue #260）：?page=&per_page=&action=&actor=&target_type=，按 id 倒序（时间倒序），响应含 items / total / page / per_page / actions（全部操作类型下拉）/ admin（当前用户是否管理员，前端据此显隐删除按钮）；SSO 启用且配置 admin_usernames 时仅名单内用户可访问（403）
 GET    /api/audit-logs/actions         审计日志出现过的全部操作类型（去重升序，过滤下拉数据源，issue #260）

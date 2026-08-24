@@ -14,7 +14,7 @@ from ..repo_params import (
 from ..audit import record_audit, repo_diff
 from ..config import RepoConfig
 from ..token_expiry import evaluate_expiry
-from ..database import DEFAULT_PRIORITY
+from ..database import DEFAULT_PRIORITY, repo_template_key
 from ..gitlab_client import GitLabError
 from ..labels import DEFAULT_LABELS
 from ..health_inspection import HEALTH_UNKNOWN
@@ -598,6 +598,9 @@ def update_template(request: Request, repo_id: int, body: dict):
         # 空 = 清空覆盖，回退全局模版
         text = None
     c.db.update_repo(repo_id, prompt_template=text)
+    # issue #262：模板版本历史——每次保存记录版本（相同内容不重复记录；
+    # 空内容 = 清空覆盖回退全局，同样留痕可回滚）
+    c.db.record_template_version(repo_template_key(repo_id), text or "")
     updated = _repo_row_to_dict(c.db.get_repo(repo_id))
     if any(r.project_id == updated["gitlab_project_id"] for r in c.config.get().repos):
         _sync_repo_to_config(request.app, updated)

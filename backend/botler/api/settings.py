@@ -19,6 +19,11 @@ from pydantic import BaseModel
 
 from ..events import global_bus
 from ..audit import record_audit, settings_section_diff
+from ..database import (
+    TEMPLATE_KEY_GLOBAL_COMMENT,
+    TEMPLATE_KEY_GLOBAL_DEFAULT,
+    TEMPLATE_KEY_GLOBAL_RESUME,
+)
 from ..config import KNOWN_FIELDS
 from ..plugins import PluginKind, list_plugins
 from ..engine_health import engine_health_snapshot
@@ -374,18 +379,31 @@ def update_settings(request: Request, body: dict):
     if tpl is not None:
         if "default" in tpl:
             c.config.update_section("templates", {"default": tpl["default"]})
+            # issue #262：模板版本历史——保存生成新版本，历史可查看/回滚；
+            # 与最新版本内容相同不重复记录（验收标准 3）
+            c.db.record_template_version(
+                TEMPLATE_KEY_GLOBAL_DEFAULT,
+                c.config.get().default_template or "")
         if "resume" in tpl:
             # issue #116：中断恢复模版必须是字符串；空白由
             # update_section("templates", ...) 归一为内置默认（不允许空模版）
             if not isinstance(tpl["resume"], str):
                 raise HTTPException(400, "templates.resume 必须是字符串")
             c.config.update_section("templates", {"resume": tpl["resume"]})
+            # issue #262：记录最终生效内容（空白归一为内置默认，与回滚
+            # 后的渲染结果一致）
+            c.db.record_template_version(
+                TEMPLATE_KEY_GLOBAL_RESUME, c.config.get().resume_template)
         if "comment" in tpl:
             # issue #252：结果评论模版必须是字符串；空白由
             # update_section("templates", ...) 归一为内置默认
             if not isinstance(tpl["comment"], str):
                 raise HTTPException(400, "templates.comment 必须是字符串")
             c.config.update_section("templates", {"comment": tpl["comment"]})
+            # issue #262：记录最终生效内容（空白归一为内置默认）
+            c.db.record_template_version(
+                TEMPLATE_KEY_GLOBAL_COMMENT,
+                c.config.get().comment_template or DEFAULT_COMMENT_TEMPLATE)
         if "raw_body_in_prompt" in tpl:
             # issue #223：原始描述是否进 prompt 开关必须是布尔值
             if not isinstance(tpl["raw_body_in_prompt"], bool):

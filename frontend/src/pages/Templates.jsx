@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api } from '../api.js'
+import { api, fmtTime } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { Icon } from '../components/Icon.jsx'
 
@@ -15,7 +15,7 @@ export default function Templates() {
   const [commentTemplate, setCommentTemplate] = useState('')
   const [globalPlaceholders, setGlobalPlaceholders] = useState({})
   const [placeholders, setPlaceholders] = useState({})
-  // kind: 'default' 全局默认 / 'resume' 中断恢复 / 'repo' 仓库级
+  // kind: 'default' 全局默认 / 'resume' 中断恢复 / 'comment' 结果评论 / 'repo' 仓库级
   const [selected, setSelected] = useState(null) // {repoId|null, kind, isOverride}
   const [text, setText] = useState('')
   const [saved, setSaved] = useState(false)
@@ -28,6 +28,24 @@ export default function Templates() {
   // 完整展示、无内层垂直滚动；折叠方式与任务详情页聊天记录一致
   // （issue #52 SectionToggle 标题行切换），折叠时编辑器整体隐藏
   const [expanded, setExpanded] = useState(true)
+  // issue #262：模板版本历史——当前模板 key 的版本信息（最新版本号/时间）
+  // 与历史版本列表；保存生成新版本、历史可查看、可回滚
+  const [versionInfo, setVersionInfo] = useState(null)
+  const [versions, setVersions] = useState([])
+  const [showHistory, setShowHistory] = useState(false)
+
+  // 拉取版本历史（最新在前），版本信息加载失败不阻塞模板编辑
+  const loadVersions = async (key) => {
+    if (!key) return
+    try {
+      const data = await api.get(`/api/template-versions?key=${encodeURIComponent(key)}`, { silent: true })
+      setVersionInfo(data.latest)
+      setVersions(data.versions || [])
+    } catch {
+      setVersionInfo(null)
+      setVersions([])
+    }
+  }
 
   const load = async () => {
     const [reposData, settings] = await Promise.all([
@@ -54,6 +72,8 @@ export default function Templates() {
       setSelected({ repoId: null, kind: 'default', isOverride: false })
       setPlaceholders(phs)
       setText(settings.templates.default)
+      // issue #262：加载全局默认模板版本历史
+      await loadVersions('global:default')
     }
   }
 
@@ -69,6 +89,8 @@ export default function Templates() {
     setSelected({ repoId, kind: 'repo', isOverride: data.is_override })
     setText(data.template)
     setPlaceholders(data.placeholders)
+    // issue #262：加载仓库级模板版本历史
+    await loadVersions(`repo:${repoId}`)
   }
 
   const save = async () => {
@@ -82,15 +104,18 @@ export default function Templates() {
         // 中断恢复模版（issue #116）：留空保存 = 恢复内置默认
         const settings = await api.put('/api/settings', { templates: { resume: text } })
         setResumeTemplate(settings.templates.resume || '')
+        await loadVersions('global:resume')
       } else if (selected.kind === 'comment') {
         // 结果评论模版（issue #252）：留空保存 = 恢复内置默认
         const settings = await api.put('/api/settings', { templates: { comment: text } })
         setCommentTemplate(settings.templates.comment || '')
+        await loadVersions('global:comment')
       } else {
         const settings = await api.get('/api/settings')
         await api.put('/api/settings', { templates: { default: text } })
         setGlobalTemplate(text)
         void settings
+        await loadVersions('global:default')
       }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -129,10 +154,41 @@ export default function Templates() {
     } catch (e) { setError(e.message) }
   }
 
+  // issue #262：回滚到指定历史版本——确认后调用回滚 API，回滚立即生效，
+  // 更新当前编辑文本与对应模板 state，并刷新版本历史
+  const rollback = async (vid) => {
+    const v = versions.find((x) => x.id === vid)
+    if (!v) return
+    if (!(await confirmDialog({
+      message: `确定回滚到版本 v${v.version_no}（${fmtTime(v.created_at)}）？回滚后模板立即生效，且回滚本身会生成一条新版本记录。`,
+    }))) return
+    try {
+      setError('')
+      const data = await api.post(`/api/template-versions/${vid}/rollback`, {})
+      if (selected.kind === 'repo') {
+        await selectRepo(selected.repoId)
+      } else if (selected.kind === 'resume') {
+        setResumeTemplate(data.content)
+        setText(data.content)
+        await loadVersions('global:resume')
+      } else if (selected.kind === 'comment') {
+        setCommentTemplate(data.content)
+        setText(data.content)
+        await loadVersions('global:comment')
+      } else {
+        setGlobalTemplate(data.content)
+        setText(data.content)
+        await loadVersions('global:default')
+      }
+      setShowHistory(false)
+    } catch (e) { setError(e.message) }
+  }
+
   const selectGlobal = () => {
     setSelected({ repoId: null, kind: 'default', isOverride: false })
     setText(globalTemplate)
     setPlaceholders(globalPlaceholders)
+    loadVersions('global:default')
   }
 
   const selectResume = () => {
@@ -140,6 +196,7 @@ export default function Templates() {
     setSelected({ repoId: null, kind: 'resume', isOverride: false })
     setText(resumeTemplate)
     setPlaceholders(globalPlaceholders)
+    loadVersions('global:resume')
   }
 
   const selectComment = () => {
@@ -147,6 +204,7 @@ export default function Templates() {
     setSelected({ repoId: null, kind: 'comment', isOverride: false })
     setText(commentTemplate)
     setPlaceholders(globalPlaceholders)
+    loadVersions('global:comment')
   }
 
   return (
@@ -196,6 +254,7 @@ export default function Templates() {
                 ? '仓库级模版：覆盖全局默认。'
                 : '该仓库未配置覆盖，当前显示全局默认模版。编辑并保存即创建覆盖。'
               : '全局默认模版：所有未配置仓库级模版的仓库使用。'}
+          {' 每次保存自动生成新版本（内容不变不重复记录），历史版本可查看与回滚（issue #262）。'}
         </p>
 
         <button
@@ -207,6 +266,9 @@ export default function Templates() {
           <span className="chevron">{expanded ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />}</span>
           模版内容
           <span className="muted small">（{text.split('\n').length} 行）</span>
+          {versionInfo && (
+            <span className="muted small"> · 当前版本 v{versionInfo.version_no}（{fmtTime(versionInfo.created_at)}）</span>
+          )}
         </button>
 
         {expanded && (
@@ -222,10 +284,56 @@ export default function Templates() {
             <div className="form-row">
               <button className="btn btn-primary" onClick={save}>保存</button>
               {saved && <span className="saved-hint"><Icon name="check" /> 已保存</span>}
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setShowHistory(!showHistory)}
+                disabled={!versions.length}
+              >
+                历史版本{versions.length ? `（${versions.length}）` : ''}
+              </button>
               {selected?.kind === 'repo' && selected?.isOverride && (
                 <button className="btn" onClick={clearOverride}>清空覆盖</button>
               )}
             </div>
+
+            {showHistory && (
+              <div style={{ marginTop: 8 }}>
+                <h3>历史版本</h3>
+                <p className="muted small">
+                  每次保存生成新版本（相同内容不重复记录）；回滚到旧版后模板立即生效，任务将使用回滚后的版本。
+                </p>
+                {!versions.length ? (
+                  <p className="muted small">暂无历史版本</p>
+                ) : (
+                  <table className="table">
+                    <thead>
+                      <tr><th>版本</th><th>保存时间</th><th>备注</th><th>内容预览</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                      {versions.map((v) => (
+                        <tr key={v.id}>
+                          <td>
+                            v{v.version_no}
+                            {versionInfo?.id === v.id && <span className="muted small">（当前）</span>}
+                          </td>
+                          <td>{fmtTime(v.created_at)}</td>
+                          <td className="muted small">{v.note || '—'}</td>
+                          <td className="muted small">
+                            <code>{v.content.slice(0, 50)}{v.content.length > 50 ? '…' : ''}</code>
+                          </td>
+                          <td>
+                            {versionInfo?.id !== v.id && (
+                              <button className="btn btn-sm" onClick={() => rollback(v.id)}>回滚</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>

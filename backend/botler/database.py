@@ -174,6 +174,21 @@ def _as_repo_list(rows: list[sqlite3.Row]) -> list[RepoRow]:
     return [cast(RepoRow, r) for r in rows]
 
 
+# 模板版本历史 key 约定（issue #262）：标识模板种类，见 _SCHEMA 中
+# template_versions 表注释。global:* 对应 config.yaml templates 段（全局
+# 默认 / 中断恢复 / 结果评论），repo:{repo_id} 对应 repos.prompt_template
+# 仓库级覆盖（repo_id 为本地 repos.id，随仓库软删除仍保留历史）。
+TEMPLATE_KEY_GLOBAL_DEFAULT = "global:default"
+TEMPLATE_KEY_GLOBAL_RESUME = "global:resume"
+TEMPLATE_KEY_GLOBAL_COMMENT = "global:comment"
+TEMPLATE_KEY_REPO_PREFIX = "repo:"
+
+
+def repo_template_key(repo_id: int) -> str:
+    """仓库级覆盖模板的 template_key。"""
+    return f"{TEMPLATE_KEY_REPO_PREFIX}{repo_id}"
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -414,6 +429,25 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at
   ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+
+-- 模板版本历史（issue #262）：模板编辑页每次保存生成新版本（相同内容
+-- 不重复记录），支持历史查看与回滚。template_key 标识模板种类：
+-- global:default（全局默认）/ global:resume（中断恢复）/ global:comment
+-- （结果评论）/ repo:{repo_id}（仓库级覆盖，repo_id 为本地 repos.id）。
+-- version_no 为 key 内递增版本号（1 起），note 记录备注（如「回滚到
+-- 版本 N」）；相同内容重复保存不产生新版本（record_template_version
+-- 比较该 key 最新版本内容，相同则跳过）。
+CREATE TABLE IF NOT EXISTS template_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  template_key TEXT NOT NULL,
+  version_no INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_template_versions_key
+  ON template_versions(template_key, id DESC);
 """
 
 
@@ -907,6 +941,27 @@ class Database:
                     "ALTER TABLE inspirations ADD COLUMN linked_issue_url TEXT")
             conn.execute("PRAGMA user_version = 29")
             ver = 29
+
+        if ver < 30:
+            # issue #262：模板版本历史表 template_versions。CREATE TABLE
+            # IF NOT EXISTS 已覆盖新库；旧库（user_version=29）首次启动时
+            # 同样建表，并显式推进版本号保持迁移链完整（与 audit_logs 表
+            # v26 迁移同模式）。
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS template_versions (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     template_key TEXT NOT NULL,
+                     version_no INTEGER NOT NULL,
+                     content TEXT NOT NULL,
+                     note TEXT NOT NULL DEFAULT '',
+                     created_at TEXT DEFAULT (datetime('now')),
+                     updated_at TEXT DEFAULT (datetime('now'))
+                   )""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_template_versions_key "
+                "ON template_versions(template_key, id DESC)")
+            conn.execute("PRAGMA user_version = 30")
+            ver = 30
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1518,6 +1573,61 @@ class Database:
     # 概览页「其他」分组手动调度顺序：用户在「调度器执行顺序」排序下拖动
     # issue 上下移动，整组顺序全量替换落库（position 从 0 连续编号），
     # 调度器派发时优先按 position 排序。仅存 Botler 本地数据库。
+
+    # ---- 模板版本历史（issue #262）----
+    # 模板编辑页每次保存生成新版本（相同内容不重复记录），历史可查看、
+    # 可回滚。template_key 约定见 _SCHEMA 注释；版本号按 key 内递增。
+
+    def record_template_version(self, key: str, content: str,
+                                note: str = "") -> int | None:
+        """记录模板新版本；与该 key 最新版本内容相同则跳过（返回 None）。
+
+        版本号按 key 内递增（1 起）；回滚操作也经此落版本（note 标注
+        来源，如「回滚到版本 N」），保证「最新版本 = 当前生效内容」。
+
+        最新版本比较与插入同在一个写事务内（_conn(write=True) 以进程级
+        写锁串行化）：并发保存相同/不同内容时以首个事务为准，后续事务
+        看到的最新版本已含前序写入，不会产生内容相同的重复版本。
+        """
+        with self._conn(write=True) as conn:
+            latest = conn.execute(
+                "SELECT * FROM template_versions WHERE template_key = ? "
+                "ORDER BY id DESC LIMIT 1", (key,)).fetchone()
+            if latest is not None and latest["content"] == content:
+                return None
+            cur = conn.execute(
+                "SELECT COALESCE(MAX(version_no), 0) + 1 AS n "
+                "FROM template_versions WHERE template_key = ?", (key,))
+            version_no = cur.fetchone()["n"]
+            cur = conn.execute(
+                "INSERT INTO template_versions "
+                "(template_key, version_no, content, note, created_at, "
+                " updated_at) VALUES (?, ?, ?, ?, datetime('now'), "
+                "datetime('now'))",
+                (key, version_no, content, note))
+            return cur.lastrowid
+
+    def list_template_versions(self, key: str,
+                               limit: int = 100) -> list[sqlite3.Row]:
+        """模板历史版本列表，最新在前（展示 / 回滚数据源）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM template_versions WHERE template_key = ? "
+                "ORDER BY id DESC LIMIT ?", (key, limit)).fetchall()
+
+    def get_template_version(self, version_id: int) -> sqlite3.Row | None:
+        """按 id 取单个模板版本（回滚目标）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM template_versions WHERE id = ?",
+                (version_id,)).fetchone()
+
+    def latest_template_version(self, key: str) -> sqlite3.Row | None:
+        """某 key 的最新版本（「相同内容不重复记录」的比较基准）。"""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT * FROM template_versions WHERE template_key = ? "
+                "ORDER BY id DESC LIMIT 1", (key,)).fetchone()
 
     def list_manual_orders(self, repo_id: int) -> list[int]:
         """返回指定仓库的 issue_iid 列表（按 position 升序 = 用户调整后的顺序）。

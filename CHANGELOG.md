@@ -442,6 +442,38 @@
 
 ### Added
 
+- **提示词模板版本历史与回滚（issue #262）**：模版页（全局默认 / 中断恢复 /
+  结果评论 / 仓库级覆盖）保存模板不再「保存即覆盖」——每次保存自动生成新版本
+  （**相同内容重复保存不产生新版本**），历史可查看、可回滚，改坏模板后可随时
+  找回旧版：
+  - 后端：新增 `template_versions` 表（`database.py` 迁移 v30，新库
+    `_SCHEMA` 同步；字段：template_key / version_no / content / note /
+    created_at / updated_at，索引按 key + id 倒序）与
+    `Database.record_template_version`（内容与最新版本相同则跳过）/ 历史列表 /
+    单条查询 / 最新版本查询方法；template_key 约定
+    `global:default`（全局默认）/ `global:resume`（中断恢复）/
+    `global:comment`（结果评论）/ `repo:{repo_id}`（仓库级覆盖）；
+    保存埋点覆盖 `PUT /api/settings` 的 templates.default/resume/comment
+    （resume/comment 留空保存记录归一后的内置默认内容）与
+    `PUT /api/repos/{id}/template`（空内容 = 清空覆盖同样留痕）；
+  - API：新增 `GET /api/template-versions?key=&limit=`（历史列表最新在前 +
+    当前最新版本 latest）与 `POST /api/template-versions/{id}/rollback`
+    （按 key 写回 config.yaml templates 段 / repos.prompt_template，回滚立即
+    生效、任务使用旧版模板；回滚本身生成带「回滚到版本 N」备注的新版本，
+    连续回滚同一目标不重复记录；版本不存在 / 仓库已删除 404，未知 key 400；
+    操作记审计日志 `template.rollback`）；
+  - 前端：模版页「模版内容」折叠标题与保存行展示当前版本号与最近修改时间；
+    「历史版本」面板展示全部历史（版本号 / 保存时间 / 备注 / 内容预览），
+    非当前版本提供「回滚」按钮，回滚前确认弹窗、成功后立即刷新编辑内容与
+    版本历史；
+  - 测试：新增 `backend/tests/test_template_versions.py`（30 个用例：数据库层
+    记录/去重/列表/单查/最新/各 key 独立编号/空内容，settings 与 repos 保存
+    埋点，回滚生效 + 渲染层使用旧版 + 回滚留痕 + 幂等 + 404/400 边界）与
+    `test_database_migrate.py` v30 迁移用例（旧库补表、新库表结构、迁移后
+    CRUD）；前端 `templates-*` 源码级断言测试保持通过；
+  - 文档：README「提示词模版」章节补充版本历史与回滚说明、API 一览补充
+    template-versions 两个接口。
+
 - **灵感支持标签分类、筛选与归档；转 issue 可选保留灵感并关联（issue #246）**：
   - 需求：灵感目前只有 content + 增删改，多了以后只能翻列表找、无法分类；
     不想再处理的灵感只能删除（不可恢复）；转 issue 后灵感被自动删除，缺少
