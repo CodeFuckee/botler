@@ -45,7 +45,12 @@ test.describe('移动端响应式（issue #270）', () => {
     await page.waitForFunction(() => {
       const d = document.querySelector('.drawer.issue-drawer')
       if (!d) return false
-      const t = getComputedStyle(d).transform
+      // issue #475：滑入动画已从 .drawer 移至外层 .drawer-shell（外壳承载
+      // 手柄与抽屉整体滑入，抽屉自身 animation:none），需等待外壳 transform
+      // 归位抽屉几何才稳定——等 .drawer 自身会在动画中途提前通过
+      const shell = d.parentElement
+      if (!shell || !shell.classList.contains('drawer-shell')) return false
+      const t = getComputedStyle(shell).transform
       return t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)'
     })
     const settled = await drawer.boundingBox()

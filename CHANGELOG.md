@@ -87,7 +87,14 @@
     `.drawer-shell` 内而非滚动容器 `.drawer` 内的结构断言、`.drawer-shell`
     样式定位参考系断言），e2e 新增 `drawer-resize-handle-scroll.spec.js`
     真实浏览器回归——滚动抽屉内容后手柄 top 位移 < 2px，前端全量 1713
-    用例 + 后端全量 pytest 通过。
+    用例 + 后端全量 pytest 通过；
+  - 跟进修复（CI e2e 回归）：滑入动画随本次修复从 `.drawer` 移至外层
+    `.drawer-shell` 后，`responsive-mobile.spec.js` 与
+    `issue-drawer-bottom-actions-wrap.spec.js` 原有「等待 `.drawer`
+    transform 归位」会在动画中途提前通过（`.drawer` 自身恒为 identity），
+    导致 375px 竖屏视口下测量到未归位几何（CI 实测 x+width 462.78px 超出
+    视口）——两处等待改为等待实际承载动画的外壳 `.drawer-shell` transform
+    归位后再测量，e2e 全量通过。
 
 - **修复统计页未撑满窗口宽度（issue #474）**：：
   - 现象：统计看板页在宽屏下内容区右侧留白大，未撑满窗口可用宽度；
