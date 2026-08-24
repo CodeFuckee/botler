@@ -79,7 +79,11 @@ DEFAULT_RULES: dict[str, list[str]] = {
         r"api[ _-]?key", r"API 密钥",
         r"api[ _-]?key[^。\n]{0,40}(invalid|无效|失效|expired)",
         r"anthropic", r"claude[^。\n]{0,30}(error|失败|不可用|unavailable|not found)",
-        r"429", r"rate limit", r"usage\s+limits?",
+        # 429 限流：只匹配独立 429（前后不能是数字/小数点）——避免错误详情里
+        # 的数值（如 Windows 磁盘剩余 "4294967.3 MB" / "429.2 MB"）误命中
+        # （issue #481 流水线 #1429：backend:test 在 Windows runner 上因此
+        # 把预检失败任务误分类为 engine）
+        r"(?<!\d)429(?![\d.])", r"rate limit", r"usage\s+limits?",
         r"sdk[^。\n]{0,30}(error|失败|exception)",
         r"引擎错误", r"引擎不可用", r"engine (error|failed|unavailable)",
     ],

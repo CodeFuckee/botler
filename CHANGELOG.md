@@ -183,6 +183,26 @@
     clean_env 剔除 CI 变量保留运行环境），修复前 7 个用例失败复现缺陷，
     修复后 ci/ 32 用例全通过。
 
+- **修复失败分类对「429 限流」规则的误匹配（issue #481 配套回归修复）**：
+  - 现象：流水线 #1429 的 backend:test（Windows runner）随机失败——
+    `test_precheck_failure_fails_fast_without_model_call` 断言
+    `failure_category == "env"` 实际得到 `engine`；本地（Linux）与上一轮
+    流水线（#1428，同一 Windows runner）均通过，为环境相关抖动；
+  - 根因：`failure_classify.py` 引擎类限流规则 `r"429"` 是无边界数字串
+    匹配——错误详情 JSON 中磁盘剩余空间数值（`shutil.disk_usage` 的 MB
+    数）恰好含 "429"（如 4294967.3 MB / 429.2 MB）时先于环境类规则命中；
+    Windows runner 磁盘剩余数值随运行抖动 → 预检失败任务被随机误分类为
+    engine；
+  - 修复：① `failure_classify.py` 的 429 规则收紧为 `(?<!\d)429(?![\d.])`
+    （只匹配独立 429，不再命中数字串里的 429）；② `executor._finish_failed`
+    新增 `failure_category` 显式入参，预检失败路径固定传 `env`——预检
+    （issue #238）本身就是环境性失败，分类不应随失败文本抖动；
+  - 测试：`test_failure_classify.py` 新增「数字串 429 不误判 engine」+
+    「真实 429 限流仍归 engine」两组参数化用例；`test_precheck.py` 新增
+    `test_precheck_failure_category_env_ignores_429_number`（模拟磁盘剩余
+    4294967.3 MB 时预检失败分类仍为 env）。修复前 4 个复现用例失败
+    （assert 'engine' == 'env'），修复后全通过。
+
 - **修复任务成功结果评论未写回 issue（issue #480）**：
   - 现象：任务 #692（issue #473）收尾时，agent 用
     `glab api ... -f "body=@/tmp/issue473_comment.md"` 发评论，GitLab 上只显示

@@ -104,6 +104,30 @@ class TestTypicalFailures:
             "The usage limit has been reached") == CATEGORY_ENGINE
 
     @pytest.mark.parametrize("text", [
+        # Windows 磁盘剩余空间数值中恰好包含 "429" 数字串（如 4294967.3 MB /
+        # 429.2 MB），与引擎类限流规则 r"429" 撞车——修复前误判 engine
+        # （issue #481 流水线 #1429 实测：backend:test 在 Windows runner 上
+        # 该数值抖动导致预检失败任务分类 engine，测试随机失败）。
+        "磁盘剩余 4294967.3 MB ≥ 阈值 2048 MB（C:\\data）",
+        "磁盘剩余 429.2 MB < 阈值 2048 MB（C:\\data）",
+        "任务执行前预检失败：git ls-remote file:///tmp/x.git 失败（exit 128）: "
+        "fatal: 'C:/Windows/TEMP/x.git' does not appear to be a git repository；"
+        "磁盘剩余 4290.5 MB ≥ 阈值 2048 MB（C:\\data）",
+    ])
+    def test_bare_429_in_number_is_not_engine(self, text):
+        """数字串里的 429 不应命中引擎类限流规则：环境类文本仍归 env。"""
+        assert classify_failure(text) == CATEGORY_ENV
+
+    @pytest.mark.parametrize("text", [
+        "HTTP 429 Too Many Requests",
+        "API 返回 429（rate limit exceeded）",
+        "DeepSeek API error: 429 usage limits exceeded",
+    ])
+    def test_rate_limit_429_still_engine(self, text):
+        """真正的 429 限流错误仍归引擎类（回归保护，修复不削弱原规则）。"""
+        assert classify_failure(text) == CATEGORY_ENGINE
+
+    @pytest.mark.parametrize("text", [
         "任务认领校验未通过，已停止处理：glab api user 返回当前绑定账号为 "
         "project_123_bot_xxx，但 Issue #414 分配给 @agent",
         "越权防护规则触发：Issue 未分配给绑定的 Agent 账号，已按越权防护规则终止本次任务",

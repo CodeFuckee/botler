@@ -351,6 +351,37 @@ class TestExecutorPrecheckIntegration:
         assert git_check["ok"] is False
         assert "失败" in git_check["detail"]
 
+    def test_precheck_failure_category_env_ignores_429_number(
+            self, executor, monkeypatch, tmp_path):
+        """预检失败分类固定 env，不随失败文本抖动（issue #481 流水线
+        #1429 回归防护）。
+
+        历史缺陷：Windows runner（backend:test 迁移目标，issue #469）磁盘
+        剩余空间数值恰好含 "429"（如 4294967.3 MB）时，failure_classify 的
+        引擎类限流规则 r"429" 先于环境类规则命中 → 预检失败任务被误分类为
+        engine，CI 随机失败。预检按 issue #238 设计本身就是环境性失败，
+        分类应固定 env，不依赖错误文本。
+        """
+        db = executor.db
+        repo_id = self._mk_repo(db, url="file:///tmp/definitely-not-exist-repo.git")
+        task_id = self._mk_task(db, repo_id)
+
+        def boom(*a):
+            raise AssertionError("预检失败的任务不应调用 _run_once（不消耗模型调用）")
+
+        self._install(executor, monkeypatch, tmp_path, run_once=boom)
+        # 模拟 Windows 上磁盘剩余数值恰好含 "429"（修复前会误判 engine）
+        monkeypatch.setattr(
+            "botler.executor.check_disk_space",
+            lambda target, min_free_mb: (
+                True, f"磁盘剩余 4294967.3 MB ≥ 阈值 {min_free_mb} MB（{target}）"))
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert task["failure_category"] == "env"
+
     def test_precheck_pass_then_task_runs_normally(
             self, executor, monkeypatch, tmp_path, local_git_repo):
         """预检通过（真实可克隆仓库）→ 任务照常执行到 _run_once → 成功

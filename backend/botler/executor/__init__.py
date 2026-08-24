@@ -60,6 +60,8 @@ from ..plugins import PluginKind, get_plugin, has_plugin, list_plugins
 from ..templates import TemplateRenderer
 from ..failure_classify import (
     CATEGORY_ENGINE,
+    CATEGORY_ENV,
+    VALID_CATEGORIES,
     category_advice,
     category_label,
     classify_failure,
@@ -482,9 +484,13 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
             else:
                 reason = format_precheck_failure(precheck)
                 self.db.add_log(task_id, "error", reason)
+                # 预检失败 = 环境性失败（issue #238 设计），分类固定 env，
+                # 不随失败文本抖动（issue #481 流水线 #1429：Windows runner
+                # 磁盘剩余数值含 "429" 曾把预检失败误分类为 engine）
                 self._finish_failed(task_id, reason,
                                     error_detail=serialize_precheck(precheck),
-                                    repo=repo)
+                                    repo=repo,
+                                    failure_category=CATEGORY_ENV)
                 return
 
         # issue #120：执行引擎按任务落库——记录本次实际执行的引擎
@@ -1086,15 +1092,22 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
             self.db.add_log(task_id, "info", f"已记录任务提交 {sha[:8]}")
     def _finish_failed(self, task_id: int, reason: str, output: str = "",
                        error_detail: str | None = None,
-                       repo: dict | None = None) -> None:
+                       repo: dict | None = None,
+                       failure_category: str | None = None) -> None:
         task = self.db.get_task(task_id)
         # issue #274：任务收尾时对失败原因做规则分类（env/engine/unsolvable/
         # unknown），结果落库 tasks.failure_category——详情页展示分类徽章+建议、
         # 失败评论带分类前缀、统计看板按分类聚合。综合失败原因、错误详情与
         # 执行输出三路文本匹配，未命中兜底 unknown（不抛错）。
-        category = classify_failure(
-            reason, error_detail or "", output,
-            rules=self.config.get().failure_classify_rules)
+        # failure_category 显式传入时（如预检失败固定 env，issue #481）优先
+        # 采用，不再做文本规则匹配——预检失败是环境性失败（issue #238），
+        # 不应被失败文本里的偶然数字/关键词带偏分类。
+        if failure_category and failure_category in VALID_CATEGORIES:
+            category = failure_category
+        else:
+            category = classify_failure(
+                reason, error_detail or "", output,
+                rules=self.config.get().failure_classify_rules)
         # 条件终态（issue #24）：任务已被其他实例先收尾时不再覆盖状态、
         # 不重复评论/通知
         if not self.db.finish_task(
