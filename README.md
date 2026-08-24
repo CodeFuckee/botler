@@ -1019,6 +1019,7 @@ GET    /api/issues/{project_id}/members  项目成员清单（概览页右边栏
 PUT    /api/issues/{project_id}/{iid}/assignee  更新 issue 负责人（assignee_id 为 GitLab 用户 id，null 清除负责人；编辑走 owner token 并同步 GitLab，成功后清缓存并返回更新后负责人列表，issue #303）
 GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
+POST   /api/environment/upgrade      升级指定工具到最新版本并延迟重启服务（body: {key}，npm/pip/gh 按发布源分派，成功后服务自动重启，issue #465）
 GET    /api/auth/status               登录状态探测（SSO 是否启用 + 当前用户，issue #27）
 GET    /api/auth/login                跳转群晖 SSO 登录页（302）
 GET    /api/auth/callback             OIDC 回调（换 token 建会话，302 回首页）

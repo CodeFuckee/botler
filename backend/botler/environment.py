@@ -7,12 +7,17 @@
 
 from __future__ import annotations
 
+import io
 import logging
+import os
+import platform
 import re
 import shutil
 import socket
 import subprocess
 import sys
+import tarfile
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version as pkg_version
@@ -191,3 +196,179 @@ def detect_local_environment(
         "detected_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "tools": results,
     }
+
+
+# ============================================================
+# 工具升级（issue #465）：设置页「本地环境检测」对可升级版本工具
+# 提供一键升级。升级方式按发布源分派：
+#   - npm  → npm install -g <pkg>@latest（claude/codex/gemini/aider）
+#   - pypi → 当前解释器 pip install -U <pkg>（dsh SDK，进程内依赖）
+#   - github → 下载 gh 最新 release 二进制替换（仅 Linux）
+# 升级成功后由 API 层调度延迟重启 botler 服务（与备份恢复同模式），
+# 使进程内依赖（dsh SDK 等）新版本生效。
+# ============================================================
+
+class UpgradeError(Exception):
+    """工具升级失败（用户可读中文信息，API 层转 HTTP 400）。"""
+
+
+# npm/pip 安装可能较慢，升级命令超时放宽到 300s
+UPGRADE_TIMEOUT = 300
+# gh 二进制下载超时（秒）
+GH_DOWNLOAD_TIMEOUT = 60
+# 返回给前端的命令输出截断长度（避免长日志刷屏）
+MAX_UPGRADE_OUTPUT = 500
+
+
+def find_tool(tool_key: str) -> dict | None:
+    """按 key 查找工具清单项；不存在返回 None。"""
+    return next((t for t in TOOLS if t["key"] == tool_key), None)
+
+
+def _upgrade_command(tool: dict) -> list[str]:
+    """按发布源构造升级命令（npm / pypi）；无发布源抛 UpgradeError。"""
+    source = tool.get("latest_source")
+    if source == "npm":
+        npm = shutil.which("npm")
+        if not npm:
+            raise UpgradeError("未找到 npm 命令，无法升级 npm 全局工具")
+        return [npm, "install", "-g", f"{tool['latest_pkg']}@latest"]
+    if source == "pypi":
+        # 使用 botler 当前解释器升级进程内 pip 包，保证升级进同一环境
+        return [sys.executable, "-m", "pip", "install", "-U", tool["latest_pkg"]]
+    raise UpgradeError(f"工具「{tool['name']}」没有可用的自动升级途径")
+
+
+def _run_upgrade_command(tool: dict, cmd: list[str], timeout: int) -> dict:
+    """执行升级命令：非零退出/超时/执行异常均抛 UpgradeError。"""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise UpgradeError(f"升级「{tool['name']}」超时（超过 {timeout}s）") from None
+    except OSError as e:
+        raise UpgradeError(f"执行升级命令失败: {e}") from None
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        raise UpgradeError(
+            f"升级「{tool['name']}」失败（退出码 {result.returncode}）: "
+            f"{output[-MAX_UPGRADE_OUTPUT:]}")
+    return _upgrade_result(tool, output)
+
+
+def _upgrade_result(tool: dict, output: str) -> dict:
+    """升级成功结果：附带命令输出与升级后重新检测的版本（检测失败不阻断）。"""
+    result = {"key": tool["key"], "name": tool["name"], "upgraded": True}
+    if output:
+        result["output"] = output[-MAX_UPGRADE_OUTPUT:]
+    try:
+        detected = detect_tool(tool, timeout=10)
+        result["version"] = detected.get("version")
+    except Exception:  # noqa: BLE001  重新检测失败仅版本未知，不阻断升级结果
+        result["version"] = None
+    return result
+
+
+def _gh_arch() -> str:
+    """当前 CPU 架构映射到 gh release 资产命名（amd64/arm64）。"""
+    machine = platform.machine().lower()
+    mapping = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+    arch = mapping.get(machine)
+    if arch is None:
+        raise UpgradeError(f"不支持的 CPU 架构: {machine}")
+    return arch
+
+
+def _extract_gh_binary(content: bytes) -> bytes:
+    """从 gh release tar.gz 中提取 bin/gh 可执行文件内容。"""
+    with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tf:
+        for member in tf.getmembers():
+            if member.isfile() and member.name.endswith("/bin/gh"):
+                data = tf.extractfile(member)
+                if data is not None:
+                    return data.read()
+    raise ValueError("升级包中未找到 bin/gh")
+
+
+def _upgrade_gh(tool: dict) -> dict:
+    """升级 GitHub CLI：下载最新 release 二进制原子替换当前可执行文件。
+
+    仅支持 Linux（botler 部署目标均为 Linux 服务器/容器）；替换需要
+    对 gh 所在目录的写权限（通常为 root 安装的 /usr/bin）。
+    """
+    if not sys.platform.startswith("linux"):
+        raise UpgradeError("gh 自动升级当前仅支持 Linux 平台")
+    latest = fetch_latest(tool, timeout=8)
+    if latest is None:
+        raise UpgradeError("查询 gh 最新版本失败（网络不可达或发布源异常）")
+    current = shutil.which("gh")
+    if not current:
+        raise UpgradeError("未找到 gh 可执行文件")
+    arch = _gh_arch()
+    url = (f"https://github.com/{tool['latest_repo']}/releases/download/"
+           f"v{latest}/gh_{latest}_linux_{arch}.tar.gz")
+    try:
+        resp = httpx.get(url, timeout=GH_DOWNLOAD_TIMEOUT, follow_redirects=True)
+    except Exception as e:  # noqa: BLE001  网络异常统一转可读错误
+        raise UpgradeError(f"下载 gh 升级包失败: {e}") from None
+    if resp.status_code != 200:
+        raise UpgradeError(f"下载 gh 升级包失败（HTTP {resp.status_code}）")
+    try:
+        payload = _extract_gh_binary(resp.content)
+    except Exception as e:  # noqa: BLE001  解包异常统一转可读错误
+        raise UpgradeError(f"解析 gh 升级包失败: {e}") from None
+    tmp = f"{current}.botler-upgrade-tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(payload)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, current)
+    except OSError as e:
+        raise UpgradeError(f"替换 gh 可执行文件失败（需要写权限）: {e}") from None
+    return _upgrade_result(tool, f"已替换为 gh {latest}（{current}）")
+
+
+def upgrade_tool(tool_key: str, timeout: int = UPGRADE_TIMEOUT) -> dict:
+    """升级单个工具到最新版本（issue #465）。
+
+    按发布源分派：npm 全局包走 npm install -g，pip 包走当前解释器
+    pip install -U，gh 走 GitHub release 二进制下载替换。工具不存在或
+    无发布源抛 UpgradeError（API 层转 400）。
+    """
+    tool = find_tool(tool_key)
+    if tool is None:
+        raise UpgradeError(f"未知工具: {tool_key}")
+    if tool.get("latest_source") == "github":
+        return _upgrade_gh(tool)
+    return _run_upgrade_command(tool, _upgrade_command(tool), timeout)
+
+
+# 进程生命周期内只调度一次重启（连续升级多个工具不重复重启）
+_restart_scheduled = False
+
+
+def schedule_restart(delay: float = 2.0) -> bool:
+    """延迟重启 botler 服务（os.execv 原地替换，与备份恢复同模式）。
+
+    Docker（restart policy 依赖进程退出）下 execv 不退出容器进程本身，
+    pm2/systemd/uvicorn --reload 场景同样成立；新进程重新加载
+    config.yaml / botler.db，scheduler 自动把 running 任务重新入队。
+    返回是否本次实际调度（进程内重复调用返回 False）。
+    """
+    global _restart_scheduled
+    if _restart_scheduled:
+        return False
+    _restart_scheduled = True
+
+    def _do() -> None:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            logging.shutdown()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as e:  # noqa: BLE001  execv 失败（理论上极罕见）
+            logger.error("进程重启失败: %s", e)
+            os._exit(1)  # noqa: PLR1722  让容器 restart policy 兜底
+
+    threading.Timer(delay, _do).start()
+    logger.info("工具升级完成，%.1fs 后自动重启服务", delay)
+    return True

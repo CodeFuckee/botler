@@ -1,5 +1,6 @@
 """本地环境检测模块测试（issue #22）：工具安装检测 / 版本解析 / 最新版本查询。"""
 
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -331,3 +332,200 @@ class TestDshDetection:
         monkeypatch.setattr("botler.environment.httpx.get",
                             lambda url, **kw: (_ for _ in ()).throw(OSError("timeout")))
         assert environment.fetch_latest(self._dsh_tool()) is None
+
+
+class TestUpgradeTool:
+    """工具升级（issue #465）：npm / pypi / gh 发布源分派与失败处理。"""
+
+    def _npm_tool(self):
+        tool = _tool()
+        tool["latest_source"] = "npm"
+        tool["latest_pkg"] = "@anthropic-ai/claude-code"
+        return tool
+
+    def test_npm_tool_upgrade_command(self, monkeypatch):
+        """npm 工具：npm install -g <pkg>@latest。"""
+        calls = {}
+        monkeypatch.setattr("botler.environment.shutil.which",
+                            lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: calls.update(cmd=cmd) or SimpleNamespace(
+                returncode=0, stdout="added 1 package\n", stderr=""))
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": tool["key"],
+                                      "installed": True, "version": "2.0.0"})
+        result = environment.upgrade_tool("claude")
+        assert result["upgraded"] is True
+        assert result["version"] == "2.0.0"
+        assert calls["cmd"] == [
+            "/usr/bin/npm", "install", "-g", "@anthropic-ai/claude-code@latest"]
+
+    def test_pypi_tool_upgrade_uses_current_interpreter(self, monkeypatch):
+        """pypi 工具（dsh）：当前解释器 pip install -U <pkg>。"""
+        calls = {}
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: calls.update(cmd=cmd) or SimpleNamespace(
+                returncode=0, stdout="Successfully installed", stderr=""))
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "dsh",
+                                      "installed": True, "version": "0.2.0"})
+        result = environment.upgrade_tool("dsh")
+        assert result["version"] == "0.2.0"
+        assert calls["cmd"] == [
+            __import__("sys").executable, "-m", "pip", "install", "-U",
+            "deepseek-harness-sdk"]
+
+    def test_npm_missing_bin_raises(self, monkeypatch):
+        """npm 未安装 → UpgradeError（不执行任何命令）。"""
+        monkeypatch.setattr("botler.environment.shutil.which", lambda cmd: None)
+        with pytest.raises(environment.UpgradeError, match="未找到 npm"):
+            environment.upgrade_tool("claude")
+
+    def test_unknown_tool_raises(self):
+        """未知工具 → UpgradeError。"""
+        with pytest.raises(environment.UpgradeError, match="未知工具"):
+            environment.upgrade_tool("no-such-tool")
+
+    def test_no_upgrade_path_raises(self):
+        """无发布源工具（git）→ UpgradeError。"""
+        with pytest.raises(environment.UpgradeError, match="没有可用的自动升级途径"):
+            environment.upgrade_tool("git")
+
+    def test_nonzero_exit_raises(self, monkeypatch):
+        """升级命令非零退出 → UpgradeError 携带退出码与输出。"""
+        monkeypatch.setattr("botler.environment.shutil.which",
+                            lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: SimpleNamespace(
+                returncode=1, stdout="", stderr="EAI_AGAIN getaddrinfo"))
+        with pytest.raises(environment.UpgradeError,
+                           match="退出码 1.*EAI_AGAIN"):
+            environment.upgrade_tool("claude")
+
+    def test_timeout_raises(self, monkeypatch):
+        """升级命令超时 → UpgradeError。"""
+        monkeypatch.setattr("botler.environment.shutil.which",
+                            lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(cmd, 300)))
+        with pytest.raises(environment.UpgradeError, match="超时"):
+            environment.upgrade_tool("claude")
+
+    def test_find_tool(self):
+        """find_tool：命中返回清单项，未命中返回 None。"""
+        assert environment.find_tool("claude")["latest_source"] == "npm"
+        assert environment.find_tool("nope") is None
+
+
+def _make_gh_tarball() -> bytes:
+    """构造含 bin/gh 的最小 tar.gz（模拟 GitHub CLI release 资产）。"""
+    import io as _io
+    import tarfile as _tarfile
+    buf = _io.BytesIO()
+    data = b"fake-gh-binary"
+    with _tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = _tarfile.TarInfo("gh_2.63.2_linux_amd64/bin/gh")
+        info.size = len(data)
+        tf.addfile(info, _io.BytesIO(data))
+    return buf.getvalue()
+
+
+class TestUpgradeGh:
+    """gh 升级（issue #465）：GitHub release 二进制下载替换。"""
+
+    def test_gh_binary_upgrade_replaces_executable(self, monkeypatch):
+        """下载最新 release 二进制并原子替换当前 gh 可执行文件。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "linux")
+        monkeypatch.setattr(
+            "botler.environment.fetch_latest",
+            lambda tool, timeout=8: "2.63.2")
+        monkeypatch.setattr(
+            "botler.environment.shutil.which",
+            lambda cmd: "/usr/bin/gh" if cmd == "gh" else None)
+        downloaded = {}
+        monkeypatch.setattr(
+            "botler.environment.httpx.get",
+            lambda url, **kw: downloaded.update(url=url) or SimpleNamespace(
+                status_code=200, content=_make_gh_tarball()))
+        written = {}
+        class _FakeFile:
+            def __init__(self, path, mode):
+                written["path"] = path
+            def write(self, data):
+                written["data"] = data
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        monkeypatch.setattr("builtins.open", _FakeFile)
+        monkeypatch.setattr("os.chmod", lambda *a, **k: None)
+        replaced = {}
+        monkeypatch.setattr(
+            "os.replace", lambda src, dst: replaced.update(src=src, dst=dst))
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "gh",
+                                      "installed": True, "version": "2.63.2"})
+        result = environment.upgrade_tool("gh")
+        assert result["version"] == "2.63.2"
+        assert "gh_2.63.2_linux_amd64.tar.gz" in downloaded["url"]
+        assert replaced["dst"] == "/usr/bin/gh"
+        assert written["data"] == b"fake-gh-binary"
+
+    def test_gh_non_linux_raises(self, monkeypatch):
+        """非 Linux 平台 → UpgradeError（不下载不替换）。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "darwin")
+        with pytest.raises(environment.UpgradeError, match="仅支持 Linux"):
+            environment.upgrade_tool("gh")
+
+    def test_gh_latest_query_failure_raises(self, monkeypatch):
+        """查询 gh 最新版本失败 → UpgradeError。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "linux")
+        monkeypatch.setattr(
+            "botler.environment.fetch_latest",
+            lambda tool, timeout=8: None)
+        with pytest.raises(environment.UpgradeError, match="查询 gh 最新版本失败"):
+            environment.upgrade_tool("gh")
+
+    def test_gh_download_failure_raises(self, monkeypatch):
+        """下载 gh 升级包 HTTP 错误 → UpgradeError。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "linux")
+        monkeypatch.setattr(
+            "botler.environment.fetch_latest",
+            lambda tool, timeout=8: "2.63.2")
+        monkeypatch.setattr(
+            "botler.environment.shutil.which",
+            lambda cmd: "/usr/bin/gh" if cmd == "gh" else None)
+        monkeypatch.setattr(
+            "botler.environment.httpx.get",
+            lambda url, **kw: SimpleNamespace(status_code=404, content=b""))
+        with pytest.raises(environment.UpgradeError, match="HTTP 404"):
+            environment.upgrade_tool("gh")
+
+
+class TestScheduleRestart:
+    """延迟重启调度（issue #465）：进程内只调度一次。"""
+
+    def test_schedule_once_per_process(self, monkeypatch):
+        """同一进程内重复调度只生效一次（后续调用返回 False）。"""
+        started = []
+        class _FakeTimer:
+            def __init__(self, delay, fn):
+                self.delay = delay
+                self.fn = fn
+            def start(self):
+                started.append((self.delay, self.fn))
+        monkeypatch.setattr("botler.environment.threading.Timer", _FakeTimer)
+        # 复位进程级全局标记，保证用例与执行顺序无关
+        environment._restart_scheduled = False
+        assert environment.schedule_restart(delay=2.0) is True
+        assert environment.schedule_restart(delay=2.0) is False
+        assert len(started) == 1
+        assert started[0][0] == 2.0

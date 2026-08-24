@@ -70,6 +70,11 @@ export function useSettingsData() {
   const [env, setEnv] = useState(null) // 本地环境检测结果（issue #22）
   const [envError, setEnvError] = useState('')
   const [envBusy, setEnvBusy] = useState(false)
+  // 工具升级（issue #465）：upgradingKey = 正在升级的工具 key（空=无）；
+  // upgradeNote / upgradeError 分别为升级成功/失败提示
+  const [upgradingKey, setUpgradingKey] = useState('')
+  const [upgradeNote, setUpgradeNote] = useState('')
+  const [upgradeError, setUpgradeError] = useState('')
   // SSO client_secret 输入（issue #27）：留空 = 保持现有凭据（后端掩码不覆盖）
   const [ssoSecretInput, setSsoSecretInput] = useState('')
   // SSO 卡片内独立保存（issue #27 第四轮）：用户反馈「SSO 配置没有保存按钮」——
@@ -157,6 +162,20 @@ export function useSettingsData() {
     try {
       setEnv(await api.get('/api/environment'))
     } catch (e) { setEnvError(e.message) } finally { setEnvBusy(false) }
+  }
+
+  // 升级工具（issue #465）：点击「升级」后调用后端升级到最新版本，
+  // 后端成功后延迟重启服务，前端提示用户稍后刷新页面
+  const upgradeEnvTool = async (key) => {
+    setUpgradingKey(key); setUpgradeNote(''); setUpgradeError('')
+    try {
+      await api.post('/api/environment/upgrade', { key })
+      setUpgradeNote('升级成功，服务正在自动重启，请稍后刷新页面')
+    } catch (e) {
+      setUpgradeError(e.message || '升级失败')
+    } finally {
+      setUpgradingKey('')
+    }
   }
 
   useEffect(() => {
@@ -493,6 +512,8 @@ export function useSettingsData() {
     busy, setBusy, reconcileNote, setReconcileNote,
     testNote, setTestNote,
     env, setEnv, envError, setEnvError, envBusy, setEnvBusy, loadEnv,
+    upgradingKey, setUpgradingKey, upgradeNote, setUpgradeNote,
+    upgradeError, setUpgradeError, upgradeEnvTool,
     ssoSecretInput, setSsoSecretInput, ssoBusy, setSsoBusy, ssoSaved, setSsoSaved,
     guide, guideError, guideOpen, setGuideOpen, setGuideError, setSsoField,
     buildSsoPatch, saveSso,

@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from botler import environment
 from botler.api import router as api_router
 from botler.config import ConfigManager
 from botler.database import Database
@@ -72,3 +73,64 @@ class TestEnvironmentApi:
         docker = data["tools"][1]
         assert docker["installed"] is False
         assert docker["up_to_date"] is None
+
+
+class TestUpgradeApi:
+    """工具升级 API（issue #465）：POST /api/environment/upgrade。"""
+
+    def test_upgrade_success_schedules_restart(self, client, monkeypatch):
+        """升级成功 → 200 + 调度重启标记 + 返回新版本。"""
+        tc, tmp_path = client
+        monkeypatch.setattr(
+            "botler.environment.upgrade_tool",
+            lambda key: {"key": key, "name": "Claude Code",
+                         "upgraded": True, "version": "2.0.0"})
+        monkeypatch.setattr(
+            "botler.environment.schedule_restart",
+            lambda delay=2.0: True)
+        resp = tc.post("/api/environment/upgrade", json={"key": "claude"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["key"] == "claude"
+        assert data["version"] == "2.0.0"
+        assert data["restarting"] is True
+
+    def test_upgrade_unknown_tool_400(self, client, monkeypatch):
+        """未知工具 → 400 携带可读错误信息。"""
+        tc, tmp_path = client
+        def _raise(key):
+            raise environment.UpgradeError(f"未知工具: {key}")
+        monkeypatch.setattr("botler.environment.upgrade_tool", _raise)
+        resp = tc.post("/api/environment/upgrade", json={"key": "nope"})
+        assert resp.status_code == 400
+        assert "未知工具" in resp.json()["detail"]
+
+    def test_upgrade_blank_key_400(self, client, monkeypatch):
+        """key 为空/纯空白 → 400。"""
+        tc, tmp_path = client
+        monkeypatch.setattr(
+            "botler.environment.upgrade_tool",
+            lambda key: pytest.fail("不应执行升级"))
+        resp = tc.post("/api/environment/upgrade", json={"key": "   "})
+        assert resp.status_code == 400
+
+    def test_upgrade_missing_key_422(self, client):
+        """请求体缺 key → 422（pydantic 校验）。"""
+        tc, tmp_path = client
+        resp = tc.post("/api/environment/upgrade", json={})
+        assert resp.status_code == 422
+
+    def test_upgrade_failure_no_restart(self, client, monkeypatch):
+        """升级失败（UpgradeError）→ 400 且不调度重启。"""
+        tc, tmp_path = client
+        monkeypatch.setattr(
+            "botler.environment.upgrade_tool",
+            lambda key: (_ for _ in ()).throw(
+                environment.UpgradeError("下载 gh 升级包失败（HTTP 404）")))
+        monkeypatch.setattr(
+            "botler.environment.schedule_restart",
+            lambda delay=2.0: pytest.fail("失败时不应调度重启"))
+        resp = tc.post("/api/environment/upgrade", json={"key": "gh"})
+        assert resp.status_code == 400
+        assert "HTTP 404" in resp.json()["detail"]

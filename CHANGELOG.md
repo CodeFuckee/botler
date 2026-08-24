@@ -95,6 +95,29 @@
 
 ### Added
 
+- **设置页「本地环境检测」支持一键升级可升级工具并自动重启（issue #465）**：
+  - 需求：设置页本地环境检测卡片对「有可升级版本」（已安装且最新版本已知但
+    非最新）的工具显示「升级」按钮，点击后升级到最新版本并重启服务使新版本
+    生效（进程内依赖如 dsh SDK 需重启后加载）；
+  - 后端：`environment.py` 新增 `upgrade_tool(key)` 按发布源分派升级——
+    npm 工具（claude/codex/gemini/aider）走 `npm install -g <pkg>@latest`，
+    pypi 工具（dsh SDK）走当前解释器 `pip install -U <pkg>`，gh 走 GitHub
+    release 二进制下载替换（仅 Linux，原子替换当前可执行文件）；新增
+    `UpgradeError` 异常与 `schedule_restart(delay)` 延迟重启（复用备份恢复
+    的 `os.execv` 原地替换模式，进程内只调度一次）；`api/environment.py`
+    新增 `POST /api/environment/upgrade`（body: `{key}`），成功返回新版本与
+    `restarting` 标记并写审计日志，失败转 HTTP 400 携带可读错误；
+  - 前端：`EnvironmentCard.jsx` 可升级行「可升级」提示旁新增「升级」按钮
+    （升级中禁用显示「升级中…」，成功/失败分别展示提示），
+    `useSettingsData.js` 新增 `upgradeEnvTool` 调用升级接口并提示
+    「服务正在自动重启，请稍后刷新页面」；
+  - 测试：`test_environment.py` 新增 TestUpgradeTool / TestUpgradeGh /
+    TestScheduleRestart（npm/pip 命令构造、gh 二进制替换、未知工具/无发布源/
+    非零退出/超时/下载失败等边界，15 用例），`test_api_environment.py`
+    新增 TestUpgradeApi（成功+重启调度、未知工具 400、空 key 400、缺 key 422、
+    失败不重启，5 用例），`frontend/tests/settings-environment-upgrade.test.mjs`
+    前后端源码契约（按钮渲染条件 / 接口调用 / 重启调度，4 用例）。
+
 - **概览页 CI/CD 流水线详情右边栏截图大图改用第三方看图组件（issue #462）**：
   - 背景：流水线详情右边栏「截图预览」视图点击缩略图后的大图预览此前为
     自研浮层（issue #453/#456/#459 演进）；本次按需求引入第三方图片预览

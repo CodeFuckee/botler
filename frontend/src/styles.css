@@ -1237,6 +1237,14 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .checkbox-label { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; }
 
 .saved-hint { color: var(--ok); }
+/* 本地环境检测可升级单元格（issue #465）：「可升级」提示与「升级」按钮同行，
+   左对齐、垂直居中，窄屏自动折行 */
+.env-upgrade-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
 .err-hint {
   color: var(--err);
   /* 生图测试失败原因可能包含接口原始返回内容（多行/长文本，issue #151）：
