@@ -25,8 +25,16 @@
     环境 Python 用 `.venv\Scripts\python.exe`、pytest 临时目录用
     `$env:TEMP`（本机用户临时目录），关键命令显式检查 `$LASTEXITCODE`，
     失败即 throw 阻断（杜绝假绿）；
-  - 测试：`ci/test_backend_test_config.py` 配置合约回归 2 用例通过，
-    GitLab CI lint 校验通过。
+  - 修复 before_script 残留 bash 语法导致流水线 #1394 失败：`backend:test`
+    此前 extends `.backend_setup`（bash 语法：`export PATH=...`、renice/
+    ionice），在 windows runner 的 pwsh shell 下执行报错（`export` 非
+    cmdlet 命令）使 job 直接失败。新增 PowerShell 语法版模板
+    `.backend_setup_windows`（`$env:PATH` 追加、`$ErrorActionPreference =
+    "Stop"`、环境信息输出），`backend:test` 改用它，其他 Linux job 继续
+    使用 `.backend_setup` 不受影响；
+  - 测试：`ci/test_backend_test_config.py` 配置合约回归扩至 4 用例
+    （新增 before_script 必须为 pwsh 语法、不得含 bash 语法的断言），
+    ci/ 目录 22 用例全通过，GitLab CI lint 校验通过。
 
 ### Fixed
 

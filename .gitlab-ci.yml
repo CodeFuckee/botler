@@ -203,6 +203,29 @@ variables:
       renice -n 10 -p $BASHPID >/dev/null 2>&1 || true
       ionice -c 2 -n 7 -p $BASHPID >/dev/null 2>&1 || true
 
+# --- 后端公共配置（Windows runner / pwsh 版，issue #469）---
+# backend:test 已迁移到带 windows 标签的 runner 上运行（issue #469），
+# 该 runner 的 shell executor 默认 shell 为 pwsh（PowerShell 7，流水线
+# #1393/#1394 实测），bash 语法的 .backend_setup 无法直接使用（export/
+# renice 等命令在 pwsh 下报错）。因此提供 PowerShell 语法版本：
+#   - 环境变量用 $env:XXX 而非 $XXX；
+#   - PATH 追加用 Windows 分号分隔（$env:USERPROFILE\.local\bin 等）；
+#   - Windows 无 renice/ionice（Linux 专用降优先级），此处省略；
+#   - $ErrorActionPreference = "Stop" 保证命令失败即抛出，杜绝假绿。
+.backend_setup_windows:
+  before_script:
+    - cd backend
+    - |
+      $ErrorActionPreference = "Stop"
+      git config --global --add safe.directory "$env:CI_PROJECT_DIR"
+      $env:PATH = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\miniconda3\bin;$env:PATH"
+      Write-Host "=== 环境信息 ==="
+      Write-Host "CI_PROJECT_DIR: $env:CI_PROJECT_DIR"
+      $pyVer = (Get-Command python -ErrorAction SilentlyContinue) ? (& python --version 2>&1) : "未安装"
+      Write-Host "Python 版本: $pyVer"
+      $uvVer = (Get-Command uv -ErrorAction SilentlyContinue) ? (& uv --version 2>&1) : "未安装"
+      Write-Host "uv 版本: $uvVer"
+
 # ================================================================
 # Stage: security —— 第零阶段：bandit 安全静态扫描（issue #58）
 # ================================================================
@@ -948,7 +971,7 @@ harmony:build:
 # 在带 windows 标签的 GitLab Runner 上运行（issue #469），
 # 不再使用 code01 标签的 runner；不依赖 Docker。
 backend:test:
-  extends: [.backend_setup, .docs_only_skip]
+  extends: [.backend_setup_windows, .docs_only_skip]
   stage: build
   tags:
     - windows
