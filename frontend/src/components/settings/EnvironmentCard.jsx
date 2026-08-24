@@ -5,24 +5,44 @@
 // 工具升级（issue #465）：有可升级版本（已安装且非最新）的工具行显示
 // 「升级」按钮，点击后后端升级到最新版本并延迟重启服务，前端提示用户
 // 稍后刷新页面。
+// 工具安装（issue #468）：未安装且可自动安装（installable，有 npm/pip/
+// github 发布源）的工具行显示「安装」按钮，点击后后端安装到最新版本并
+// 延迟重启服务，前端提示用户稍后刷新页面。
 import { Icon } from '../Icon.jsx'
 import { fmtTime } from '../../api.js'
 
-// 单工具状态提示：未安装 / 无法获取最新版本 / 已是最新 / 可升级（附升级按钮）
-function envStatus(t, upgradingKey, upgradeEnvTool) {
-  if (!t.installed) return <span className="muted">未安装</span>
+// 单工具状态提示：未安装（可安装则附安装按钮）/ 无法获取最新版本 /
+// 已是最新 / 可升级（附升级按钮）。actionKey 为进行中的操作 key（安装
+// 或升级，禁用按钮），onAction 为对应处理函数。
+function envStatus(t, actionKey, onAction) {
+  if (!t.installed) {
+    if (!t.installable) return <span className="muted">未安装</span>
+    return (
+      <span className="env-action-cell">
+        <span className="muted">未安装</span>
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={actionKey === t.key}
+          onClick={() => onAction(t.key)}
+        >
+          {actionKey === t.key ? '安装中…' : '安装'}
+        </button>
+      </span>
+    )
+  }
   if (!t.latest) return <span className="muted">无法获取最新版本</span>
   if (t.up_to_date) return <span className="ok-text"><Icon name="check" /> 已是最新</span>
   return (
-    <span className="env-upgrade-cell">
+    <span className="env-action-cell">
       <span className="err-hint"><Icon name="warning" /> 可升级</span>
       <button
         type="button"
         className="btn btn-sm"
-        disabled={upgradingKey === t.key}
-        onClick={() => upgradeEnvTool(t.key)}
+        disabled={actionKey === t.key}
+        onClick={() => onAction(t.key)}
       >
-        {upgradingKey === t.key ? '升级中…' : '升级'}
+        {actionKey === t.key ? '升级中…' : '升级'}
       </button>
     </span>
   )
@@ -31,6 +51,7 @@ function envStatus(t, upgradingKey, upgradeEnvTool) {
 export default function EnvironmentCard({
   env, envError, setEnvError, envBusy, loadEnv,
   upgradingKey, upgradeNote, setUpgradeError, upgradeError, upgradeEnvTool,
+  installingKey, installNote, setInstallError, installError, installEnvTool,
 }) {
   return (
     <div className="card">
@@ -38,11 +59,15 @@ export default function EnvironmentCard({
       <p className="muted small">
         检测 botler 服务器上常见 AI agent 与基础工具是否安装及其版本；
         最新版本来自 npm registry / GitHub API（网络不可达时显示 "—"）。
-        有可升级版本的工具可点击「升级」一键升级到最新版本，升级成功后服务将自动重启。
+        未安装且可自动安装的工具可点击「安装」一键安装；
+        有可升级版本的工具可点击「升级」一键升级到最新版本，
+        安装/升级成功后服务将自动重启。
       </p>
       {envError && <div className="alert alert-error" onClick={() => setEnvError('')}>{envError}</div>}
       {upgradeError && <div className="alert alert-error" onClick={() => setUpgradeError('')}>{upgradeError}</div>}
+      {installError && <div className="alert alert-error" onClick={() => setInstallError('')}>{installError}</div>}
       {upgradeNote && <div className="alert alert-ok"><Icon name="check" /> {upgradeNote}</div>}
+      {installNote && <div className="alert alert-ok"><Icon name="check" /> {installNote}</div>}
       {!env && !envError && <p className="muted">检测中…</p>}
       {env && (
         <table className="table">
@@ -58,7 +83,11 @@ export default function EnvironmentCard({
                   : <span className="muted">未安装</span>}</td>
                 <td>{t.version || <span className="muted">未知</span>}</td>
                 <td>{t.latest || <span className="muted">—</span>}</td>
-                <td>{envStatus(t, upgradingKey, upgradeEnvTool)}</td>
+                <td>
+                  {t.installed
+                    ? envStatus(t, upgradingKey, upgradeEnvTool)
+                    : envStatus(t, installingKey, installEnvTool)}
+                </td>
               </tr>
             ))}
           </tbody>

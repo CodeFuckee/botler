@@ -230,6 +230,34 @@
     （ArrowRight/Left 步进与下界钳制）、localStorage 挂载即应用。
 
 
+- **设置页本地环境检测未安装工具一键安装并自动重启服务（issue #468）**：
+  - 需求：设置页本地环境检测卡片对「未安装且具备自动安装来源」的工具显示
+    「安装」按钮，点击后安装到最新版本并重启服务使新安装的版本生效（进程内
+    依赖如 dsh SDK 需重启后加载）；用户已在 issue 评论确认范围为「仅安装
+    功能」，不改动既有升级能力；
+  - 后端：`environment.py` 检测结果新增 `installable` 标记（配置了
+    npm/pypi/github 发布源即可自动安装），新增 `install_tool(key)` 按发布源
+    分派安装——npm 工具（claude/codex/gemini/aider）走
+    `npm install -g <pkg>@latest`，pypi 工具（dsh SDK）走当前解释器
+    `pip install <pkg>`，gh 走 GitHub release 二进制下载安装到
+    `/usr/local/bin`（仅 Linux，原子写入）；新增 `InstallError` 异常（工具
+    不存在/已安装/无发布源/目录不可写等转可读错误），安装成功复用
+    `schedule_restart` 延迟重启（进程内只调度一次）；`api/environment.py`
+    新增 `POST /api/environment/install`（body: `{key}`），成功返回新版本与
+    `restarting` 标记并写审计日志，失败转 HTTP 400；
+  - 前端：`EnvironmentCard.jsx` 未安装且可安装（installable）的工具行
+    「未安装」提示旁新增「安装」按钮（安装中禁用显示「安装中…」，成功/失败
+    分别展示提示），`useSettingsData.js` 新增 `installEnvTool` 调用安装接口
+    并提示「服务正在自动重启，请稍后刷新页面」；操作单元格样式类泛化为
+    `.env-action-cell`（安装/升级共用）；
+  - 测试：`test_environment.py` 新增 TestInstallTool / TestInstallGh /
+    installable 标记（npm/pip 命令构造、gh 二进制安装、已安装/未知工具/无
+    发布源/非零退出/超时/下载失败/目录不可写等边界，14 用例），
+    `test_api_environment.py` 新增 TestInstallApi（成功+重启调度、未知工具
+    400、空 key 400、缺 key 422、失败不重启，5 用例），
+    `frontend/tests/settings-environment-install.test.mjs` 前后端源码契约
+    （按钮渲染条件 / 接口调用 / 重启调度，4 用例）。
+
   - 需求：设置页本地环境检测卡片对「有可升级版本」（已安装且最新版本已知但
     非最新）的工具显示「升级」按钮，点击后升级到最新版本并重启服务使新版本
     生效（进程内依赖如 dsh SDK 需重启后加载）；

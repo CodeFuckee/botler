@@ -158,8 +158,13 @@ def fetch_latest(tool: dict, timeout: int = 8) -> str | None:
 
 
 def _inspect_tool(tool: dict, cmd_timeout: int, net_timeout: int) -> dict:
-    """单个工具完整检测：安装 + 版本 + 最新版本 + 落后判定。"""
+    """单个工具完整检测：安装 + 版本 + 最新版本 + 落后判定 + 可安装标记。
+
+    installable（issue #468）：工具配置了自动安装来源（npm / pypi /
+    github）即为可自动安装，前端据此对未安装工具显示「安装」按钮。
+    """
     result = detect_tool(tool, timeout=cmd_timeout)
+    result["installable"] = tool.get("latest_source") is not None
     if not result["installed"]:
         result.update(latest=None, up_to_date=None)
         return result
@@ -217,7 +222,7 @@ UPGRADE_TIMEOUT = 300
 # gh 二进制下载超时（秒）
 GH_DOWNLOAD_TIMEOUT = 60
 # 返回给前端的命令输出截断长度（避免长日志刷屏）
-MAX_UPGRADE_OUTPUT = 500
+MAX_CMD_OUTPUT = 500
 
 
 def find_tool(tool_key: str) -> dict | None:
@@ -251,7 +256,7 @@ def _run_upgrade_command(tool: dict, cmd: list[str], timeout: int) -> dict:
     if result.returncode != 0:
         raise UpgradeError(
             f"升级「{tool['name']}」失败（退出码 {result.returncode}）: "
-            f"{output[-MAX_UPGRADE_OUTPUT:]}")
+            f"{output[-MAX_CMD_OUTPUT:]}")
     return _upgrade_result(tool, output)
 
 
@@ -259,7 +264,7 @@ def _upgrade_result(tool: dict, output: str) -> dict:
     """升级成功结果：附带命令输出与升级后重新检测的版本（检测失败不阻断）。"""
     result = {"key": tool["key"], "name": tool["name"], "upgraded": True}
     if output:
-        result["output"] = output[-MAX_UPGRADE_OUTPUT:]
+        result["output"] = output[-MAX_CMD_OUTPUT:]
     try:
         detected = detect_tool(tool, timeout=10)
         result["version"] = detected.get("version")
@@ -374,3 +379,123 @@ def schedule_restart(delay: float = 2.0) -> bool:
     threading.Timer(delay, _do).start()
     logger.info("工具升级完成，%.1fs 后自动重启服务", delay)
     return True
+
+
+# ============================================================
+# 工具安装（issue #468）：设置页「本地环境检测」对「未安装且具备自动安装
+# 来源」的工具提供一键安装。安装方式按发布源分派（与升级 issue #465 对齐）：
+#   - npm  → npm install -g <pkg>@latest（claude/codex/gemini/aider）
+#   - pypi → 当前解释器 pip install <pkg>（dsh SDK，进程内依赖）
+#   - github → 下载 gh 最新 release 二进制安装到 /usr/local/bin（仅 Linux）
+# 安装成功后由 API 层调度延迟重启 botler 服务（与升级/备份恢复同模式），
+# 使进程内依赖（dsh SDK 等）新安装的版本生效。
+# ============================================================
+
+class InstallError(Exception):
+    """工具安装失败（用户可读中文信息，API 层转 HTTP 400）。"""
+
+
+# npm/pip 安装可能较慢，安装命令超时放宽到 300s
+INSTALL_TIMEOUT = 300
+# gh 二进制默认安装目录（Linux 标准系统 PATH 目录，通常 root 可写）
+GH_INSTALL_DIR = "/usr/local/bin"
+
+
+def _install_command(tool: dict) -> list[str]:
+    """按发布源构造安装命令（npm / pypi）；无发布源抛 InstallError。"""
+    source = tool.get("latest_source")
+    if source == "npm":
+        npm = shutil.which("npm")
+        if not npm:
+            raise InstallError("未找到 npm 命令，无法安装 npm 全局工具")
+        return [npm, "install", "-g", f"{tool['latest_pkg']}@latest"]
+    if source == "pypi":
+        # 使用 botler 当前解释器安装进程内 pip 包，保证装进同一环境
+        return [sys.executable, "-m", "pip", "install", tool["latest_pkg"]]
+    raise InstallError(f"工具「{tool['name']}」没有可用的自动安装途径")
+
+
+def _run_install_command(tool: dict, cmd: list[str], timeout: int) -> dict:
+    """执行安装命令：非零退出/超时/执行异常均抛 InstallError。"""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise InstallError(f"安装「{tool['name']}」超时（超过 {timeout}s）") from None
+    except OSError as e:
+        raise InstallError(f"执行安装命令失败: {e}") from None
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        raise InstallError(
+            f"安装「{tool['name']}」失败（退出码 {result.returncode}）: "
+            f"{output[-MAX_CMD_OUTPUT:]}")
+    return _install_result(tool, output)
+
+
+def _install_result(tool: dict, output: str) -> dict:
+    """安装成功结果：附带命令输出与安装后重新检测的版本（检测失败不阻断）。"""
+    result = {"key": tool["key"], "name": tool["name"], "installed": True}
+    if output:
+        result["output"] = output[-MAX_CMD_OUTPUT:]
+    try:
+        detected = detect_tool(tool, timeout=10)
+        result["version"] = detected.get("version")
+    except Exception:  # noqa: BLE001  重新检测失败仅版本未知，不阻断安装结果
+        result["version"] = None
+    return result
+
+
+def _install_gh(tool: dict) -> dict:
+    """安装 GitHub CLI：下载最新 release 二进制原子写入 /usr/local/bin/gh。
+
+    仅支持 Linux（botler 部署目标均为 Linux 服务器/容器）；安装目录需
+    已存在且可写（通常为 root 安装的 /usr/local/bin）。
+    """
+    if not sys.platform.startswith("linux"):
+        raise InstallError("gh 自动安装当前仅支持 Linux 平台")
+    latest = fetch_latest(tool, timeout=8)
+    if latest is None:
+        raise InstallError("查询 gh 最新版本失败（网络不可达或发布源异常）")
+    arch = _gh_arch()
+    url = (f"https://github.com/{tool['latest_repo']}/releases/download/"
+           f"v{latest}/gh_{latest}_linux_{arch}.tar.gz")
+    try:
+        resp = httpx.get(url, timeout=GH_DOWNLOAD_TIMEOUT, follow_redirects=True)
+    except Exception as e:  # noqa: BLE001  网络异常统一转可读错误
+        raise InstallError(f"下载 gh 安装包失败: {e}") from None
+    if resp.status_code != 200:
+        raise InstallError(f"下载 gh 安装包失败（HTTP {resp.status_code}）")
+    try:
+        payload = _extract_gh_binary(resp.content)
+    except Exception as e:  # noqa: BLE001  解包异常统一转可读错误
+        raise InstallError(f"解析 gh 安装包失败: {e}") from None
+    if not os.path.isdir(GH_INSTALL_DIR):
+        raise InstallError(f"gh 安装目录 {GH_INSTALL_DIR} 不存在，请先创建")
+    if not os.access(GH_INSTALL_DIR, os.W_OK):
+        raise InstallError(f"gh 安装目录 {GH_INSTALL_DIR} 不可写（需要 root 权限）")
+    dest = os.path.join(GH_INSTALL_DIR, "gh")
+    tmp = f"{dest}.botler-install-tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(payload)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+    except OSError as e:
+        raise InstallError(f"写入 gh 可执行文件失败: {e}") from None
+    return _install_result(tool, f"已安装 gh {latest}（{dest}）")
+
+
+def install_tool(tool_key: str, timeout: int = INSTALL_TIMEOUT) -> dict:
+    """安装单个工具到最新版本（issue #468）。
+
+    按发布源分派：npm 全局包走 npm install -g，pip 包走当前解释器
+    pip install，gh 走 GitHub release 二进制下载安装到 /usr/local/bin。
+    工具不存在 / 已安装 / 无发布源抛 InstallError（API 层转 400）。
+    """
+    tool = find_tool(tool_key)
+    if tool is None:
+        raise InstallError(f"未知工具: {tool_key}")
+    if detect_tool(tool, timeout=10)["installed"]:
+        raise InstallError(f"工具「{tool['name']}」已安装，无需重复安装")
+    if tool.get("latest_source") == "github":
+        return _install_gh(tool)
+    return _run_install_command(tool, _install_command(tool), timeout)

@@ -75,6 +75,11 @@ export function useSettingsData() {
   const [upgradingKey, setUpgradingKey] = useState('')
   const [upgradeNote, setUpgradeNote] = useState('')
   const [upgradeError, setUpgradeError] = useState('')
+  // 工具安装（issue #468）：installingKey = 正在安装的工具 key（空=无）；
+  // installNote / installError 分别为安装成功/失败提示
+  const [installingKey, setInstallingKey] = useState('')
+  const [installNote, setInstallNote] = useState('')
+  const [installError, setInstallError] = useState('')
   // SSO client_secret 输入（issue #27）：留空 = 保持现有凭据（后端掩码不覆盖）
   const [ssoSecretInput, setSsoSecretInput] = useState('')
   // SSO 卡片内独立保存（issue #27 第四轮）：用户反馈「SSO 配置没有保存按钮」——
@@ -175,6 +180,20 @@ export function useSettingsData() {
       setUpgradeError(e.message || '升级失败')
     } finally {
       setUpgradingKey('')
+    }
+  }
+
+  // 安装工具（issue #468）：点击「安装」后调用后端安装到最新版本，
+  // 后端成功后延迟重启服务，前端提示用户稍后刷新页面
+  const installEnvTool = async (key) => {
+    setInstallingKey(key); setInstallNote(''); setInstallError('')
+    try {
+      await api.post('/api/environment/install', { key })
+      setInstallNote('安装成功，服务正在自动重启，请稍后刷新页面')
+    } catch (e) {
+      setInstallError(e.message || '安装失败')
+    } finally {
+      setInstallingKey('')
     }
   }
 
@@ -514,6 +533,8 @@ export function useSettingsData() {
     env, setEnv, envError, setEnvError, envBusy, setEnvBusy, loadEnv,
     upgradingKey, setUpgradingKey, upgradeNote, setUpgradeNote,
     upgradeError, setUpgradeError, upgradeEnvTool,
+    installingKey, setInstallingKey, installNote, setInstallNote,
+    installError, setInstallError, installEnvTool,
     ssoSecretInput, setSsoSecretInput, ssoBusy, setSsoBusy, ssoSaved, setSsoSaved,
     guide, guideError, guideOpen, setGuideOpen, setGuideError, setSsoField,
     buildSsoPatch, saveSso,

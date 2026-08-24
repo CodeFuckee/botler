@@ -1237,9 +1237,9 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .checkbox-label { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; }
 
 .saved-hint { color: var(--ok); }
-/* 本地环境检测可升级单元格（issue #465）：「可升级」提示与「升级」按钮同行，
-   左对齐、垂直居中，窄屏自动折行 */
-.env-upgrade-cell {
+/* 本地环境检测操作单元格（issue #465/#468）：「未安装/可升级」提示与
+   「安装/升级」按钮同行，左对齐、垂直居中，窄屏自动折行 */
+.env-action-cell {
   display: flex;
   align-items: center;
   gap: var(--space-2);

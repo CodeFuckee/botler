@@ -134,3 +134,64 @@ class TestUpgradeApi:
         resp = tc.post("/api/environment/upgrade", json={"key": "gh"})
         assert resp.status_code == 400
         assert "HTTP 404" in resp.json()["detail"]
+
+
+class TestInstallApi:
+    """工具安装 API（issue #468）：POST /api/environment/install。"""
+
+    def test_install_success_schedules_restart(self, client, monkeypatch):
+        """安装成功 → 200 + 调度重启标记 + 返回新版本。"""
+        tc, tmp_path = client
+        monkeypatch.setattr(
+            "botler.environment.install_tool",
+            lambda key: {"key": key, "name": "Claude Code",
+                         "installed": True, "version": "2.0.0"})
+        monkeypatch.setattr(
+            "botler.environment.schedule_restart",
+            lambda delay=2.0: True)
+        resp = tc.post("/api/environment/install", json={"key": "claude"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["key"] == "claude"
+        assert data["version"] == "2.0.0"
+        assert data["restarting"] is True
+
+    def test_install_unknown_tool_400(self, client, monkeypatch):
+        """未知工具 → 400 携带可读错误信息。"""
+        tc, tmp_path = client
+        def _raise(key):
+            raise environment.InstallError(f"未知工具: {key}")
+        monkeypatch.setattr("botler.environment.install_tool", _raise)
+        resp = tc.post("/api/environment/install", json={"key": "nope"})
+        assert resp.status_code == 400
+        assert "未知工具" in resp.json()["detail"]
+
+    def test_install_blank_key_400(self, client, monkeypatch):
+        """key 为空/纯空白 → 400。"""
+        tc, tmp_path = client
+        monkeypatch.setattr(
+            "botler.environment.install_tool",
+            lambda key: pytest.fail("不应执行安装"))
+        resp = tc.post("/api/environment/install", json={"key": "   "})
+        assert resp.status_code == 400
+
+    def test_install_missing_key_422(self, client):
+        """请求体缺 key → 422（pydantic 校验）。"""
+        tc, tmp_path = client
+        resp = tc.post("/api/environment/install", json={})
+        assert resp.status_code == 422
+
+    def test_install_failure_no_restart(self, client, monkeypatch):
+        """安装失败（InstallError）→ 400 且不调度重启。"""
+        tc, tmp_path = client
+        monkeypatch.setattr(
+            "botler.environment.install_tool",
+            lambda key: (_ for _ in ()).throw(
+                environment.InstallError("下载 gh 安装包失败（HTTP 404）")))
+        monkeypatch.setattr(
+            "botler.environment.schedule_restart",
+            lambda delay=2.0: pytest.fail("失败时不应调度重启"))
+        resp = tc.post("/api/environment/install", json={"key": "gh"})
+        assert resp.status_code == 400
+        assert "HTTP 404" in resp.json()["detail"]

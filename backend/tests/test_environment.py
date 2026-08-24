@@ -285,6 +285,33 @@ class TestDetectEnvironment:
         assert tools["claude"]["up_to_date"] is None
 
 
+
+    def test_installable_flag_per_source(self, monkeypatch):
+        """检测结果含 installable 标记：有发布源可安装，无发布源不可安装。"""
+        monkeypatch.setattr(
+            "botler.environment.shutil.which",
+            lambda cmd: None if cmd == "docker" else f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda *a, **k: SimpleNamespace(
+                returncode=0, stdout="1.0.0\n", stderr=""))
+        monkeypatch.setattr(
+            "botler.environment.httpx.get",
+            lambda *a, **k: SimpleNamespace(
+                status_code=200, json=lambda: {"version": "2.0.0"}))
+        tools = {t["key"]: t
+                 for t in environment.detect_local_environment()["tools"]}
+        # npm / pypi / github 发布源 → 可自动安装
+        assert tools["claude"]["installable"] is True
+        assert tools["dsh"]["installable"] is True
+        assert tools["gh"]["installable"] is True
+        # 无发布源 → 不可自动安装（docker/git/uv/hermes）
+        assert tools["docker"]["installable"] is False
+        assert tools["git"]["installable"] is False
+        assert tools["uv"]["installable"] is False
+        assert tools["hermes"]["installable"] is False
+
+
 class TestDshDetection:
     """dsh 检测（issue #84）：pip 包检测（module 存在 + 版本 + PyPI 最新版）。"""
 
@@ -529,3 +556,231 @@ class TestScheduleRestart:
         assert environment.schedule_restart(delay=2.0) is False
         assert len(started) == 1
         assert started[0][0] == 2.0
+
+
+class TestInstallTool:
+    """工具安装（issue #468）：npm / pypi / gh 发布源分派与失败处理。"""
+
+    def _npm_tool(self):
+        tool = _tool()
+        tool["latest_source"] = "npm"
+        tool["latest_pkg"] = "@anthropic-ai/claude-code"
+        return tool
+
+    def test_npm_tool_install_command(self, monkeypatch):
+        """npm 工具：npm install -g <pkg>@latest（安装前检测未安装）。"""
+        calls = {}
+        monkeypatch.setattr(
+            "botler.environment.shutil.which",
+            lambda cmd: f"/usr/bin/{cmd}" if cmd == "npm" else None)
+        detections = iter([
+            {"key": "claude", "installed": False, "version": None},   # 安装前：未安装
+            {"key": "claude", "installed": True, "version": "2.0.0"},  # 安装后重新检测
+        ])
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: next(detections))
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: calls.update(cmd=cmd) or SimpleNamespace(
+                returncode=0, stdout="added 1 package\n", stderr=""))
+        result = environment.install_tool("claude")
+        assert result["installed"] is True
+        assert result["version"] == "2.0.0"
+        assert calls["cmd"] == [
+            "/usr/bin/npm", "install", "-g", "@anthropic-ai/claude-code@latest"]
+
+    def test_pypi_tool_install_uses_current_interpreter(self, monkeypatch):
+        """pypi 工具（dsh）：当前解释器 pip install <pkg>。"""
+        calls = {}
+        detections = iter([
+            {"key": "dsh", "installed": False, "version": None},
+            {"key": "dsh", "installed": True, "version": "0.1.0"},
+        ])
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: next(detections))
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: calls.update(cmd=cmd) or SimpleNamespace(
+                returncode=0, stdout="Successfully installed", stderr=""))
+        result = environment.install_tool("dsh")
+        assert result["version"] == "0.1.0"
+        assert calls["cmd"] == [
+            __import__("sys").executable, "-m", "pip", "install",
+            "deepseek-harness-sdk"]
+
+    def test_already_installed_raises(self, monkeypatch):
+        """工具已安装 → InstallError（不重复安装，不执行任何命令）。"""
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "claude",
+                                      "installed": True, "version": "1.0.0"})
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: pytest.fail("已安装时不应执行命令"))
+        with pytest.raises(environment.InstallError, match="已安装"):
+            environment.install_tool("claude")
+
+    def test_unknown_tool_raises(self):
+        """未知工具 → InstallError。"""
+        with pytest.raises(environment.InstallError, match="未知工具"):
+            environment.install_tool("no-such-tool")
+
+    def test_no_install_path_raises(self, monkeypatch):
+        """无发布源工具（git）→ InstallError。"""
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "git",
+                                      "installed": False, "version": None})
+        with pytest.raises(environment.InstallError,
+                           match="没有可用的自动安装途径"):
+            environment.install_tool("git")
+
+    def test_npm_missing_bin_raises(self, monkeypatch):
+        """npm 未安装 → InstallError（不执行任何命令）。"""
+        monkeypatch.setattr("botler.environment.shutil.which", lambda cmd: None)
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "claude",
+                                      "installed": False, "version": None})
+        with pytest.raises(environment.InstallError, match="未找到 npm"):
+            environment.install_tool("claude")
+
+    def test_nonzero_exit_raises(self, monkeypatch):
+        """安装命令非零退出 → InstallError 携带退出码与输出。"""
+        monkeypatch.setattr(
+            "botler.environment.shutil.which",
+            lambda cmd: f"/usr/bin/{cmd}" if cmd == "npm" else None)
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "claude",
+                                      "installed": False, "version": None})
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: SimpleNamespace(
+                returncode=1, stdout="", stderr="EAI_AGAIN getaddrinfo"))
+        with pytest.raises(environment.InstallError,
+                           match="退出码 1.*EAI_AGAIN"):
+            environment.install_tool("claude")
+
+    def test_timeout_raises(self, monkeypatch):
+        """安装命令超时 → InstallError。"""
+        monkeypatch.setattr(
+            "botler.environment.shutil.which",
+            lambda cmd: f"/usr/bin/{cmd}" if cmd == "npm" else None)
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "claude",
+                                      "installed": False, "version": None})
+        monkeypatch.setattr(
+            "botler.environment.subprocess.run",
+            lambda cmd, **kw: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(cmd, 300)))
+        with pytest.raises(environment.InstallError, match="超时"):
+            environment.install_tool("claude")
+
+
+class TestInstallGh:
+    """gh 安装（issue #468）：GitHub release 二进制下载安装到 PATH 目录。"""
+
+    def test_gh_binary_install_to_usr_local_bin(self, monkeypatch):
+        """下载最新 release 二进制并原子写入 /usr/local/bin/gh。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "linux")
+        monkeypatch.setattr(
+            "botler.environment.fetch_latest",
+            lambda tool, timeout=8: "2.63.2")
+        detections = iter([
+            {"key": "gh", "installed": False, "version": None},
+            {"key": "gh", "installed": True, "version": "2.63.2"},
+        ])
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: next(detections))
+        downloaded = {}
+        monkeypatch.setattr(
+            "botler.environment.httpx.get",
+            lambda url, **kw: downloaded.update(url=url) or SimpleNamespace(
+                status_code=200, content=_make_gh_tarball()))
+        monkeypatch.setattr("botler.environment.os.path.isdir",
+                            lambda p: p == "/usr/local/bin")
+        monkeypatch.setattr("botler.environment.os.access", lambda p, m: True)
+        written = {}
+        class _FakeFile:
+            def __init__(self, path, mode):
+                written["path"] = path
+            def write(self, data):
+                written["data"] = data
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        monkeypatch.setattr("builtins.open", _FakeFile)
+        monkeypatch.setattr("os.chmod", lambda *a, **k: None)
+        replaced = {}
+        monkeypatch.setattr(
+            "os.replace", lambda src, dst: replaced.update(src=src, dst=dst))
+        result = environment.install_tool("gh")
+        assert result["installed"] is True
+        assert result["version"] == "2.63.2"
+        assert "gh_2.63.2_linux_amd64.tar.gz" in downloaded["url"]
+        assert replaced["dst"] == "/usr/local/bin/gh"
+        assert written["data"] == b"fake-gh-binary"
+
+    def test_gh_non_linux_raises(self, monkeypatch):
+        """非 Linux 平台 → InstallError（不下载不写入）。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "darwin")
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "gh",
+                                      "installed": False, "version": None})
+        with pytest.raises(environment.InstallError, match="仅支持 Linux"):
+            environment.install_tool("gh")
+
+    def test_gh_latest_query_failure_raises(self, monkeypatch):
+        """查询 gh 最新版本失败 → InstallError。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "linux")
+        monkeypatch.setattr(
+            "botler.environment.fetch_latest",
+            lambda tool, timeout=8: None)
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "gh",
+                                      "installed": False, "version": None})
+        with pytest.raises(environment.InstallError, match="查询 gh 最新版本失败"):
+            environment.install_tool("gh")
+
+    def test_gh_download_failure_raises(self, monkeypatch):
+        """下载 gh 安装包 HTTP 错误 → InstallError。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "linux")
+        monkeypatch.setattr(
+            "botler.environment.fetch_latest",
+            lambda tool, timeout=8: "2.63.2")
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "gh",
+                                      "installed": False, "version": None})
+        monkeypatch.setattr(
+            "botler.environment.httpx.get",
+            lambda url, **kw: SimpleNamespace(status_code=404, content=b""))
+        with pytest.raises(environment.InstallError, match="HTTP 404"):
+            environment.install_tool("gh")
+
+    def test_gh_install_dir_not_writable_raises(self, monkeypatch):
+        """安装目录不可写 → InstallError。"""
+        monkeypatch.setattr("botler.environment.sys.platform", "linux")
+        monkeypatch.setattr(
+            "botler.environment.fetch_latest",
+            lambda tool, timeout=8: "2.63.2")
+        monkeypatch.setattr(
+            "botler.environment.detect_tool",
+            lambda tool, timeout=10: {"key": "gh",
+                                      "installed": False, "version": None})
+        monkeypatch.setattr(
+            "botler.environment.httpx.get",
+            lambda url, **kw: SimpleNamespace(
+                status_code=200, content=_make_gh_tarball()))
+        monkeypatch.setattr("botler.environment.os.path.isdir", lambda p: True)
+        monkeypatch.setattr("botler.environment.os.access", lambda p, m: False)
+        with pytest.raises(environment.InstallError, match="不可写"):
+            environment.install_tool("gh")
