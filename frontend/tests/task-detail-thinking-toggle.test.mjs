@@ -130,7 +130,8 @@ test('默认隐藏思考过程：thinking 事件不渲染，其他事件正常�
     const { renderer, renderError } = await renderDetail()
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-      const es = FakeEventSource.instances[0]
+      const es = FakeEventSource.instances.find((i) => i.url === '/api/tasks/3/events')
+      ?? FakeEventSource.instances[0]
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'thinking', text: '先定位报错位置' })
         es.emit({ seq: 2, kind: 'text', text: '我来修复登录问题。' })
@@ -156,7 +157,8 @@ test('勾选「显示思考过程」后 thinking 事件展开显示，取消勾�
     const { renderer, renderError } = await renderDetail()
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-      const es = FakeEventSource.instances[0]
+      const es = FakeEventSource.instances.find((i) => i.url === '/api/tasks/3/events')
+      ?? FakeEventSource.instances[0]
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'thinking', text: '先定位报错位置' })
         es.emit({ seq: 2, kind: 'text', text: '我来修复登录问题。' })
@@ -187,7 +189,8 @@ test('勾选状态下新推送的 thinking 事件立即展开显示（状态驱�
     const { renderer, renderError } = await renderDetail()
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-      const es = FakeEventSource.instances[0]
+      const es = FakeEventSource.instances.find((i) => i.url === '/api/tasks/3/events')
+      ?? FakeEventSource.instances[0]
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'thinking', text: '第一条思考' })
       })
@@ -215,7 +218,8 @@ test('无 thinking 事件时开关正常显示且不影响事件流渲染',
     const { renderer, renderError } = await renderDetail()
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-      const es = FakeEventSource.instances[0]
+      const es = FakeEventSource.instances.find((i) => i.url === '/api/tasks/3/events')
+      ?? FakeEventSource.instances[0]
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'text', text: '只有文本事件' })
       })

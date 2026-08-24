@@ -3,16 +3,14 @@
 // 派生数据收敛到本 hook，页面组件只接数据（数据加载与轮询抽
 // usePolling hook，组件只接数据）。
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePolling } from './usePolling.js'
+import { usePolling, isDocumentVisible } from './usePolling.js'
+import { useGlobalEvents } from './useGlobalEvents.js'
 import { api } from '../api.js'
 import { useI18n } from '../i18n.jsx'
 import { useShortcuts } from '../keymap.js'
 import {
   MAX_CARD_LINES,
-  OVERVIEW_POLL_MS,
   PIPELINE_POLL_MS,
-  ISSUE_POLL_MS,
-  INSPIRATION_POLL_MS,
   DEEPSEEK_BALANCE_POLL_MS,
   runningIssueKeys, activeIssueKeys,
   DEFAULT_ISSUE_PRIORITY,
@@ -355,10 +353,10 @@ export function useOverviewData() {
     }
   }, [])
 
-  // 任务列表轮询（issue #200：页面隐藏时暂停、恢复可见立即拉一次，
-  // 由 usePolling 统一处理可见性）
-  usePolling(load, OVERVIEW_POLL_MS)
-
+  // issue #478：任务/流水线等由「固定间隔轮询」改为「SSE 事件驱动刷新」：
+  // 后端在数据真实变化点发布通知事件，前端订阅 /api/events 后只刷新
+  // 受影响模块（见下方 useGlobalEvents）；流水线保留 60s 低频兜底轮询
+  // （GitLab 侧独立变化后端无法感知），其余高频轮询全部移除。
   usePolling(loadPipelines, PIPELINE_POLL_MS)
 
   // 已启用仓库的开放 issue 聚合（issue #64，独立慢轮询）
@@ -392,18 +390,16 @@ export function useOverviewData() {
     }
   }, [])
 
-  usePolling(loadIssues, ISSUE_POLL_MS)
-
-  // 维护模式轮询（issue #241）：开启/恢复即时反映到概览页横幅（后端
-  // 保存即生效，前端 15s 内同步；接口失败保留上次状态，不弹错误）
-  usePolling(async () => {
+  // 维护模式（issue #241）：保存设置（后端 settings 事件）时即时刷新
+  // 概览页横幅；接口失败保留上次状态，不弹错误（事件驱动见下方订阅）
+  const reloadMaintenance = useCallback(async () => {
     try {
       const d = await api.get('/api/settings', { silent: true })
       setMaintenanceMode(!!(d.worker && d.worker.maintenance_mode))
     } catch {
       // 读取失败保留上次状态，后端自会拦截写入
     }
-  }, ISSUE_POLL_MS)
+  }, [])
 
   // issue #132：owner token 配置状态（启动时检测一次；配置变化由设置页
   // 保存后手动刷新页面生效）
@@ -431,8 +427,6 @@ export function useOverviewData() {
       setInspirationError(e.message)
     }
   }, [])
-
-  usePolling(loadInspirations, INSPIRATION_POLL_MS)
 
   // 按仓库展开后才读取首个分页；重复点击/并发加载不会重复发请求。
   const loadInspirationPage = useCallback(async (repo, offset = 0, append = false) => {
@@ -508,6 +502,87 @@ export function useOverviewData() {
   }, [])
 
   usePolling(loadDeepSeekBalance, DEEPSEEK_BALANCE_POLL_MS)
+
+  // ---- issue #478：SSE 事件驱动刷新（替代固定间隔轮询）----
+  // 初始加载：挂载时拉取各模块最新数据（onOpen 全量刷新兜底重复拉取，
+  // 接口均有 TTL 缓存 / silent 兜底，不影响体验）
+  useEffect(() => {
+    load()
+    loadPipelines()
+    loadIssues()
+    loadInspirations()
+    reloadMaintenance()
+  }, [load, loadPipelines, loadIssues, loadInspirations, reloadMaintenance])
+
+  // 页面隐藏时挂起事件驱动刷新，恢复可见时合并刷新（issue #200 语义：
+  // 后台标签页 0 请求；SSE 长连接保持，事件到达仅记录不拉数据）
+  const pendingRefreshRef = useRef(new Set())
+  const flushPending = useCallback(() => {
+    const pending = pendingRefreshRef.current
+    pendingRefreshRef.current = new Set()
+    if (pending.has('task')) { load(); loadPipelines() }
+    if (pending.has('pipeline')) loadPipelines()
+    if (pending.has('issue')) loadIssues()
+    if (pending.has('inspiration')) loadInspirations()
+    if (pending.has('settings')) reloadMaintenance()
+  }, [load, loadPipelines, loadIssues, loadInspirations, reloadMaintenance])
+
+  // 事件 → 对应模块刷新；页面隐藏时挂起（恢复可见合并刷新）
+  const onGlobalEvent = useCallback((ev) => {
+    if (!isDocumentVisible()) {
+      if (ev && typeof ev.type === 'string') pendingRefreshRef.current.add(ev.type)
+      return
+    }
+    switch (ev && ev.type) {
+      case 'task':        // 任务状态变化 → 任务列表 + 流水线（提交代码触发 CI）
+        load()
+        loadPipelines()
+        break
+      case 'pipeline':    // 流水线数据重拉 → 同步本标签页
+        loadPipelines()
+        break
+      case 'issue':       // open issue 变化 → 刷新开放 issue 列表
+        loadIssues()
+        break
+      case 'inspiration': // 灵感增删改 → 刷新灵感板块
+        loadInspirations()
+        break
+      case 'settings':    // 设置保存 → 维护模式等即时生效
+        reloadMaintenance()
+        break
+      default:
+        break
+    }
+  }, [load, loadPipelines, loadIssues, loadInspirations, reloadMaintenance])
+
+  // 连接建立/断线重连成功 → 全量刷新兜底（断线期间错过的事件由此补齐）
+  const onGlobalOpen = useCallback(() => {
+    if (!isDocumentVisible()) {
+      // 页面隐藏时连接重连：挂起全部类型，恢复可见时刷新
+      pendingRefreshRef.current = new Set(
+        ['task', 'pipeline', 'issue', 'inspiration', 'settings'])
+      return
+    }
+    load()
+    loadPipelines()
+    loadIssues()
+    loadInspirations()
+    reloadMaintenance()
+  }, [load, loadPipelines, loadIssues, loadInspirations, reloadMaintenance])
+
+  useGlobalEvents(onGlobalEvent, { onOpen: onGlobalOpen })
+
+  // 页面恢复可见：刷新挂起类型（后台期间到达的事件合并处理）
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const onVisibility = () => {
+      if (document.visibilityState !== 'hidden' && pendingRefreshRef.current.size > 0) {
+        flushPending()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [flushPending])
 
   // ---- 灵感增删改（issue #131）：仅写 Botler 本地数据库 ----
 

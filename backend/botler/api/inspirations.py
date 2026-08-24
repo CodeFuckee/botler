@@ -54,6 +54,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from ..events import global_bus
 from ..gitlab_client import GitLabError, GITLAB_ISSUE_TITLE_MAX_LEN
 from .issues import _issue_edit_call, _trim_issue, _normalize_label_names, clear_issue_cache
 
@@ -238,6 +239,8 @@ def create_inspiration(request: Request, body: InspirationCreate):
     insp_id = c.db.create_inspiration(body.repo_id, content)
     row = c.db.get_inspiration(insp_id)
     assert row is not None  # 刚插入的记录必然可查
+    # issue #478：灵感新增 → 广播 inspiration 事件（前端 SSE 驱动刷新）
+    global_bus.publish({"type": "inspiration"})
     return _row_to_dict(row)
 
 
@@ -250,6 +253,8 @@ def update_inspiration(request: Request, inspiration_id: int,
         raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
     row = c.db.get_inspiration(inspiration_id)
     assert row is not None
+    # issue #478：灵感编辑 → 广播 inspiration 事件
+    global_bus.publish({"type": "inspiration"})
     return _row_to_dict(row)
 
 
@@ -258,6 +263,8 @@ def delete_inspiration(request: Request, inspiration_id: int):
     c = request.app.state.ctx
     if not c.db.delete_inspiration(inspiration_id):
         raise HTTPException(404, f"灵感不存在（id={inspiration_id}）")
+    # issue #478：灵感删除 → 广播 inspiration 事件
+    global_bus.publish({"type": "inspiration"})
     return None
 
 
@@ -370,6 +377,9 @@ def _submit_inspiration_as_issue(c, insp, repo=None, *, title=None,
     except Exception as e:
         logger.warning("灵感提交 issue 成功后删除灵感失败（id=%s）: %s",
                        insp["id"], str(e)[:200])
+    # issue #478：灵感转 issue 后灵感列表变化 → 广播 inspiration 事件
+    # （issue 事件已由 clear_issue_cache 发布）
+    global_bus.publish({"type": "inspiration"})
     # 标签色省略（创建刚完成，前端随即刷新列表从 overview 获取完整数据）
     return _trim_issue(issue, {})
 

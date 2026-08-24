@@ -6,7 +6,6 @@ import { Icon } from '../Icon.jsx'
 import { ScrollContainerBackToTop } from '../BackToTop.jsx'
 import ResizableDrawer, { CHAT_DRAWER_WIDTH_KEY } from '../ResizableDrawer.jsx'  // issue #466：聊天抽屉拖拽调整宽度
 import { fmtAgo } from '../../api.js'
-import { INSPIRATION_POLL_MS } from '../../lib/overview.jsx'
 
 // 对话输入框自动增高（issue #443 codex 风格）：内容超出单行时随内容撑高，
 // 达到上限（CHAT_INPUT_MAX_HEIGHT）后内部滚动；测试环境事件对象无真实
@@ -57,7 +56,7 @@ export default function InspirationSection({
                   : <><Icon name="checkSquare" /> {tr('overview.inspirationSelectMode')}</>}
               </button>
             </div>
-            <p className="muted">{tr('overview.inspirationsDesc', { seconds: INSPIRATION_POLL_MS / 1000 })}</p>
+            <p className="muted">{tr('overview.inspirationsDesc')}</p>
             {inspirationError && (
               <div className="alert alert-error" onClick={() => setInspirationError('')}>{inspirationError}</div>
             )}

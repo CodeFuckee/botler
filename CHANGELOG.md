@@ -6,6 +6,44 @@
 
 ### Changed
 
+- **概览页/统计页/导航轮询改为 SSE 事件驱动刷新（issue #478）**：
+  - 新增后端全局事件总线（`botler/events.py` 的 `AppEventBus` + 进程内单例
+    `global_bus`）与 `GET /api/events` SSE 长连接端点（`botler/api/events.py`）：
+    数据变更点发布轻量通知事件（仅 type 元信息、不携带数据），前端单一连接
+    订阅后按需拉取对应数据接口，断线重连由前端全量刷新兜底；15 秒心跳
+    `: ping` 保活、连接断开自动退订；
+  - 事件发布点覆盖任务（`database.py` 的 create_task / set_task_status 状态
+    变化 / claim_task / finish_task / stop_active_tasks，经 `main.py` 注入
+    `event_publisher` 回调）、开放 issue（`api/issues.py` 清缓存、
+    `webhook.py` 收 issue 事件、灵感转 issue）、灵感增删改
+    （`api/inspirations.py`）、设置保存（`api/settings.py`）、流水线概览实际
+    重拉（`api/pipelines.py`）；
+  - 前端新增 `lib/eventStream.js`（模块级单例 SSE 连接 + 订阅分发，首次连接
+    不重复广播、断线重连广播全量刷新）与 `hooks/useGlobalEvents.js`；概览页
+    `useOverviewData.js` 移除任务 3s / 流水线 15s / issue 15s / 灵感 15s /
+    维护模式 15s 固定轮询，改为事件驱动刷新（task → 任务列表+流水线联动、
+    issue → 开放 issue、inspiration → 灵感、settings → 维护模式、pipeline →
+    多标签页同步），页面隐藏时挂起事件刷新、恢复可见合并刷新（保留 issue
+    #200「后台 0 请求」语义）；导航水位（App.jsx）改 task 事件驱动；
+    统计页完成耗时 / 用量 / 来源分布改 task 事件驱动；
+  - 任务列表页（Tasks.jsx）有活跃任务时的 5s 轮询、任务详情页
+    （TaskDetail.jsx）5s 详情轮询同样改为 SSE 事件驱动（task 事件携带
+    task_id，详情页仅本任务状态变化时刷新）；任务详情实时执行面板与抽屉
+    的 3s transcript 增量轮询保留（用户主动查看执行过程时运行、且事件流
+    不携带聊天记录数据）；
+  - DeepSeek 余额（外部服务持有、后端无法感知变化）保留 60s 低频轮询；
+    流水线保留 60s 低频兜底轮询（GitLab 侧独立变化后端无法感知）；
+  - 文案同步更新：`overview.issuesDesc` / `overview.inspirationsDesc` /
+    `overview.pipelinesDesc` / `stats.completionDesc` / `stats.usageDesc` /
+    `stats.sourceStatsDesc` 由「每 N 秒自动刷新」改为「实时更新（事件驱动）」
+    （zh-CN / en-US）；
+  - 测试：新增 `backend/tests/test_global_events.py`（全局事件总线单元 +
+    /api/events 生成器 + 发布点集成共 16 用例）；前端 6 处轮询断言测试更新为
+    「SSE 事件驱动」语义（overview-page / overview-issues /
+    overview-pipelines / stats-completion-stats / stats-usage-stats /
+    stats-source-stats / stats-page），e2e `overview.spec.js` 轮询测试重写为
+    「无固定轮询：仅挂载拉取一次 + SSE 连接保持」。
+
 - **概览页开放 Issue 布局切换按钮美化（issue #479）**：
   - `.issue-filter-layouts` 布局切换从 issue #471 引入时的无样式裸按钮升级为
     apple-design 分段控件（segmented control）：托盘（`--bg-card` 背景 +

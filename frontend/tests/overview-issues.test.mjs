@@ -29,18 +29,18 @@ const vite = await createServer({
   appType: 'custom',
   logLevel: 'error',
 })
-const { default: Overview, ISSUE_POLL_MS } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
+const { default: Overview } = await vite.ssrLoadModule('/src/pages/Overview.jsx')
 const { api } = await vite.ssrLoadModule('/src/api.js')
 
 after(() => vite.close())
 
 // ---- 数据流源码断言 ----
 
-test('概览页轮询 GET /api/issues/overview 聚合开放 issue', () => {
+test('概览页事件驱动刷新 GET /api/issues/overview 聚合开放 issue（issue #478）', () => {
   assert.match(overview, /api\.get\('\/api\/issues\/overview', \{ silent: true \}\)/,
-               '应调用 /api/issues/overview 聚合接口（轮询静默，issue #226）')
-  assert.match(overview, /ISSUE_POLL_MS/, '应使用 ISSUE_POLL_MS 轮询常量')
-  assert.equal(ISSUE_POLL_MS, 15000, 'issue 板块轮询间隔应为 15 秒')
+               '应调用 /api/issues/overview 聚合接口（静默，issue #226）')
+  assert.match(overview, /case 'issue':/, 'issue 事件驱动刷新开放 issue 列表')
+  assert.match(overview, /loadIssues\(\)/, '刷新调用 loadIssues()')
 })
 
 test('板块渲染仓库分组：仓库名、优先级徽章、issue 链接', () => {

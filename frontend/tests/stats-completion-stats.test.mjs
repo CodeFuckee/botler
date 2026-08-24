@@ -48,13 +48,13 @@ after(() => vite.close())
 
 // ---- 数据流源码断言 ----
 
-test('源码：统计页请求完成耗时接口并低频轮询（60 秒）', () => {
+test('源码：统计页请求完成耗时接口并事件驱动刷新（issue #478）', () => {
   assert.match(statsSrc, /\/api\/issues\/completion-stats/,
                '应请求 GET /api/issues/completion-stats')
-  assert.match(statsSrc, /COMPLETION_STATS_POLL_MS\s*=\s*60000/,
-               '完成耗时轮询间隔应为 60 秒')
-  assert.match(statsSrc, /usePolling\(loadCompletionStats, COMPLETION_STATS_POLL_MS\)/,
-               '应经 usePolling 独立定时轮询完成耗时接口（issue #200 统一管理）')
+  assert.match(statsSrc, /useGlobalEvents\(/,
+               '应订阅全局事件流（issue #478 替代低频轮询）')
+  assert.match(statsSrc, /ev\.type === 'task'\).*loadCompletionStats\(\)/s,
+               'task 事件（任务完成）驱动刷新完成耗时统计')
 })
 
 test('源码：板块位于统计页 dashboard 各板块之后（页面最下方）', () => {

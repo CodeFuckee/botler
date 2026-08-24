@@ -18,6 +18,7 @@ import { api, setDisplayTz, setSsoEnabled, shortSha } from './api.js'
 import { applyTheme, loadThemePreference, saveThemePreference, watchSystemTheme } from './theme.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
 import { usePolling } from './hooks/usePolling.js'
+import { useGlobalEvents } from './hooks/useGlobalEvents.js'
 import { createVersionChecker } from './version-update.js'
 import { Icon } from './components/Icon.jsx'
 import { useI18n, LANG_LABELS } from './i18n.jsx'
@@ -192,7 +193,20 @@ export default function App() {
       // 接口失败（旧后端无该端点等）：保留上次数据，徽章不闪断不报错
     }
   }, [])
-  usePolling(loadWatermark, WATERMARK_POLL_MS, { enabled: notifyEnabled })
+  // issue #478：任务水位由固定 15s 轮询改为 SSE 事件驱动刷新——task
+  // 事件即任务状态变化（水位数据唯一变化来源），收到事件即时刷新；
+  // 连接建立/断线重连（onOpen）全量兜底刷新一次。原 15s 轮询移除，
+  // 避免固定周期请求。通知轮询（notifyPoll）的 onEvents 仍保留作为
+  // 额外兜底（10s 通知轮询拉到新事件时刷新水位，双保险不冲突）。
+  useGlobalEvents((ev) => {
+    if (ev && ev.type === 'task') loadWatermark()
+  }, { enabled: notifyEnabled, onOpen: () => loadWatermark() })
+
+  // 挂载即加载一次水位（初始数据；事件驱动负责后续变化，onOpen 负责
+  // 断线重连兜底）
+  useEffect(() => {
+    if (notifyEnabled) loadWatermark()
+  }, [notifyEnabled, loadWatermark])
 
   // 徽章展示值（issue #257）：接口数据缺失（失败/旧后端）时不渲染
   const watermarkBadge = computeWatermarkDisplay(watermark)

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from ..events import global_bus
 from ..audit import record_audit, settings_section_diff
 from ..config import KNOWN_FIELDS
 from ..plugins import PluginKind, list_plugins
@@ -515,6 +516,9 @@ def update_settings(request: Request, body: dict):
             "sections": sorted(changed),
             "diff": changed,
         })
+    # issue #478：设置保存 → 广播 settings 事件（维护模式等前端立即
+    # 生效项；事件发布尽力而为，不影响保存结果）
+    global_bus.publish({"type": "settings"})
     return after
 
 

@@ -47,11 +47,13 @@ after(() => vite.close())
 
 // ---- 数据流源码断言 ----
 
-test('概览页独立轮询流水线状态接口（15 秒间隔）', () => {
+test('概览页流水线状态接口：事件驱动 + 低频兜底轮询（issue #478）', () => {
   assert.match(overview, /\/api\/pipelines\/overview/, '应请求 GET /api/pipelines/overview')
-  assert.match(overview, /PIPELINE_POLL_MS\s*=\s*15000/, '流水线轮询间隔应为 15 秒')
+  assert.match(overview, /PIPELINE_POLL_MS\s*=\s*60000/, '流水线低频兜底轮询间隔应为 60 秒')
   assert.match(overview, /usePolling\(loadPipelines, PIPELINE_POLL_MS\)/,
-               '流水线应经 usePolling 独立定时轮询（issue #200 统一管理）')
+               '流水线保留低频兜底轮询（GitLab 侧独立变化兜底）')
+  assert.match(overview, /case 'task':/, 'task 事件（提交代码触发 CI）联动刷新流水线')
+  assert.match(overview, /case 'pipeline':/, 'pipeline 事件多标签页同步刷新')
 })
 
 test('卡片渲染仓库名、状态徽章、stage 节点与 pipeline 链接', () => {

@@ -15,12 +15,15 @@ export const ACTIVE_TASK_STATUSES = ['queued', ...LIVE_STATUSES]
 // 展示，超出丢弃最旧行，防止任务块无限增长）
 export const MAX_CARD_LINES = 40
 
-// 任务列表轮询间隔
+// 任务列表轮询间隔（issue #478 起不再使用：改为 SSE 事件驱动刷新，
+// 常量保留供文案/测试引用）
 export const OVERVIEW_POLL_MS = 3000
 
-// 流水线状态轮询间隔（issue #39）：比任务轮询慢——流水线变化不频繁，
-// 且后端有 10 秒 TTL 缓存兜底，避免高频轮询打爆 GitLab API
-export const PIPELINE_POLL_MS = 15000
+// 流水线状态低频兜底轮询间隔（issue #478）：流水线状态变化主要来自
+// 任务执行（提交代码触发 CI），由 task 事件联动刷新；GitLab 侧独立变化
+// （手动触发流水线等）后端无法感知，保留 60s 低频兜底轮询（后端另有
+// 10 秒 TTL 缓存兜底，避免高频轮询打爆 GitLab API）
+export const PIPELINE_POLL_MS = 60000
 
 // 开放 issue 聚合轮询间隔（issue #64）：与流水线板块同频，后端同样
 // 有 10 秒 TTL 缓存兜底，避免高频轮询打爆 GitLab API

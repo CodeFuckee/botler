@@ -21,7 +21,7 @@ import threading
 import weakref
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-from typing import TypedDict, cast
+from typing import Callable, TypedDict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -469,7 +469,11 @@ def _near_any(t: datetime, others: list[datetime], tol: timedelta) -> bool:
 class Database:
     """线程安全的 SQLite 封装。"""
 
-    def __init__(self, path: str = DB_PATH):
+    def __init__(self, path: str = DB_PATH, *,
+                 event_publisher: Callable[[dict], None] | None = None):
+        # issue #478：全局事件发布回调（main.py 注入 global_bus.publish），
+        # 任务创建/状态变化时广播 task 事件，前端 SSE 订阅后事件驱动刷新
+        self._event_publisher = event_publisher
         self.path = path
         # issue #191：连接复用——每线程各持一条长连接（threading.local），
         # 连接只初始化一次（WAL/busy_timeout/row_factory），后续复用不再
@@ -1466,6 +1470,24 @@ class Database:
 
     # ---- tasks ----
 
+    def _emit_task_event(self, task_id: int | None = None) -> None:
+        """广播 task 变更通知（issue #478）。
+
+        task_id 供前端按任务精确刷新（任务详情页只刷新对应任务）；批量
+        操作（一键停止）task_id 为 None 表示「任意任务变化」。事件发布为
+        尽力而为：发布回调异常只记日志，不影响任务落库主流程——前端
+        断线重连/手动刷新兜底。
+        """
+        if self._event_publisher is None:
+            return
+        try:
+            event: dict = {"type": "task"}
+            if task_id is not None:
+                event["task_id"] = task_id
+            self._event_publisher(event)
+        except Exception:  # noqa: BLE001 发布失败不影响数据写入
+            logging.getLogger("botler").exception("发布 task 事件失败")
+
     def create_task(self, repo_id: int, project_id: int, issue_iid: int,
                     issue_title: str, triggered_by: str = "webhook",
                     issue_labels: list[str] | None = None,
@@ -1492,7 +1514,10 @@ class Database:
                    VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)""",
                 (repo_id, project_id, issue_iid, issue_title, triggered_by,
                  labels_json, issue_updated_at or "", issue_created_at or ""))
-            return cur.lastrowid
+            task_id = cur.lastrowid
+        if task_id is not None:
+            self._emit_task_event(task_id)
+        return task_id
 
     def get_task(self, task_id: int) -> TaskRow | None:
         with self._conn() as conn:
@@ -1672,6 +1697,10 @@ class Database:
         vals.append(task_id)
         with self._conn(write=True) as conn:
             conn.execute(f"UPDATE tasks SET {', '.join(cols)} WHERE id=?", vals)  # nosec B608
+        # issue #478：状态变化广播 task 事件（仅改附加字段 status=None 不发布，
+        # 任务列表无可见变化；避免执行过程中的日志路径/引擎写入频繁刷前端）
+        if status is not None:
+            self._emit_task_event(task_id)
 
     def claim_task(self, task_id: int) -> bool:
         """原子抢占任务（防多实例并发执行同一任务，issue #24）。
@@ -1684,7 +1713,10 @@ class Database:
             cur = conn.execute(
                 "UPDATE tasks SET status=? WHERE id=? AND status IN (?, ?)",
                 (STATUS_RUNNING, task_id, STATUS_QUEUED, STATUS_RETRYING))
-            return cur.rowcount > 0
+            claimed = cur.rowcount > 0
+        if claimed:
+            self._emit_task_event(task_id)
+        return claimed
 
     def finish_task(self, task_id: int, status: str, **fields) -> bool:
         """条件终态更新（issue #24）：仅当任务仍处于 running/retrying 时生效。
@@ -1704,7 +1736,10 @@ class Database:
             cur = conn.execute(
                 f"UPDATE tasks SET {', '.join(cols)} WHERE id=? AND status IN (?, ?)",  # nosec B608
                 vals)
-            return cur.rowcount > 0
+            finished = cur.rowcount > 0
+        if finished:
+            self._emit_task_event(task_id)
+        return finished
 
     def stop_active_tasks(self) -> list[int]:
         """一键停止所有活跃任务（issue #35）：queued/running/retrying → interrupted。
@@ -1727,6 +1762,8 @@ class Database:
                 conn.executemany(
                     "INSERT INTO task_logs (task_id, level, message) VALUES (?, 'warn', ?)",
                     [(tid, redact("任务已停止：用户一键停止所有任务")) for tid in stopped])
+        if stopped:
+            self._emit_task_event()
         return stopped
 
     def stop_task(self, task_id: int) -> str:

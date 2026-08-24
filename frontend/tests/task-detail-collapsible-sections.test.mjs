@@ -147,7 +147,8 @@ test('事件流/聊天记录/执行日志 标题均为折叠按钮且默认展�
     const { renderer, renderError } = await renderDetail()
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-      const es = FakeEventSource.instances[0]
+      const es = FakeEventSource.instances.find((i) => i.url === '/api/tasks/3/events')
+      ?? FakeEventSource.instances[0]
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'text', text: '事件内容X' })
       })
@@ -174,7 +175,8 @@ test('点击「事件流」折叠后事件内容隐藏，再次点击恢复',
     const { renderer, renderError } = await renderDetail()
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-      const es = FakeEventSource.instances[0]
+      const es = FakeEventSource.instances.find((i) => i.url === '/api/tasks/3/events')
+      ?? FakeEventSource.instances[0]
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'text', text: '事件内容X' })
         es.emit({ seq: 2, kind: 'text', text: '事件内容Y' })
@@ -279,7 +281,8 @@ test('事件流全量渲染：批量事件逐条完整展示（无虚拟化截�
     const { renderer, renderError } = await renderDetail()
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-      const es = FakeEventSource.instances[0]
+      const es = FakeEventSource.instances.find((i) => i.url === '/api/tasks/3/events')
+      ?? FakeEventSource.instances[0]
       await TestRenderer.act(async () => {
         for (let i = 1; i <= 120; i += 1) {
           es.emit({ seq: i, kind: 'text', text: `批量事件${i}` })

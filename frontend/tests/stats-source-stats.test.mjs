@@ -57,14 +57,15 @@ test('源码：Stats 引入并渲染来源分布卡片（issue #361），Overvie
   assert.doesNotMatch(overviewSrc, /SourceStatsSection/, '概览页不应再渲染来源分布组件')
 })
 
-test('源码：组件请求统计看板接口（近 30 天）并 60 秒轮询', () => {
+test('源码：组件请求统计看板接口（近 30 天）并事件驱动刷新（issue #478）', () => {
   assert.match(sectionSrc, /\/api\/stats\/dashboard\?days=\$\{SOURCE_STATS_DAYS\}/,
                '应请求 /api/stats/dashboard 并带 days 窗口参数')
   assert.match(sectionSrc, /SOURCE_STATS_DAYS\s*=\s*30/, '组件默认窗口应为近 30 天')
-  assert.match(sectionSrc, /SOURCE_STATS_POLL_MS\s*=\s*60000/, '轮询间隔应为 60 秒')
-  assert.match(sectionSrc, /usePolling\(load, SOURCE_STATS_POLL_MS\)/,
-               '应经 usePolling 独立定时轮询（issue #200 统一管理）')
-  assert.match(sectionSrc, /silent: true/, '轮询接口应 silent（失败不弹 toast）')
+  assert.match(sectionSrc, /useGlobalEvents\(/,
+               '应订阅全局事件流（issue #478 替代 60 秒轮询）')
+  assert.match(sectionSrc, /ev\.type === 'task'\).*load\(\)/s,
+               'task 事件（任务状态变化）驱动刷新来源分布')
+  assert.match(sectionSrc, /silent: true/, '接口应 silent（失败不弹 toast）')
 })
 
 test('源码：文案经 i18n 国际化且中文文案保留', () => {

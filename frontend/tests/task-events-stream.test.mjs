@@ -147,10 +147,12 @@ test('TaskDetail 运行中任务订阅事件流并把事件渲染进面板',
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
 
-      // 运行中任务应创建一个 EventSource 连接
-      assert.equal(FakeEventSource.instances.length, 1)
-      const es = FakeEventSource.instances[0]
-      assert.equal(es.url, '/api/tasks/3/events')
+      // 运行中任务应创建两个连接：全局事件流（/api/events，issue #478）
+      // + 任务事件流（/api/tasks/{id}/events），按 url 定位任务流
+      assert.equal(FakeEventSource.instances.length, 2)
+      const es = FakeEventSource.instances.find(
+        (i) => i.url === '/api/tasks/3/events')
+      assert.ok(es, '应为任务创建事件流连接 /api/tasks/3/events')
 
       // 推送事件后渲染：文本 / thinking（默认隐藏，issue #176）/ 工具调用
       await TestRenderer.act(async () => {
@@ -178,9 +180,12 @@ test('TaskDetail 终态任务回放事件流后流结束',
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
 
-      // 终态任务同样连接事件流（回放已有事件），后端推完即发 done
-      assert.equal(FakeEventSource.instances.length, 1)
-      const es = FakeEventSource.instances[0]
+      // 终态任务同样连接事件流（回放已有事件），后端推完即发 done；
+      // 另有全局事件流连接（/api/events，issue #478）
+      assert.equal(FakeEventSource.instances.length, 2)
+      const es = FakeEventSource.instances.find(
+        (i) => i.url === '/api/tasks/3/events')
+      assert.ok(es, '应为任务创建事件流连接 /api/tasks/3/events')
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'text', text: '历史事件回放' })
         es.emit({ kind: 'done' })
@@ -200,7 +205,8 @@ test('TaskDetail 事件按 seq 去重（断线重连回放重叠不重复渲染�
     const { renderer, renderError } = await renderDetail()
     try {
       assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
-      const es = FakeEventSource.instances[0]
+      const es = FakeEventSource.instances.find(
+        (i) => i.url === '/api/tasks/3/events')
       await TestRenderer.act(async () => {
         es.emit({ seq: 1, kind: 'text', text: '只出现一次' })
         es.emit({ seq: 1, kind: 'text', text: '只出现一次' }) // 重复 seq

@@ -6,7 +6,6 @@ import { shortSha, fmtTime, fmtAgo } from '../../api.js'
 import {
   PIPELINE_STATUS_META,
   stageClass,
-  PIPELINE_POLL_MS,
 } from '../../lib/overview.jsx'
 
 export default function PipelineSection({
@@ -16,7 +15,7 @@ export default function PipelineSection({
   return (
           <section className="pipelines-section">
             <h2>{tr('overview.pipelinesTitle')}</h2>
-            <p className="muted">{tr('overview.pipelinesDesc', { seconds: PIPELINE_POLL_MS / 1000 })}</p>
+            <p className="muted">{tr('overview.pipelinesDesc')}</p>
             {pipeError && (
               <div className="alert alert-error" onClick={() => setPipeError('')}>{pipeError}</div>
             )}

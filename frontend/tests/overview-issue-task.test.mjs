@@ -218,12 +218,15 @@ test('渲染：running 组的 issue 项内展示任务状态徽章、引擎与�
       root.findAllByType('a').some((a) => a.props.href?.includes('/-/issues/101')),
       '任务块应保留 GitLab 中打开 issue 的链接',
     )
-    // SSE 推送实时输出到 issue 项内任务块
-    assert.equal(FakeEventSource.instances.length, 1, '应为活跃任务创建事件流连接')
+    // SSE 推送实时输出到 issue 项内任务块（另有一个全局事件流连接
+    // /api/events，issue #478 事件驱动，按 url 定位任务流实例）
+    const taskStream = FakeEventSource.instances.find(
+      (i) => i.url === '/api/tasks/11/events')
+    assert.ok(taskStream, '应为活跃任务创建事件流连接 /api/tasks/11/events')
     await TestRenderer.act(async () => {
-      FakeEventSource.instances[0].emit({ seq: 1, kind: 'text', text: '正在分析 bug…' })
-      FakeEventSource.instances[0].emit({ seq: 2, kind: 'tool', tool: 'Bash',
-                                          input: { command: 'git status' } })
+      taskStream.emit({ seq: 1, kind: 'text', text: '正在分析 bug…' })
+      taskStream.emit({ seq: 2, kind: 'tool', tool: 'Bash',
+                        input: { command: 'git status' } })
     })
     const textAfter = JSON.stringify(renderer.toJSON())
     assert.ok(textAfter.includes('正在分析 bug…'), '任务块应实时展示 agent 输出')

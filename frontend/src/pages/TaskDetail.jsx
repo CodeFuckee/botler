@@ -1,6 +1,7 @@
 import { failureCategoryClass, failureCategoryLabel } from '../failure-categories.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePolling } from '../hooks/usePolling.js'
+import { useGlobalEvents } from '../hooks/useGlobalEvents.js'
 import { Icon } from '../components/Icon.jsx'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { api, openTaskEventStream, fmtTime, fmtDuration, shortSha, STATUS_META, summarizeToolInput } from '../api.js'
@@ -226,15 +227,23 @@ export default function TaskDetail() {
   const [eventDone, setEventDone] = useState(false)
   const lastSeqRef = useRef(0)
 
-  // 任务详情拉取（useCallback 稳定引用供 usePolling 使用；issue #200 起
-  // 由 usePolling 统一管理 5s 轮询与页面可见性——隐藏暂停、恢复可见即刷）
+  // 任务详情拉取（useCallback 稳定引用；issue #478 起由 SSE 事件驱动
+  // 刷新替代 5s 轮询——task 事件携带 task_id，仅本任务状态变化时拉取）
   const load = useCallback(async () => {
     try {
       setTask(await api.get(`/api/tasks/${id}`, { silent: true }))
     } catch (e) { setError(e.message) }
   }, [id])
 
-  usePolling(load, 5000)
+  // 挂载即加载一次（初始数据；onOpen 断线重连兜底）
+  useEffect(() => {
+    load()
+  }, [load])
+  // issue #478：task 事件驱动刷新——仅本任务状态变化时拉详情，避免
+  // 无关任务事件触发请求；onOpen 全量兜底（重连/首次连接）
+  useGlobalEvents((ev) => {
+    if (ev && ev.type === 'task' && ev.task_id === Number(id)) load()
+  }, { onOpen: () => load() })
 
   // 单任务停止（issue #214）：仅执行中（running）任务可停止；确认后调
   // 后端 POST /api/tasks/{id}/stop——状态落库 interrupted 并强制终止执行

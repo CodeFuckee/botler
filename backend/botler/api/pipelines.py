@@ -31,6 +31,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
+from ..events import global_bus
 from ..gitlab_client import GitLabClient, GitLabError
 from ..report_parsers import parse_report
 from ..git_remote import build_repo_client
@@ -290,6 +291,9 @@ def pipelines_overview(request: Request):
     with _CACHE_LOCK:
         _CACHE["expires_at"] = time.monotonic() + CACHE_TTL_SECONDS
         _CACHE["data"] = result
+    # issue #478：流水线概览实际重拉（非 TTL 缓存命中）→ 广播 pipeline
+    # 事件，多标签页同步刷新（数据确实变化才通知，TTL 内重复请求不刷）
+    global_bus.publish({"type": "pipeline"})
     return result
 
 

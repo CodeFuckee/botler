@@ -20,7 +20,7 @@
 // 空态，不随 dashboard 一起隐藏。
 
 import { useCallback, useEffect, useState } from 'react'
-import { usePolling } from '../hooks/usePolling.js'
+import { useGlobalEvents } from '../hooks/useGlobalEvents.js'
 import { api, fmtSeconds } from '../api.js'
 import { Icon } from '../components/Icon.jsx'
 import { fmtTokens, fmtCost } from '../components/UsageCard.jsx'
@@ -28,15 +28,9 @@ import { useI18n } from '../i18n.jsx'
 import { failureCategoryClass, failureCategoryLabel } from '../failure-categories.js'
 import SourceStatsSection from '../components/stats/SourceStatsSection.jsx'
 
-// Issue 完成耗时统计轮询间隔（issue #180）：平均完成耗时与走势图数据
-// 来自本地 tasks 表成功终态任务（GET /api/issues/completion-stats），
-// 无 GitLab 请求压力，低频轮询即可（任务完成后再等下一轮刷新）
-const COMPLETION_STATS_POLL_MS = 60000
-
-// Token 用量统计轮询间隔（issue #235）：数据来自本地 task_usage 表
-// （GET /api/usage/stats），无 GitLab 请求压力，沿用 60 秒低频轮询
-const USAGE_STATS_POLL_MS = 60000
-
+// issue #478：完成耗时 / Token 用量统计由低频轮询改为 SSE 事件驱动
+// 刷新（数据来自本地任务表聚合，task 事件即数据变化来源），不再需要
+// 固定轮询间隔常量
 // 时间段选项：value 为查询参数 days（0=全部），持久化存 value
 const RANGE_OPTIONS = [
   { value: '7', label: '最近 7 天', days: 7 },
@@ -269,7 +263,18 @@ export default function Stats() {
     }
   }, [])
 
-  usePolling(loadCompletionStats, COMPLETION_STATS_POLL_MS)
+  // issue #478：完成耗时统计由 60s 轮询改为 SSE 事件驱动刷新——数据来自
+  // 本地 tasks 表成功终态任务，task 事件（任务状态变化/完成）即数据唯一
+  // 变化来源；连接建立/断线重连（onOpen）全量兜底刷新一次
+  useGlobalEvents((ev) => {
+    if (ev && ev.type === 'task') loadCompletionStats()
+  }, { onOpen: () => loadCompletionStats() })
+
+  // 挂载即加载一次完成耗时统计（初始数据；事件驱动负责后续变化，
+  // onOpen 断线重连兜底）
+  useEffect(() => {
+    loadCompletionStats()
+  }, [loadCompletionStats])
 
   // Token 用量统计（issue #235）：按仓库/引擎/时间段聚合，数据来自本地
   // task_usage 表（GET /api/usage/stats），无 GitLab 请求压力，沿用 60 秒
@@ -291,7 +296,19 @@ export default function Stats() {
     }
   }, [usageRepoId, usageEngine, usageRange])
 
-  usePolling(loadUsageStats, USAGE_STATS_POLL_MS)
+  // issue #478：Token 用量统计由 60s 轮询改为 SSE 事件驱动刷新（task
+  // 事件即数据变化来源）；过滤器变化时立即重拉（等价保留原 usePolling
+  // 的「fn 变化立即拉取」语义——loadUsageStats 依赖过滤器参数）
+  useGlobalEvents((ev) => {
+    if (ev && ev.type === 'task') loadUsageStats()
+  }, { onOpen: () => loadUsageStats() })
+
+  // 用量过滤器（仓库/引擎/时间段）变化：立即按新条件重拉（事件驱动
+  // 只覆盖任务变化，过滤条件变化需主动刷新）
+  useEffect(() => {
+    loadUsageStats()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usageRepoId, usageEngine, usageRange])
 
   const o = data?.overview || {}
   const maxEngine = Math.max(1, ...((data?.by_engine) || []).map((e) => e.task_count))
@@ -497,7 +514,7 @@ export default function Stats() {
           （GET /api/issues/completion-stats），无 GitLab 请求压力 */}
       <section className="completion-stats-section">
         <h2>{tr('stats.completionTitle')}</h2>
-        <p className="muted">{tr('stats.completionDesc', { seconds: COMPLETION_STATS_POLL_MS / 1000 })}</p>
+        <p className="muted">{tr('stats.completionDesc')}</p>
         {completionStatsError && (
           <div className="alert alert-error" onClick={() => setCompletionStatsError('')}>{completionStatsError}</div>
         )}
@@ -555,7 +572,7 @@ export default function Stats() {
           展示 token 数）；过滤器变化立即重拉，沿用 60 秒低频轮询 */}
       <section className="usage-stats-section">
         <h2>{tr('stats.usageTitle')}</h2>
-        <p className="muted">{tr('stats.usageDesc', { seconds: USAGE_STATS_POLL_MS / 1000 })}</p>
+        <p className="muted">{tr('stats.usageDesc')}</p>
         <div className="form-row wrap">
           <select className="input usage-stats-filter" value={usageRepoId}
                   onChange={(e) => setUsageRepoId(e.target.value)}

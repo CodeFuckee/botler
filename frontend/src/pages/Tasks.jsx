@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { usePolling } from '../hooks/usePolling.js'
+import { useGlobalEvents } from '../hooks/useGlobalEvents.js'
 import { api, fmtTime, fmtDuration, shortSha, STATUS_META } from '../api.js'
 import { confirmDialog } from '../dialog.js'
 import { Icon } from '../components/Icon.jsx'
@@ -299,11 +299,16 @@ export default function Tasks() {
   const activeCount =
     (data.stats?.queued || 0) + (data.stats?.running || 0) + (data.stats?.retrying || 0)
 
-  // 有活跃任务时每 5s 自动刷新（issue #59，issue #200 起经 usePolling 统一
-  // 管理可见性）：页面隐藏时暂停轮询（后台标签页 0 请求），恢复可见立即
-  // 拉一次再恢复；immediate=true 保证挂载 / 过滤条件变化时即使无活跃任务
-  // 也会先拉一次列表（与原 useEffect 行为一致）
-  usePolling(load, 5000, { enabled: activeCount > 0, immediate: true })
+  // issue #478：有活跃任务时的 5s 轮询改为 SSE 事件驱动刷新——task 事件
+  // 即任务状态变化（列表数据唯一变化来源），收到事件只刷新列表，不再
+  // 固定周期请求；挂载 / 过滤条件变化（load 引用变化）仍立即拉一次
+  // （等价保留原 usePolling 的 immediate + fn 变化语义）
+  useEffect(() => {
+    load()
+  }, [load])
+  useGlobalEvents((ev) => {
+    if (ev && ev.type === 'task') load()
+  }, { onOpen: () => load() })
 
   // 一键停止所有任务（issue #35）：确认后调后端批量停止，刷新列表
   const stopAll = async () => {

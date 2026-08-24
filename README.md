@@ -277,7 +277,7 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 
 > 概览页「灵感」板块位于「开放 Issue」板块下方（issue #293：灵感组件还是和
 > 原来一样，放在开放 issue 组件的下方；issue #184 曾改为右侧常驻边栏，本次
-> 回退该布局调整）。为避免长期积累的灵感拖慢首屏，概览轮询只获取每仓库的
+> 回退该布局调整）。为避免长期积累的灵感拖慢首屏，概览数据加载只获取每仓库的
 > 总数；有灵感的仓库默认折叠，点击后按每页 20 条懒加载并可继续“加载更多”，
 > 排序始终为 `updated_at` 降序（issue #219）。每条灵感提供「添加 Issue」按钮
 > （issue #143）：灵感内容同时作为标题与描述一键提交为 GitLab issue（默认标签
@@ -368,8 +368,8 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > **「运行 N · 排队 M · 今日完成 K」**——运行 = running+retrying、排队 = queued、
 > 今日完成 = UTC 今日成功终态数，数据来自 `GET /api/tasks/watermark`（与任务
 > 列表同表同口径）；各段点击跳转任务列表对应过滤（/tasks?status=running,retrying
-> / queued / succeeded）。数据与现有轮询共用 15s 周期（不增加请求频率），任务
-> 状态变化时经通知轮询事件回调即时刷新；折叠态窄栏隐藏徽章。
+> / queued / succeeded）。数据经全局事件流（`/api/events`，issue #478）SSE
+> 事件驱动即时刷新（task 事件即状态变化，无固定轮询）；折叠态窄栏隐藏徽章。
 
 > 全站「回到顶部」按钮（issue #455）：所有需要竖向滚动的页面右下角提供
 > **「回到顶部」浮动按钮**——滚动超过约两屏（400px）且页面内容超出视口
@@ -976,6 +976,7 @@ command，sse/http 必须提供 http(s) url；args 为字符串数组、env 为�
 
 ```
 GET    /api/health                    健康检查（含平台版本号 version / 构建信息 build / 依赖探测 deps——MinIO 连通（仅启用时）与磁盘空间；关键依赖失败返回 503，issue #207；版本与前端 version.json 同源 issue #233）
+GET    /api/events                   全局事件流（SSE 长连接，issue #478）：概览页/统计页/导航由「固定间隔轮询」改为「事件驱动刷新」的通道——后端在数据真实变化点（任务创建/状态变化、issue 增删改、灵感增删改、设置保存、流水线概览重拉）向进程内全局事件总线发布轻量通知事件，前端单一连接订阅后只刷新对应数据模块；事件 data 为 JSON {"type": "task"|"issue"|"inspiration"|"settings"|"pipeline"}（不携带数据，断线重连后前端全量兜底刷新）；15 秒心跳 `: ping` 保活，连接断开自动退订
 GET    /metrics                       Prometheus 指标端点（issue #208，文本格式 v0.0.4/1.0.0，无 SSO 保护可直接被抓取）：任务状态计数 botler_task_state{status}、执行时长直方图 botler_task_duration_seconds（tasks 表 started_at→finished_at 实时聚合，重启不丢历史）、webhook 接收计数 botler_webhook_received_total{result}、GitLab API 调用/错误计数 botler_gitlab_api_requests_total{method} / botler_gitlab_api_errors_total{method}、调度器队列深度 botler_queue_depth / 运行中 botler_running_tasks、磁盘与 DB 大小 botler_disk_free_bytes / botler_disk_total_bytes / botler_db_size_bytes；Prometheus + Grafana 按此地址抓取
 GET    /api/repos                     仓库列表
 POST   /api/repos                     添加仓库（自动识别 project_id + 注册 webhook + 在目标 GitLab 项目补齐标记库缺失的默认标签（issue #157）；priority 1~999 缺省 100，Web UI 添加仓库表单可填写调度优先级，issue #161）
@@ -1015,7 +1016,7 @@ GET    /api/pipelines/{repo_id}/artifacts 下载指定 job 的流水线产物（
 GET    /api/pipelines/{repo_id}/report 查看指定 job 的报告（?job_id=&file=&file_type=，issue #337）：后端代理 GitLab 单文件产物并解析为统一 JSON——file_type=sast 解析 SARIF 问题列表（bandit/semgrep/gitleaks）、dependency_scanning 解析依赖漏洞（deps-python/deps-frontend）、junit 解析测试用例明细（backend:test/frontend:build/e2e:playwright）；文件路径仅允许归档内相对路径（拒绝绝对路径/路径穿越），报告解析失败 502、文件不存在 404
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138；「每小时余额变化速率」由前端基于历史观测样本计算，issue #304）
 GET    /api/tasks                     任务列表（分页/过滤，含 commit_sha/commit_url/environment；?include_usage=1 可选附带 token 用量字段，issue #235）
-GET    /api/tasks/watermark           任务并发水位（issue #257）：导航栏常驻徽章数据源——各状态计数（queued/running/retrying/succeeded/failed/interrupted/canceled_by_user）+ 总量 total + 今日完成数 completed_today（UTC 今日成功终态）+ 最近完成时间 last_completed_at；与任务列表 stats 同表同口径（保证徽章数字与列表一致），单条轻量聚合查询供导航栏 15s 轮询（不产生额外高频请求）
+GET    /api/tasks/watermark           任务并发水位（issue #257）：导航栏常驻徽章数据源——各状态计数（queued/running/retrying/succeeded/failed/interrupted/canceled_by_user）+ 总量 total + 今日完成数 completed_today（UTC 今日成功终态）+ 最近完成时间 last_completed_at；与任务列表 stats 同表同口径（保证徽章数字与列表一致），单条轻量聚合查询供导航栏徽章展示（issue #478 起经全局事件流 SSE 事件驱动刷新，无固定轮询）
 GET    /api/tasks/export              任务数据导出（issue #228）：?format=csv|json（默认 csv），可按 status（支持逗号分隔多值）/repo_id/search 过滤（与任务列表一致）与创建时间范围 date_from/date_to（'YYYY-MM-DD' 或 'YYYY-MM-DD HH:MM:SS'）过滤；CSV 带 UTF-8 BOM（Excel 打开中文不乱码），字段含 id/仓库/issue/状态/引擎/用时/错误/时间等，JSON 为同字段英文 key 扁平对象数组；响应 attachment 下载
 GET    /api/search?q=&limit=      全局搜索（issue #216）：跨 4 模块（任务 / GitLab 开放 issue / 灵感 / 仓库）按关键词模糊匹配，结果按模块分组（tasks/issues/inspirations/repos 四个数组，每模块默认 10 条上限 50 条）；中文关键词直接用 LIKE 字面子串匹配（FTS5 默认分词器不切分中文、trigram 对 1~2 字词无效，按 Issue 正文允许的 LIKE 兜底方案）；issues 模块复用概览页 10 秒 TTL 聚合缓存（不额外打爆 GitLab API，仅覆盖已启用仓库）；搜索词中的 % _ 通配符按字面匹配
 GET    /api/tasks/{id}                任务详情（含日志、commit_sha/commit_url/environment——执行环境快照 JSON：引擎版本/模型/起始提交/平台版本/配置哈希，issue #276；usage——任务 token 用量：engine/model/prompt_tokens/completion_tokens/total_tokens/estimated_cost/currency/raw_usage，无用量数据为 null，issue #235；dsh 引擎额外含 cache_hit_tokens/cache_miss_tokens/cache_hit_rate——DeepSeek 缓存命中率百分比，无缓存数据为 null，issue #473）

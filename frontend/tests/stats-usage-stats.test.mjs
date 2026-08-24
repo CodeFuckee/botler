@@ -51,13 +51,13 @@ function textOf(node) {
 
 // ---- 源码断言 ----
 
-test('源码：请求用量统计接口并低频轮询（60 秒）', () => {
+test('源码：请求用量统计接口并事件驱动刷新（issue #478）', () => {
   assert.match(statsSrc, /\/api\/usage\/stats/,
                '应请求 GET /api/usage/stats')
-  assert.match(statsSrc, /USAGE_STATS_POLL_MS\s*=\s*60000/,
-               '用量统计轮询间隔应为 60 秒')
-  assert.match(statsSrc, /usePolling\(loadUsageStats, USAGE_STATS_POLL_MS\)/,
-               '应经 usePolling 独立定时轮询用量统计接口（issue #200 统一管理）')
+  assert.match(statsSrc, /useGlobalEvents\(/,
+               '应订阅全局事件流（issue #478 替代低频轮询）')
+  assert.match(statsSrc, /ev\.type === 'task'\).*loadUsageStats\(\)/s,
+               'task 事件（任务执行）驱动刷新用量统计')
 })
 
 test('源码：板块含仓库/引擎/时间范围过滤器', () => {

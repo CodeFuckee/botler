@@ -221,3 +221,53 @@ class EventBus:
                 subs.discard(sub)
                 if not subs:
                     self._subs.pop(task_id, None)
+
+
+# ---- 全局事件总线（issue #478：轮询改 SSE 事件驱动）----
+
+class AppEventBus:
+    """全局事件总线：数据变更通知，供 /api/events SSE 推送。
+
+    与按 task_id 分组的 EventBus 不同：所有订阅者收到全部事件（轻量
+    通知，仅携带 type 等元信息、不携带数据——前端收到后按需拉取对应
+    数据接口，断线重连后全量兜底刷新即可，无历史回放需求）。队列满丢
+    最旧（慢消费者不阻塞业务线程发布）。
+    """
+
+    def __init__(self, maxsize: int = 500):
+        self._subs: set[queue.Queue] = set()
+        self._lock = threading.Lock()
+        self._maxsize = maxsize
+
+    def subscribe(self) -> queue.Queue:
+        """注册一个订阅队列；返回后调用方从队列消费事件。"""
+        q: queue.Queue = queue.Queue(maxsize=self._maxsize)
+        with self._lock:
+            self._subs.add(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue) -> None:
+        """注销订阅队列（连接断开时调用，避免泄漏）。"""
+        with self._lock:
+            self._subs.discard(q)
+
+    def publish(self, event: dict) -> None:
+        """广播事件到全部订阅队列；队列满丢最旧再入队（不阻塞）。"""
+        with self._lock:
+            subs = list(self._subs)
+        for q in subs:
+            try:
+                q.put_nowait(event)
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                except queue.Empty:  # pragma: no cover 竞态下队列已空
+                    pass
+                try:
+                    q.put_nowait(event)
+                except queue.Full:  # pragma: no cover 极端竞态丢弃新事件
+                    pass
+
+
+# 进程内全局单例：发布点与 SSE 端点共用（测试可直接订阅断言）
+global_bus = AppEventBus()

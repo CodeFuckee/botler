@@ -70,8 +70,9 @@ test('App.jsx 注册 /overview 路由并挂载 Overview 页面', () => {
 test('概览页一次拉取全部活跃任务（queued/running/retrying）', () => {
   assert.match(overview, /status:\s*'queued,running,retrying'/, '列表请求应带 queued/running/retrying 多值状态')
   assert.match(overview, /api\.get\('\/api\/tasks\?\s*'\s*\+\s*q/, '列表走 GET /api/tasks')
-  assert.match(overview, /usePolling\(load, OVERVIEW_POLL_MS\)/,
-               '列表应经 usePolling 定时轮询刷新（issue #200 统一管理）')
+  assert.match(overview, /useGlobalEvents\(onGlobalEvent/,
+               '列表应经全局事件流事件驱动刷新（issue #478 替代固定轮询）')
+  assert.match(overview, /case 'task':/, 'task 事件驱动刷新任务列表')
 })
 
 test('每个活跃任务独立订阅事件流（SSE 实时输出）', () => {
@@ -199,15 +200,16 @@ test('渲染运行中任务信息：issue 项内展示状态徽章与实时输�
     // 任务信息块只渲染在运行中的 issue 项内
     assert.equal(root.findAll((n) => n.props.className === 'issue-task').length, 1,
                  '运行中 issue 项内应有一个任务块')
-    // 每个活跃任务一个事件流连接（SSE 实时输出）
-    assert.equal(FakeEventSource.instances.length, 1, '应为任务创建事件流连接')
-    assert.equal(FakeEventSource.instances[0].url, '/api/tasks/11/events',
-                 '事件流应订阅 /api/tasks/{id}/events')
+    // 每个活跃任务一个事件流连接（SSE 实时输出）；另有一个全局事件流
+    // 连接（/api/events，issue #478 事件驱动），按 url 定位任务流实例
+    const taskStream = FakeEventSource.instances.find(
+      (i) => i.url === '/api/tasks/11/events')
+    assert.ok(taskStream, '应为任务创建事件流连接 /api/tasks/{id}/events')
     // 推送事件 → 任务块实时输出
     await TestRenderer.act(async () => {
-      FakeEventSource.instances[0].emit({ seq: 1, kind: 'text', text: '正在分析 bug…' })
-      FakeEventSource.instances[0].emit({ seq: 2, kind: 'tool', tool: 'Bash',
-                                          input: { command: 'git status' } })
+      taskStream.emit({ seq: 1, kind: 'text', text: '正在分析 bug…' })
+      taskStream.emit({ seq: 2, kind: 'tool', tool: 'Bash',
+                        input: { command: 'git status' } })
     })
     const textAfter = JSON.stringify(renderer.toJSON())
     assert.ok(textAfter.includes('正在分析 bug…'), '任务块应显示 agent 实时输出')

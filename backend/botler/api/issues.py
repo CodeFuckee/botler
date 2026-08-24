@@ -54,6 +54,7 @@ import httpx
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from ..events import global_bus
 from ..database import (_parse_db_ts, normalize_issue_created_at,
                             normalize_issue_updated_at)
 from ..gitlab_client import GitLabClient, GitLabError
@@ -105,7 +106,11 @@ def clear_issue_cache() -> None:
     # owner client 缓存（issue #130）：测试隔离 + 配置变更后重建
     global _OWNER_CLIENT, _OWNER_CLIENT_TOKEN
     _OWNER_CLIENT = None
-    _OWNER_CLIENT_TOKEN = "" 
+    _OWNER_CLIENT_TOKEN = ""
+    # issue #478：开放 issue 聚合数据变化 → 广播 issue 事件（写操作清
+    # 缓存即代表数据已变化，前端 SSE 订阅后事件驱动刷新开放 issue 列表；
+    # 发布为尽力而为，测试隔离等场景无订阅者无副作用）
+    global_bus.publish({"type": "issue"})
 
 
 def _trim_assignees(issue: dict) -> list[dict]:

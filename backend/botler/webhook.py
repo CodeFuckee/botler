@@ -13,6 +13,7 @@ import logging
 
 from .config import ConfigManager
 from .database import Database, normalize_issue_created_at, normalize_issue_updated_at
+from .events import global_bus
 from .gitlab_client import GitLabClient, GitLabError
 from .git_remote import build_repo_client_with_username
 from .labels import CLAIM_SKIP_LABELS
@@ -162,6 +163,9 @@ class WebhookHandler:
             issue_labels=cur_labels,
             issue_updated_at=normalize_issue_updated_at(current.get("updated_at")),
             issue_created_at=normalize_issue_created_at(current.get("created_at")))
+        # issue #478：webhook 收到的 issue 事件说明开放 issue 数据已变化
+        # （assignee / 标签 / 评论），广播 issue 事件供前端事件驱动刷新
+        global_bus.publish({"type": "issue"})
         if task_id is None:
             return {"accepted": True, "reason": "已有活跃任务，跳过（去重）"}
         self.scheduler.enqueue(task_id)

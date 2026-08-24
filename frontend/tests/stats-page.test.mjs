@@ -84,12 +84,12 @@ test('源码：迁入「Issue 完成耗时」与「Token 用量统计」板块�
   assert.match(statsSrc, /usage-stats-section/, '应用量统计板块容器')
   assert.match(statsSrc, /\/api\/issues\/completion-stats/,
                '应请求完成耗时接口')
-  assert.match(statsSrc, /COMPLETION_STATS_POLL_MS\s*=\s*60000/,
-               '完成耗时轮询间隔应为 60 秒')
+  assert.match(statsSrc, /useGlobalEvents\(/,
+               '完成耗时/用量统计应经全局事件流事件驱动刷新（issue #478）')
   assert.match(statsSrc, /\/api\/usage\/stats/,
                '应请求用量统计接口')
-  assert.match(statsSrc, /USAGE_STATS_POLL_MS\s*=\s*60000/,
-               '用量统计轮询间隔应为 60 秒')
+  assert.match(statsSrc, /ev\.type === 'task'\).*loadUsageStats\(\)/s,
+               'task 事件驱动刷新用量统计（issue #478）')
   assert.match(statsSrc, /stats\.completionTitle/, '完成耗时标题应经 t() 国际化')
   assert.equal(zhCN['stats.completionTitle'], 'Issue 完成耗时', '中文标题应为「Issue 完成耗时」')
   assert.match(statsSrc, /stats\.usageTitle/, '用量标题应经 t() 国际化')

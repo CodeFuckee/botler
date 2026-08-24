@@ -12,7 +12,6 @@ import {
   ISSUE_GROUPS,
   BOT_STATUS_META,
   BOT_STATUS_NAMES,
-  ISSUE_POLL_MS,
   ISSUE_SORTS,
   ISSUE_STATUS_FILTERS,
   ISSUE_LAYOUTS,
@@ -385,7 +384,7 @@ export default function IssueListSection({
   return (
           <section className="issues-section">
             <h2>{tr('overview.issuesTitle')}</h2>
-            <p className="muted">{tr('overview.issuesDesc', { seconds: ISSUE_POLL_MS / 1000 })}</p>
+            <p className="muted">{tr('overview.issuesDesc')}</p>
 
             {/* issue #230：过滤条——按状态（全部/开放/进行中）+ 标签多选
                 过滤，仅过滤条目、保留仓库分组结构；偏好存 localStorage

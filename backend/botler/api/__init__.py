@@ -33,6 +33,7 @@ from .skills import router as skills_router  # noqa: E402
 from .tools import router as tools_router  # noqa: E402
 from .search import router as search_router  # noqa: E402
 from .audit import router as audit_router  # noqa: E402
+from .events import router as events_router  # noqa: E402
 
 router.include_router(repos_router)
 router.include_router(tasks_router)
@@ -57,3 +58,4 @@ router.include_router(skills_router)
 router.include_router(tools_router)
 router.include_router(search_router)
 router.include_router(audit_router)
+router.include_router(events_router)

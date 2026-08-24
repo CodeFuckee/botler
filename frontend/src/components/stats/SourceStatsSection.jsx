@@ -5,15 +5,14 @@
 // 自动暂停，后台 0 请求），不依赖 GitLab API、不给远端加压力。
 // issue #361：本卡片由概览页整体迁入统计页，替换统计页原有「来源分布」表格
 // （同源同口径数据，避免同页重复展示）；组件行为保持不变（近 30 天独立轮询）。
-import { useCallback, useState } from 'react'
-import { usePolling } from '../../hooks/usePolling.js'
+import { useCallback, useEffect, useState } from 'react'
+import { useGlobalEvents } from '../../hooks/useGlobalEvents.js'
 import { api, fmtSeconds } from '../../api.js'
 import { useI18n } from '../../i18n.jsx'
 import { Icon } from '../Icon.jsx'
 
-// 来源分布轮询间隔（issue #224）：数据来自本地 tasks 表聚合，后端另有
-// 10s TTL 缓存，低频轮询即可（任务完成后再等下一轮刷新）
-const SOURCE_STATS_POLL_MS = 60000
+// issue #478：来源分布由低频轮询改为 SSE 事件驱动刷新（数据来自本地
+// tasks 表聚合，task 事件即数据变化来源），不再需要固定轮询间隔常量
 // 来源分布默认统计窗口：近 30 天（与统计页「最近 30 天」口径一致）
 const SOURCE_STATS_DAYS = 30
 
@@ -41,7 +40,17 @@ export default function SourceStatsSection() {
     }
   }, [])
 
-  usePolling(load, SOURCE_STATS_POLL_MS)
+  // issue #478：来源分布统计由 60s 轮询改为 SSE 事件驱动刷新——数据
+  // 来自本地 tasks 表聚合（后端 10s TTL 缓存），task 事件即数据唯一
+  // 变化来源；连接建立/断线重连（onOpen）全量兜底刷新一次
+  useGlobalEvents((ev) => {
+    if (ev && ev.type === 'task') load()
+  }, { onOpen: () => load() })
+
+  // 挂载即加载一次（初始数据；事件驱动负责后续变化，onOpen 重连兜底）
+  useEffect(() => {
+    load()
+  }, [load])
 
   const bySource = data?.by_source || []
   const taskCount = data?.overview?.task_count || 0
@@ -50,7 +59,7 @@ export default function SourceStatsSection() {
     <section className="stats-source-section">
       <h2>{tr('stats.sourceStatsTitle')}</h2>
       <p className="muted">
-        {tr('stats.sourceStatsDesc', { seconds: SOURCE_STATS_POLL_MS / 1000 })}
+        {tr('stats.sourceStatsDesc')}
       </p>
       {error && (
         <div className="alert alert-error" role="alert" onClick={() => setError('')}>
