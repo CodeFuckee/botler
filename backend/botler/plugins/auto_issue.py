@@ -26,6 +26,7 @@ GitLabError（调用方统一容错，仅记日志不阻塞任务收尾，与 we
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ..failure_classify import CATEGORY_ADVICE, category_label
@@ -46,6 +47,45 @@ AUTO_ISSUE_DETAIL_MAX_CHARS = 2000
 
 # 任务日志去重标记前缀（add_log 落库，同一任务只上报一次）
 DEDUP_LOG_MARK = "已自动提交失败上报 issue"
+
+# 大模型 API 请求错误识别规则（issue #494）：任务失败由大模型 API 请求
+# 错误导致（LLM 供应商限流 / 过载 / 服务不可用 / 请求失败等）时不自动
+# 创建失败上报 issue——属平台侧共因（一个供应商故障影响所有任务），逐
+# 任务上报只会刷屏，且重试后大概率自愈，无需人工逐个介入。
+# 匹配原则：必须带供应商名 / Anthropic 错误码 / 「大模型|LLM」上下文，
+# 避免误伤 GitLab 侧独立出现的 401/403/429 等错误（那些仍需上报）。
+LLM_API_ERROR_PATTERNS: tuple[str, ...] = (
+    # ① 供应商名 + 请求失败/API 错误：覆盖 chat/识图/生图模型统一报错
+    #    格式「X 请求失败: HTTP ...」（chat_models / vision_models /
+    #    models / image_models）与 Claude Code 的 "Anthropic API error"
+    r"(anthropic|claude|deepseek|openai|gemini|qwen|zhipu|智谱|通义|"
+    r"豆包|kimi|moonshot|doubao|dashscope|ollama)"
+    r"[^。\n]{0,80}(请求失败|api[ _-]?error|overloaded|rate[ _-]?limit|"
+    r"限流|过载|不可用|unavailable|billing|credit)",
+    # ② Claude/Anthropic 供应商错误码（Anthropic messages API 返回的
+    #    error.type 值：请求已发出、供应商拒绝或异常）
+    r"(anthropic api error|overloaded_error|rate_limit_error|"
+    r"authentication_error|permission_error|billing_not_active)",
+    # ③ 大模型 API 请求失败通用表述（带「大模型|LLM」上下文，避免误伤
+    #    GitLab 侧 401/403/429 等独立错误）
+    r"(大模型|llm)[^。\n]{0,40}(api|接口)[^。\n]{0,40}"
+    r"(请求失败|error|failed|失败|超时|timeout|限流|过载)",
+)
+
+
+def is_llm_api_error(*texts: str | None) -> bool:
+    """判断失败文本是否由大模型 API 请求错误导致（issue #494）。
+
+    多段文本（失败原因 / 错误详情）任一段命中即返回 True；全部未命中 /
+    输入为空返回 False（兜底不误伤，保持自动上报）。
+    """
+    blob = "\n".join(t for t in texts if t)
+    if not blob.strip():
+        return False
+    for pattern in LLM_API_ERROR_PATTERNS:
+        if re.search(pattern, blob, re.IGNORECASE):
+            return True
+    return False
 
 
 def build_issue_title(task: dict, repo_name: str = "") -> str:
@@ -154,6 +194,13 @@ class AutoIssueNotifierPlugin(NotifierPlugin):
         if not cfg.auto_issue_enabled:
             return None
         task_id = int(task.get("id") or 0)
+        # issue #494：大模型 API 请求错误导致的失败不自动上报——LLM 供应
+        # 商限流/过载/服务不可用属平台侧共因（一个供应商故障影响所有
+        # 任务），逐任务上报只会刷屏，且重试后大概率自愈，无需人工介入
+        if is_llm_api_error(reason, task.get("error_detail")):
+            logger.info("任务 %s 失败由大模型 API 请求错误导致，跳过失败上报",
+                        task_id)
+            return None
         # 去重（issue #347）：同一任务只上报一次——成功创建后在任务日志
         # 落标记；重复分发（多实例/事件重放）时跳过，避免重复 issue
         try:

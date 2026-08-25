@@ -255,6 +255,29 @@
     底缘不超出视口、底 padding 保留，以及滚动后操作栏仍固定在底部；修复前
     操作栏 29px < 47px 必失败）。
 
+- **任务失败自动上报跳过「大模型 API 请求错误」导致的失败（issue #494）**：
+  - 需求：任务失败若由大模型 API 请求错误（LLM 供应商限流 / 过载 / 服务
+    不可用 / 请求失败等）导致，不再自动创建失败上报 issue——该错误属平台侧
+    共因（一个供应商故障影响所有任务），逐任务上报只会刷屏，且重试后大概率
+    自愈，无需人工逐个介入；
+  - 实现：`backend/botler/plugins/auto_issue.py` 新增 `is_llm_api_error()`
+    纯函数与内置规则 `LLM_API_ERROR_PATTERNS`（① 供应商名 + 请求失败/API
+    错误：覆盖 chat/识图/生图模型统一报错格式「X 请求失败: HTTP ...」与
+    Claude Code 的 "Anthropic API error"；② Claude/Anthropic 供应商错误码
+    （overloaded_error / rate_limit_error / authentication_error /
+    permission_error / billing_not_active）；③ 「大模型|LLM」+ API/接口 +
+    失败/超时/限流等通用表述）；`send_task_failed` 在创建上报 issue 前对
+    「失败原因 + 错误详情」做检测，命中即跳过并记日志；
+  - 匹配原则：必须带供应商名 / Anthropic 错误码 /「大模型|LLM」上下文，
+    避免误伤 GitLab 侧独立出现的 401/403/429 等错误（那些仍需上报人工处理），
+    也避免把「找不到 claude 命令」等引擎配置错误误判为 API 请求错误；
+  - 测试：新增 `TestIsLlmApiError` 纯函数用例（各供应商请求失败 / Anthropic
+    错误码 / 通用表述 / 空输入 / GitLab 401/403/429 不误伤 / 环境类失败不
+    误伤）与 `TestPluginLlmApiSkip` 插件行为用例（失败原因或错误详情命中 →
+    跳过上报不创建；普通失败仍正常上报）；后端全量 pytest 3537 用例通过、
+    前端 node 单测 1804 用例通过、ruff 通过。
+
+
 ### Fixed
 
 - **修复任务结束后没有自动开始执行下一个任务——对账/webhook 漏领分配给 remote 用户名账号（如 @agent）的 issue（issue #487）**：

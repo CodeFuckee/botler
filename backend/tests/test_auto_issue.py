@@ -26,6 +26,7 @@ from botler.plugins.auto_issue import (
     AutoIssueNotifierPlugin,
     build_issue_description,
     build_issue_title,
+    is_llm_api_error,
 )
 from botler.templates import TemplateRenderer
 
@@ -416,3 +417,81 @@ class TestExecutorDispatch:
         # 去重标记落库
         logs = db.list_logs(task_id)
         assert any("已自动提交失败上报 issue" in (l["message"] or "") for l in logs)
+
+
+# ---- 大模型 API 请求错误跳过上报（issue #494）----
+
+class TestIsLlmApiError:
+    """is_llm_api_error 纯函数：识别大模型 API 请求错误导致的失败。"""
+
+    def test_provider_request_failed_anthropic(self):
+        """Anthropic 请求失败（chat_models 格式）识别为大模型 API 请求错误。"""
+        assert is_llm_api_error("anthropic 请求失败: HTTP 529 Overloaded")
+
+    def test_provider_request_failed_deepseek(self):
+        """DeepSeek API 错误识别为大模型 API 请求错误。"""
+        assert is_llm_api_error("DeepSeek API error: 503 service unavailable")
+
+    def test_provider_request_failed_gemini(self):
+        """Gemini 请求失败识别为大模型 API 请求错误。"""
+        assert is_llm_api_error("Gemini 请求失败: HTTP 503 Service Unavailable")
+
+    def test_claude_error_codes(self):
+        """Claude/Anthropic 错误码（限流/过载）识别为 API 请求错误。"""
+        assert is_llm_api_error("Error: rate_limit_error 429")
+        assert is_llm_api_error("Anthropic API error: overloaded_error 529")
+
+    def test_llm_api_generic(self):
+        """「大模型 API 请求失败」通用表述识别。"""
+        assert is_llm_api_error("大模型 API 请求失败: connection timeout")
+        assert is_llm_api_error("LLM API request failed with 503")
+
+    def test_empty_inputs_false(self):
+        """空/None 输入不识别为 API 请求错误。"""
+        assert is_llm_api_error() is False
+        assert is_llm_api_error("") is False
+        assert is_llm_api_error(None) is False
+
+    def test_gitlab_http_errors_not_matched(self):
+        """GitLab 侧 401/403/429 独立出现不误伤（仍需上报人工处理）。"""
+        assert is_llm_api_error("GitLab API 返回 401 Unauthorized") is False
+        assert is_llm_api_error("触发限流（HTTP 429），任务重试") is False
+
+    def test_environment_failures_not_matched(self):
+        """环境类失败（磁盘/网络/命令缺失）不识别为 API 请求错误。"""
+        assert is_llm_api_error("磁盘空间不足: no space left on device") is False
+        assert is_llm_api_error("找不到 claude 命令，请先 npm install") is False
+
+
+class TestPluginLlmApiSkip:
+    """send_task_failed：大模型 API 请求错误导致失败时不自动上报。"""
+
+    def test_reason_matches_llm_api_error_skips(self, tmp_path):
+        """失败原因命中大模型 API 请求错误 → 跳过上报（返回 None 不创建）。"""
+        cm = _make_config(tmp_path)  # 默认 enabled=true
+        gl = _FakeGitlab()
+        ctx = _FakeCtx(cm, gl)
+        result = _plugin().send_task_failed(
+            ctx, _task(), "Anthropic API error: overloaded_error 529")
+        assert result is None
+        assert gl.created == []
+
+    def test_error_detail_matches_llm_api_error_skips(self, tmp_path):
+        """错误详情（error_detail 含供应商请求失败）命中 → 跳过上报。"""
+        cm = _make_config(tmp_path)
+        gl = _FakeGitlab()
+        ctx = _FakeCtx(cm, gl)
+        task = _task(error_detail='{"summary": "重试耗尽", "attempts": [{"error": "anthropic 请求失败: HTTP 529 Overloaded"}]}')
+        result = _plugin().send_task_failed(ctx, task, "重试耗尽后仍失败")
+        assert result is None
+        assert gl.created == []
+
+    def test_normal_failure_still_reports(self, tmp_path):
+        """非大模型 API 请求错误的失败仍正常上报（不误伤）。"""
+        cm = _make_config(tmp_path)
+        gl = _FakeGitlab()
+        ctx = _FakeCtx(cm, gl)
+        result = _plugin().send_task_failed(
+            ctx, _task(failure_category="env"), "GitLab 网络超时，重试耗尽")
+        assert result is not None
+        assert len(gl.created) == 1
