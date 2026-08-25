@@ -992,6 +992,13 @@ backend:test:
   # TOTAL 行，驱动项目覆盖率徽章与流水线页面覆盖率展示（GitLab 17+ 由
   # job 级 coverage 关键字替代旧项目设置 test_coverage_regex）
   coverage: '/TOTAL\s+\d+\s+\d+\s+(\d+\.?\d*)%/'
+  variables:
+    # Windows runner（pwsh）注入预定义变量 CI_COMMIT_DESCRIPTION 时不对特殊字符
+    # 做转义（流水线 #1456 实测：提交信息正文含 Markdown 代码块反引号导致
+    # get_sources 阶段 PowerShell 解析失败，job 无法进入脚本阶段）。
+    # GitLab 允许 job 级同名变量覆盖非受保护预定义变量，仓库内无任何 job 依赖
+    # 该变量，置空可彻底规避此问题。
+    CI_COMMIT_DESCRIPTION: ""
   cache:
     key: uv-cache-${CI_COMMIT_REF_SLUG}
     paths:
