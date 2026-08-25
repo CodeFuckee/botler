@@ -257,6 +257,28 @@
 
 ### Fixed
 
+- **CI/CD 流水线详情右边栏：只有产物归档内确实含截图/报告时才渲染「查看截图」「查看报告」按钮（issue #488）**：
+  - 现象：概览页流水线详情抽屉中，几乎所有上传了产物（zip 归档）的成功 job
+    都显示「查看截图」按钮，但只有 e2e:screenshots 这类归档内实际含 png 截图的
+    job 才能看到截图，其余（构建/安全扫描等）点击后只能看到「该任务产物中未
+    发现截图」空态；
+  - 根因：前端仅凭 `hasArchiveArtifact(job)`（产物含 file_type=archive 的 zip
+    归档）判断是否有截图——但 GitLab 中任何上传产物的 job 都会带 archive 归档，
+    归档内是否真有 png 截图只有下载解析后才知道（真实流水线 19 个 job 中 12 个
+    带归档、仅 e2e:screenshots 归档含截图）；
+  - 修复：`PipelineDrawer` 抽屉打开/切换流水线视图时，对每个带 archive 产物的
+    成功 job 异步调用后端 `/api/pipelines/{repo_id}/screenshots?job_id=`（后端
+    下载归档解析 png 清单，60 秒 TTL 缓存），确认归档内确实含截图才渲染「查看
+    截图」入口；核对完成前与核对失败一律不渲染（宁缺毋滥）；「查看报告」按钮
+    本就按报告型产物元数据（file_type ∈ sast/dependency_scanning/junit）门控，
+    与真实报告一一对应，无需改动；
+  - 测试：新增「有 archive 产物但归档内无截图的 job 不渲染查看截图按钮（issue
+    #488）」复现用例（修复前 1 !== 0 必失败）；既有 e2e:screenshots 正向用例
+    （含截图 → 按钮出现并预览）保持通过；前端全量 1806 用例通过、后端全量
+    pytest 通过、eslint 通过。
+
+### Fixed
+
 - **平板竖屏下 issue 详情右边栏底部操作按钮被遮挡/裁切（issue #482）**：
   - 现象：平板竖屏（≤860px）查看概览页 issue 详情右边栏，底部操作栏
     （.drawer-bottom-actions）被压缩到约 29px（自然高度约 68px），按钮溢出

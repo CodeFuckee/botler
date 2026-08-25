@@ -141,6 +141,9 @@ export default function PipelineDrawer({ entry, onClose }) {
   // 当前查看的流水线视图（issue #483）：'current'=当前流水线，
   // 'last_success'=上一次全部成功的流水线；默认展示当前流水线
   const [view, setView] = useState('current')
+  // issue #488：jobId → 是否确认其产物归档内确实含截图（核对完成前
+  // 缺省为 false，即不渲染「查看截图」入口；仅在核对确认为 true 时展示）
+  const [screenshotReady, setScreenshotReady] = useState({})
   const repo = entry && typeof entry === 'object' ? entry : null
   const repoName = repo && repo.repo_name ? repo.repo_name : '—'
   // 上一次全部成功的流水线（后端 /api/pipelines/overview 聚合）：
@@ -166,6 +169,44 @@ export default function PipelineDrawer({ entry, onClose }) {
     setReport(null)
     setScreenshot(null)
   }
+
+  // issue #488：仅当 job 产物归档内确实含截图时才渲染「查看截图」按钮。
+  // 仅凭 archive 产物（zip 归档）无法区分 e2e:screenshots（归档含 png）
+  // 与普通构建归档（无截图）——只有后端 /screenshots 接口下载归档并解析
+  // 出 png 清单（60 秒 TTL 缓存）后才知道有无。抽屉打开 / 切换流水线
+  // 视图时，对每个带 archive 产物的成功 job 异步核对一次；核对完成前
+  // 与核对失败一律不渲染入口（宁缺毋滥，避免对无截图的 job 误展示）。
+  useEffect(() => {
+    if (!repo || repo.repo_id == null) {
+      setScreenshotReady({})
+      return
+    }
+    // 当前视图的 stages（与组件渲染同源；依赖 repo/view 而非 stages——
+    // 兜底空数组每次渲染是新引用，作为依赖会导致 effect 无限重跑）
+    const cur = view === 'last_success' ? repo.last_success_stages : repo.stages
+    const stageArr = Array.isArray(cur) ? cur : []
+    const jobs = stageArr.flatMap((s) => (Array.isArray(s && s.jobs) ? s.jobs : []))
+    const candidates = jobs.filter((j) => j.status === 'success'
+                                   && j.id != null && hasArchiveArtifact(j))
+    // 视图切换后旧 job 的核对结果作废，重新核对当前视图下的候选 job
+    setScreenshotReady({})
+    if (candidates.length === 0) return
+    let cancelled = false
+    for (const j of candidates) {
+      api.get(`/api/pipelines/${repo.repo_id}/screenshots?job_id=${j.id}`)
+        .then((data) => {
+          if (cancelled) return
+          const has = Array.isArray(data && data.screenshots)
+            && data.screenshots.length > 0
+          setScreenshotReady((prev) => ({ ...prev, [j.id]: has }))
+        })
+        .catch(() => {
+          // 核对失败（归档下载失败 / 网络错误）：按「未确认有截图」处理
+          if (!cancelled) setScreenshotReady((prev) => ({ ...prev, [j.id]: false }))
+        })
+    }
+    return () => { cancelled = true }
+  }, [repo, view])
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
@@ -334,9 +375,12 @@ export default function PipelineDrawer({ entry, onClose }) {
                           {/* issue #453：job 成功且带 archive 产物（zip 归档）时
                               提供「查看截图」，点击在抽屉内列出并预览产物内的
                               png 截图（e2e:screenshots job）；无 png 时展示
-                              空态提示，不崩溃 */}
+                              空态提示，不崩溃。
+                              issue #488：仅当后端 /screenshots 核对确认归档内
+                              确实含 png 截图时才渲染入口——普通构建归档
+                              （zip 里没有截图）不再误展示「查看截图」 */}
                           {j.status === 'success' && j.id != null && repo.repo_id != null
-                           && hasArchiveArtifact(j) && (
+                           && screenshotReady[j.id] === true && (
                             <div className="pipeline-detail-report">
                               <button type="button"
                                       className="pipeline-detail-screenshot-btn"

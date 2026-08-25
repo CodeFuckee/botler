@@ -978,6 +978,55 @@ test('无 archive 产物的 job 不渲染「查看截图」按钮', async () => 
   }
 })
 
+// issue #488：只有产物归档内确实含截图（png）时，才渲染「查看截图」
+// 按钮——仅凭 archive 产物（zip 归档）无法区分 e2e:screenshots（归档
+// 含 png 截图）与普通构建归档（无截图）；后端 /screenshots 接口下载并
+// 解析归档后返回 png 清单，清单为空则不应出现「查看截图」按钮。
+test('有 archive 产物但归档内无截图的 job 不渲染「查看截图」按钮（issue #488）', async () => {
+  const entry = {
+    ...PIPELINE_ENTRY,
+    stages: [
+      { name: 'build', status: 'success', jobs: [
+        { id: 101, name: 'harmony:build', status: 'success',
+          web_url: 'https://x/-/jobs/101',
+          artifacts: [
+            { file_type: 'archive', filename: 'artifacts.zip',
+              size: 19055, file_format: 'zip' },
+          ] },
+      ] },
+    ],
+  }
+  const { renderer, renderError } = await renderOverview(
+    { pipelines: [entry], errors: [] }, [],
+    (pathname) => {
+      if (/^\/api\/pipelines\/1\/screenshots\?job_id=101$/.test(pathname)) {
+        // 归档内无 png 截图 → 截图清单为空
+        return { job_id: 101, screenshots: [] }
+      }
+      throw new Error('unexpected ' + pathname)
+    })
+  assert.equal(renderError, null, `渲染抛错：${renderError?.message || renderError}`)
+  const root = renderer.root
+  try {
+    const cardBtn = root.findAll(
+      (n) => n.type === 'button' && String(n.props.className || '').includes('pipeline-link'))
+    assert.ok(cardBtn.length > 0, '应渲染流水线卡片主体按钮')
+    await TestRenderer.act(async () => { cardBtn[0].props.onClick() })
+    // 等待截图存在性核对完成（mock 为异步 resolve）
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const btns = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-screenshot-btn'))
+    assert.equal(btns.length, 0, '归档内无截图的 job 不应有查看截图按钮')
+    const text = drawerText(root)
+    assert.ok(text.includes('harmony:build'), '抽屉应显示任务名')
+    assert.ok(!text.includes('查看截图'), '抽屉不应出现「查看截图」文案')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
 // 样式：styles.css 提供截图视图样式
 test('styles.css 提供截图视图样式（.pipeline-detail-screenshot-btn / .pipeline-screenshots-*）', () => {
   assert.match(styles, /\.pipeline-detail-screenshot-btn\s*\{/, '应有「查看截图」按钮样式')
