@@ -6,6 +6,30 @@
 
 ### Added
 
+### Added
+
+- **概览页单列分组布局改为「状态 → 仓库」两级分组（issue #485）**：
+  - 需求：单列分组布局先按 issue 状态分组——进行中（running）第一、完成任务
+    （bot-done）第二、失败任务（bot-failed）第三、其他任务第四，状态组内再按
+    仓库分组；
+  - 实现：`lib/overview.jsx` 新增 `COLUMN_ISSUE_GROUPS`（状态组顺序
+    running → done → failed → other，与卡片布局的 running → failed → done →
+    other 不同）与 `groupIssuesByStatusThenRepo` 纯函数（「仓库 → issue」扁平
+    结构重组为「状态 → 仓库」两级分组：状态判定复用 `groupIssuesByBotLabel`
+    语义，running 优先于终态标签，重试中的 bot-failed / bot-done 一并归入
+    进行中；零 issue 仓库不进入任何状态组；组内仓库保持输入顺序、issue 保持
+    原始相对顺序）；
+  - 单列布局渲染改为先遍历状态组（组头展示标题 + 计数，仅渲染非空状态组），
+    状态组内再渲染仓库子分组——子分组沿用原单列仓库组头（折叠开关 / 仓库名 /
+    优先级 / Token 到期 / 计数 / 对账 / 自省 / 发掘 / 添加 Issue 按钮）与
+    结果反馈；仓库折叠偏好仍按仓库 id 全局生效（同一仓库出现在多个状态组时
+    同时折叠）；置顶按钮仅在「其他」状态组内展示（与卡片布局语义一致）；
+  - 测试：新增 `frontend/tests/overview-column-status-group.test.mjs`（组顺序 /
+    纯函数正常路径 + 空数组 / 非数组 / null 元素 / 缺 repo_id / labels 缺失等
+    边界 / running 优先 / 渲染进行中置顶与状态组计数），更新
+    `overview-layout-column.test.mjs` 渲染断言为两级分组结构；前端全量单测
+    1804 用例通过、eslint 通过。
+
 - **流水线详情可切换查看「上一次全部成功的流水线」（issue #483）**：
   - 后端 `GET /api/pipelines/overview` 每条仓库结果新增 `last_success_pipeline`
     / `last_success_stages` / `last_success_commit_time` 字段：当前（最新）流水线

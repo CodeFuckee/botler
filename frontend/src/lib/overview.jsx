@@ -167,6 +167,45 @@ export function groupIssuesByBotLabel(issues, runningKeys, repoId) {
   return groups
 }
 
+// ---- issue #485：单列分组布局「状态 → 仓库」两级分组 ----
+// 单列分组布局改为先按 issue 状态分组、组内再按仓库分组。状态分组
+// 顺序为需求指定：进行中（running）第一 → 完成任务（done）第二 →
+// 失败任务（failed）第三 → 其他（other）第四（与卡片布局
+// running → failed → done → other 不同，完成任务排在失败任务之前）。
+// title/icon/hint 与 ISSUE_GROUPS 同源字段结构，渲染文案走 i18n
+// overview.group.<key> / overview.groupHint.<key>
+export const COLUMN_ISSUE_GROUPS = [
+  { key: 'running', title: '运行中', icon: 'settings',
+    hint: '正在被 bot 执行的 issue，置顶展示' },
+  { key: 'done', title: 'bot-done', icon: 'checkCircle',
+    hint: 'bot 已完成开发，待人工确认关闭' },
+  { key: 'failed', title: 'bot-failed', icon: 'xCircle',
+    hint: 'bot 处理失败，需人工介入' },
+  { key: 'other', title: '其他', icon: 'clipboard',
+    hint: '尚未处理或处理中的 issue' },
+]
+
+// 将「仓库 → issue」扁平结构重组为「状态 → 仓库」两级分组（issue #485）：
+// 返回 { running: [{...repo, issues: [...]}], done: [...], failed: [...],
+// other: [...] }。每个状态键只收录该状态非空的仓库分组（零 issue 仓库
+// 不出现，避免空组噪音）；仓库分组保持输入仓库的相对顺序，组内 issue
+// 保持原始相对顺序（后端已按 updated_at 降序，前端不重排）。状态判定
+// 复用 groupIssuesByBotLabel（running 优先于终态标签：重试中的
+// bot-failed / bot-done 一并归入进行中）
+export function groupIssuesByStatusThenRepo(repos, runningKeys) {
+  const out = {}
+  for (const g of COLUMN_ISSUE_GROUPS) out[g.key] = []
+  for (const r of Array.isArray(repos) ? repos : []) {
+    if (!r || typeof r !== 'object' || r.repo_id == null) continue
+    const byLabel = groupIssuesByBotLabel(r.issues, runningKeys, r.repo_id)
+    for (const g of COLUMN_ISSUE_GROUPS) {
+      const items = byLabel[g.key]
+      if (items.length > 0) out[g.key].push({ ...r, issues: items })
+    }
+  }
+  return out
+}
+
 // ---- issue #230：开放 issue 过滤（标签多选 + 状态）----
 // 概览页开放 issue 支持按标签多选（命中任一选中标签即展示）与状态
 // （全部/开放/进行中）过滤，仅过滤条目、保留仓库分组结构；过滤偏好
@@ -529,7 +568,7 @@ export const ISSUE_LAYOUTS = [
   { key: 'cards', label: '仓库卡片',
     hint: '每个仓库一张卡片，卡片内按 bot 状态分组展示（默认布局）' },
   { key: 'column', label: '单列分组',
-    hint: '所有仓库 issue 同一列展示，同仓库 issue 归为一个分组，分组可折叠展开' },
+    hint: '所有仓库 issue 同一列展示，先按 issue 状态分组（进行中/完成/失败/其他），组内再按仓库分组，仓库分组可折叠展开' },
 ]
 
 // 读取布局偏好：localStorage 兼容对象（测试可注入）；无存储环境或

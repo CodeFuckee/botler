@@ -406,7 +406,7 @@
   "overview.layoutBy.cards": "仓库卡片",
   "overview.layoutBy.column": "单列分组",
   "overview.layoutHint.cards": "每个仓库一张卡片，卡片内按 bot 状态分组展示（默认布局）",
-  "overview.layoutHint.column": "所有仓库 issue 同一列展示，同仓库 issue 归为一个分组，分组可折叠展开",
+  "overview.layoutHint.column": "所有仓库 issue 同一列展示，先按 issue 状态分组（进行中/完成/失败/其他），组内再按仓库分组，仓库分组可折叠展开",
   "overview.expandRepo": "展开该仓库分组",
   "overview.collapseRepo": "折叠该仓库分组",
   "overview.expandRepoHint": "展开该仓库分组，展示组内 issue",

@@ -10,6 +10,8 @@ import { confirmDialog } from '../../dialog.js'
 import { closeIssuesInBatch } from '../../lib/batchCloseIssues.js'
 import {
   ISSUE_GROUPS,
+  COLUMN_ISSUE_GROUPS,
+  groupIssuesByStatusThenRepo,
   BOT_STATUS_META,
   BOT_STATUS_NAMES,
   ISSUE_SORTS,
@@ -69,6 +71,13 @@ export default function IssueListSection({
       repo_name: repo.repo_name,
     }))
   }), [filteredRepoIssues])
+  // issue #485：单列分组布局的「状态 → 仓库」两级分组数据——先按
+  // issue 状态分组（进行中/完成任务/失败任务/其他），状态组内再按仓库
+  // 分组；仅单列布局需要，卡片布局不计算（保持原仓库卡片渲染路径不变）
+  const columnRepoGroups = issueLayout === 'column'
+    ? groupIssuesByStatusThenRepo(filteredRepoIssues, runningKeys)
+    : null
+
   const visibleIssueKeys = useMemo(
     () => new Set(visibleIssues.map((issue) => issueKey(issue)).filter(Boolean)),
     [visibleIssues])
@@ -381,6 +390,80 @@ export default function IssueListSection({
     )
   }
 
+  // issue #485：单列分组布局的仓库子分组渲染（状态组内按仓库分组）。
+  // 沿用原单列仓库组头——折叠开关（collapsedRepos 按仓库 id 持久化）/
+  // 仓库名/优先级/Token 到期/计数/操作按钮，以及对账/自省/发掘结果与
+  // 手动顺序保存失败提示；计数与文案反映当前状态组下的子集数量。
+  // statusKey 为所在状态组 key（置顶按钮仅在「其他」状态组内展示，
+  // 与卡片布局语义一致）
+  function renderColumnRepoGroup(r, statusKey) {
+    const repoId = r.repo_id
+    const collapsed = collapsedRepos.has(String(repoId))
+    const repoIssues = r.issues || []
+    return (
+      <div key={repoId} className={'card issue-repo-group' + (collapsed ? ' issue-repo-group-collapsed' : '')} data-repo-id={repoId}>
+        <div className="issue-repo-head issue-repo-group-head">
+          <button type="button"
+                  className="issue-repo-toggle"
+                  onClick={() => setCollapsedRepos((prev) => toggleGroupCollapsed(prev, String(repoId)))}
+                  aria-expanded={!collapsed}
+                  aria-label={tr(collapsed ? 'overview.expandRepo' : 'overview.collapseRepo')}
+                  title={tr(collapsed ? 'overview.expandRepoHint' : 'overview.collapseRepoHint')}>
+            <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} />
+          </button>
+          <span className="issue-repo-name issue-repo-group-name" title={tr('overview.repoTitle')}><Icon name="folder" /> {r.repo_name || tr('common.deleted')}</span>
+          <span className="badge badge-muted" title={tr('overview.repoPriorityTitle')}>
+            优先级 {r.priority ?? 100}
+          </span>
+          {r.token_expiry?.level && r.token_expiry.level !== 'unknown' && (
+            <span className={`badge token-expiry-${r.token_expiry.level}`}
+                  title="请前往 GitLab 新建 Personal Access Token 后，在仓库管理页更新到期日">
+              Token {r.token_expiry.days_remaining < 0 ? '已到期' : `剩余 ${r.token_expiry.days_remaining} 天`}
+            </span>
+          )}
+          <span className="muted" title={issueFilterActive
+            ? '当前过滤条件下该仓库在该状态组的 issue 数量'
+            : '该仓库在该状态组的 issue 数量'}>
+            {issueFilterActive ? `匹配 ${repoIssues.length} 个` : `${repoIssues.length} 个`}
+          </span>
+          {repoActionButtons(r)}
+        </div>
+        {/* 对账/自省/发掘结果与手动顺序保存失败提示——与卡片
+            布局一致紧贴组头展示，折叠时也保留操作反馈 */}
+        {reconcileResults[r.repo_id] && <ReconcileResult result={reconcileResults[r.repo_id]} />}
+        {introspectResults[r.repo_id] && <IntrospectResult result={introspectResults[r.repo_id]} />}
+        {discoverResults[r.repo_id] && <DiscoverResult result={discoverResults[r.repo_id]} />}
+        {manualErrors[r.repo_id] && (
+          <div className="alert alert-error issue-manual-error"
+               title={tr('overview.manualOrderTitle')}
+               onClick={() => setManualErrors((prev) => {
+                 const next = { ...prev }
+                 delete next[r.repo_id]
+                 return next
+               })}>
+            <Icon name="warning" /> {manualErrors[r.repo_id]}
+          </div>
+        )}
+        {!collapsed && (
+          repoIssues.length === 0 ? (
+            <div className="empty-state small">
+              <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
+              <p className="muted">{tr('overview.repoNoOpenIssues')}</p>
+            </div>
+          ) : (
+            /* issue #485：组内平铺该仓库在当前状态组下的 issue（保持
+               排序/过滤结果），运行中高亮与状态徽章由 issue 项传达；
+               置顶按钮仅「其他」状态组展示 */
+            <ul className="issue-list">
+              {repoIssues.map((i, idx) =>
+                renderIssueItem(r, i, statusKey, idx, { dragEnabled: false }))}
+            </ul>
+          )
+        )}
+      </div>
+    )
+  }
+
   return (
           <section className="issues-section">
             <h2>{tr('overview.issuesTitle')}</h2>
@@ -561,75 +644,35 @@ export default function IssueListSection({
                 </button>
               </div>
             ) : issueLayout === 'column' ? (
-                /* issue #471：单列分组布局——所有仓库 issue 在同一列展示，
-                   同一个仓库的 issue 归为一个分组，分组头带折叠开关，折叠
-                   后隐藏组内 issue 列表、保留组头（仓库名/优先级/计数/操作
-                   按钮/结果提示）；折叠偏好存 localStorage 刷新后保持 */
+                /* issue #485：单列分组布局「状态 → 仓库」两级分组——
+                   先按 issue 状态分组（进行中 → 完成任务 → 失败任务 →
+                   其他，顺序见 COLUMN_ISSUE_GROUPS），状态组内再按仓库
+                   分组；状态组头展示标题与计数（仅渲染非空状态组），
+                   仓库子分组沿用 issue #471 的折叠开关/仓库名/优先级/
+                   计数/操作按钮与结果提示，折叠偏好存 localStorage */
                 <div className="issues-list issues-list-column">
-                  {filteredRepoIssues.map((r) => {
-                    const repoId = r.repo_id
-                    const collapsed = collapsedRepos.has(String(repoId))
-                    const repoIssues = r.issues || []
+                  {COLUMN_ISSUE_GROUPS.map((g) => {
+                    const subGroups = columnRepoGroups && columnRepoGroups[g.key]
+                    if (!subGroups || subGroups.length === 0) return null
+                    // 状态组计数 = 组内全部仓库子分组 issue 数之和
+                    const groupCount = subGroups.reduce(
+                      (n, rg) => n + (rg.issues || []).length, 0)
                     return (
-                      <div key={repoId} className={'card issue-repo-group' + (collapsed ? ' issue-repo-group-collapsed' : '')} data-repo-id={repoId}>
-                        <div className="issue-repo-head issue-repo-group-head">
-                          <button type="button"
-                                  className="issue-repo-toggle"
-                                  onClick={() => setCollapsedRepos((prev) => toggleGroupCollapsed(prev, String(repoId)))}
-                                  aria-expanded={!collapsed}
-                                  aria-label={tr(collapsed ? 'overview.expandRepo' : 'overview.collapseRepo')}
-                                  title={tr(collapsed ? 'overview.expandRepoHint' : 'overview.collapseRepoHint')}>
-                            <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} />
-                          </button>
-                          <span className="issue-repo-name issue-repo-group-name" title={tr('overview.repoTitle')}><Icon name="folder" /> {r.repo_name || tr('common.deleted')}</span>
-                          <span className="badge badge-muted" title={tr('overview.repoPriorityTitle')}>
-                            优先级 {r.priority ?? 100}
+                      <div key={g.key} className="issue-group issue-column-status-group">
+                        <div className="issue-group-head">
+                          <span className="issue-group-title"
+                                title={tr(`overview.groupHint.${g.key}`)}>
+                            <Icon name={g.icon} /> {tr(`overview.group.${g.key}`)}
                           </span>
-                          {r.token_expiry?.level && r.token_expiry.level !== 'unknown' && (
-                            <span className={`badge token-expiry-${r.token_expiry.level}`}
-                                  title="请前往 GitLab 新建 Personal Access Token 后，在仓库管理页更新到期日">
-                              Token {r.token_expiry.days_remaining < 0 ? '已到期' : `剩余 ${r.token_expiry.days_remaining} 天`}
-                            </span>
-                          )}
-                          <span className="muted" title={issueFilterActive
-                            ? '当前过滤条件下匹配的开放 issue 数量'
-                            : '该仓库开放 issue 总数'}>
-                            {issueFilterActive ? `匹配 ${repoIssues.length} 个` : `${repoIssues.length} 个开放 issue`}
+                          <span className="issue-group-count"
+                                title={tr('overview.groupCountTitle')}>
+                            {tr('overview.groupCount', { n: groupCount })}
                           </span>
-                          {repoActionButtons(r)}
                         </div>
-                        {/* 对账/自省/发掘结果与手动顺序保存失败提示——与卡片
-                            布局一致紧贴组头展示，折叠时也保留操作反馈 */}
-                        {reconcileResults[r.repo_id] && <ReconcileResult result={reconcileResults[r.repo_id]} />}
-                        {introspectResults[r.repo_id] && <IntrospectResult result={introspectResults[r.repo_id]} />}
-                        {discoverResults[r.repo_id] && <DiscoverResult result={discoverResults[r.repo_id]} />}
-                        {manualErrors[r.repo_id] && (
-                          <div className="alert alert-error issue-manual-error"
-                               title={tr('overview.manualOrderTitle')}
-                               onClick={() => setManualErrors((prev) => {
-                                 const next = { ...prev }
-                                 delete next[r.repo_id]
-                                 return next
-                               })}>
-                            <Icon name="warning" /> {manualErrors[r.repo_id]}
-                          </div>
-                        )}
-                        {!collapsed && (
-                          repoIssues.length === 0 ? (
-                            <div className="empty-state small">
-                              <span className="empty-icon" aria-hidden="true"><Icon name="clipboard" /></span>
-                              <p className="muted">{tr('overview.repoNoOpenIssues')}</p>
-                            </div>
-                          ) : (
-                            /* issue #471：组内平铺该仓库全部 issue（保持当前
-                               排序/过滤结果），状态由 issue 项上的状态徽章与
-                               running 高亮传达；置顶按钮对所有 issue 可用 */
-                            <ul className="issue-list">
-                              {repoIssues.map((i, idx) =>
-                                renderIssueItem(r, i, 'other', idx, { dragEnabled: false }))}
-                            </ul>
-                          )
-                        )}
+                        {/* 状态组内按仓库分组——仓库子分组沿用原单列仓库
+                            组头（折叠开关/仓库名/优先级/Token/计数/操作
+                            按钮）与对账/自省/发掘结果反馈 */}
+                        {subGroups.map((rg) => renderColumnRepoGroup(rg, g.key))}
                       </div>
                     )
                   })}

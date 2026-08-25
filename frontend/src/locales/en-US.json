@@ -406,7 +406,7 @@
   "overview.layoutBy.cards": "Repo cards",
   "overview.layoutBy.column": "Grouped column",
   "overview.layoutHint.cards": "One card per repository, issues grouped by bot status inside (default)",
-  "overview.layoutHint.column": "All repository issues in a single column, grouped per repository, groups collapsible",
+  "overview.layoutHint.column": "All repository issues in a single column, grouped by issue status (running/done/failed/other) first, then by repository within each status group; repository groups collapsible",
   "overview.expandRepo": "Expand this repository group",
   "overview.collapseRepo": "Collapse this repository group",
   "overview.expandRepoHint": "Expand this repository group to show its issues",

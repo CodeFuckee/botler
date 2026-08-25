@@ -1,8 +1,9 @@
-// 概览页「开放 Issue」单列分组布局测试（issue #471）：在现有「仓库卡片」
-// 布局之外新增「单列分组」布局——所有仓库 issue 在同一列展示，同一个
-// 仓库的 issue 归为一个分组，分组可折叠/展开；布局选择与仓库分组折叠
-// 偏好均存 localStorage（键 botler.overview.layout / botler.overview.
-// collapsedRepos），刷新后保持。
+// 概览页「开放 Issue」单列分组布局测试（issue #471 / issue #485）：在
+// 现有「仓库卡片」布局之外新增「单列分组」布局。issue #485 起单列分组
+// 改为「状态 → 仓库」两级分组——先按 issue 状态分组（进行中 → 完成任务
+// → 失败任务 → 其他），状态组内再按仓库分组；仓库子分组可折叠/展开；
+// 布局选择与仓库分组折叠偏好均存 localStorage（键 botler.overview.
+// layout / botler.overview.collapsedRepos），刷新后保持。
 //
 // 断言：
 // 1. 纯函数：loadIssueLayout / saveIssueLayout 的解析与规范化边界
@@ -309,20 +310,28 @@ test('渲染：默认卡片布局——不渲染单列分组容器，布局按�
   }
 })
 
-test('渲染：点击「单列分组」→ 按仓库分组单列渲染（组头 + issue 列表齐全）', async () => {
+test('渲染：点击「单列分组」→ 按状态分组、组内按仓库分组单列渲染（组头 + issue 列表齐全）', async () => {
   const { renderer, renderError, restore } = await renderOverview({ issuesPayload: TWO_REPO_PAYLOAD })
   try {
     assert.equal(renderError, null)
     const root = renderer.root
     await TestRenderer.act(() => layoutBtns(root)[1].props.onClick())
     assert.equal(columnLists(root).length, 1, '切换后应渲染单列分组容器')
-    assert.equal(repoGroups(root).length, 2, '应渲染两个仓库分组')
+    // 状态组：完成任务（repo1 的 101）/ 失败任务（repo2 的 201）/ 其他
+    // （repo1 的 102 + repo2 的 202、203）；进行中无运行任务不渲染
+    const statusTitles = root.findAll(
+      (n) => String(n.props.className || '').includes('issue-group-title'))
+    assert.deepEqual(statusTitles.map((n) => textOf(n.props.children).trim()),
+                     ['bot-done', 'bot-failed', '其他'],
+                     '状态组顺序应为 进行中→完成任务→失败任务→其他（空组不渲染）')
+    assert.equal(repoGroups(root).length, 4,
+                 '状态组内按仓库分组：完成任务 1 + 失败任务 1 + 其他 2 = 4 个仓库子分组')
     const toggles = repoToggleBtns(root)
-    assert.equal(toggles.length, 2, '每个仓库分组应有折叠开关')
+    assert.equal(toggles.length, 4, '每个仓库子分组应有折叠开关')
     assert.deepEqual(toggles.map((b) => b.props['aria-expanded']),
-                     [true, true], '默认应全部为展开态')
-    assert.equal(issueLists(root).length, 2, '应渲染两个仓库的组内列表')
-    // 组内 issue 标题齐全（两个仓库共 5 条）
+                     [true, true, true, true], '默认应全部为展开态')
+    assert.equal(issueLists(root).length, 4, '应渲染 4 个仓库子分组的组内列表')
+    // 组内 issue 标题齐全（两个仓库共 5 条，全部 issue 不丢失）
     const items = root.findAll((n) => String(n.props.className || '').includes('issue-item'))
     assert.equal(items.length, 5, '单列布局应渲染全部 5 条 issue')
     const titles = items.map((n) => textOf(n.props.children).trim())
@@ -336,25 +345,28 @@ test('渲染：点击「单列分组」→ 按仓库分组单列渲染（组头 
   }
 })
 
-test('渲染：单列布局下点击仓库组折叠开关 → 该组列表隐藏、组头保留、其他组不受影响', async () => {
+test('渲染：单列布局下点击仓库子分组折叠开关 → 该组列表隐藏、组头保留、其他组不受影响', async () => {
   const { renderer, renderError, restore } = await renderOverview({ issuesPayload: TWO_REPO_PAYLOAD })
   try {
     assert.equal(renderError, null)
     const root = renderer.root
     await TestRenderer.act(() => layoutBtns(root)[1].props.onClick())
-    assert.equal(issueLists(root).length, 2)
-    // 折叠第一个仓库组（botler）
+    assert.equal(issueLists(root).length, 4)
+    // 折叠第一个仓库子分组（完成任务组内 repo1，仅 1 条 issue）。
+    // 折叠偏好按仓库 id 全局生效：repo1 出现在完成任务/其他两个状态组，
+    // 两个子分组应同时折叠（test 17 同源语义）
     await TestRenderer.act(() => repoToggleBtns(root)[0].props.onClick())
-    assert.equal(issueLists(root).length, 1, '折叠后应隐藏该仓库组内列表')
-    assert.equal(repoGroups(root).length, 2, '折叠组容器应保留')
+    assert.equal(issueLists(root).length, 2, '折叠后应隐藏该仓库全部状态子分组列表（repo2 两子分组保留）')
+    assert.equal(repoGroups(root).length, 4, '折叠子分组容器应保留')
     const toggles = repoToggleBtns(root)
-    assert.equal(toggles[0].props['aria-expanded'], false, '第一个仓库组应为折叠态')
-    assert.equal(toggles[1].props['aria-expanded'], true, '其余仓库组应保持展开态')
+    assert.deepEqual(toggles.map((b) => b.props['aria-expanded']),
+                     [false, true, false, true],
+                     'repo1 的两个子分组（完成任务/其他）应为折叠态，repo2 保持展开')
     const items = root.findAll((n) => String(n.props.className || '').includes('issue-item'))
-    assert.equal(items.length, 3, '折叠后只应显示未折叠仓库的 3 条 issue')
+    assert.equal(items.length, 3, '折叠后只应显示 repo2 的 3 条 issue')
     // 折叠不丢数据：展开后恢复 5 条
     await TestRenderer.act(() => repoToggleBtns(root)[0].props.onClick())
-    assert.equal(issueLists(root).length, 2, '再次点击应展开恢复')
+    assert.equal(issueLists(root).length, 4, '再次点击应展开恢复')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()
@@ -370,7 +382,8 @@ test('渲染：点击折叠后偏好写入 localStorage；预置折叠偏好初�
     assert.equal(renderError, null)
     const root = renderer.root
     await TestRenderer.act(() => layoutBtns(root)[1].props.onClick())
-    await TestRenderer.act(() => repoToggleBtns(root)[1].props.onClick()) // 折叠 docs-site（repo_id=2）
+    // 折叠第二个仓库子分组（失败任务组内 docs-site，repo_id=2）
+    await TestRenderer.act(() => repoToggleBtns(root)[1].props.onClick())
     assert.equal(storage.getItem(REPO_COLLAPSE_STORAGE_KEY),
                  JSON.stringify(['2']), '点击折叠后应持久化仓库折叠偏好')
   } finally {
@@ -378,7 +391,8 @@ test('渲染：点击折叠后偏好写入 localStorage；预置折叠偏好初�
     mock.restoreAll()
     restore()
   }
-  // 预置：初始即折叠对应仓库组
+  // 预置：初始即折叠对应仓库子分组（仓库 1 出现在完成任务与其它两个
+  // 状态组，两处应同时折叠——折叠偏好按仓库 id 全局生效）
   const storage2 = makeStorage({ [REPO_COLLAPSE_STORAGE_KEY]: JSON.stringify(['1']) })
   const { renderer: r2, renderError: e2, restore: restore2 } =
     await renderOverview({ issuesPayload: TWO_REPO_PAYLOAD, storage: storage2 })
@@ -386,10 +400,11 @@ test('渲染：点击折叠后偏好写入 localStorage；预置折叠偏好初�
     assert.equal(e2, null)
     const root = r2.root
     await TestRenderer.act(() => layoutBtns(root)[1].props.onClick())
-    assert.equal(issueLists(root).length, 1, '预置折叠仓库 1 后应只剩仓库 2 的列表')
+    assert.equal(issueLists(root).length, 2, '预置折叠仓库 1 后应只剩仓库 2 的两个子分组列表')
     const toggles = repoToggleBtns(root)
     assert.deepEqual(toggles.map((b) => b.props['aria-expanded']),
-                     [false, true], '仅仓库 1 组应为折叠态')
+                     [false, true, false, true],
+                     '仓库 1 的两个子分组（完成任务/其他）应为折叠态')
   } finally {
     await TestRenderer.act(() => r2.unmount())
     mock.restoreAll()
@@ -428,7 +443,8 @@ test('渲染：单列布局组头保留仓库操作按钮（对账/自省/发掘
     // 每个仓库组头都应有添加 Issue 按钮（reconcile/introspect/discover 同组）
     const addBtns = root.findAll((n) =>
       n.type === 'button' && String(n.props.className || '').includes('add-issue-btn'))
-    assert.equal(addBtns.length, 2, '两个仓库组头均应保留「添加 Issue」按钮')
+    assert.equal(addBtns.length, 4,
+                 '4 个仓库子分组组头均应保留「添加 Issue」按钮（按仓库 id 全局）')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

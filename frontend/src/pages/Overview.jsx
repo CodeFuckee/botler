@@ -28,6 +28,8 @@ export {
   BOT_STATUS_NAMES,
   BOT_STATUS_META,
   ISSUE_GROUPS,
+  COLUMN_ISSUE_GROUPS,
+  groupIssuesByStatusThenRepo,
   runningIssueKeys, activeIssueKeys,
   tasksForIssue,
   fmtRateWindowText,
