@@ -206,6 +206,11 @@
     inspiration 事件广播 + 列表不再出现）；`test_inspiration_write_publishes`
     改为创建后即删除、数据不残留；
   - 已清理生产库中本次 bug 残留的 demo 仓库（软删除）与 2 条「测试灵感」。
+  - 补充（CI 流水线 #1446/#1447 暴露）：临时库目录在 Windows runner 上清理
+    失败（`PermissionError: [WinError 32]`，`events.db` 仍被 sqlite 连接占用），
+    app fixture teardown 显式 `ctx.db.close()` 后再释放 `TemporaryDirectory`，
+    与 `test_audit_logs.py` 既有惯例一致；修复后 Windows CI 全量测试
+    3289 passed / 7 errors → 全绿。
 
 - **修复「backend:test 已迁移到另一台服务器，但运行该阶段时生产页面仍卡顿」的历史遗留问题（issue #481）**：
   - 深入诊断结论：backend:test 已确实迁移到 windows 标签 runner（runner

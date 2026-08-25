@@ -73,6 +73,11 @@ def app():
         app.state.ctx = ctx
         app.include_router(api_router)
         yield app
+        # issue #486：fixture 结束前显式关闭 sqlite 连接，否则 Windows
+        # CI runner 上临时目录中的 events.db 仍被占用，TemporaryDirectory
+        # 清理时报 PermissionError: [WinError 32]（Linux 无此限制故本地
+        # 不报错）。与 test_audit_logs.py 的 ctx.db.close() 惯例一致。
+        ctx.db.close()
 
 
 # ---- AppEventBus 单元测试 ----
