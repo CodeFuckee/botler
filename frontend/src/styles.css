@@ -5771,6 +5771,15 @@ body:has(.drawer-overlay) {
     display: flex;
     flex-wrap: nowrap;
     gap: var(--space-2);
+    /* issue #482：flex-shrink: 0 禁止被 .drawer（高度固定的 flex 列
+       滚动容器）压缩——操作栏自身 overflow-x: auto 使其成为滚动容器，
+       flex 自动最小尺寸降为 0，内容超高时负自由空间会把操作栏压到
+       29px（自然高度约 68px），按钮溢出栏底被裁剪、padding-bottom
+       被压缩消失，平板竖屏下底部按钮紧贴屏幕底缘被遮挡；加
+       flex-shrink: 0 后保持自然高度（按钮完整 + 16px 底 padding），
+       sticky bottom 常驻抽屉底部不随内容滚动（与 .back-to-top
+       .in-drawer 的 flex: 0 0 auto 同机制） */
+    flex-shrink: 0;
     overflow-x: auto;
     scrollbar-width: none;
     margin-top: auto;

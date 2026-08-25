@@ -236,6 +236,27 @@
 
 ### Fixed
 
+- **平板竖屏下 issue 详情右边栏底部操作按钮被遮挡/裁切（issue #482）**：
+  - 现象：平板竖屏（≤860px）查看概览页 issue 详情右边栏，底部操作栏
+    （.drawer-bottom-actions）被压缩到约 29px（自然高度约 68px），按钮溢出
+    操作栏底缘 2px 被 .drawer 的 overflow 裁剪、padding-bottom（16px）被压缩
+    消失——按钮紧贴屏幕底缘，真实设备上叠加浏览器底部工具条/Home 指示条后
+    表现为「底部按钮显示被遮挡」，且底部按钮缺少底部留白；
+  - 根因：.drawer 是高度固定（height:100%）的 flex 列滚动容器，内容超高产生
+    负自由空间时按 flex-shrink 压缩可收缩子项；底部操作栏自身 overflow-x: auto
+    使其成为滚动容器，flex 布局中滚动容器的自动最小尺寸为 0（min-height:auto
+    → 0），成为唯一可被压缩的子项——操作栏被压扁、按钮溢出栏底被裁剪；
+  - 修复：底部操作栏增加 `flex-shrink: 0` 禁止被 flex 压缩（与 .back-to-top
+    .in-drawer 的 flex: 0 0 auto 同机制），保持自然高度——按钮完整显示 +
+    16px 底部留白，sticky bottom 常驻抽屉底部、不随内容滚动；仅作用于
+    ≤860px 断点，桌面端（>860px）布局不受影响；
+  - 测试：新增 `frontend/e2e/tests/issue-drawer-bottom-actions-clip.spec.js`
+    （768×1024 / 375×667 竖屏真实 Chromium 断言操作栏高度 ≥ 自然高度、按钮
+    底缘不超出视口、底 padding 保留，以及滚动后操作栏仍固定在底部；修复前
+    操作栏 29px < 47px 必失败）。
+
+### Fixed
+
 - **修复任务结束后没有自动开始执行下一个任务——对账/webhook 漏领分配给 remote 用户名账号（如 @agent）的 issue（issue #487）**：
   - 现象：任务执行结束后队列空转，其他列表里仍有待执行 issue，只能手动点击
     「执行」逐个触发；`#709` 任务（用户侧任务编号）结束后尤为明显；
