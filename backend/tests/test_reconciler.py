@@ -816,3 +816,79 @@ class TestReconcileMaintenanceMode:
 
         assert result == {"scanned": 1, "enqueued": 1}
         assert ctx.db.find_active_task(42, 1) is not None
+
+
+class TestReconcileRemoteUsernameIdentityAlwaysIncluded:
+    """issue #487：任务结束后没有自动开始下一个任务。
+
+    用户把 issue 指派给 remote URL 用户名对应账号（如 @agent，id=3），而
+    全局 bot 账号（GITLAB_BOT_TOKEN 对应 project bot，如 id=11）正常时，
+    对账只按全局 bot 账号扫描 assignee，remote 用户名账号被忽略——扫描为 0
+    且无任何报错，agent 的 issue 永远不会被自动领取，队列空转。
+
+    issue #65 曾把 remote 用户名纳入身份集合，但只发生在「全局 bot 身份
+    不可用」的降级路径；全局身份可用时同样需要合并该身份（设计意图：
+    身份集合 = 全局 bot 账号 + remote 用户名账号）。
+    """
+
+    @staticmethod
+    def _add_local_repo(db, tmp_path, project_id=42, name="demo") -> int:
+        import subprocess
+        repo_dir = tmp_path / name
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo_dir)],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo_dir), "remote", "add", "origin",
+                        "https://agent:glpat-repo@gitlab.example.com/group/repo.git"],
+                       check=True)
+        return db.upsert_repo(
+            project_id=project_id, name=name,
+            url=f"https://gitlab.example.com/{name}.git",
+            local_path=str(repo_dir), remote_name="origin")
+
+    def test_claims_remote_username_issue_when_global_bot_ok(
+            self, ctx, tmp_path, monkeypatch):
+        """全局 bot 身份可用（get_bot_id 不抛错）时，remote 用户名账号
+        （agent → id 3）的 issue 也应被扫描并补入队。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+        # 全局 bot 身份可用：StubGitLab.get_bot_id 返回 BOT_ID=99
+        # remote 用户名 agent 解析为 id 3（issue #65 身份提示）
+        ctx.gitlab.get_user_id_by_username = (
+            lambda username: 3 if username == "agent" else None)
+        seen_assignee: list[int] = []
+        ctx.gitlab.list_open_issues = (
+            lambda project_id, assignee_id=None: (
+                seen_assignee.append(assignee_id)
+                or ([make_issue(10, labels=["bug"])]
+                    if assignee_id == 3 else [])))
+        fallback = StubGitLab()
+        fallback.get_bot_id = lambda: 77  # remote token 账号 user id
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"),
+                            raising=False)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        # 修复前：只扫全局账号 99，agent 的 issue 漏扫，enqueued=0
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert seen_assignee == [99, 3]
+        assert ctx.db.find_active_task(42, 10) is not None
+
+    def test_rejects_issue_not_assigned_to_any_bot_identity(
+            self, ctx, tmp_path, monkeypatch):
+        """全局身份 + remote 用户名身份都不匹配 assignee 时仍拒绝（不误领取）。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+        ctx.gitlab.get_user_id_by_username = lambda username: None
+        # issue 分配给无关账号 55，两个身份都匹配不上
+        ctx.gitlab.list_open_issues = (
+            lambda project_id, assignee_id=None:
+                [make_issue(11, labels=["bug"])] if assignee_id == 55 else [])
+        fallback = StubGitLab()
+        fallback.get_bot_id = lambda: 77
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"),
+                            raising=False)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 0, "enqueued": 0}
+        assert ctx.db.count_tasks() == 0

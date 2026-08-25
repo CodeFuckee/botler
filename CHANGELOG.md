@@ -190,6 +190,30 @@
 
 ### Fixed
 
+- **修复任务结束后没有自动开始执行下一个任务——对账/webhook 漏领分配给 remote 用户名账号（如 @agent）的 issue（issue #487）**：
+  - 现象：任务执行结束后队列空转，其他列表里仍有待执行 issue，只能手动点击
+    「执行」逐个触发；`#709` 任务（用户侧任务编号）结束后尤为明显；
+  - 根因：对账与 webhook 的 bot 身份集合只含「全局 bot 账号」
+    （`GITLAB_BOT_TOKEN` 对应 project bot，如 id=11）——`cfg.bot_id` 未配置时
+    回退 `get_bot_id()` 得到该账号；而用户把 issue 指派给 remote URL 用户名
+    对应账号（如 `https://agent:glpat-…@…` 中的 `agent`，id=3）。issue #65 的
+    remote 用户名身份合并只发生在「全局 bot 身份不可用」（token 401/502）的
+    降级路径；全局 token 正常时只按 `assignee_id=11` 扫描，agent 的 issue
+    扫描为 0 且无任何报错，永远不会被自动领取；
+  - 修复：`reconciler._reconcile_repo` 与 `webhook.handle` 在全局 bot 身份可用
+    时同样把 remote URL 用户名账号并入身份集合（身份集合 = 全局 bot 账号 +
+    remote token 账号 + remote 用户名账号，按 iid 去重合并），分配给 @agent
+    的 issue 在任务结束后由对账自动补入队、自动开始执行；
+  - 配套修复：`scheduler.enqueue` 同一任务幂等去重——`start()` 重启恢复时
+    `requeue_interrupted` 恢复的任务会同时出现在两个入队循环中，重复入队导致
+    任务完成后多一个 claim 失败的重复 worker（日志「已被其他实例领取或已结束」），
+    浪费派发周期并干扰排障；
+  - 测试：`test_reconciler.py` 新增 `TestReconcileRemoteUsernameIdentityAlwaysIncluded`
+    （全局身份可用时扫到 agent issue 补入队 / 身份均不匹配仍拒绝）；`test_webhook.py`
+    新增 `TestWebhookRemoteUsernameIdentityAlwaysIncluded`（全局身份可用时接受
+    agent issue 事件 / 身份不匹配仍拒绝）；`test_scheduler_issue_priority.py`
+    新增 `TestEnqueueIdempotent`（同一任务重复入队只保留一次 / 重启恢复只入队一次）。
+
 - **修复测试运行会向真实数据库新增 demo 仓库与测试灵感且无对应删除的问题（issue #486）**：
   - 根因：`tests/test_global_events.py` 的 app fixture 经 `build_context` 构建
     ctx 时，`Database()` 使用默认路径（受 `BOTLER_DB` 环境变量影响），在

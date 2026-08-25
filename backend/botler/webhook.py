@@ -117,7 +117,15 @@ class WebhookHandler:
             return {"accepted": False, "reason": "查询 issue 失败，拒绝入队"}
 
         cur_assignees = [a.get("id") for a in (current.get("assignees") or [])]
-        bot_ids = [bot_id] if bot_id is not None else self._repo_bot_ids(project_id, cfg)
+        # issue #65 + #487：身份集合 = 全局 bot 账号 + 仓库 remote 身份
+        # （remote token 账号 + remote URL 用户名对应账号）。此前仅在全局
+        # bot 身份不可用时才用 remote 身份集合；全局身份可用时 remote 用户名
+        # 账号被忽略，导致分配给 @agent 的 issue 事件被拒绝入队、任务无法
+        # 自动开始（与对账侧同源缺陷）。
+        bot_ids: list[int] = [bot_id] if bot_id is not None else []
+        for uid in self._repo_bot_ids(project_id, cfg):
+            if uid not in bot_ids:
+                bot_ids.append(uid)
         if not (set(cur_assignees) & set(bot_ids)):
             return {"accepted": False, "reason": "issue 未指派给 bot 账号"}
 

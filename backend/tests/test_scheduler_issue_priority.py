@@ -581,3 +581,48 @@ class TestCrossRepoBotIssue:
         sched._dispatch()
         assert executor.run_ids == [], \
             "其他仓库普通任务运行中时不应派发 bot-issue 任务"
+
+
+class TestEnqueueIdempotent:
+    """同一任务重复入队只保留一次（issue #487 配套修复）。
+
+    重启恢复时 scheduler.start() 会先 enqueue requeue_interrupted 恢复的
+    任务，再 enqueue 所有 queued 任务——恢复任务同时出现在两个集合中，
+    此前会被重复入队，任务完成后触发一个 claim 失败的重复 worker
+    （日志「已被其他实例领取或已结束」），浪费派发周期并干扰排障。
+    """
+
+    def test_same_task_enqueued_twice_keeps_single_entry(
+            self, config, db, executor):
+        repo = _mk_repo(db, project_id=11)
+        t = _mk_task(db, repo, project_id=11, issue_iid=1)
+
+        sched = _scheduler(config, db, executor)
+        assert sched.enqueue(t) is True
+        assert sched.enqueue(t) is True  # 重复入队应被幂等去重
+
+        assert sched.stats()["queued"] == 1
+        assert list(sched._queues[repo]) == [t]
+
+    def test_restart_restore_enqueues_restored_task_once(
+            self, config, db, executor):
+        """start() 重启恢复：requeue_interrupted 恢复的任务只入队一次。"""
+        repo = _mk_repo(db, project_id=11)
+        t = _mk_task(db, repo, project_id=11, issue_iid=1)
+        # 模拟重启前 running：requeue_interrupted 会把它置为 queued 返回
+        conn = sqlite3.connect(db.path)
+        conn.execute("UPDATE tasks SET status='running' WHERE id=?", (t,))
+        conn.commit()
+        conn.close()
+
+        sched = _scheduler(config, db, executor)
+        restored = db.requeue_interrupted()
+        assert restored == [t]
+        # 模拟 start() 的两段入队：恢复任务 + 全部 queued 任务
+        for tid in restored:
+            sched.enqueue(tid)
+        for task in db.list_tasks(status="queued", limit=10000):
+            sched.enqueue(task["id"])
+
+        assert sched.stats()["queued"] == 1
+        assert list(sched._queues[repo]) == [t]

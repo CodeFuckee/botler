@@ -154,31 +154,33 @@ class Reconciler:
         """
         client = self.gitlab
         bot_ids: list[int] = []
+        fallback, username = build_repo_client_with_username(repo, cfg.verify_ssl)
         if bot_id is not None:
             bot_ids = [bot_id]
-        else:
-            fallback, username = build_repo_client_with_username(repo, cfg.verify_ssl)
-            if fallback is None:
-                return 0, 0, [f"仓库 {repo['name']}: 全局 token 失效且 remote 无内嵌 token"]
+        elif fallback is not None:
             client = fallback
             try:
                 bot_ids = [client.get_bot_id()]
             except GitLabError as e:
                 return 0, 0, [f"仓库 {repo['name']}: {e}"]
-            # issue #65：remote URL 用户名（如 agent）也作为 bot 身份候选——
-            # 用户通常把 issue 分配给该账号，仅以 remote token 账号扫描会
-            # 静默漏扫（扫描为 0 且无任何报错）
-            if username:
-                try:
-                    uid = client.get_user_id_by_username(username)
-                except GitLabError as e:
-                    logger.warning("对账仓库 %s：按用户名 %s 解析 bot 身份失败: %s",
-                                   repo["name"], username, e)
-                    uid = None
-                if uid and uid not in bot_ids:
-                    bot_ids.append(uid)
             logger.info("对账仓库 %s：全局 bot 身份不可用，改用 remote 身份 %s",
                         repo["name"], bot_ids)
+        else:
+            return 0, 0, [f"仓库 {repo['name']}: 全局 token 失效且 remote 无内嵌 token"]
+        # issue #65 + #487：remote URL 用户名（如 agent）也作为 bot 身份候选——
+        # 用户通常把 issue 分配给该账号，仅以全局 bot 账号扫描会静默漏扫
+        # （扫描为 0 且无任何报错）。该合并不再局限于「全局 bot 身份不可用」
+        # 的降级路径：全局身份可用时同样纳入 remote 用户名账号，保证分配给
+        # @agent 的 issue 在任务结束后能被对账自动补入队、自动开始下一个任务。
+        if username:
+            try:
+                uid = client.get_user_id_by_username(username)
+            except GitLabError as e:
+                logger.warning("对账仓库 %s：按用户名 %s 解析 bot 身份失败: %s",
+                               repo["name"], username, e)
+                uid = None
+            if uid and uid not in bot_ids:
+                bot_ids.append(uid)
         issues: list[dict] = []
         try:
             seen_iids: set[int] = set()

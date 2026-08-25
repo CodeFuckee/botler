@@ -481,3 +481,67 @@ class TestWebhookMaintenanceMode:
         assert result["accepted"] is True
         task = ctx.db.find_active_task(PROJECT_ID, IID)
         assert task is not None
+
+
+class TestWebhookRemoteUsernameIdentityAlwaysIncluded:
+    """issue #487：任务结束后没有自动开始下一个任务（webhook 侧）。
+
+    与对账同源缺陷：全局 bot 身份可用（get_bot_id 正常返回）时，webhook
+    只按全局 bot 账号判定 assignee，remote URL 用户名对应账号（@agent）
+    被忽略——分配给 @agent 的 issue 事件被拒绝入队，任务无法自动开始。
+    issue #65 的 remote 身份合并仅发生在全局身份获取失败的降级路径，
+    全局身份正常时同样需要纳入该身份。
+    """
+
+    @staticmethod
+    def _add_local_repo(db, tmp_path, project_id=PROJECT_ID, name="demo") -> int:
+        import subprocess
+        repo_dir = tmp_path / name
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo_dir)],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo_dir), "remote", "add", "origin",
+                        "https://agent:glpat-repo@gitlab.example.com/group/repo.git"],
+                       check=True)
+        return db.upsert_repo(
+            project_id=project_id, name=name,
+            url=f"https://gitlab.example.com/{name}.git",
+            local_path=str(repo_dir), remote_name="origin")
+
+    def test_accepts_remote_username_issue_when_global_bot_ok(
+            self, ctx, tmp_path, monkeypatch):
+        """全局 bot 身份可用（get_bot_id 正常）时，分配给 @agent（remote
+        URL 用户名对应 id=3）的 issue 事件也应接受入队。"""
+        self._add_local_repo(ctx.db, tmp_path)
+        # 全局身份可用：StubGitLab.get_bot_id 返回 BOT_ID=99，不抛错
+        ctx.gitlab.current_issue = make_api_issue(
+            labels=["bug"], assignees=[{"id": 3, "username": "agent"}])
+        fallback = TestWebhookBotIdentityFallback._FallbackStub(
+            bot_id=11, username_ids={"agent": 3})
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"),
+                            raising=False)
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        # 修复前：bot_ids=[99]，assignee 3 不在其中 → 拒绝入队
+        assert result["accepted"] is True
+        assert ctx.db.find_active_task(PROJECT_ID, IID) is not None
+
+    def test_still_rejects_issue_not_assigned_to_bot(
+            self, ctx, tmp_path, monkeypatch):
+        """全局身份 + remote 身份都不匹配 assignee 时仍拒绝（不误领取）。"""
+        self._add_local_repo(ctx.db, tmp_path)
+        ctx.gitlab.current_issue = make_api_issue(
+            labels=["bug"], assignees=[{"id": 55, "username": "other"}])
+        # remote 用户名 agent 查无此人（username_ids 为空）
+        fallback = TestWebhookBotIdentityFallback._FallbackStub(
+            bot_id=11, username_ids={})
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "agent"),
+                            raising=False)
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert "bot" in result["reason"]
+        assert ctx.db.count_tasks() == 0

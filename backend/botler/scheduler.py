@@ -68,7 +68,16 @@ class TaskScheduler:
                         task_id, task["project_id"], task["issue_iid"], active["id"])
             return False
         with self._lock:
-            self._queues[task["repo_id"]].append(task_id)
+            q = self._queues[task["repo_id"]]
+            # 同一任务幂等（issue #487）：start() 重启恢复时
+            # requeue_interrupted 恢复的任务会同时出现在两个入队循环中，
+            # 重复入队会导致任务完成后多一个空转 worker（claim 失败
+            # 「已被其他实例领取」），浪费一次派发周期。
+            if task_id in q:
+                logger.info("任务 %s 已在队列中，跳过重复入队（%s#%s）",
+                            task_id, task["project_id"], task["issue_iid"])
+                return True
+            q.append(task_id)
         logger.info("任务 %s 入队（%s#%s）", task_id, task["project_id"], task["issue_iid"])
         return True
 
