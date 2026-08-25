@@ -509,11 +509,15 @@ class Database:
     """线程安全的 SQLite 封装。"""
 
     def __init__(self, path: str = DB_PATH, *,
-                 event_publisher: Callable[[dict], None] | None = None):
+                 event_publisher: Callable[[dict], None] | None = None,
+                 check_same_thread: bool = True):
         # issue #478：全局事件发布回调（main.py 注入 global_bus.publish），
         # 任务创建/状态变化时广播 task 事件，前端 SSE 订阅后事件驱动刷新
         self._event_publisher = event_publisher
         self.path = path
+        # issue #486：check_same_thread 默认保持 True（每连接仅被所属线程
+        # 使用）；测试可传 False 以便任意线程关闭连接（见 close_all）
+        self._check_same_thread = check_same_thread
         # issue #191：连接复用——每线程各持一条长连接（threading.local），
         # 连接只初始化一次（WAL/busy_timeout/row_factory），后续复用不再
         # 重复 PRAGMA；写事务通过 _write_lock 跨线程串行化（WAL 下读可
@@ -1031,7 +1035,8 @@ class Database:
         """
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self.path, timeout=30)
+            conn = sqlite3.connect(
+                self.path, timeout=30, check_same_thread=self._check_same_thread)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=30000")
@@ -1139,6 +1144,25 @@ class Database:
         if conn is not None:
             conn.close()
             self._local.conn = None
+
+    def close_all(self) -> None:
+        """关闭注册表中的全部连接（含其他线程创建的），并清空引用。
+
+        issue #486：FastAPI TestClient 的同步路由在独立线程执行，会在
+        _conns 注册表中追加线程连接；close() 仅关闭当前线程的连接，
+        其余线程的连接在 Windows 上仍占用 db 文件，导致测试临时目录
+        清理失败（PermissionError: [WinError 32]）。本方法配合
+        check_same_thread=False 的测试库，可在任意线程确定性关闭全部
+        连接；生产默认连接（check_same_thread=True）不受影响。
+        """
+        _close_all_connections(self._conns)
+        self._conns.clear()
+        # 当前线程持有的连接引用一并清空（其他线程的 threading.local
+        # 由各自线程退出时自动释放，测试中 teardown 后不再访问）
+        try:
+            self._local.conn = None
+        except Exception:
+            pass
 
     @contextmanager
     def _conn(self, write: bool = False):

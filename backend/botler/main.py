@@ -97,7 +97,8 @@ class AppContext:
     config_path: str = ""
 
 
-def build_context(config_path: str | None = None, db_path: str | None = None) -> AppContext:
+def build_context(config_path: str | None = None, db_path: str | None = None,
+                 db_check_same_thread: bool = True) -> AppContext:
     config = ConfigManager(config_path or os.environ.get("BOTLER_CONFIG", str(BACKEND_DIR / "config.yaml")))
     settings = config.load()
     # 统一日志脱敏（issue #259）：配置中声明的凭据 Key（gitlab token /
@@ -114,7 +115,10 @@ def build_context(config_path: str | None = None, db_path: str | None = None) ->
     # issue #486：测试隔离可用 db_path 指定临时库；生产调用不传则
     # 沿用 DB_PATH（BOTLER_DB 环境变量 / 默认 backend/botler.db），
     # 避免测试写入真实数据库
-    db = Database(path=db_path or DB_PATH, event_publisher=global_bus.publish)
+    # issue #486：测试可用 db_check_same_thread=False 关闭跨线程连接
+    # （fixture teardown close_all 需要）；生产默认 True 语义不变
+    db = Database(path=db_path or DB_PATH, event_publisher=global_bus.publish,
+                  check_same_thread=db_check_same_thread)
     # 启动即应用配置，保证首次 webhook/手动对账前所有 GitLab API
     # 请求也使用用户设定的共享限速；Reconciler 每轮再刷新以支持热重载。
     configure_default_rate_limiter(settings.gitlab_api_requests_per_second)

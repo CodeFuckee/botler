@@ -68,16 +68,21 @@ def app():
         config_path = f"{td}/config.yaml"
         with open(config_path, "w", encoding="utf-8") as f:
             f.write(CONFIG_TEXT)
-        ctx = build_context(config_path, db_path=f"{td}/events.db")
+        # issue #486：check_same_thread=False 允许 fixture teardown 跨
+        # 线程关闭全部连接（close_all），Windows CI 上临时目录才能删除
+        ctx = build_context(
+            config_path, db_path=f"{td}/events.db", db_check_same_thread=False)
         app = FastAPI()
         app.state.ctx = ctx
         app.include_router(api_router)
         yield app
-        # issue #486：fixture 结束前显式关闭 sqlite 连接，否则 Windows
-        # CI runner 上临时目录中的 events.db 仍被占用，TemporaryDirectory
-        # 清理时报 PermissionError: [WinError 32]（Linux 无此限制故本地
-        # 不报错）。与 test_audit_logs.py 的 ctx.db.close() 惯例一致。
-        ctx.db.close()
+        # issue #486：fixture 结束前关闭全部 sqlite 连接——TestClient 的
+        # 同步路由在独立线程执行，会在 _conns 注册表中追加线程连接，
+        # close() 只关当前线程的连接，其余线程的连接在 Windows runner 上
+        # 仍占用 events.db，TemporaryDirectory 清理时报
+        # PermissionError: [WinError 32]（Linux 无此限制故本地不报错）；
+        # close_all() 配合 check_same_thread=False 可确定性关闭全部连接。
+        ctx.db.close_all()
 
 
 # ---- AppEventBus 单元测试 ----

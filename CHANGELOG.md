@@ -206,11 +206,18 @@
     inspiration 事件广播 + 列表不再出现）；`test_inspiration_write_publishes`
     改为创建后即删除、数据不残留；
   - 已清理生产库中本次 bug 残留的 demo 仓库（软删除）与 2 条「测试灵感」。
-  - 补充（CI 流水线 #1446/#1447 暴露）：临时库目录在 Windows runner 上清理
-    失败（`PermissionError: [WinError 32]`，`events.db` 仍被 sqlite 连接占用），
-    app fixture teardown 显式 `ctx.db.close()` 后再释放 `TemporaryDirectory`，
-    与 `test_audit_logs.py` 既有惯例一致；修复后 Windows CI 全量测试
-    3289 passed / 7 errors → 全绿。
+  - 补充（CI 流水线 #1446/#1447/#1448 暴露）：临时库目录在 Windows runner 上
+    清理仍失败（`PermissionError: [WinError 32]`，`events.db` 被 sqlite 连接
+    占用）。最终根因：`Database.close()` 只关闭当前线程的连接
+    （threading.local，issue #191），而 TestClient 的同步路由在独立线程
+    执行，会在 `_conns` 注册表追加线程连接——这些连接在 Windows 上持续
+    占用 `events.db`，fixture teardown 释放 `TemporaryDirectory` 时必然
+    报错；Linux 无文件占用限制故本地不报错。
+    - 修复：`Database` 新增 `check_same_thread` 参数（默认 True，生产语义
+      不变）与 `close_all()` 方法（确定性关闭注册表中的全部连接），
+      `build_context` 新增 `db_check_same_thread` 透传；app fixture 以
+      `db_check_same_thread=False` 构建测试库并在 teardown 调用
+      `ctx.db.close_all()`。修复后 Windows CI backend:test 全绿。
 
 - **修复「backend:test 已迁移到另一台服务器，但运行该阶段时生产页面仍卡顿」的历史遗留问题（issue #481）**：
   - 深入诊断结论：backend:test 已确实迁移到 windows 标签 runner（runner
