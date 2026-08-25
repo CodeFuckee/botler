@@ -221,24 +221,20 @@ def _parse_json_array(text: str) -> list | None:
     return None
 
 
-def _chat_once(c, provider_cfg: dict, system: str, user_content: str,
+def _chat_once(c, providers: list[dict], system: str, user_content: str,
                timeout: float) -> str:
-    """调用 AI 对话模型（复用设置页「AI API 供应商」第一个启用且 Key 非空
-    的项，与灵感/自省同一链路）；失败抛 HTTPException(502)。"""
-    from ..chat_models import ChatModelClient, ChatModelError
+    """调用 AI 对话模型（复用设置页「AI API 供应商」配置，issue #495：
+    按优先级逐个尝试，额度不足/调用失败自动切换下一个启用供应商，
+    与灵感/自省同一链路）；全部失败抛 HTTPException(502)。"""
+    from ..chat_models import ChatModelError, chat_with_fallback
     try:
-        chat = ChatModelClient(
-            name=str(provider_cfg.get("name") or "AI 供应商"),
-            provider=str(provider_cfg.get("provider") or "custom").strip(),
-            base_url=str(provider_cfg.get("base_url") or "").strip(),
-            api_key=str(provider_cfg.get("api_key") or "").strip(),
-            model=str(provider_cfg.get("model") or "").strip(),
+        reply, _used = chat_with_fallback(
+            providers, [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
             timeout=timeout,
             verify_ssl=getattr(c.config.get(), "verify_ssl", True))
-        reply = chat.chat([
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ])
     except ChatModelError as e:
         raise HTTPException(502, f"AI 调用失败: {e}") from e
     except httpx.HTTPError as e:
@@ -290,12 +286,12 @@ def discover_repo(request: Request, repo_id: int):
     if not row["enabled"]:
         raise HTTPException(400, "仓库未启用")
 
-    # AI 对话模型：复用设置页「AI API 供应商」第一个启用且 Key 非空的项
-    # （与灵感对话 issue #166 / 自省 issue #187 同一链路）
+    # AI 对话模型：复用设置页「AI API 供应商」配置（issue #495：按
+    # 优先级数字小优先取全部启用且有 Key 的项，调用失败自动切换）
     settings = c.config.get()
-    from ..chat_models import resolve_chat_provider
-    provider_cfg = resolve_chat_provider(settings)
-    if provider_cfg is None:
+    from ..chat_models import sorted_chat_providers
+    providers = sorted_chat_providers(settings)
+    if not providers:
         raise HTTPException(
             400, "未配置 AI 对话模型：请先在设置页「AI API 供应商」添加"
                  "并启用一个供应商（需填写 API Key）")
@@ -317,7 +313,7 @@ def discover_repo(request: Request, repo_id: int):
     user_content = _build_review_prompt(row, local_ctx, gitlab_ctx)
 
     # 2. AI 第一轮：基于项目功能生成 GitHub 搜索关键词（严格 JSON 数组）
-    reply_query = _chat_once(c, provider_cfg, DISCOVER_QUERY_SYSTEM_PROMPT,
+    reply_query = _chat_once(c, providers, DISCOVER_QUERY_SYSTEM_PROMPT,
                              user_content, DISCOVER_TIMEOUT_QUERY)
     parsed_query = _parse_json_array(reply_query)
     queries = [str(q).strip() for q in parsed_query or []
@@ -369,7 +365,7 @@ def discover_repo(request: Request, repo_id: int):
     requirements: list[dict] = []
     if raw_issues:
         # 5.1 AI 第二轮：把原始需求整理成若干条需求（严格 JSON 数组）
-        reply_agg = _chat_once(c, provider_cfg, DISCOVER_AGGREGATE_SYSTEM_PROMPT,
+        reply_agg = _chat_once(c, providers, DISCOVER_AGGREGATE_SYSTEM_PROMPT,
                                _build_requirements_prompt(row, raw_issues),
                                DISCOVER_TIMEOUT_AGGREGATE)
         parsed_agg = _parse_json_array(reply_agg)

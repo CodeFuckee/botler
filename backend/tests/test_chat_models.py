@@ -327,3 +327,183 @@ class TestResolveChatProvider:
             {"name": "a", "provider": "deepseek", "api_key": "sk"},
         ])
         assert resolve_chat_provider(settings)["name"] == "a"
+
+
+class TestPriorityAndFallback:
+    """AI 供应商优先级排序与额度不足自动切换（issue #495）。
+
+    覆盖：priority 数字小优先（与 repos[].priority 语义一致，issue #51）、
+    同优先级保持列表顺序、历史配置缺省 100 兼容、禁用/无 Key 过滤、
+    调用失败自动切换下一供应商、成功即停、全部失败汇总错误。
+    """
+
+    @staticmethod
+    def _fallback_factory(handler_map: dict) -> callable:
+        """按供应商 name 分发 HTTP handler 的 client 工厂（注入 MockTransport）。"""
+        def factory(cfg: dict):
+            handler = handler_map.get(cfg["name"], _ok_handler)
+            client = ChatModelClient(
+                name=cfg["name"],
+                provider=str(cfg.get("provider") or "deepseek"),
+                api_key=str(cfg.get("api_key") or "sk-test"),
+                model=str(cfg.get("model") or ""),
+            )
+            client._http = httpx.Client(transport=httpx.MockTransport(handler))
+            return client
+        return factory
+
+    @staticmethod
+    def _fail_handler(status_code: int = 402, text: str = ""):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(status_code, text=text or "boom")
+        return handler
+
+    # ---- 优先级排序 ----
+
+    def test_priority_smaller_first(self):
+        """priority 数字小优先级高（与 repos[].priority 语义一致）。"""
+        settings = SimpleNamespace(ai_providers=[
+            {"name": "low", "provider": "deepseek", "api_key": "sk-a",
+             "priority": 200},
+            {"name": "high", "provider": "openai", "api_key": "sk-b",
+             "priority": 50},
+        ])
+        assert resolve_chat_provider(settings)["name"] == "high"
+
+    def test_same_priority_keeps_list_order(self):
+        """同优先级按列表顺序（第一个启用项优先，与旧版行为一致）。"""
+        settings = SimpleNamespace(ai_providers=[
+            {"name": "first", "provider": "deepseek", "api_key": "sk-a"},
+            {"name": "second", "provider": "openai", "api_key": "sk-b"},
+        ])
+        assert resolve_chat_provider(settings)["name"] == "first"
+
+    def test_missing_priority_defaults_100(self):
+        """历史配置无 priority 字段默认 100，与显式 100 同优先级保持顺序。"""
+        settings = SimpleNamespace(ai_providers=[
+            {"name": "no-pri", "provider": "deepseek", "api_key": "sk-a"},
+            {"name": "pri-100", "provider": "openai", "api_key": "sk-b",
+             "priority": 100},
+        ])
+        assert resolve_chat_provider(settings)["name"] == "no-pri"
+
+    def test_invalid_priority_falls_back_to_default(self):
+        """priority 非法值（None / 非数字）按默认 100 参与排序。"""
+        settings = SimpleNamespace(ai_providers=[
+            {"name": "bad", "provider": "deepseek", "api_key": "sk-a",
+             "priority": "abc"},
+            {"name": "ok", "provider": "openai", "api_key": "sk-b",
+             "priority": 99},
+        ])
+        assert resolve_chat_provider(settings)["name"] == "ok"
+
+    def test_sorted_filters_disabled_and_missing_key(self):
+        """排序结果只含启用且有 Key 的供应商。"""
+        from botler.chat_models import sorted_chat_providers
+        providers = sorted_chat_providers(SimpleNamespace(ai_providers=[
+            {"name": "off", "provider": "deepseek", "api_key": "sk",
+             "enabled": False, "priority": 1},
+            {"name": "nokey", "provider": "openai", "api_key": "",
+             "priority": 2},
+            {"name": "ok1", "provider": "deepseek", "api_key": "sk-1",
+             "priority": 5},
+            {"name": "ok2", "provider": "openai", "api_key": "sk-2",
+             "priority": 3},
+        ]))
+        assert [p["name"] for p in providers] == ["ok2", "ok1"]
+
+    def test_sorted_empty(self):
+        """空列表 / None 返回空列表。"""
+        from botler.chat_models import sorted_chat_providers
+        assert sorted_chat_providers(SimpleNamespace(ai_providers=[])) == []
+        assert sorted_chat_providers(SimpleNamespace(ai_providers=None)) == []
+
+    # ---- 失败自动切换 ----
+
+    def test_fallback_first_failure_then_success(self):
+        """第一个供应商额度不足（402）失败，自动切换第二个并成功。"""
+        from botler.chat_models import chat_with_fallback
+        providers = [
+            {"name": "a", "provider": "deepseek", "api_key": "sk-a",
+             "priority": 1},
+            {"name": "b", "provider": "openai", "api_key": "sk-b",
+             "priority": 2},
+        ]
+        reply, used = chat_with_fallback(
+            providers, [{"role": "user", "content": "hi"}],
+            client_factory=self._fallback_factory(
+                {"a": self._fail_handler(402, "Insufficient Balance")}))
+        assert reply == "你好，我是 AI"
+        assert used["name"] == "b"
+
+    def test_fallback_stops_at_first_success(self):
+        """成功即停：不再调用后续供应商（按优先级顺序尝试）。"""
+        from botler.chat_models import chat_with_fallback
+        calls: list[str] = []
+
+        def handler_a(request: httpx.Request) -> httpx.Response:
+            calls.append("a")
+            return httpx.Response(500, text="boom")
+
+        def handler_b(request: httpx.Request) -> httpx.Response:
+            calls.append("b")
+            return _ok_handler(request)
+
+        def handler_c(request: httpx.Request) -> httpx.Response:
+            calls.append("c")
+            return _ok_handler(request)
+
+        providers = [
+            {"name": "a", "provider": "deepseek", "api_key": "sk-a",
+             "priority": 1},
+            {"name": "b", "provider": "openai", "api_key": "sk-b",
+             "priority": 2},
+            {"name": "c", "provider": "anthropic", "api_key": "sk-c",
+             "priority": 3},
+        ]
+        reply, used = chat_with_fallback(
+            providers, [{"role": "user", "content": "hi"}],
+            client_factory=self._fallback_factory({
+                "a": handler_a, "b": handler_b, "c": handler_c}))
+        assert reply == "你好，我是 AI"
+        assert used["name"] == "b"
+        assert calls == ["a", "b"], "第三个供应商不应被调用"
+
+    def test_fallback_all_failed_raises_summary(self):
+        """全部失败抛汇总错误，逐供应商标注失败原因。"""
+        from botler.chat_models import chat_with_fallback
+        providers = [
+            {"name": "甲", "provider": "deepseek", "api_key": "sk-a",
+             "priority": 1},
+            {"name": "乙", "provider": "openai", "api_key": "sk-b",
+             "priority": 2},
+        ]
+        with pytest.raises(ChatModelError) as ei:
+            chat_with_fallback(
+                providers, [{"role": "user", "content": "hi"}],
+                client_factory=self._fallback_factory({
+                    "甲": self._fail_handler(402, "Insufficient Balance"),
+                    "乙": self._fail_handler(429, "Rate limit exceeded"),
+                }))
+        msg = str(ei.value)
+        assert "甲" in msg and "乙" in msg, "汇总错误应包含每个供应商名"
+        assert "所有 AI 供应商" in msg
+
+    def test_fallback_empty_providers_raises(self):
+        """空候选列表抛可读错误。"""
+        from botler.chat_models import chat_with_fallback
+        with pytest.raises(ChatModelError, match="未配置"):
+            chat_with_fallback([], [{"role": "user", "content": "hi"}])
+
+    def test_fallback_single_provider_success(self):
+        """单供应商直接成功（显式指定场景，不切换）。"""
+        from botler.chat_models import chat_with_fallback
+        providers = [
+            {"name": "only", "provider": "deepseek", "api_key": "sk-a",
+             "priority": 100},
+        ]
+        reply, used = chat_with_fallback(
+            providers, [{"role": "user", "content": "hi"}],
+            client_factory=self._fallback_factory({}))
+        assert reply == "你好，我是 AI"
+        assert used["name"] == "only"

@@ -94,3 +94,16 @@ test('styles.css 提供供应商卡片样式（provider-logo / provider-form / p
     )
   }
 })
+
+// ---- issue #495：供应商优先级（1~999 整数，数字小优先级高，缺省 100）----
+
+test('供应商表单与列表支持优先级（默认 100，1~999 数字小优先）', () => {
+  assert.match(card, /priority: 100/, 'EMPTY_FORM 默认优先级应为 100')
+  assert.match(card, /<th>优先级<\/th>/, '列表表头应有「优先级」列')
+  assert.match(card, /\{p\.priority \?\? 100\}/, '列表行应展示优先级（缺省 100）')
+  assert.match(card, /type="number"\s*\n\s*min="1"\s*\n\s*max="999"/, '编辑表单应有 1~999 数字输入框')
+  assert.match(card, /数字越小优先级越高/, '优先级输入框应有语义提示')
+  assert.match(card, /优先级必须是 1~999 的整数/, '提交时应校验 1~999 范围')
+  assert.match(card, /额度不足 \/ 调用失败后自动切换/, '说明文案应提到额度不足自动切换')
+  assert.match(card, /colSpan=\{6\}/, '空列表行应覆盖 6 列')
+})

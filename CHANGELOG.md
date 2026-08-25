@@ -6,6 +6,27 @@
 
 ### Added
 
+- **AI API 供应商支持优先级设置与额度不足自动切换（issue #495）**：
+  - 数据：`ai_providers[].priority` 新增 1~999 整数（**数字小优先级高**，缺省
+    100，与仓库调度优先级 `repos[].priority` 同语义，issue #51）；历史配置无
+    该字段自动按 100 处理，行为与旧版（取第一个启用且有 Key 的项）完全兼容；
+  - 后端：`chat_models.py` 新增 `sorted_chat_providers`（按优先级升序过滤
+    启用且有 API Key 的供应商，同优先级保持列表顺序）与 `chat_with_fallback`
+    （按优先级逐个调用，当前供应商额度不足 / 调用失败自动切换下一个启用
+    供应商，全部失败返回逐供应商汇总错误；空回复视为「内容问题」交由调用方
+    处理，不触发切换）；`resolve_chat_provider` 改为选择优先级最高的项；
+  - 调用接入：灵感 AI 对话（默认路径）/ 仓库发掘 / 仓库自省 / 生成图标统一
+    走 fallback 调用，显式指定供应商保持「硬选择」不自动切换；dsh 引擎凭据
+    回退中非 deepseek 中转站候选按优先级选择（issue #395 基础上）；
+  - 校验与存储：`api/settings.py` `_validate_ai_providers` 校验 priority 为
+    1~999 整数（缺省 100，纯数字字符串归一为整数，非法 / 越界 400）；
+    config.yaml 加载防御性兜底默认 100；GET /api/settings 返回 priority 字段；
+  - 前端：设置页「AI API 供应商」卡片新增「优先级」列与 1~999 数字输入框
+    （提示「数字越小优先级越高」），说明文案更新；
+  - 测试：后端新增排序 / fallback 切换 / 校验边界用例（test_chat_models /
+    test_api_settings / test_executor_dsh），前端新增表单与列表断言
+    （settings-ai-providers-card.test.mjs）；全量测试通过、ruff / eslint 通过。
+
 - **统一代码平台适配层（Provider），降低 GitLab 强绑定（issue #484）**：
   - 新增 `backend/botler/providers/` 子包：`Provider` 抽象接口 + 通用领域模型
     （`PullRequest` / `ChangeRequest` / `Issue` / `IssueComment` / `Pipeline` /

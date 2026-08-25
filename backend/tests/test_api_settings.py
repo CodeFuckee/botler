@@ -432,6 +432,48 @@ class TestAiProvidersSettings:
         finally:
             os.environ.pop("BOTLER_TEST_DEEPSEEK_KEY", None)
 
+    # ---- issue #495：供应商优先级（1~999 整数，数字小优先，缺省 100）----
+
+    def test_put_ai_providers_priority_persists(self, client):
+        """priority 持久化写回 config.yaml 并可读回。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ai_providers": [
+            {**self.PROVIDER, "priority": 20},
+        ]})
+        assert resp.status_code == 200
+        providers = resp.json()["ai_providers"]
+        assert providers[0]["priority"] == 20
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "priority: 20" in config_text
+
+    def test_put_ai_providers_priority_defaults_100(self, client):
+        """未配置 priority 时默认 100（与 repos[].priority 默认一致）。"""
+        tc, tmp_path = client
+        resp = tc.put("/api/settings", json={"ai_providers": [self.PROVIDER]})
+        assert resp.status_code == 200
+        assert resp.json()["ai_providers"][0]["priority"] == 100
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "priority: 100" in config_text
+
+    def test_put_ai_providers_priority_string_number_ok(self, client):
+        """纯数字字符串归一为整数（前端 number 输入可能提交字符串）。"""
+        tc, _ = client
+        resp = tc.put("/api/settings", json={"ai_providers": [
+            {**self.PROVIDER, "priority": "30"},
+        ]})
+        assert resp.status_code == 200
+        assert resp.json()["ai_providers"][0]["priority"] == 30
+
+    def test_put_ai_providers_rejects_invalid_priority(self, client):
+        """非整数 / 越界（1~999 之外）→ 400。"""
+        tc, _ = client
+        for bad in ["abc", 1.5, 0, -1, 1000, None, True]:
+            resp = tc.put("/api/settings", json={"ai_providers": [
+                {**self.PROVIDER, "priority": bad},
+            ]})
+            assert resp.status_code == 400, f"priority={bad!r} 应被拒绝"
+            assert "priority" in resp.json()["detail"]
+
 
 class TestImageModelsSettings:
     """image_models 段：生图模型配置（issue #135，设置页「生图模型」卡片）。

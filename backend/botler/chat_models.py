@@ -80,6 +80,12 @@ ANTHROPIC_MAX_TOKENS = 1024
 # 支持供应商清单展示用（错误提示列出可选值）
 SUPPORTED_PROVIDERS = sorted(DEFAULT_BASE_URLS)
 
+# AI 供应商默认优先级（issue #495）：与仓库调度优先级 repos[].priority
+# （issue #51）同语义——1~999 整数，数字越小优先级越高，缺省 100；
+# 历史配置无 priority 字段时按 100 参与排序（全部同值 → 保持列表顺序，
+# 与旧版「取第一个启用项」行为完全兼容）。
+DEFAULT_PRIORITY = 100
+
 
 class ChatModelError(RuntimeError):
     """AI 对话模型调用失败（缺 key / 缺 Base URL / 不支持的 provider /
@@ -341,17 +347,101 @@ class ChatModelClient:
         return reply
 
 
+def _provider_priority(p: dict) -> int:
+    """解析供应商 priority（issue #495）：缺省 DEFAULT_PRIORITY。
+
+    历史配置无 priority 字段 / 值为 None 或非法时按默认 100 参与排序；
+    校验层（_validate_ai_providers）已保证合法值，此处仅防御性兜底。
+    """
+    try:
+        return int(p.get("priority", DEFAULT_PRIORITY))
+    except (TypeError, ValueError):
+        return DEFAULT_PRIORITY
+
+
+def sorted_chat_providers(settings) -> list[dict]:
+    """返回启用且有 API Key 的 AI 对话供应商，按优先级升序（issue #495）。
+
+    过滤 enabled 且 api_key 非空的项；排序键为 priority（数字小优先级
+    高，与 repos[].priority 同语义，issue #51），同优先级保持列表原有
+    顺序（Python sorted 稳定排序）——历史配置全部默认 100 时行为与旧版
+    「取第一个启用项」完全一致。
+    """
+    providers = [
+        p for p in (getattr(settings, "ai_providers", None) or [])
+        if (isinstance(p, dict)
+            and bool(p.get("enabled", True))
+            and str(p.get("api_key") or "").strip())
+    ]
+    return sorted(providers, key=_provider_priority)
+
+
 def resolve_chat_provider(settings) -> dict | None:
-    """解析灵感对话使用的 AI 供应商配置（issue #166）。
+    """解析灵感对话使用的 AI 供应商配置（issue #166 / #495）。
 
     复用设置页「AI API 供应商」列表（ai_providers，issue #46）：取
-    第一个 enabled 且 api_key 非空的项作为灵感对话模型。用户可通过
-    调整列表顺序 / 启用开关选择灵感对话使用的模型；未配置返回 None
-    （调用方报 400 引导设置页配置）。
+    优先级最高（priority 数字小，缺省 100）且 enabled、api_key 非空
+    的项作为灵感对话模型。用户可通过调整优先级 / 启用开关选择灵感
+    对话使用的模型；未配置返回 None（调用方报 400 引导设置页配置）。
     """
-    for p in getattr(settings, "ai_providers", None) or []:
-        if (isinstance(p, dict)
-                and bool(p.get("enabled", True))
-                and str(p.get("api_key") or "").strip()):
-            return p
-    return None
+    providers = sorted_chat_providers(settings)
+    return providers[0] if providers else None
+
+
+def chat_with_fallback(
+    providers: list[dict],
+    messages: list[dict[str, str]],
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+    verify_ssl: bool = True,
+    client_factory=None,
+) -> tuple[str, dict]:
+    """按优先级顺序调用 AI 对话供应商，失败自动切换下一个（issue #495）。
+
+    需求语义：优先使用启用的高优先级供应商；当该供应商没有额度
+    （余额不足 402 / 限流 429 / Key 无效 / 网络异常等任何调用失败）后，
+    自动切换到下一个启用的低优先级供应商，直到成功或全部失败。
+
+    :param providers: 已按优先级排序的候选供应商配置列表
+        （由 :func:`sorted_chat_providers` 产出；显式指定供应商的场景
+        可传单元素列表，失败即抛错保持「硬选择」语义）。
+    :param messages: OpenAI 兼容消息列表，透传给 ChatModelClient.chat。
+    :param client_factory: 测试注入用——自定义 ChatModelClient 构造器
+        （接收 provider_cfg 返回客户端实例）；None 时按默认参数构造。
+    :return: ``(reply, provider_cfg)``——第一个调用成功的供应商回复与其
+        配置（调用方可用 provider 名提示用户实际由哪个供应商作答）。
+    :raises ChatModelError: 无候选 / 全部供应商调用失败（错误信息逐条
+        列出每个供应商的失败原因，便于用户对照配置诊断）。
+    """
+    if not providers:
+        raise ChatModelError(
+            "未配置可用的 AI 对话供应商：请先在设置页「AI API 供应商」"
+            "添加并启用至少一个供应商（需填写 API Key）")
+    errors: list[str] = []
+    for cfg in providers:
+        name = str(cfg.get("name") or cfg.get("provider") or "AI 供应商")
+        try:
+            if client_factory is not None:
+                client = client_factory(cfg)
+            else:
+                client = ChatModelClient(
+                    name=name,
+                    provider=str(cfg.get("provider") or "custom").strip(),
+                    base_url=str(cfg.get("base_url") or "").strip(),
+                    api_key=str(cfg.get("api_key") or "").strip(),
+                    model=str(cfg.get("model") or "").strip(),
+                    timeout=timeout,
+                    verify_ssl=verify_ssl)
+            reply = client.chat(messages)
+        except ChatModelError as e:
+            errors.append(f"「{name}」: {e}")
+            continue
+        # 空回复属于「内容问题」而非「额度不足」：不触发切换，由调用方
+        # 按业务语义自行检查（如「AI 回复为空」「提示词为空」）
+        return (reply or "").strip(), cfg
+    if len(providers) == 1:
+        # 单供应商（显式指定 / 唯一候选）：直接透传原始错误（不带
+        # 「所有供应商」包装），保持旧版错误消息语义
+        raise ChatModelError(errors[0] if errors else "AI 调用失败")
+    raise ChatModelError(
+        "所有 AI 供应商调用失败：" + "；".join(errors))

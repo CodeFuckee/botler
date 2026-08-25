@@ -279,6 +279,54 @@ class TestDshCredentials:
         ex = _mk_executor(tmp_path, config)
         assert ex._dsh_credentials(config.get()) == (None, None, None)
 
+    def test_non_deepseek_fallback_respects_priority(self, tmp_path):
+        """（issue #495）非 deepseek 中转站候选按优先级（数字小优先，
+        缺省 100）取第一个——不再固定取列表第一项。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: 中转站A
+  provider: custom
+  base_url: https://gw-a.example.com/v1
+  api_key: sk-a
+  model: deepseek-v4-pro
+  priority: 200
+  enabled: true
+- name: 中转站B
+  provider: custom
+  base_url: https://gw-b.example.com/v1
+  api_key: sk-b
+  model: deepseek-v4-flash
+  priority: 50
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        api_key, base_url, model = ex._dsh_credentials(config.get())
+        assert (api_key, base_url, model) == (
+            "sk-b", "https://gw-b.example.com/v1", "deepseek-v4-flash")
+
+    def test_non_deepseek_fallback_priority_default_100(self, tmp_path):
+        """（issue #495）候选未配置 priority（历史数据）默认 100——
+        与显式 100 同优先级保持列表顺序。"""
+        config = _mk_config(
+            tmp_path,
+            ai_providers_extra="""
+- name: 旧配置A
+  provider: custom
+  base_url: https://gw-a.example.com/v1
+  api_key: sk-a
+  enabled: true
+- name: 旧配置B
+  provider: custom
+  base_url: https://gw-b.example.com/v1
+  api_key: sk-b
+  priority: 100
+  enabled: true
+""")
+        ex = _mk_executor(tmp_path, config)
+        api_key, base_url, _model = ex._dsh_credentials(config.get())
+        assert api_key == "sk-a", "同优先级（默认 100）应保持列表顺序"
+
 
 
     def test_provider_model_follows_credentials_chain(self, tmp_path):

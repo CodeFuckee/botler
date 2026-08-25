@@ -9,7 +9,7 @@ import { AI_PROVIDER_PRESETS, presetOf, providerName, ProviderLogo } from '../pr
 //
 // 与 SSO 卡片一致的交互约定：卡片内独立保存按钮（只提交 ai_providers 段，
 // 不影响其他设置）；API Key 留空 = 保持现有（后端掩码回填）。
-const EMPTY_FORM = { name: '', provider: 'deepseek', base_url: '', api_key: '', model: '', enabled: true }
+const EMPTY_FORM = { name: '', provider: 'deepseek', base_url: '', api_key: '', model: '', enabled: true, priority: 100 }
 
 export default function AiProvidersCard() {
   const [providers, setProviders] = useState(null) // null = 加载中
@@ -63,6 +63,13 @@ export default function AiProvidersCard() {
     if (providers.some((p, idx) => p.name === form.name && idx !== editing.index)) {
       setError(`供应商名称重复: ${form.name}`); return
     }
+    // issue #495：优先级 1~999 整数（数字小优先级高，缺省 100，
+    // 与仓库调度优先级 repos[].priority 同语义）
+    const pri = Number(form.priority)
+    if (!Number.isInteger(pri) || pri < 1 || pri > 999) {
+      setError('优先级必须是 1~999 的整数（数字越小优先级越高）'); return
+    }
+    form.priority = pri
     const list = [...providers]
     const entry = { ...form, api_key: apiKeyInput.trim() }
     if (editing.index === null) list.push(entry)
@@ -111,11 +118,11 @@ export default function AiProvidersCard() {
 
       <table className="table provider-table">
         <thead>
-          <tr><th>供应商</th><th>类型</th><th>默认模型</th><th>状态</th><th>操作</th></tr>
+          <tr><th>供应商</th><th>类型</th><th>默认模型</th><th>优先级</th><th>状态</th><th>操作</th></tr>
         </thead>
         <tbody>
           {providers.length === 0 && (
-            <tr><td colSpan={5} className="muted center">尚未配置供应商，点击下方「添加供应商」开始配置</td></tr>
+            <tr><td colSpan={6} className="muted center">尚未配置供应商，点击下方「添加供应商」开始配置</td></tr>
           )}
           {providers.map((p, i) => (
             <tr key={p.name}>
@@ -127,6 +134,7 @@ export default function AiProvidersCard() {
               </td>
               <td className="muted small">{providerName(p.provider)}</td>
               <td><code>{p.model || '—'}</code></td>
+              <td><code>{p.priority ?? 100}</code></td>
               <td>{p.enabled
                 ? <span className="ok-text"><Icon name="check" /> 启用</span>
                 : <span className="muted">停用</span>}</td>
@@ -201,6 +209,18 @@ export default function AiProvidersCard() {
                 onChange={(e) => setForm('model', e.target.value.trim())}
               />
             </label>
+            <label className="provider-field">
+              优先级
+              <input
+                className="input grow"
+                type="number"
+                min="1"
+                max="999"
+                placeholder="1~999，数字越小优先级越高"
+                value={editing.form.priority ?? 100}
+                onChange={(e) => setForm('priority', e.target.value)}
+              />
+            </label>
             <label className="checkbox-label">
               <input
                 type="checkbox"
@@ -233,9 +253,11 @@ export default function AiProvidersCard() {
         {saved && <span className="saved-hint"><Icon name="check" /> 已保存</span>}
       </div>
       <p className="muted small">
-        为后续 AI 功能配置可用的 API 供应商（本期仅存储配置，不接入实际调用）。
-        选择预设类型会自动填充默认 Base URL 与模型（均可修改）；API Key 保存后仅显示掩码，
-        编辑时留空 = 保持现有。修改后点击「保存 AI 供应商配置」写回 config.yaml，重启后不丢失。
+        为 AI 功能配置可用的 API 供应商。选择预设类型会自动填充默认 Base URL 与模型
+        （均可修改）；API Key 保存后仅显示掩码，编辑时留空 = 保持现有。
+        优先级为 1~999 整数（数字越小优先级越高，缺省 100）：调用 AI 时优先使用
+        启用的高优先级供应商，该供应商额度不足 / 调用失败后自动切换下一个启用的
+        供应商。修改后点击「保存 AI 供应商配置」写回 config.yaml，重启后不丢失。
       </p>
     </div>
   )

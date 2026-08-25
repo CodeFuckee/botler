@@ -735,11 +735,22 @@ def send_inspiration_message(request: Request, inspiration_id: int,
         raise HTTPException(400, "消息内容不能为空")
     if len(content) > MAX_CHAT_CONTENT_LEN:
         raise HTTPException(400, f"消息内容不能超过 {MAX_CHAT_CONTENT_LEN} 字")
-    # 对话模型按显式参数 → 灵感保存值 → 首个可用项回退，保持旧兼容行为。
-    from ..chat_models import ChatModelClient, ChatModelError
+    # 对话模型按显式参数 → 灵感保存值 → 默认按优先级回退（issue #495）。
+    from ..chat_models import ChatModelError
     settings = c.config.get()
-    provider_cfg = _select_chat_provider(settings, body.provider, insp["chat_provider"])
-    if provider_cfg is None:
+    # issue #495：默认按供应商优先级（priority 数字小优先，缺省 100）
+    # 取全部启用且有 Key 的供应商，调用失败自动切换下一个；显式指定
+    # （本次请求或灵感历史保存）保持「硬选择」语义，仅调用该供应商。
+    from ..chat_models import chat_with_fallback, sorted_chat_providers
+    requested_key = str(body.provider or "").strip()
+    saved_key = str(insp["chat_provider"] or "").strip()
+    if requested_key or saved_key:
+        provider_cfg = _select_chat_provider(
+            settings, body.provider, insp["chat_provider"])
+        providers = [provider_cfg] if provider_cfg is not None else []
+    else:
+        providers = sorted_chat_providers(settings)
+    if not providers:
         raise HTTPException(
             400, "未配置 AI 对话模型：请先在设置页「AI API 供应商」添加"
                  "并启用一个供应商（需填写 API Key）")
@@ -762,15 +773,11 @@ def send_inspiration_message(request: Request, inspiration_id: int,
     # 保证对话历史成对完整
     user_msg_id = c.db.add_inspiration_message(inspiration_id, "user", content)
     try:
-        client = ChatModelClient(
-            name=str(provider_cfg.get("name") or "AI 供应商"),
-            provider=str(provider_cfg.get("provider") or "custom").strip(),
-            base_url=str(provider_cfg.get("base_url") or "").strip(),
-            api_key=str(provider_cfg.get("api_key") or "").strip(),
-            model=str(provider_cfg.get("model") or "").strip(),
-            timeout=CHAT_TIMEOUT,
+        # issue #495：按优先级逐个尝试，额度不足/调用失败自动切换下一
+        # 个启用供应商；全部失败抛汇总错误（含每个供应商失败原因）
+        reply, _used = chat_with_fallback(
+            providers, messages, timeout=CHAT_TIMEOUT,
             verify_ssl=getattr(settings, "verify_ssl", True))
-        reply = client.chat(messages)
     except ChatModelError as e:
         c.db.delete_inspiration_message(user_msg_id)
         raise HTTPException(502, f"AI 回复失败: {e}") from e

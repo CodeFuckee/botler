@@ -215,7 +215,9 @@ def get_settings(request: Request):
             "verify_ssl": s.sso_verify_ssl,
         },
         "ai_providers": [
-            # AI API 供应商（issue #46）：api_key 只返回掩码，明文不流转到界面
+            # AI API 供应商（issue #46/#495）：api_key 只返回掩码，明文不
+            # 流转到界面；priority 为 1~999 整数（数字小优先级高，缺省 100，
+            # 与 repos[].priority 同语义，issue #51）
             {
                 "name": p["name"],
                 "provider": p["provider"],
@@ -223,6 +225,7 @@ def get_settings(request: Request):
                 "api_key_masked": _mask(p["api_key"]),
                 "model": p["model"],
                 "enabled": p["enabled"],
+                "priority": p.get("priority", 100),
             }
             for p in s.ai_providers
         ],
@@ -1322,6 +1325,19 @@ def _validate_ai_providers(patch, current: list[dict]) -> list[dict]:
         enabled = item.get("enabled", True)
         if not isinstance(enabled, bool):
             raise HTTPException(400, f"{name}.enabled 必须是布尔值")
+        # priority（issue #495）：1~999 整数，数字小优先级高，缺省 100
+        # （与 repos[].priority 同语义，issue #51）。接受 int 或纯数字
+        # 字符串（前端 number 输入框可能提交字符串）；bool / 浮点 / 越界
+        # 一律 400，防止配置写坏。
+        priority = item.get("priority", 100)
+        if isinstance(priority, bool) or not isinstance(priority, int):
+            if isinstance(priority, str) and priority.strip().isdigit():
+                priority = int(priority.strip())
+            else:
+                raise HTTPException(
+                    400, f"{name}.priority 必须是 1~999 的整数")
+        if not 1 <= priority <= 999:
+            raise HTTPException(400, f"{name}.priority 必须是 1~999 的整数")
         if not api_key.strip() or "*" in api_key:
             api_key = by_name[name]["api_key"] if name in by_name else ""
         cleaned.append({
@@ -1331,6 +1347,7 @@ def _validate_ai_providers(patch, current: list[dict]) -> list[dict]:
             "api_key": api_key,
             "model": model,
             "enabled": enabled,
+            "priority": priority,
         })
     return cleaned
 

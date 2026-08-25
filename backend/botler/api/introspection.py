@@ -303,12 +303,12 @@ def introspect_repo(request: Request, repo_id: int):
     if not row["enabled"]:
         raise HTTPException(400, "仓库未启用")
 
-    # AI 审查模型：复用设置页「AI API 供应商」第一个启用且 Key 非空的项
-    # （与灵感 AI 对话 issue #166 同一链路）
-    from ..chat_models import ChatModelClient, ChatModelError, resolve_chat_provider
+    # AI 审查模型：复用设置页「AI API 供应商」配置（issue #495：按
+    # 优先级数字小优先取全部启用且有 Key 的项，调用失败自动切换）
+    from ..chat_models import ChatModelError, chat_with_fallback,         sorted_chat_providers
     settings = c.config.get()
-    provider_cfg = resolve_chat_provider(settings)
-    if provider_cfg is None:
+    providers = sorted_chat_providers(settings)
+    if not providers:
         raise HTTPException(
             400, "未配置 AI 对话模型：请先在设置页「AI API 供应商」添加"
                  "并启用一个供应商（需填写 API Key）")
@@ -329,18 +329,15 @@ def introspect_repo(request: Request, repo_id: int):
 
     user_content = _build_review_prompt(row, local_ctx, gitlab_ctx)
     try:
-        chat = ChatModelClient(
-            name=str(provider_cfg.get("name") or "AI 供应商"),
-            provider=str(provider_cfg.get("provider") or "custom").strip(),
-            base_url=str(provider_cfg.get("base_url") or "").strip(),
-            api_key=str(provider_cfg.get("api_key") or "").strip(),
-            model=str(provider_cfg.get("model") or "").strip(),
+        # issue #495：按优先级逐个尝试，额度不足/调用失败自动切换下一
+        # 个启用供应商；全部失败抛汇总错误（含每个供应商失败原因）
+        review, _used = chat_with_fallback(
+            providers, [
+                {"role": "system", "content": INTROSPECT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
             timeout=INTROSPECT_TIMEOUT,
             verify_ssl=getattr(settings, "verify_ssl", True))
-        review = chat.chat([
-            {"role": "system", "content": INTROSPECT_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ])
     except ChatModelError as e:
         raise HTTPException(502, f"AI 审查失败: {e}") from e
     except httpx.HTTPError as e:

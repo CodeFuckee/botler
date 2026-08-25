@@ -68,6 +68,14 @@ DECISION_QUESTION_RE = re.compile(
 )
 
 
+def _safe_int(value, default: int = 0) -> int:
+    """宽容解析整数（config.yaml 手改可能写坏，防御性兜底）。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class ProcessMixin:
     """引擎进程执行与结果判定（依赖 ClaudeExecutor 实例状态）。"""
 
@@ -612,12 +620,17 @@ class ProcessMixin:
                 and bool(p.get("enabled", True))
                 and str(p.get("api_key", "") or "").strip()
             ]
-            # 优先 provider=deepseek（issue #115），否则取列表第一个
-            # 启用的 OpenAI 兼容中转站项（issue #395）
+            # 优先 provider=deepseek（issue #115），否则取启用的 OpenAI
+            # 兼容中转站项中优先级最高（priority 数字小优先，缺省 100，
+            # issue #495，与 repos[].priority 同语义）的第一个
             provider = next(
                 (p for p in candidates
                  if str(p.get("provider", "")).strip() == "deepseek"),
-                None) or (candidates[0] if candidates else None)
+                None)
+            if provider is None and candidates:
+                provider = sorted(
+                    candidates,
+                    key=lambda p: _safe_int(p.get("priority"), 100))[0]
             if provider is not None:
                 api_key = str(provider.get("api_key", "")).strip() or None
                 base_url = base_url or (

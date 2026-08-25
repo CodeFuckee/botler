@@ -50,6 +50,14 @@ def _expand_env(value: Any) -> Any:
     return value
 
 
+def _safe_int(value, default: int = 0) -> int:
+    """宽容解析整数（config.yaml 手改可能写坏，防御性兜底）。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _notify_default(notify: dict, key: str, default: bool) -> bool:
     """读取通知开关配置：缺省或非布尔值回退默认（issue #21）。"""
     val = notify.get(key, default)
@@ -879,6 +887,10 @@ class ConfigManager:
                     "api_key": str(p.get("api_key") or ""),
                     "model": str(p.get("model", "")).strip(),
                     "enabled": bool(p.get("enabled", True)),
+                    # priority（issue #495）：1~999 整数，数字小优先级高，
+                    # 缺省 100（与 repos[].priority 同语义，issue #51）；
+                    # yaml 手改可能写坏，防御性兜底默认 100
+                    "priority": _safe_int(p.get("priority"), 100),
                 }
                 for p in providers_raw
                 if isinstance(p, dict) and p.get("name")

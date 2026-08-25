@@ -392,12 +392,12 @@ def generate_repo_logo(request: Request, repo_id: int):
     # issue #323：未启用仓库同样允许「生成图标」——停用只影响任务调度，
     # 不限制仓库设置页的 logo 生成/同步操作（sync-logo 本就未校验 enabled）
 
-    # 1. AI 对话模型：复用设置页「AI API 供应商」第一个启用且 Key 非空的
-    #    项（与自省 issue #187 / 灵感 issue #166 同一链路）
-    from ..chat_models import ChatModelClient, ChatModelError, resolve_chat_provider
+    # 1. AI 对话模型：复用设置页「AI API 供应商」配置（issue #495：按
+    #    优先级数字小优先取全部启用且有 Key 的项，调用失败自动切换）
+    from ..chat_models import ChatModelError, chat_with_fallback,         sorted_chat_providers
     settings = c.config.get()
-    provider_cfg = resolve_chat_provider(settings)
-    if provider_cfg is None:
+    providers = sorted_chat_providers(settings)
+    if not providers:
         raise HTTPException(
             400, "未配置 AI 对话模型：请先在设置页「AI API 供应商」添加"
                  "并启用一个供应商（需填写 API Key）")
@@ -420,20 +420,16 @@ def generate_repo_logo(request: Request, repo_id: int):
                        row["id"], e)
         readme = None
 
-    # 4. 调用 AI 生成 logo 提示词
+    # 4. 调用 AI 生成 logo 提示词（issue #495：失败自动切换下一供应商）
     try:
-        chat = ChatModelClient(
-            name=str(provider_cfg.get("name") or "AI 供应商"),
-            provider=str(provider_cfg.get("provider") or "custom").strip(),
-            base_url=str(provider_cfg.get("base_url") or "").strip(),
-            api_key=str(provider_cfg.get("api_key") or "").strip(),
-            model=str(provider_cfg.get("model") or "").strip(),
+        logo_prompt, _used = chat_with_fallback(
+            providers, [
+                {"role": "system", "content": GENERATE_PROMPT_SYSTEM},
+                {"role": "user",
+                 "content": _build_prompt_user_content(row, readme)},
+            ],
             timeout=GENERATE_LOGO_TIMEOUT,
             verify_ssl=getattr(settings, "verify_ssl", True))
-        logo_prompt = chat.chat([
-            {"role": "system", "content": GENERATE_PROMPT_SYSTEM},
-            {"role": "user", "content": _build_prompt_user_content(row, readme)},
-        ])
     except ChatModelError as e:
         raise HTTPException(502, f"AI 生成提示词失败: {e}") from e
     except httpx.HTTPError as e:
