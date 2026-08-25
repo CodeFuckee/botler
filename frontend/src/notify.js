@@ -97,11 +97,14 @@ export async function sendTestNotification() {
   }
 }
 
-// 创建轮询器：opts = { getEvents(after), getSettings(), onError?, show? }
+// 创建轮询器：opts = { getEvents(after), getSettings(), onError?, onEvents?, onData? }
 // show 默认用 showNotification（测试可注入收集函数）。
 // 返回 { poll, getCursor }；poll 一次 = 拉取 → 过滤 → 弹通知 → 推进游标。
+// onData：每次轮询成功都回调（含无新事件），供导航栏未读徽标读取
+// data.unread_count（issue #215）——已读操作后 App 触发一次 poll 即可
+// 立即刷新计数。
 export function createNotifyPoller(opts) {
-  const { getEvents, getSettings, onError, onEvents } = opts
+  const { getEvents, getSettings, onError, onEvents, onData } = opts
   const show = opts.show || showNotification
   let cursor = 0
   let first = true
@@ -109,11 +112,13 @@ export function createNotifyPoller(opts) {
     try {
       const [data, settings] = await Promise.all([getEvents(cursor), getSettings()])
       const events = data.events || []
+      // 全量数据回调（issue #215）：每次轮询都触发，导航栏未读徽标数据源
+      onData?.(data)
       // 新事件回调（issue #257）：任务状态变化等新事件到达时触发一次
       // 附加刷新（如导航栏水位徽章即时更新）——仅在确实有新事件时回调，
       // 不增加轮询请求频率
       if (data.latest_id > cursor) {
-        onEvents?.(events)
+        onEvents?.(events, data)
       }
       if (!first) {
         for (const ev of filterNotifyEvents(events, settings)) {

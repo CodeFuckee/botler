@@ -5,7 +5,7 @@ import { Link, Navigate, NavLink, Route, Routes } from 'react-router-dom'
 // 代码按需下载；页面切换期间由 <Suspense> fallback 展示轻量加载态
 import {
   Overview, Repos, Templates, Labels, Tasks, Stats, TaskDetail,
-  Settings, Plugins, Skills, Tools, Terminal, Login,
+  Settings, Plugins, Skills, Tools, Terminal, Notifications, Login,
 } from './pages/lazy.jsx'
 import DialogHost from './components/DialogHost.jsx'
 import ToastHost from './components/ToastHost.jsx'
@@ -17,6 +17,7 @@ import { useShortcuts } from './keymap.js'
 import { api, setDisplayTz, setSsoEnabled, shortSha } from './api.js'
 import { applyTheme, loadThemePreference, saveThemePreference, watchSystemTheme } from './theme.js'
 import { createNotifyPoller, POLL_INTERVAL_MS } from './notify.js'
+import { NOTIFICATION_CHANGED_EVENT } from './notify-center.js'
 import { usePolling } from './hooks/usePolling.js'
 import { useGlobalEvents } from './hooks/useGlobalEvents.js'
 import { createVersionChecker } from './version-update.js'
@@ -185,6 +186,10 @@ export default function App() {
   // 回调即时刷新（复用 10s 通知轮询，仅在新事件到达时触发一次，不增加
   // 请求频率）。silent=true：失败保留上次数据不弹 toast。
   const [watermark, setWatermark] = useState(null)
+  // 通知未读计数（issue #215）：来自通知轮询 /events 响应的 unread_count
+  //（onData 每次轮询更新，复用现有 10s 轮询零额外请求）；通知中心页标记
+  // 已读后广播 NOTIFICATION_CHANGED_EVENT，本组件触发一次 poll 立即刷新
+  const [unreadCount, setUnreadCount] = useState(0)
   const loadWatermark = useCallback(async () => {
     try {
       const d = await api.get('/api/tasks/watermark', { silent: true })
@@ -219,12 +224,30 @@ export default function App() {
       // 任务状态变化即时刷新水位徽章（issue #257）：通知轮询拉到新事件
       // （任务成功/失败/入队等）时额外拉一次水位，徽章数字跟随最新状态
       onEvents: () => loadWatermark(),
+      // 未读计数徽标（issue #215）：每次轮询（含无新事件）更新一次
+      onData: (data) => {
+        if (data && typeof data.unread_count === 'number') {
+          setUnreadCount(data.unread_count)
+        }
+      },
     })
   }
   const notifyPoll = useCallback(() => {
     if (notifyPollerRef.current) notifyPollerRef.current.poll()
   }, [])
   usePolling(notifyPoll, POLL_INTERVAL_MS, { enabled: notifyEnabled })
+
+  // 通知已读状态变化（issue #215）：通知中心页标记单条/全部已读后广播
+  // NOTIFICATION_CHANGED_EVENT，这里触发一次通知轮询立即刷新未读徽标
+  //（onData 每次轮询更新 unread_count，无需等待下一个 10s 周期）
+  useEffect(() => {
+    const onChanged = () => notifyPollerRef.current?.poll()
+    // 无 window 或 window 无 addEventListener（node 测试的 window mock）时跳过
+    if (typeof window === 'undefined' ||
+        typeof window.addEventListener !== 'function') return undefined
+    window.addEventListener(NOTIFICATION_CHANGED_EVENT, onChanged)
+    return () => window.removeEventListener(NOTIFICATION_CHANGED_EVENT, onChanged)
+  }, [])
 
   // 键盘快捷键（issue #269）：全站级绑定——t 跳转任务列表、
   // g o / g s 组合前往概览/设置页；n / r / / 为页面级绑定，由
@@ -362,6 +385,21 @@ export default function App() {
             <Icon name="clipboard" aria-hidden="true" />
             <span className="nav-label">{t('nav.tasks')}</span>
           </NavLink>
+          {/* 通知中心（issue #215）：未读计数徽标来自通知轮询 unread_count；
+              折叠态隐藏徽标（与 watermark 同规则）；点击进入通知中心页 */}
+          <NavLink
+            to="/notifications"
+            title={t('nav.notifications')}
+            className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}
+          >
+            <Icon name="bell" aria-hidden="true" />
+            <span className="nav-label">{t('nav.notifications')}</span>
+            {unreadCount > 0 && (
+              <span className="nav-badge notify-badge" title={t('nav.notificationsUnread', { n: unreadCount })}>
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </NavLink>
           {/* 维护模式徽章（issue #241）：开启时导航栏常驻「维护中」提示，
               数据来自 /api/tasks/watermark 的 maintenance_mode（15s 轮询
               同源，不额外增加请求频率）；折叠态隐藏（与 watermark 同规则） */}
@@ -495,6 +533,7 @@ export default function App() {
             <Route path="/repos" element={<Repos />} />
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/tasks/:id" element={<TaskDetail />} />
+            <Route path="/notifications" element={<Notifications />} />
             <Route path="/stats" element={<Stats />} />
             <Route path="/templates" element={<Templates />} />
             <Route path="/labels" element={<Labels />} />

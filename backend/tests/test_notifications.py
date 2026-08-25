@@ -425,7 +425,8 @@ class TestNotificationsApi:
         tc, _ = api_client
         resp = tc.get("/api/notifications/events")
         assert resp.status_code == 200
-        assert resp.json() == {"events": [], "latest_id": 0}
+        # issue #215：响应新增 unread_count（导航栏未读徽标数据源）
+        assert resp.json() == {"events": [], "latest_id": 0, "unread_count": 0}
 
     def test_get_events_incremental(self, api_client):
         """after 游标：只返回新事件，latest_id 为最新事件 id。"""
@@ -443,7 +444,8 @@ class TestNotificationsApi:
         tc, db = api_client
         Notifier(db).record("task_succeeded", "t", "b", task_id=1)
         resp = tc.get("/api/notifications/events?after=999")
-        assert resp.json() == {"events": [], "latest_id": 999}
+        # issue #215：unread_count 为全局未读数，与游标无关
+        assert resp.json() == {"events": [], "latest_id": 999, "unread_count": 1}
 
     def test_get_events_limit(self, api_client):
         """limit 限制返回条数，latest_id 为本次返回的最后一条（游标不丢事件）。

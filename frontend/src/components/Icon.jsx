@@ -8,7 +8,7 @@
 //   Lucide 无对应图形，不在图标替换范围内。
 import {
   Archive, ArchiveRestore,
-  ArrowLeft, ArrowUp, BarChart3, Bot, Brain, Check, CheckCircle2, CheckSquare, ChevronDown,
+  ArrowLeft, ArrowUp, BarChart3, Bell, Bot, Brain, Check, CheckCircle2, CheckSquare, ChevronDown,
   ChevronLeft, ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Eye,
   FileText, Flag, Folder, FolderOpen, GripVertical, Hourglass,
   Image as ImageIcon, Keyboard, LayoutGrid, LayoutList, Lightbulb, Lock, Menu, MessageCircle, Mic, Package,
@@ -22,6 +22,7 @@ export const ICONS = {
   archive: Archive,
   archiveRestore: ArchiveRestore,
   arrowLeft: ArrowLeft,
+  bell: Bell,
   arrowUp: ArrowUp,
   chart: BarChart3,
   bot: Bot,

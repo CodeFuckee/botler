@@ -432,5 +432,13 @@
   "overview.inspirationKeepLabel": "Keep inspiration and link (do not delete, show link on card)",
   "overview.inspirationKeepLabelTitle": "When checked, the inspiration is kept and linked to the created issue",
   "overview.inspirationKeepConfirm": "Confirm create",
-  "overview.inspirationBatchKeepLabel": "Keep and link"
+  "overview.inspirationBatchKeepLabel": "Keep and link",
+  "nav.notifications": "Notifications",
+  "nav.notificationsUnread": "{n} unread notification(s)",
+  "notifyCenter.title": "Notification Center",
+  "notifyCenter.empty": "No notifications",
+  "notifyCenter.markAllRead": "Mark all as read",
+  "notifyCenter.markAllReadTitle": "Mark all notifications as read",
+  "notifyCenter.markReadTitle": "Click to mark as read",
+  "notifyCenter.readTitle": "Read"
 }

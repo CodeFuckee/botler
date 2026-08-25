@@ -432,5 +432,13 @@
   "overview.inspirationKeepLabel": "保留灵感并关联（不删除，卡片展示关联链接）",
   "overview.inspirationKeepLabelTitle": "勾选后创建 issue 成功不删除该灵感，并记录 issue 关联",
   "overview.inspirationKeepConfirm": "确认创建",
-  "overview.inspirationBatchKeepLabel": "保留灵感并关联"
+  "overview.inspirationBatchKeepLabel": "保留灵感并关联",
+  "nav.notifications": "通知中心",
+  "nav.notificationsUnread": "未读通知 {n} 条",
+  "notifyCenter.title": "通知中心",
+  "notifyCenter.empty": "暂无通知",
+  "notifyCenter.markAllRead": "全部已读",
+  "notifyCenter.markAllReadTitle": "将全部通知标记为已读",
+  "notifyCenter.markReadTitle": "点击标记为已读",
+  "notifyCenter.readTitle": "已读"
 }

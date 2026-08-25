@@ -1,7 +1,8 @@
 // 左侧边栏「折叠/展开」测试（issue #324）：
 //
 // 需求：顶部导航选项卡过多（11 个）改为左侧边栏，可整体折叠/展开：
-//   - 展开态（默认）：240px 侧边栏，品牌 + 11 个导航项（图标+文字）
+//   - 展开态（默认）：240px 侧边栏，品牌 + 12 个导航项（图标+文字，
+//     issue #215 起含「通知中心」）
 //     + 底部工具区（语言切换 / 快捷键帮助 / 登录用户区）+ 收起按钮；
 //   - 折叠态：侧边栏收成 56px 图标窄栏（文字与底部工具区隐藏，
 //     仅保留图标导航，悬停 title 提示），点击展开按钮恢复；
@@ -131,15 +132,15 @@ test("saveSidebarCollapsed：写回 '1'/'0'；无存储/异常存储静默忽略
 
 // ---- 2. 源码断言 ----
 
-test('源码：App.jsx 渲染左侧边栏（品牌 + 11 个导航项 + 折叠按钮 + 底部工具区）', () => {
+test('源码：App.jsx 渲染左侧边栏（品牌 + 12 个导航项 + 折叠按钮 + 底部工具区）', () => {
   // 侧边栏容器：className 随折叠状态追加 collapsed
   assert.ok(appSrc.includes("className={'sidebar' + (sidebarCollapsed ? ' collapsed' : '') + (mobileNavOpen ? ' open' : '')}"),
     '侧边栏 className 应随折叠/抽屉状态切换')
   assert.match(appSrc, /aria-label=\{t\('nav\.ariaMain'\)\}/, '侧边栏应带主导航 aria-label')
-  // 11 个导航项全部在侧边栏内（to 与现有路由一一对应）
+  // 12 个导航项全部在侧边栏内（to 与现有路由一一对应；通知中心 issue #215）
   const navBlock = appSrc.match(/<nav[\s\S]*?<\/nav>/)[0]
-  const routes = ['overview', 'repos', 'tasks', 'stats', 'templates', 'labels',
-    'plugins', 'skills', 'tools', 'settings', 'terminal']
+  const routes = ['overview', 'repos', 'tasks', 'notifications', 'stats', 'templates',
+    'labels', 'plugins', 'skills', 'tools', 'settings', 'terminal']
   for (const r of routes) {
     assert.match(navBlock, new RegExp(`to="/${r}"`), `侧边栏应有 /${r} 导航项`)
   }
@@ -177,14 +178,14 @@ test('源码：折叠偏好存储键与持久化 effect 存在', () => {
 
 // ---- 3. 渲染：默认展开 ----
 
-test('渲染：默认展开（11 个导航项 + 收起按钮 + 无 collapsed 类）', async () => {
+test('渲染：默认展开（12 个导航项 + 收起按钮 + 无 collapsed 类）', async () => {
   const renderer = await renderApp('/')
   try {
     const sidebar = renderer.root.findAll((n) => String(n.props.className || '').includes('sidebar'))
     const navEl = sidebar.find((n) => String(n.props.className).includes('sidebar') && !String(n.props.className).includes('navlink'))
     assert.ok(navEl, '应渲染侧边栏容器')
     assert.ok(!String(navEl.props.className).includes('collapsed'), '默认应展开（无 collapsed 类）')
-    assert.equal(findNavlinks(renderer.root).length, 11, '应渲染全部 11 个导航项')
+    assert.equal(findNavlinks(renderer.root).length, 12, '应渲染全部 12 个导航项（含通知中心）')
     const toggle = findToggle(renderer.root)
     assert.equal(toggle.props['aria-expanded'], true, '展开态 aria-expanded 应为 true')
     assert.equal(toggle.props['aria-label'], '收起侧边栏', '展开态按钮文案应为「收起侧边栏」')

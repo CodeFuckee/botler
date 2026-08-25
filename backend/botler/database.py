@@ -327,7 +327,8 @@ CREATE TABLE IF NOT EXISTS notification_events (
   repo_name TEXT,
   task_id INTEGER,
   data TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  read_at TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notify_task
@@ -962,6 +963,18 @@ class Database:
                 "ON template_versions(template_key, id DESC)")
             conn.execute("PRAGMA user_version = 30")
             ver = 30
+
+        if ver < 31:
+            # issue #215：通知已读/未读状态——notification_events 加 read_at
+            # 列（NULL=未读，非空=已读时间）。新库由 _SCHEMA 直接创建；
+            # 旧库（user_version=30）首次启动时补列并显式推进版本号（与
+            # inspirations 补列 v28/v29 迁移同模式），存量通知默认未读。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(notification_events)")}
+            if "read_at" not in cols:
+                conn.execute(
+                    "ALTER TABLE notification_events ADD COLUMN read_at TEXT")
+            conn.execute("PRAGMA user_version = 31")
+            ver = 31
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -2543,6 +2556,42 @@ class Database:
             return conn.execute(
                 """SELECT * FROM notification_events WHERE id > ?
                    ORDER BY id ASC LIMIT ?""", (after_id, limit)).fetchall()
+
+    def list_recent_notifications(self, limit: int = 100) -> list[sqlite3.Row]:
+        """通知中心列表（issue #215）：最新优先返回最近 limit 条事件。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT * FROM notification_events
+                   ORDER BY id DESC LIMIT ?""", (limit,)).fetchall()
+
+    def mark_notification_read(self, notification_id: int) -> bool:
+        """标记单条通知已读（写 read_at）。不存在返回 False（幂等，重复标记仍 True）。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                """UPDATE notification_events SET read_at = datetime('now')
+                   WHERE id = ? AND read_at IS NULL""", (notification_id,))
+            # 已读行再标记不更新但视为成功（幂等）；仅当 id 不存在时返回 False
+            if cur.rowcount == 0:
+                exists = conn.execute(
+                    "SELECT 1 FROM notification_events WHERE id = ?",
+                    (notification_id,)).fetchone()
+                return exists is not None
+            return True
+
+    def mark_all_notifications_read(self) -> int:
+        """全部标记已读，返回本次更新的行数（已读行不计入，幂等）。"""
+        with self._conn(write=True) as conn:
+            cur = conn.execute(
+                """UPDATE notification_events SET read_at = datetime('now')
+                   WHERE read_at IS NULL""")
+            return cur.rowcount
+
+    def count_unread_notifications(self) -> int:
+        """未读通知计数（导航栏徽标数据源，issue #215）。"""
+        with self._conn() as conn:
+            return int(conn.execute(
+                "SELECT COUNT(*) FROM notification_events WHERE read_at IS NULL"
+            ).fetchone()[0])
 
     def last_notification(self, repo_name: str, type_: str) -> sqlite3.Row | None:
         """节流查询：同仓库同类型最近一条事件（无则 None）。"""

@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- **网页通知已读/未读状态与通知中心（issue #215）**：
+  - `notification_events` 表新增 `read_at` 列（迁移 v31；存量通知默认未读，
+    迁移平滑、数据不丢），列表接口返回 `read` 字段；
+  - 后端新增 `GET /api/notifications`（通知中心全量列表，最新优先，含全局
+    `unread_count`）、`POST /api/notifications/{id}/read`（单条已读，不存在
+    404）、`POST /api/notifications/read-all`（全部已读，幂等）；既有
+    `GET /api/notifications/events` 增量拉取响应新增 `unread_count`；
+  - 前端新增「通知中心」页（侧边栏导航 + 未读计数徽标）：未读条目点击标记
+    已读、顶部「全部已读」按钮、15s 轮询刷新；`bot-failed`（task_failed）
+    与平台告警（alert_*）类通知默认置顶高亮，避免需人工介入的通知被淹没；
+  - 导航栏未读徽标复用现有 10s 通知轮询的 `unread_count`（零额外请求），
+    通知中心已读操作后广播事件触发一次即时刷新；
+  - 测试：新增 `backend/tests/test_notification_read.py`（迁移 v31 / DB 已读
+    方法 / 已读 API 边界）与 `frontend/tests/notify-center.test.mjs`（排序
+    纯函数 / 页面渲染 / 交互 / 徽标）。
+
 ### Changed
 
 - **概览页/统计页/导航轮询改为 SSE 事件驱动刷新（issue #478）**：

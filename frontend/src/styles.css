@@ -6253,3 +6253,124 @@ body:has(.drawer-overlay) {
   color: var(--primary);
   font-weight: 600;
 }
+
+/* ---------------------------------------------------------------
+   通知中心（issue #215）：侧边栏未读徽标 + 通知中心页列表。
+   徽标：导航项右侧红色计数（折叠态隐藏，与 watermark 同规则）。
+   列表：未读行可点击标记已读（hover 高亮）、已读行置灰；
+   需人工介入类（task_failed / alert_*）默认置顶并橙色高亮。
+   --------------------------------------------------------------- */
+.sidebar-nav .navlink {
+  position: relative;
+}
+.nav-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--danger, #e5484d);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.sidebar.collapsed .nav-badge { display: none; }
+
+.notify-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 760px;
+}
+.notify-item {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--bg-card, var(--surface));
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.notify-item.unread {
+  border-left: 3px solid var(--primary);
+}
+.notify-item.notify-attn {
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
+}
+.notify-item.read {
+  opacity: 0.65;
+}
+.notify-item-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-3);
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}
+.notify-item-main:disabled { cursor: default; }
+.notify-item-main:not(:disabled):hover {
+  background: var(--bg-hover-soft);
+}
+.notify-item-main:not(:disabled):focus-visible { box-shadow: var(--focus-ring); }
+.notify-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
+}
+.notify-item.read .notify-dot { background: var(--hairline-strong, var(--hairline)); }
+.notify-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.notify-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+.notify-attn .notify-title { color: var(--warn); }
+.notify-text {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.notify-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.notify-repo {
+  color: var(--primary);
+  font-weight: 500;
+}
+.notify-type {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  background: var(--bg-hover-soft);
+  padding: 0 6px;
+  border-radius: 4px;
+}
+.notify-time {
+  white-space: nowrap;
+}

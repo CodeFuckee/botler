@@ -516,7 +516,7 @@ class TestMigrateInspirations:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
         assert "inspirations" in tables, "旧库应补出 inspirations 表"
         assert "inspiration_messages" in tables, "旧库应补出灵感 AI 对话消息表（issue #166）"
-        assert ver == 30, f"user_version 应推进到 30（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列；v30 模板版本历史表 template_versions），实际 {ver}"
+        assert ver == 31, f"user_version 应推进到 31（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列；v30 模板版本历史表 template_versions；v31 通知已读 read_at 列），实际 {ver}"
         assert "remote_username" in cols, "旧库应补出 remote_username 列"
 
     def test_new_db_has_inspirations_table(self, tmp_path):
@@ -606,7 +606,7 @@ class TestMigrateInspirationMessages:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "inspiration_messages" in tables, "旧库应补出灵感对话消息表"
         assert "idx_inspiration_messages_insp" in indexes, "旧库应补出消息索引"
-        assert ver == 30, f"user_version 应推进到 30（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列；v30 模板版本历史表 template_versions），实际 {ver}"
+        assert ver == 31, f"user_version 应推进到 31（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列；v30 模板版本历史表 template_versions；v31 通知已读 read_at 列），实际 {ver}"
 
     def test_new_db_has_inspiration_messages_table(self, tmp_path):
         """新库建表语句应直接含 inspiration_messages 表（无需迁移）。"""
@@ -671,7 +671,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols, "旧库应补出 tasks.environment 列"
-        assert ver == 30, f"user_version 应推进到 30（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列；v30 模板版本历史表 template_versions），实际 {ver}"
+        assert ver == 31, f"user_version 应推进到 31（v22 engine_fallback；v23 仓库级任务参数；v24 预检结果；v25 token_expires_at；v26 audit_logs；v27 repo_health；v28 灵感对话供应商；v29 灵感标签/归档/issue 关联列；v30 模板版本历史表 template_versions；v31 通知已读 read_at 列），实际 {ver}"
 
     def test_new_db_has_environment_column(self, tmp_path):
         """新库建表语句应直接含 environment 列（无需迁移）。"""
@@ -680,7 +680,7 @@ class TestMigrateEnvironment:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "environment" in cols
-        assert ver == 30
+        assert ver == 31
 
     def test_set_task_status_accepts_environment(self, tmp_path):
         """set_task_status 应能写入 environment（_TASK_FIELDS 白名单）。"""
@@ -738,7 +738,7 @@ class TestTaskProgressLedger:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "task_progress" in tables, "旧库应补出 task_progress 表"
-        assert ver == 30
+        assert ver == 31
 
     def test_record_and_latest_per_step(self, tmp_path):
         """record/list/latest：只增不改快照式，latest 取每步最新状态。"""
@@ -851,7 +851,7 @@ class TestMigrateInspirationChatProvider:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(inspirations)")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "chat_provider" in cols
-        assert ver == 30
+        assert ver == 31
 
     def test_new_db_persists_chat_provider_and_clear(self, tmp_path):
         db = Database(str(tmp_path / "new249.db"))
@@ -896,7 +896,7 @@ class TestMigrateInspirationLabelArchive:
         assert "archived" in cols
         assert "linked_issue_iid" in cols
         assert "linked_issue_url" in cols
-        assert ver == 30
+        assert ver == 31
 
     def test_new_db_has_label_archive_columns(self, tmp_path):
         """新库建表语句应直接含 label/archived/关联列（无需迁移）。"""
@@ -908,7 +908,7 @@ class TestMigrateInspirationLabelArchive:
         assert "archived" in cols
         assert "linked_issue_iid" in cols
         assert "linked_issue_url" in cols
-        assert ver == 30
+        assert ver == 31
 
     def test_create_with_label_and_archive_flow(self, tmp_path):
         """创建带标签的灵感；归档/取消归档；记录不存在返回 False。"""
@@ -1037,7 +1037,7 @@ class TestMigrateTemplateVersions:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert "template_versions" in tables, "旧库应补出 template_versions 表"
-        assert ver == 30, f"user_version 应推进到 30（v30 模板版本历史表），实际 {ver}"
+        assert ver == 31, f"user_version 应推进到 31（v30 模板版本历史表；v31 通知已读 read_at 列），实际 {ver}"
 
     def test_new_db_has_template_versions_table(self, tmp_path):
         """新库建表语句应直接含 template_versions 表（无需迁移）。"""

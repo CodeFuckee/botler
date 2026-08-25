@@ -22,7 +22,9 @@ Botler 面向需要持续维护多个 GitLab 仓库的团队，将「Issue → A
 - **可切换 AI 执行引擎**：支持 Claude Code、hermes-agent 和 deepseek-harness（DSH），
   可配置备用引擎，在主引擎不可用时降级重试。
 - **端到端可观测性**：在 Web 界面查看任务、日志、GitLab 流水线、统计数据、失败分类和
-  通知；支持手动执行、重试、暂停窗口和数据保留策略。
+  通知；支持手动执行、重试、暂停窗口和数据保留策略。通知中心（issue #215）汇总全部
+  通知事件并提供已读/未读状态：导航栏未读计数徽标、单条/全部已读、bot-failed 与平台
+  告警类通知置顶高亮，重要通知不再被淹没。
 - **仓库健康巡检**（issue #265）：定时检查每个启用仓库的 webhook 有效性 / token 有效性 /
   项目可达性，结果落库并在仓库列表展示健康徽章（正常 / 异常 / 未知）；webhook 缺失或
   secret 不匹配时自动重新注册，异常聚合通知（in_app + webhook 推送，节流防刷屏），
@@ -1053,7 +1055,10 @@ POST   /api/issues/{project_id}/{iid}/comments   添加 issue 评论（概览页
 POST   /api/issues/{project_id}/{iid}/comments/{note_id}/reply   回复 issue 某条评论（概览页右边栏「回复评论」，后端经 discussions API 解析评论所在线程后追加回复，issue #125）
 GET    /api/issues/{project_id}/members  项目成员清单（概览页右边栏负责人下拉数据源：GitLab members/all + user_id 补齐，成员精简为 {id, username, name}，id 为 GitLab 用户 id，issue #303）
 PUT    /api/issues/{project_id}/{iid}/assignee  更新 issue 负责人（assignee_id 为 GitLab 用户 id，null 清除负责人；编辑走 owner token 并同步 GitLab，成功后清缓存并返回更新后负责人列表，issue #303）
-GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21）
+GET    /api/notifications/events      通知事件增量拉取（游标 after，issue #21；issue #215 起事件含 read 字段，响应含全局 unread_count——导航栏未读徽标数据源）
+GET    /api/notifications             通知中心全量列表（最新优先，默认 100 条，issue #215；含 unread_count）
+POST   /api/notifications/read-all    全部通知标记已读（返回本次更新条数 updated，幂等，issue #215）
+POST   /api/notifications/{id}/read   标记单条通知已读（不存在返回 404，幂等，issue #215）
 GET    /api/environment               本地环境检测（服务器上 agent/基础工具安装与版本，issue #22）
 POST   /api/environment/upgrade      升级指定工具到最新版本并延迟重启服务（body: {key}，npm/pip/gh 按发布源分派，成功后服务自动重启；pypi 工具已是最新时返回 already_up_to_date 且不重启，issue #465/#470）
 POST   /api/environment/install      安装未安装且可自动安装的工具并延迟重启服务（body: {key}，npm/pip/gh 按发布源分派，成功后服务自动重启，issue #468）

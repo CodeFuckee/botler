@@ -28,6 +28,7 @@ export const PAGE_ROUTES = [
   { path: '/repos', name: '仓库管理', ready: 'main.content' },
   { path: '/tasks', name: '任务列表', ready: '.tasks-card-list, .table.tasks-table, main.content' },
   { path: '/tasks/1', name: '任务详情', ready: 'main.content' },
+  { path: '/notifications', name: '通知中心', ready: 'main.content' },
   { path: '/stats', name: '统计', ready: 'main.content' },
   { path: '/templates', name: '结果评论模板', ready: 'main.content' },
   { path: '/labels', name: '标签管理', ready: 'main.content' },

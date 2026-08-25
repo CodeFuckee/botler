@@ -21,6 +21,7 @@ const APP_ROUTES = [
   '/repos',
   '/tasks',
   '/tasks/1',
+  '/notifications',
   '/stats',
   '/templates',
   '/labels',

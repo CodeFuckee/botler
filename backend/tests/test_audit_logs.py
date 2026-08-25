@@ -242,7 +242,7 @@ class TestAuditDatabase:
                 ver = conn.execute("PRAGMA user_version").fetchone()[0]
             assert "audit_logs" in tables
             assert "repo_health" in tables  # issue #265：v27 迁移同链补建
-            assert ver == 30
+            assert ver == 31  # v30 模板版本历史表 + v31 通知已读 read_at 列（issue #215）
             # 新表可正常写入
             db.add_audit_log("alice", "repo.add", "repo", 1)
         finally:
