@@ -6,6 +6,25 @@
 
 ### Added
 
+- **流水线详情可切换查看「上一次全部成功的流水线」（issue #483）**：
+  - 后端 `GET /api/pipelines/overview` 每条仓库结果新增 `last_success_pipeline`
+    / `last_success_stages` / `last_success_commit_time` 字段：当前（最新）流水线
+    本身全部成功（GitLab status == success）时直接复用当前数据（零额外请求）；
+    否则回查流水线历史找最近一条成功记录并拉取其 jobs 聚合 stage 明细；
+    无成功记录 / 查询失败静默降级为 null/[]，不影响当前流水线展示
+    （与 commit_time issue #43 同降级策略）；
+  - `GitLabClient` 新增 `list_pipelines` 方法（项目最近流水线列表，id 倒序，
+    默认最多 200 条防无限翻页）；
+  - 前端流水线详情右边栏（`PipelineDrawer`）头部下方新增「当前流水线 /
+    上一次成功」切换：当前流水线非全部成功且存在历史成功记录时显示，
+    切换后展示上次成功流水线的整体状态、分支/提交、时间与阶段任务明细，
+    「在 GitLab 中打开」按钮同步指向对应流水线；切换时清空报告/截图选中态
+    （它们绑定特定流水线的 job）；
+  - 测试：后端 `tests/test_api_pipelines.py` 新增 `TestLastSuccessPipeline`
+    （复用/回查/无记录/查询失败静默降级/字段精简等 8 用例）；前端
+    `frontend/tests/overview-pipeline-drawer.test.mjs` 新增切换交互与边界用例
+    （同 id 隐藏切换、无记录隐藏、切回当前、跳转链接跟随视图）。
+
 - **网页通知已读/未读状态与通知中心（issue #215）**：
   - `notification_events` 表新增 `read_at` 列（迁移 v31；存量通知默认未读，
     迁移平滑、数据不丢），列表接口返回 `read` 字段；

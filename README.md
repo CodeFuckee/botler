@@ -366,6 +366,17 @@ npm install && npm run dev    # http://localhost:5173，/api 代理到 8000
 > 分开显示模式下为独立「标记活动」区块、按时间升序排列；开启合并时间线模式（issue #342）
 > 后标记活动并入时间线按时间交错展示，不再单独成区（issue #351）；加载失败自动降级不影响主内容。
 >
+> 💡 **流水线详情可查看上一次全部成功的流水线**（issue #483）：概览页 CI/CD 流水线
+> 板块点击仓库卡片打开详情右边栏后，抽屉头部下方提供「当前流水线 / 上一次成功」
+> 切换——当前（最新）流水线非全部成功且存在历史成功记录时显示。切换到「上一次
+> 成功」后展示最近一次全部成功（GitLab status == success）流水线的整体状态、
+> 分支/提交、创建/更新时间/时长与阶段任务明细，「在 GitLab 中打开」按钮同步指向
+> 该流水线；当前流水线本身已全部成功或无历史成功记录时不显示切换（两视图无差异）。
+> 数据由后端 `GET /api/pipelines/overview` 聚合（`last_success_pipeline` /
+> `last_success_stages` / `last_success_commit_time` 字段）：当前流水线已全部成功时
+> 直接复用当前数据（零额外 GitLab 请求），否则回查流水线历史找最近一条成功记录并
+> 拉取其 jobs 聚合；查询失败静默降级为 null，不影响当前流水线展示。
+>
 > 左侧边栏导航（issue #324）：顶部导航选项卡过多（11 个）改为左侧边栏，支持整体
 > **折叠/展开**——展开态 240px 展示图标+文字，折叠态收成 56px 图标窄栏（导航项
 > 悬停 title 提示目标页，最大化内容区）；折叠偏好持久化到浏览器本地（localStorage
@@ -1031,7 +1042,7 @@ GET    /api/skills/{engine}/files      技能目录内 md 文件列表（?skill=
 GET    /api/skills/{engine}/file       读取技能 md 文件内容（?skill=&path=，issue #282）
 PUT    /api/skills/{engine}/file       保存技能 md 文件内容（body: {skill, path, content}，仅允许技能目录内 md/markdown，issue #282）
 POST   /api/settings/reconcile-now    手动触发对账
-GET    /api/pipelines/overview       概览页 CI/CD 流水线聚合（所有配置仓库最新一次流水线整体状态 + 按 jobs 聚合的 stage 进度；job 明细含 id/name/status/allow_failure/web_url 与精简产物列表 artifacts——保留 archive 与报告类型、过滤 trace/metadata 噪音，issue #39/#329；10 秒 TTL 缓存，单仓库失败进 errors 不中断整体）
+GET    /api/pipelines/overview       概览页 CI/CD 流水线聚合（所有配置仓库最新一次流水线整体状态 + 按 jobs 聚合的 stage 进度；job 明细含 id/name/status/allow_failure/web_url 与精简产物列表 artifacts——保留 archive 与报告类型、过滤 trace/metadata 噪音，issue #39/#329；每条结果另带 last_success_pipeline/last_success_stages/last_success_commit_time——最近一次全部成功的流水线（issue #483）：当前流水线已全部成功时复用当前数据，否则回查历史找最近 success 并拉取 jobs 聚合，无记录/查询失败静默降级 null/[]；10 秒 TTL 缓存，单仓库失败进 errors 不中断整体）
 GET    /api/pipelines/{repo_id}/artifacts 下载指定 job 的流水线产物（?job_id=；后端代理 GitLab jobs artifacts zip 归档，per-repo token 优先回退全局 bot token，流式透传 + Content-Disposition attachment；无产物 404、GitLab 故障 502，issue #329）
 GET    /api/pipelines/{repo_id}/report 查看指定 job 的报告（?job_id=&file=&file_type=，issue #337）：后端代理 GitLab 单文件产物并解析为统一 JSON——file_type=sast 解析 SARIF 问题列表（bandit/semgrep/gitleaks）、dependency_scanning 解析依赖漏洞（deps-python/deps-frontend）、junit 解析测试用例明细（backend:test/frontend:build/e2e:playwright）；文件路径仅允许归档内相对路径（拒绝绝对路径/路径穿越），报告解析失败 502、文件不存在 404
 GET    /api/settings/deepseek-balance  DeepSeek 账户余额（概览页余额卡片数据源：设置里配置了 deepseek api 时后端代调 user/balance 接口返回余额，API Key 明文不外发，issue #138；「每小时余额变化速率」由前端基于历史观测样本计算，issue #304）

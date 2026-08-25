@@ -57,6 +57,10 @@ class StubGitLab:
         # 产物下载桩（issue #329）
         self.artifact_bytes: dict[tuple[int, int], bytes] = {}
         self.fail_artifacts: dict[int, GitLabError] = {}
+        # 流水线历史桩（issue #483）：list_pipelines 返回的列表，
+        # fail_list_pipelines 按 project_id 注入查询故障
+        self.pipelines_history: dict[int, list[dict]] = {}
+        self.fail_list_pipelines: set[int] = set()
         # 单文件报告下载桩（issue #337）：(project_id, job_id, path) → 字节
         self.artifact_files: dict[tuple[int, int, str], bytes] = {}
         self.fail_artifact_files: dict[int, GitLabError] = {}
@@ -73,6 +77,13 @@ class StubGitLab:
         if pipeline_id in self.fail_jobs_pipelines:
             raise GitLabError("模拟 jobs 查询故障")
         return self.jobs_by_pipeline.get(pipeline_id, [])
+
+    def list_pipelines(self, project_id):
+        """流水线历史列表桩（issue #483）：按 project_id 配置。"""
+        self.calls.append(f"list-pipelines:{project_id}")
+        if project_id in self.fail_list_pipelines:
+            raise GitLabError("模拟流水线列表查询故障")
+        return self.pipelines_history.get(project_id, [])
 
     def get_commit(self, project_id, sha):
         self.calls.append(f"commit:{project_id}:{sha}")
@@ -557,6 +568,190 @@ class TestOverviewCommitTime:
 
         data = resp.json()
         assert data["pipelines"][0]["commit_time"] is None
+
+
+# ---- 上一次全部成功的流水线（issue #483） ----
+
+class TestLastSuccessPipeline:
+    """概览每条结果带 last_success_* 数据：详情右边栏除当前流水线外可
+    切换查看最近一次全部成功的流水线。
+
+    规则：
+    - 当前（最新）流水线本身全部成功 → 直接复用当前数据（零额外请求）；
+    - 否则回查流水线历史（id 倒序）找最近一条 status == success，
+      拉取其 jobs 聚合 stages 与提交时间；
+    - 无成功记录 / 查询失败 → 静默降级 null/[]，不影响当前流水线展示。
+    """
+
+    def test_current_success_reuses_current_no_extra_calls(self, client):
+        """当前流水线已全部成功：last_success 复用当前数据且不再查询历史。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(731, status="success")}
+        stub.jobs_by_pipeline = {731: [
+            make_job(1, "build"), make_job(2, "test", status="success")]}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        entry = data["pipelines"][0]
+        assert entry["last_success_pipeline"]["id"] == 731
+        assert entry["last_success_stages"] == entry["stages"]
+        assert entry["last_success_commit_time"] == entry["commit_time"]
+        # 零额外请求：不查流水线历史
+        assert not any(c.startswith("list-pipelines:") for c in stub.calls)
+
+    def test_last_success_found_in_history(self, client):
+        """当前流水线失败：回查历史找到最近一条成功流水线并聚合明细。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(900, status="failed")}
+        stub.jobs_by_pipeline = {900: [make_job(9, "build", status="failed")]}
+        # 历史（id 倒序）：最近是 failed(899)，再往前是 success(898)
+        stub.pipelines_history = {42: [
+            make_pipeline(899, status="failed", sha="deadbee"),
+            make_pipeline(898, status="success", sha="beef123"),
+            make_pipeline(897, status="success", sha="cafe456"),
+        ]}
+        stub.jobs_by_pipeline[898] = [
+            make_job(81, "build"), make_job(82, "test", status="success")]
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        entry = data["pipelines"][0]
+        # 当前流水线保持原样
+        assert entry["pipeline"]["id"] == 900
+        assert entry["pipeline"]["status"] == "failed"
+        # 上一次成功 = 历史中最近一条 success（898，而非更早的 897）
+        assert entry["last_success_pipeline"]["id"] == 898
+        assert entry["last_success_pipeline"]["status"] == "success"
+        assert entry["last_success_pipeline"]["sha"] == "beef123"
+        assert [(s["name"], s["status"]) for s in entry["last_success_stages"]] == [
+            ("build", "success"), ("test", "success")]
+        assert "list-pipelines:42" in stub.calls
+        assert "jobs:42:898" in stub.calls
+        # 未拉取更早成功流水线 897 的 jobs
+        assert "jobs:42:897" not in stub.calls
+
+    def test_last_success_commit_time_included(self, client):
+        """上一次成功流水线对应提交的提交时间同样聚合。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(900, status="failed")}
+        stub.jobs_by_pipeline = {900: [make_job(9, "build", status="failed")]}
+        stub.pipelines_history = {42: [make_pipeline(898, status="success", sha="beef123")]}
+        stub.jobs_by_pipeline[898] = [make_job(81, "build")]
+        stub.commits_by_sha = {
+            (42, "beef123"): {"id": "beef123",
+                              "committed_date": "2026-08-13T12:00:00.000+08:00"}}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        data = resp.json()
+        entry = data["pipelines"][0]
+        assert entry["last_success_commit_time"] == "2026-08-13 04:00:00"
+        assert "commit:42:beef123" in stub.calls
+
+    def test_no_success_in_history_returns_null(self, client):
+        """历史中无成功记录：last_success 为 null/[]，当前展示不受影响。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(900, status="failed")}
+        stub.jobs_by_pipeline = {900: [make_job(9, "build", status="failed")]}
+        stub.pipelines_history = {42: [
+            make_pipeline(899, status="failed"),
+            make_pipeline(898, status="canceled"),
+            make_pipeline(897, status="running")]}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        entry = data["pipelines"][0]
+        assert entry["pipeline"]["id"] == 900
+        assert entry["last_success_pipeline"] is None
+        assert entry["last_success_stages"] == []
+        assert entry["last_success_commit_time"] is None
+
+    def test_list_pipelines_failure_silent(self, client):
+        """流水线历史查询失败：静默降级 null/[]，不进 errors（增强信息）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(900, status="failed")}
+        stub.jobs_by_pipeline = {900: [make_job(9, "build", status="failed")]}
+        stub.fail_list_pipelines = {42}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        entry = data["pipelines"][0]
+        assert entry["pipeline"]["id"] == 900  # 当前流水线展示不受影响
+        assert entry["last_success_pipeline"] is None
+        assert entry["last_success_stages"] == []
+
+    def test_last_success_jobs_failure_silent(self, client):
+        """找到成功流水线但 jobs 查询失败：静默降级，当前展示不受影响。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(900, status="failed")}
+        stub.jobs_by_pipeline = {900: [make_job(9, "build", status="failed")]}
+        stub.pipelines_history = {42: [make_pipeline(898, status="success")]}
+        stub.fail_jobs_pipelines = {898}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["errors"] == []
+        entry = data["pipelines"][0]
+        assert entry["pipeline"]["id"] == 900
+        assert entry["last_success_pipeline"] is None
+        assert entry["last_success_stages"] == []
+
+    def test_no_pipeline_skips_last_success_query(self, client):
+        """无流水线仓库：last_success 为 null/[] 且不查历史（避免无效请求）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db, project_id=42, name="a")
+        _add_repo(db, project_id=43, name="b")
+        stub.pipelines_by_project = {42: make_pipeline(731, status="success")}
+        stub.jobs_by_pipeline = {731: [make_job(1, "build")]}
+
+        resp = tc.get("/api/pipelines/overview")
+
+        data = resp.json()
+        b = next(p for p in data["pipelines"] if p["repo_name"] == "b")
+        assert b["pipeline"] is None
+        assert b["last_success_pipeline"] is None
+        assert b["last_success_stages"] == []
+        assert not any(c.startswith("list-pipelines:43") for c in stub.calls)
+
+    def test_last_success_trimmed_fields(self, client):
+        """上一次成功流水线同样只透传精简字段（含 web_url 供跳转）。"""
+        tc, stub, db, tmp_path = client
+        _add_repo(db)
+        stub.pipelines_by_project = {42: make_pipeline(900, status="failed")}
+        stub.jobs_by_pipeline = {900: [make_job(9, "build", status="failed")]}
+        raw = make_pipeline(898, status="success")
+        raw["user"] = {"id": 1}  # 无关字段应被精简
+        stub.pipelines_history = {42: [raw]}
+        stub.jobs_by_pipeline[898] = [make_job(81, "build")]
+
+        resp = tc.get("/api/pipelines/overview")
+
+        data = resp.json()
+        entry = data["pipelines"][0]
+        lp = entry["last_success_pipeline"]
+        assert lp["id"] == 898
+        assert lp["web_url"].endswith("/pipelines/898")
+        assert "user" not in lp, "无关字段应被精简"
 
 
 # ---- per-repo token（issue #60） ----

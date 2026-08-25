@@ -983,3 +983,163 @@ test('styles.css 提供截图视图样式（.pipeline-detail-screenshot-btn / .p
   assert.match(styles, /\.pipeline-detail-screenshot-btn\s*\{/, '应有「查看截图」按钮样式')
   assert.match(styles, /\.pipeline-screenshots\s*\{/, '应有截图视图容器样式')
 })
+
+// =====================================================================
+// issue #483：流水线详情可切换查看「上一次全部成功的流水线」
+// 当前（最新）流水线非全部成功时，抽屉头部下方提供「当前流水线 /
+// 上一次成功」切换；切换到上一次成功后展示其整体状态、分支/提交、
+// 时间与阶段任务明细（数据来自后端 /api/pipelines/overview 聚合的
+// last_success_* 字段）；当前流水线本身已全部成功或无历史成功记录时
+// 不显示切换。
+// =====================================================================
+
+// 当前流水线失败 + 存在上一次成功流水线的条目
+const LAST_SUCCESS_ENTRY = {
+  ...PIPELINE_ENTRY,
+  pipeline: {
+    id: 900, status: 'failed', ref: 'main', sha: 'deadbee000',
+    web_url: 'https://gitlab.example.com/chenkaidi/botler/-/pipelines/900',
+    created_at: '2026-08-20T08:00:00.000Z',
+    updated_at: '2026-08-20T08:05:00.000Z',
+    finished_at: '2026-08-20T08:05:00.000Z',
+    duration: 300,
+  },
+  stages: [
+    { name: 'build', status: 'failed', jobs: [
+      { id: 91, name: 'compile', status: 'failed',
+        web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/91', artifacts: [] },
+    ] },
+  ],
+  commit_time: '2026-08-20 08:00:00',
+  last_success_pipeline: {
+    id: 731, status: 'success', ref: 'main', sha: 'abc123def456',
+    web_url: 'https://gitlab.example.com/chenkaidi/botler/-/pipelines/731',
+    created_at: '2026-08-19T08:00:00.000Z',
+    updated_at: '2026-08-19T08:05:00.000Z',
+    finished_at: '2026-08-19T08:05:00.000Z',
+    duration: 300,
+  },
+  last_success_stages: [
+    { name: 'build', status: 'success', jobs: [
+      { id: 11, name: 'compile', status: 'success',
+        web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/11',
+        artifacts: [
+          { file_type: 'archive', filename: 'artifacts.zip',
+            size: 208520, file_format: 'zip' },
+        ] },
+    ] },
+    { name: 'test', status: 'success', jobs: [
+      { id: 22, name: 'unit', status: 'success',
+        web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/22',
+        artifacts: [] },
+    ] },
+  ],
+  last_success_commit_time: '2026-08-19 08:00:00',
+}
+
+// 数据流源码断言
+test('流水线切换：源码含「当前流水线 / 上一次成功」tab 与 last_success 数据（issue #483）', () => {
+  assert.match(drawerSrc, /当前流水线/, '应有「当前流水线」切换按钮文案')
+  assert.match(drawerSrc, /上一次成功/, '应有「上一次成功」切换按钮文案')
+  assert.match(drawerSrc, /last_success_pipeline/, '应消费后端 last_success_pipeline 字段')
+  assert.match(drawerSrc, /last_success_stages/, '应消费后端 last_success_stages 字段')
+  assert.match(drawerSrc, /switchView/, '应提供切换视图函数')
+  assert.match(drawerSrc, /setReport\(null\)/, '切换时应清空报告选中态')
+  assert.match(drawerSrc, /setScreenshot\(null\)/, '切换时应清空截图选中态')
+  assert.match(drawerSrc, /pipeline-detail-tab/, '应渲染切换 tab 样式类')
+})
+
+// 集成验收：当前失败 + 存在上一次成功 → 显示切换，点击后展示上次成功详情
+test('流水线切换：点击「上一次成功」展示上次全部成功流水线详情（issue #483 验收）', async () => {
+  const { renderer, root } = await openPipelineDrawer({
+    pipelines: [LAST_SUCCESS_ENTRY], errors: [],
+  })
+  try {
+    // 默认展示当前（失败）流水线
+    let text = drawerText(root)
+    assert.ok(text.includes('失败'), '默认应展示当前流水线失败状态')
+    assert.ok(text.includes('deadbee'), '当前流水线 sha 应展示')
+
+    // 切换 tab 存在（两个按钮）
+    const tabs = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-tab'))
+    assert.equal(tabs.length, 2, '应有两个切换按钮')
+
+    // 点击「上一次成功」
+    const lastTab = tabs.find((t) => toText(t.props.children).includes('上一次成功'))
+    assert.ok(lastTab, '应能找到「上一次成功」按钮')
+    await TestRenderer.act(async () => { lastTab.props.onClick() })
+    text = drawerText(root)
+    assert.ok(text.includes('成功'), '上一次成功视图应展示成功状态')
+    assert.ok(text.includes('abc123def'), '应展示上一次成功流水线的 sha')
+    assert.ok(text.includes('unit'), '应展示上一次成功流水线的 test 阶段任务')
+    // 上一次成功视图下「在 GitLab 中打开」跳转其 web_url
+    const links = root.findAll(
+      (n) => n.type === 'a'
+        && n.props.href === LAST_SUCCESS_ENTRY.last_success_pipeline.web_url)
+    assert.ok(links.length >= 1, '跳转按钮应指向上一次成功流水线的 GitLab 链接')
+
+    // 切回「当前流水线」
+    const curTab = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-tab'))
+      .find((t) => toText(t.props.children).includes('当前流水线'))
+    assert.ok(curTab, '应能找到「当前流水线」按钮')
+    await TestRenderer.act(async () => { curTab.props.onClick() })
+    text = drawerText(root)
+    assert.ok(text.includes('失败'), '切回后应展示当前流水线失败状态')
+    assert.ok(text.includes('deadbee'), '切回后应展示当前流水线 sha')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// 边界：当前流水线已全部成功（last_success 与当前同 id）→ 不显示切换
+test('流水线切换：当前流水线已全部成功时不显示切换（两视图无差异）', async () => {
+  const entry = {
+    ...PIPELINE_ENTRY,
+    last_success_pipeline: {
+      ...PIPELINE_ENTRY.pipeline,
+      id: PIPELINE_ENTRY.pipeline.id, // 与当前流水线同 id
+      status: 'success',
+    },
+    last_success_stages: PIPELINE_ENTRY.stages,
+    last_success_commit_time: PIPELINE_ENTRY.commit_time,
+  }
+  const { renderer, root } = await openPipelineDrawer({ pipelines: [entry], errors: [] })
+  try {
+    const tabs = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-tab'))
+    assert.equal(tabs.length, 0, '与当前流水线 id 相同时不应显示切换')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// 边界：无上一次成功记录 → 不显示切换，当前内容正常展示不崩溃
+test('流水线切换：无上一次成功记录时不显示切换且不崩溃', async () => {
+  const entry = { ...PIPELINE_ENTRY, last_success_pipeline: null,
+                  last_success_stages: [], last_success_commit_time: null }
+  const { renderer, root } = await openPipelineDrawer({ pipelines: [entry], errors: [] })
+  try {
+    const tabs = root.findAll(
+      (n) => n.type === 'button'
+        && String(n.props.className || '').includes('pipeline-detail-tab'))
+    assert.equal(tabs.length, 0, '无成功记录不应显示切换')
+    const text = drawerText(root)
+    assert.ok(text.includes('compile'), '当前流水线内容应正常展示')
+  } finally {
+    await TestRenderer.act(() => renderer.unmount())
+    mock.restoreAll()
+  }
+})
+
+// 样式：styles.css 提供流水线切换 tab 样式
+test('styles.css 提供流水线切换 tab 样式（.pipeline-detail-tabs / .pipeline-detail-tab）', () => {
+  assert.match(styles, /\.pipeline-detail-tabs\s*\{/, '应有切换容器样式')
+  assert.match(styles, /\.pipeline-detail-tab\s*\{/, '应有切换按钮样式')
+})

@@ -2906,6 +2906,38 @@ body:has(.drawer-overlay) {
 .pipeline-detail-head .pipeline-ref {
   margin: 0;
 }
+/* issue #483：流水线详情抽屉「当前流水线 / 上一次成功」切换——紧凑型
+   分段控件（复用设计令牌，配色与 skills-engine-tab 一致） */
+.pipeline-detail-tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+.pipeline-detail-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px var(--space-3);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
+}
+.pipeline-detail-tab:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+}
+.pipeline-detail-tab:focus-visible { box-shadow: var(--focus-ring); }
+.pipeline-detail-tab.active {
+  border-color: var(--primary);
+  background: var(--primary-weak);
+  color: var(--primary);
+}
+
 /* KV 信息网格：状态 / 分支 / 提交 / 时间 / 时长 */
 .pipeline-detail-kv {
   display: grid;

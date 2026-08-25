@@ -8,6 +8,12 @@
 //   「在 GitLab 中打开」按钮（web_url 新窗口）；
 // - 关闭方式：右上角 × 按钮 / 点击遮罩 / Esc 键。
 //
+// issue #483：抽屉头部下方提供「当前流水线 / 上一次成功」切换——当前
+// 流水线非全部成功时，可切换到最近一次全部成功（GitLab status ==
+// success）的流水线查看其整体状态、分支/提交、时间与阶段任务明细；
+// 最新流水线本身已全部成功或无历史成功记录时不显示切换（两者无差异）。
+// 切换时清空报告/截图选中态（它们绑定特定流水线的 job）。
+//
 // 数据来源：复用 GET /api/pipelines/overview 已返回的 stages + jobs
 // 明细（后端聚合时已按 GitLab jobs API 精简每个 job 的 id/name/status/
 // allow_failure/web_url/artifacts），无需新增接口。issue #329：任务行
@@ -132,11 +138,34 @@ export default function PipelineDrawer({ entry, onClose }) {
   const [report, setReport] = useState(null)
   // 选中的截图（issue #453）：{repoId, jobId, jobName} 或 null
   const [screenshot, setScreenshot] = useState(null)
+  // 当前查看的流水线视图（issue #483）：'current'=当前流水线，
+  // 'last_success'=上一次全部成功的流水线；默认展示当前流水线
+  const [view, setView] = useState('current')
   const repo = entry && typeof entry === 'object' ? entry : null
   const repoName = repo && repo.repo_name ? repo.repo_name : '—'
-  const pl = repo ? repo.pipeline : null
-  const stages = repo && Array.isArray(repo.stages) ? repo.stages : []
+  // 上一次全部成功的流水线（后端 /api/pipelines/overview 聚合）：
+  // 无记录为 null。与当前流水线 id 相同（当前流水线本身已全部成功）
+  // 或缺失时不提供切换——两视图无差异
+  const lastSuccess = repo && repo.last_success_pipeline
+    ? repo.last_success_pipeline : null
+  const hasLastSuccess = !!lastSuccess
+    && lastSuccess.id != null
+    && (!repo || !repo.pipeline || repo.pipeline.id !== lastSuccess.id)
+  const showLastSuccess = hasLastSuccess && view === 'last_success'
+  const pl = repo
+    ? (showLastSuccess ? repo.last_success_pipeline : repo.pipeline) : null
+  const stages = repo && Array.isArray(
+    showLastSuccess ? repo.last_success_stages : repo.stages)
+    ? (showLastSuccess ? repo.last_success_stages : repo.stages) : []
   const meta = pl ? (PIPELINE_STATUS_META[pl.status] || { label: pl.status, cls: '' }) : null
+  // 切换流水线视图：清空报告/截图选中态（它们绑定特定流水线的 job，
+  // 避免在另一条流水线的阶段视图上残留过期报告内容）
+  const switchView = (v) => {
+    if (v === view) return
+    setView(v)
+    setReport(null)
+    setScreenshot(null)
+  }
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
@@ -156,6 +185,30 @@ export default function PipelineDrawer({ entry, onClose }) {
                     aria-label="关闭右边栏"><Icon name="x" /></button>
           </span>
         </div>
+
+        {/* issue #483：当前流水线与上一次全部成功的流水线切换——
+            仅当存在与当前流水线不同的成功记录时显示 */}
+        {hasLastSuccess && (
+          <div className="pipeline-detail-tabs" role="tablist"
+               aria-label="切换查看流水线">
+            <button type="button"
+                    className={'pipeline-detail-tab'
+                               + (view === 'current' ? ' active' : '')}
+                    role="tab" aria-selected={view === 'current'}
+                    onClick={() => switchView('current')}
+                    title="查看该仓库最新一次流水线的运行详情">
+              当前流水线
+            </button>
+            <button type="button"
+                    className={'pipeline-detail-tab'
+                               + (view === 'last_success' ? ' active' : '')}
+                    role="tab" aria-selected={view === 'last_success'}
+                    onClick={() => switchView('last_success')}
+                    title="查看最近一次全部成功的流水线运行详情">
+              上一次成功
+            </button>
+          </div>
+        )}
 
         {!pl ? (
           <div className="empty-state">

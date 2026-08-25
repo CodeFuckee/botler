@@ -16,6 +16,13 @@ GET /api/pipelines/overview：遍历所有配置仓库（含未启用，issue #3
 （与 /tasks/reconcile-all 的 issue #38 模式一致）；无流水线仓库 pipeline
 为 null；每条结果带 enabled 字段供前端标注未启用仓库。为避免前端轮询
 打爆 GitLab API，结果带 10 秒 TTL 内存缓存。
+
+issue #483：每条结果另带「最近一次全部成功的流水线」数据
+（last_success_pipeline / last_success_stages / last_success_commit_time，
+无成功记录或查询失败时为 null/[]）——流水线详情右边栏除当前流水线外
+还可切换查看上一次运行全部成功的流水线详情。最新流水线本身已全部成功
+时直接复用当前数据（零额外 GitLab 请求）；否则回查流水线历史找最近
+一条 status == "success" 的记录并拉取其 jobs 聚合。
 """
 
 from __future__ import annotations
@@ -227,6 +234,41 @@ def _lookup_commit_time(client, project_id: int, pipeline: dict) -> str | None:
     return _commit_time_utc(commit.get("committed_date"))
 
 
+def _last_success(client, project_id: int, latest: dict | None,
+                latest_stages: list[dict], latest_commit_time: str | None
+                ) -> tuple[dict | None, list[dict], str | None]:
+    """最近一次全部成功的流水线（issue #483）。
+
+    返回 (pipeline, stages, commit_time)：pipeline 为精简后的流水线对象
+    （无则 None），stages 为其按 stage 聚合的任务明细（默认 []），
+    commit_time 为其对应提交时间（默认 None）。「全部成功」按 GitLab
+    流水线 status == "success" 判定（含 allow_failure job 失败的
+    passed-with-warnings，与 GitLab 整体成功语义一致）。
+
+    最新流水线本身已全部成功时直接复用当前数据（零额外 GitLab 请求）；
+    否则回查流水线历史（id 倒序）找最近一条成功记录并拉取其 jobs 聚合。
+    查询失败 / 无成功记录一律静默降级为 (None, [], None)——「上一次
+    成功」是增强信息，失败不影响当前流水线展示（与 commit_time issue
+    #43 同降级策略，不进 errors 列表）。
+    """
+    if latest is not None and latest.get("status") == "success":
+        return latest, latest_stages, latest_commit_time
+    try:
+        pipelines = client.list_pipelines(project_id)
+    except (GitLabError, httpx.HTTPError):
+        return None, [], None
+    target = next((pl for pl in pipelines
+                   if pl.get("status") == "success"), None)
+    if target is None:
+        return None, [], None
+    try:
+        jobs = client.list_pipeline_jobs(project_id, target["id"])
+    except (GitLabError, httpx.HTTPError):
+        return None, [], None
+    return (_trim_pipeline(target), aggregate_stages(jobs),
+            _lookup_commit_time(client, project_id, target))
+
+
 def _repo_client(c, row) -> GitLabClient | None:
     """per-repo 客户端（带缓存）；解析失败返回 None（调用方回退全局）。"""
     repo_id = row["id"]
@@ -256,7 +298,10 @@ def _collect(c) -> dict:
             continue
         entry = {"repo_id": row["id"], "repo_name": row["name"],
                  "enabled": bool(row["enabled"]),
-                 "pipeline": None, "stages": [], "commit_time": None}
+                 "pipeline": None, "stages": [], "commit_time": None,
+                 # issue #483：最近一次全部成功的流水线（详情右边栏切换查看）
+                 "last_success_pipeline": None, "last_success_stages": [],
+                 "last_success_commit_time": None}
         # issue #60：优先用仓库自己 remote url 内嵌的 token 查流水线，
         # 无 token 回退全局 bot token（兼容旧仓库）
         client = _repo_client(c, row) or c.gitlab
@@ -270,6 +315,12 @@ def _collect(c) -> dict:
             entry["stages"] = aggregate_stages(jobs)
             entry["commit_time"] = _lookup_commit_time(
                 client, row["gitlab_project_id"], pipeline)
+            # issue #483：最近一次全部成功的流水线——当前流水线非成功时
+            # 回查历史，失败静默降级（不中断当前流水线展示）
+            entry["last_success_pipeline"], entry["last_success_stages"], \
+                entry["last_success_commit_time"] = _last_success(
+                    client, row["gitlab_project_id"], entry["pipeline"],
+                    entry["stages"], entry["commit_time"])
         except GitLabError as e:
             errors.append(f"仓库 {row['name']}: {e}")
         except httpx.HTTPError as e:

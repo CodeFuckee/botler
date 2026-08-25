@@ -576,6 +576,19 @@ class GitLabClient:
             return None
         return pipelines[0]
 
+    def list_pipelines(self, project_id: int, limit: int = 200) -> list[dict]:
+        """项目最近流水线列表（按 id 倒序，issue #483）。
+
+        概览页「上一次全部成功的流水线」查找用：流水线列表项带
+        status 字段（success/failed/running/canceled 等），在列表
+        内从新到旧找第一条 status == "success" 即最近一次全部成功的
+        流水线。limit 限制最多拉取条数（默认 200，覆盖常见活跃仓库
+        的近期流水线），避免无成功记录时无限翻页。
+        """
+        return self._paged(
+            f"/projects/{project_id}/pipelines",
+            params={"order_by": "id", "sort": "desc"}, limit=limit)
+
     def get_pipeline(self, project_id: int, pipeline_id: int) -> dict | None:
         """单条流水线详情（executor 等待终态时轮询用）。"""
         pipeline = self._request("GET", f"/projects/{project_id}/pipelines/{pipeline_id}")
