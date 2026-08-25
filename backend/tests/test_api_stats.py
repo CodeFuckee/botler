@@ -257,10 +257,15 @@ class TestDashboardTaskRows:
         assert len(db.dashboard_task_rows(days=0)) == 2
 
     def test_days_filter_keeps_recent(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
         db = Database(str(tmp_path / "d2.db"))
         repo = _mk_repo(db, 1, "repo-a")
-        old = _mk_task(db, repo, created_at="2026-01-01 00:00:00")
-        recent = _mk_task(db, repo, created_at="2026-08-18 00:00:00")
+        old = _mk_task(db, repo, created_at="2020-01-01 00:00:00")
+        # 日期动态计算（UTC，昨天），避免硬编码日期随 7 天窗口过期而偶发失败
+        recent = _mk_task(
+            db, repo,
+            created_at=(datetime.now(timezone.utc) - timedelta(days=1)
+                        ).strftime("%Y-%m-%d %H:%M:%S"))
         rows = db.dashboard_task_rows(days=7)
         ids = [r["id"] for r in rows]
         assert old not in ids
@@ -386,27 +391,28 @@ class TestSourceDailyTrend:
         assert by[("2026-08-19", "manual")]["failed_count"] == 1
 
     def test_days_window_zero_filled(self, tmp_path):
-        from datetime import date
+        from datetime import datetime, timedelta, timezone
         from botler.database import Database, _source_daily_trend
         db = Database(str(tmp_path / "trend7.db"))
         repo = _mk_repo(db, 1, "repo-a")
-        # 8/18 有 webhook 任务，8/14-8/20 窗口内其余日期应零填充
+        # 昨天有 webhook 任务，窗口内其余日期应零填充（动态日期防过期失效）
+        task_day = (datetime.now(timezone.utc) - timedelta(days=1)).date()
         _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
                  triggered_by="webhook",
-                 created_at="2026-08-18 01:00:00",
-                 finished_at="2026-08-18 01:00:30")
+                 created_at=f"{task_day} 01:00:00",
+                 finished_at=f"{task_day} 01:00:30")
+        today = datetime.now(timezone.utc).date()
         res = _source_daily_trend(db.dashboard_task_rows(days=7), days=7,
-                                  today=date(2026, 8, 20))
-        # 7 天窗口：8/14 ~ 8/20，每天都有 webhook 行（无任务日为零填充）
+                                  today=today)
+        # 7 天窗口：today-6 ~ today，每天都有 webhook 行（无任务日为零填充）
         assert [r["date"] for r in res] == [
-            "2026-08-14", "2026-08-15", "2026-08-16", "2026-08-17",
-            "2026-08-18", "2026-08-19", "2026-08-20",
+            str(today - timedelta(days=6 - i)) for i in range(7)
         ]
         by = {(r["date"], r["source"]): r for r in res}
-        assert by[("2026-08-18", "webhook")]["task_count"] == 1
-        assert by[("2026-08-14", "webhook")]["task_count"] == 0
-        assert by[("2026-08-14", "webhook")]["success_rate"] is None
-        assert by[("2026-08-20", "webhook")]["avg_duration_seconds"] is None
+        assert by[(str(task_day), "webhook")]["task_count"] == 1
+        assert by[(str(today - timedelta(days=6)), "webhook")]["task_count"] == 0
+        assert by[(str(today - timedelta(days=6)), "webhook")]["success_rate"] is None
+        assert by[(str(today), "webhook")]["avg_duration_seconds"] is None
 
     def test_source_display_names(self, tmp_path):
         from datetime import date
@@ -499,12 +505,16 @@ class TestDashboardApiBySourceDaily:
         assert body["by_source_daily"] == []
 
     def test_with_data_returns_trend(self, api_app):
+        from datetime import datetime, timedelta, timezone
         app, db = api_app
         repo = _mk_repo(db, 1, "repo-a")
+        # 任务日期动态计算（昨天，UTC），确保落在 7 天趋势窗口内（防过期失效）
+        task_day = (datetime.now(timezone.utc) - timedelta(days=1)
+                    ).strftime("%Y-%m-%d")
         _mk_task(db, repo, status=STATUS_SUCCEEDED, engine="claude",
                  triggered_by="webhook",
-                 created_at="2026-08-18 01:00:00",
-                 finished_at="2026-08-18 01:03:00")
+                 created_at=f"{task_day} 01:00:00",
+                 finished_at=f"{task_day} 01:03:00")
         client = TestClient(app)
         body = client.get("/api/stats/dashboard?days=7").json()
         assert "by_source_daily" in body

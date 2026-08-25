@@ -458,6 +458,18 @@
   - 测试：`frontend/tests/settings-audit-logs.test.mjs`（渲染/删除/分页
     既有用例保持通过）、e2e `responsive-mobile.spec.js` 全量并行复跑通过。
 
+- **统计看板测试硬编码日期过期导致 CI 偶发失败（issue #215 CI 阻塞）**：
+  - `test_api_stats.py` 三个用例把「最近」任务日期硬编码为 2026-08-18，
+    而 `days=7` 窗口（DB 层 `datetime('now')` 过滤与 API 层趋势窗口 today）
+    以当前 UTC 日期动态推导：当前 UTC 日期越过 08-25 后任务滑出 7 天窗口，
+    `backend:test` 流水线开始偶发失败（与 #215 功能改动无关，属日期过期型
+    flaky，此前多次流水线通过只因运行时间早于阈值）；
+  - 修复：`test_days_filter_keeps_recent`、`test_days_window_zero_filled`、
+    `test_with_data_returns_trend` 三个用例的任务日期改为基于
+    `datetime.now(timezone.utc)` 动态计算（昨天/近端日期），测试意图不变、
+    不再随时间过期；
+  - 验证：`tests/test_api_stats.py` 全量 35 用例通过，后端全量测试无回归。
+
 ### Added
 
 - **提示词模板版本历史与回滚（issue #262）**：模版页（全局默认 / 中断恢复 /
