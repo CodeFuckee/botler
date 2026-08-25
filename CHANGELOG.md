@@ -268,11 +268,17 @@
     CI_COMMIT_TITLE 含「查看截图」等 UTF-8 多字节）被误读为引号等特殊字符，
     字符串中途终止抛 ParserError（gitlab-runner issue #39427 同类问题；其 UTF-8
     BOM 修复仅覆盖文件传递路径，stdin 路径不受益）；
-  - 修复：backend:test job 级变量开启 FF_DISABLE_POWERSHELL_STDIN=true，runner
-    改为把脚本写入带 UTF-8 BOM 的文件再执行（该标志亦为 allow_failure:exit_codes
-    的官方前置条件）；改动仅作用于 backend:test 一个 job，不影响其它 job；
-  - 验证：YAML 解析通过；本地后端全量 pytest / 前端全量 1806 用例通过；推送后
-    流水线 backend:test 在 runner 23 上成功执行（见流水线记录）。
+  - 修复（两处）：
+    ① backend:test job 级变量开启 FF_DISABLE_POWERSHELL_STDIN=true，runner 改为
+    把脚本写入带 UTF-8 BOM 的文件再执行（该标志亦为 allow_failure:exit_codes 的
+    官方前置条件），get_sources 阶段中文提交信息不再被误读；
+    ② `.backend_setup_windows` 公共 before_script 中 2 处 PowerShell 7 专属三元
+    运算符（`? :`，流水线 #1476 实测 PS 5.1 下 ParserError）改写为
+    `if/else` 兼容写法——新旧 Windows runner（pwsh7 / Windows PowerShell 5.1）
+    语法交集，两处改动均仅作用于 backend:test 链路，不影响其它 job；
+  - 验证：YAML 解析与 GitLab ci/lint 通过；本地后端全量 pytest（3554 passed）/
+    前端全量 1806 用例通过；推送后流水线 backend:test 在 runner 23 上成功执行
+    （见流水线记录）。
 
 
 - **CI/CD 流水线详情右边栏：只有产物归档内确实含截图/报告时才渲染「查看截图」「查看报告」按钮（issue #488）**：

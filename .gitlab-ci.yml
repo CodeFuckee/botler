@@ -211,15 +211,19 @@ variables:
       renice -n 10 -p $BASHPID >/dev/null 2>&1 || true
       ionice -c 2 -n 7 -p $BASHPID >/dev/null 2>&1 || true
 
-# --- 后端公共配置（Windows runner / pwsh 版，issue #469）---
+# --- 后端公共配置（Windows runner / PowerShell 版，issue #469）---
 # backend:test 已迁移到带 windows 标签的 runner 上运行（issue #469），
-# 该 runner 的 shell executor 默认 shell 为 pwsh（PowerShell 7，流水线
-# #1393/#1394 实测），bash 语法的 .backend_setup 无法直接使用（export/
-# renice 等命令在 pwsh 下报错）。因此提供 PowerShell 语法版本：
+# bash 语法的 .backend_setup 无法直接使用（export/renice 等命令在
+# PowerShell 下报错）。因此提供 PowerShell 语法版本：
 #   - 环境变量用 $env:XXX 而非 $XXX；
 #   - PATH 追加用 Windows 分号分隔（$env:USERPROFILE\.local\bin 等）；
 #   - Windows 无 renice/ionice（Linux 专用降优先级），此处省略；
-#   - $ErrorActionPreference = "Stop" 保证命令失败即抛出，杜绝假绿。
+#   - $ErrorActionPreference = "Stop" 保证命令失败即抛出，杜绝假绿；
+#   - ⚠️ 兼容性（issue #488 CI 修复）：仓库内存在两类 Windows runner——
+#     老 runner（DESKTOP-S1FQOMR）shell 为 pwsh（PowerShell 7），新 runner
+#     （HC-202608171632）shell 为 Windows PowerShell 5.1。脚本必须使用两者
+#     的语法交集：禁用三元运算符（? :）、空合并（??）等 PS7 专属语法
+#     （PS 5.1 无三元运算符，直接 ParserError，流水线 #1476 实测）。
 .backend_setup_windows:
   before_script:
     - cd backend
@@ -229,9 +233,11 @@ variables:
       $env:PATH = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\miniconda3\bin;$env:PATH"
       Write-Host "=== 环境信息 ==="
       Write-Host "CI_PROJECT_DIR: $env:CI_PROJECT_DIR"
-      $pyVer = (Get-Command python -ErrorAction SilentlyContinue) ? (& python --version 2>&1) : "未安装"
+      $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+      if ($null -ne $pyCmd) { $pyVer = (& python --version 2>&1) } else { $pyVer = "未安装" }
       Write-Host "Python 版本: $pyVer"
-      $uvVer = (Get-Command uv -ErrorAction SilentlyContinue) ? (& uv --version 2>&1) : "未安装"
+      $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+      if ($null -ne $uvCmd) { $uvVer = (& uv --version 2>&1) } else { $uvVer = "未安装" }
       Write-Host "uv 版本: $uvVer"
 
 # ================================================================
@@ -983,10 +989,12 @@ backend:test:
   stage: build
   tags:
     - windows
-  # Windows runner 默认 shell 为 pwsh（PowerShell 7）。job 级无法覆盖 runner
-  # 的 shell 配置（`shell:` 不是 GitLab CI job 关键字），脚本必须用 PowerShell
-  # 语法实现（issue #469 流水线 #1393 实测：bash 语法在 pwsh 下逐行报错、
-  # pytest 静默不执行但 job 仍返回 success 假绿）。
+  # Windows runner 的 shell 为 PowerShell（老 runner 是 pwsh 7，新 runner
+  # HC-202608171632 是 Windows PowerShell 5.1）。job 级无法覆盖 runner 的
+  # shell 配置（`shell:` 不是 GitLab CI job 关键字），脚本必须用 PowerShell
+  # 语法实现且兼容 pwsh7 / PS 5.1（issue #469 流水线 #1393 实测：bash 语法在
+  # PowerShell 下逐行报错、pytest 静默不执行但 job 仍返回 success 假绿；
+  # issue #488：PS 5.1 无三元运算符，脚本禁用 PS7 专属语法）。
   timeout: 30m
   # 覆盖率提取正则（issue #210）：解析 pytest-cov term-missing 日志的
   # TOTAL 行，驱动项目覆盖率徽章与流水线页面覆盖率展示（GitLab 17+ 由
