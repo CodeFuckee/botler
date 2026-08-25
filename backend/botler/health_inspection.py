@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from urllib.parse import unquote, urlparse
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -54,6 +55,26 @@ _ABNORMAL_DISPLAY_LIMIT = 5
 def _utc_now_str() -> str:
     """当前 UTC 时间字符串（YYYY-MM-DD HH:MM:SS，与库内时间格式一致）。"""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _url_namespace(url: str) -> str | None:
+    """从仓库 URL 解析命名空间（host 后第一段路径）。
+
+    如 https://host/chenkaidi/tender_document_spider.git → chenkaidi；
+    https://host/group/sub/project.git → group（仅取第一段）。解析失败
+    返回 None（不影响诊断主流程，issue #496）。
+    """
+    if not url:
+        return None
+    try:
+        path = unquote(urlparse(url).path).strip("/")
+    except ValueError:
+        return None
+    if path.endswith(".git"):
+        path = path[:-4]
+    if not path:
+        return None
+    return path.split("/")[0]
 
 
 class RepoHealthInspector:
@@ -185,7 +206,8 @@ class RepoHealthInspector:
             except GitLabError as exc:
                 webhook_err = f"自动修复 webhook 失败: {exc}"
         token_ok, token_err = self._check_token()
-        project_ok, project_err = self._check_project(project_id)
+        project_ok, project_err, project_detail = self._check_project(
+            project_id, repo)
 
         failures: list[str] = []
         if not webhook_ok:
@@ -199,7 +221,8 @@ class RepoHealthInspector:
         self.db.add_repo_health(
             repo["id"], status, now, last_error=last_error,
             webhook_ok=webhook_ok, token_ok=token_ok,
-            project_ok=project_ok, repaired=repaired)
+            project_ok=project_ok, repaired=repaired,
+            project_detail=project_detail)
         return {
             "status": status, "last_error": last_error,
             "webhook_ok": webhook_ok, "token_ok": token_ok,
@@ -232,6 +255,9 @@ class RepoHealthInspector:
         try:
             hooks = self.gitlab.list_webhooks(project_id)
         except GitLabError as exc:
+            if exc.status_code == 404:
+                return False, ("读取 webhook 列表失败（404：项目不存在，或为"
+                               "私有项目且 bot 账号无权限，GitLab 统一返回 404）")
             return False, f"读取 webhook 列表失败: {exc}"
         hook = self._find_platform_hook(hooks)
         if hook is None:
@@ -275,17 +301,143 @@ class RepoHealthInspector:
         except Exception as exc:  # noqa: BLE001 非 GitLabError 异常同样判失败
             return False, str(exc)
 
-    def _check_project(self, project_id: int) -> tuple[bool, str | None]:
-        """仓库可达：GET /projects/{id}。"""
+    def _check_project(self, project_id: int,
+                       repo: dict | None = None) -> tuple[bool, str | None, str | None]:
+        """仓库可达：GET /projects/{id}。
+
+        返回 (project_ok, last_error, project_detail)。404 时执行补充诊断
+        （issue #496）：GitLab 对「项目不存在」与「无权限访问的私有项目」
+        统一返回 404（隐私保护），旧实现只报「项目不存在（可能已被删除或
+        无权限）」，误导用户以为项目被删除。补充诊断结果写入
+        project_detail（健康详情弹窗展示），last_error 为面向徽章/历史的
+        精简摘要。
+        """
         try:
             self.gitlab.get_project(project_id)
-            return True, None
+            return True, None, None
         except GitLabError as exc:
             if exc.status_code == 404:
-                return False, "项目不存在（可能已被删除或无权限）"
-            return False, str(exc)
+                err, detail = self._diagnose_project_404(project_id, repo)
+                return False, err, detail
+            return False, str(exc), None
         except Exception as exc:  # noqa: BLE001
-            return False, str(exc)
+            return False, str(exc), None
+
+    def _diagnose_project_404(self, project_id: int,
+                              repo: dict | None) -> tuple[str, str]:
+        """项目 GET 404 的补充诊断（issue #496）。
+
+        背景：GitLab 对「项目不存在」与「无权限访问的私有项目」统一返回
+        404（隐私保护），仅凭状态码无法区分。通过以下探测输出详细原因：
+        1. 匿名访问 /projects/{id}（不带 token）：200=项目公开（token 受限），
+           404=项目私有或不存在；
+        2. 命名空间探测：按仓库 URL 解析命名空间（用户/组），不存在说明
+           项目可能已被删除/转移；
+        3. 按名称搜索：命中且 ID 不同 → gitlab_project_id 可能已变更
+           （项目删除后重建）；
+        4. 按路径访问：成功 → 项目存在但配置的 ID 已过期。
+        返回 (last_error 摘要, project_detail 多行详情)。探测均为尽力而为，
+        任一失败不阻断诊断主流程。
+        """
+        # repo 来自 db.list_repos()/get_repo()（sqlite3.Row），按索引取值
+        name = (repo["name"] if repo is not None else None) or str(project_id)
+        url = repo["url"] if repo is not None else ""
+        ns = _url_namespace(url)
+        lines = [
+            f"GET /projects/{project_id} → 404 Project Not Found",
+            "GitLab 对「项目不存在」与「无权限访问的私有项目」统一返回 404"
+            "（隐私保护），无法仅凭状态码区分，以下为补充诊断：",
+        ]
+        pub: dict | None = None
+        try:
+            pub = self.gitlab.get_project_public(project_id)
+        except Exception:  # noqa: BLE001 探测失败不阻断诊断
+            lines.append(f"- 匿名访问 /projects/{project_id}：探测失败（跳过）")
+        if pub is not None:
+            lines.append(f"- 匿名访问 /projects/{project_id}：200（项目存在且"
+                         "公开，当前 token 访问受限）")
+        else:
+            lines.append(f"- 匿名访问 /projects/{project_id}：不可见（项目非"
+                         "公开，为私有项目或已删除）")
+        if ns:
+            ns_kind = self._probe_namespace(ns)
+            if ns_kind:
+                lines.append(f"- 命名空间 {ns}：存在（{ns_kind}）")
+            else:
+                lines.append(f"- 命名空间 {ns}：不存在（项目可能已被删除或转移）")
+        try:
+            found = self.gitlab.list_projects(membership=False, search=name)
+            if found:
+                hit = found[0]
+                hit_id = hit.get("id")
+                hit_path = hit.get("path_with_namespace") or ""
+                if hit_id != project_id:
+                    lines.append(f"- 按名称搜索 {name}：命中 id={hit_id}"
+                                 f"（{hit_path}），与配置 id={project_id} 不一致，"
+                                 "项目 ID 可能已变更（删除后重建）")
+                else:
+                    lines.append(f"- 按名称搜索 {name}：命中 id={hit_id}"
+                                 "（项目存在，但当前 token 访问受限）")
+            else:
+                lines.append(f"- 按名称搜索 {name}：未找到（私有项目对当前账号"
+                             "不可见，或项目已删除）")
+        except GitLabError:
+            lines.append(f"- 按名称搜索 {name}：探测失败（跳过）")
+        if ns:
+            path = f"{ns}/{name}"
+            try:
+                self.gitlab.get_project_by_path(path)
+                lines.append(f"- 按路径 {path} 访问：成功（项目存在，配置的 "
+                             f"gitlab_project_id={project_id} 可能已过期，"
+                             "请更新仓库配置中的项目 ID）")
+            except GitLabError:
+                lines.append(f"- 按路径 {path} 访问：404（路径同样不可达）")
+        bot = self._bot_username()
+        if pub is not None:
+            summary = ("项目不可达（404）：项目存在且公开，但当前 token 无法"
+                       "访问（可能为项目级限定 token）")
+            lines.append("最可能原因：项目存在且公开，但当前 token 无法访问该项目"
+                         "（token 可能为项目级限定 PAT，仅能访问指定项目）。")
+        else:
+            summary = ("项目不可达（404）：项目不存在或为私有且 bot 账号无权限"
+                       "（GitLab 对私有项目统一返回 404 保护隐私）")
+            lines.append(f"最可能原因：项目为私有（private）且 {bot} 不是项目成员，"
+                         "GitLab 出于隐私保护统一返回 404；若项目确实已删除/转移"
+                         "则需更新配置。")
+        lines.append("处理建议：")
+        if pub is not None:
+            lines.append("① 使用有权限访问该项目的用户级 token 替换"
+                         " gitlab.bot_token 配置后重新巡检；")
+        else:
+            lines.append("① 项目仍存在 → 在 GitLab 项目设置「成员」中把平台 bot "
+                         "账号加入项目（至少 Reporter 角色）后点「重新巡检」；")
+        lines.append("② 项目已删除/转移 → 更新仓库配置中的 gitlab_project_id"
+                     "（或删除该仓库配置）。")
+        return summary, "\n".join(lines)
+
+    def _probe_namespace(self, ns: str) -> str | None:
+        """探测命名空间（用户或组）是否存在，返回 '用户' / '组' / None。"""
+        try:
+            if self.gitlab.get_user_id_by_username(ns) is not None:
+                return "用户"
+        except GitLabError:
+            pass
+        try:
+            self.gitlab.get_group(ns)
+            return "组"
+        except GitLabError:
+            pass
+        return None
+
+    def _bot_username(self) -> str:
+        """当前 bot 账号用户名（尽力获取，失败回退通用描述）。"""
+        try:
+            me = self.gitlab.test_connection()
+            if isinstance(me, dict) and me.get("username"):
+                return f"平台 bot 账号（{me['username']}）"
+        except Exception:  # noqa: BLE001
+            pass
+        return "平台 bot 账号"
 
     # ---- 聚合告警（issue #265 验收标准 3：不刷屏）----
 

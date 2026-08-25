@@ -59,6 +59,11 @@ class StubGitLab:
         self.token_mode = "ok"               # ok / unauthorized
         self.project_mode = "ok"             # ok / missing
         self.register_mode = "ok"            # ok / error
+        # issue #496 项目 404 补充诊断探测模式
+        self.public_probe_mode = "missing"   # get_project_public: ok / missing
+        self.namespace_mode = "user"         # 命名空间: user / group / missing
+        self.search_mode = "empty"           # 名称搜索: empty / hit_same / hit_diff
+        self.path_mode = "missing"           # 路径探测: ok / missing
 
     def webhook_url(self) -> str:
         return "https://botler.example.com/webhook/gitlab"
@@ -93,6 +98,40 @@ class StubGitLab:
             raise GitLabError("项目不存在（404）", 404)
         return {"id": project_id, "path_with_namespace": "group/project"}
 
+    def get_project_public(self, project_id: int) -> dict | None:
+        """匿名探测（issue #496）：公开项目可匿名访问 → 返回 dict，否则 None。"""
+        if self.public_probe_mode == "ok":
+            return {"id": project_id, "visibility": "public",
+                    "path_with_namespace": "chenkaidi/demo"}
+        return None
+
+    def get_user_id_by_username(self, username: str) -> int | None:
+        """按用户名查用户（issue #496 命名空间探测）。"""
+        if self.namespace_mode in ("user", "group"):
+            return 1
+        return None
+
+    def get_group(self, group_path: str) -> dict:
+        """按路径查组（issue #496 命名空间探测）。"""
+        if self.namespace_mode == "group":
+            return {"id": 2, "full_path": group_path}
+        raise GitLabError(f"资源不存在（404）: /groups/{group_path}", 404)
+
+    def list_projects(self, membership: bool = True,
+                      search: str | None = None) -> list[dict]:
+        """项目搜索（issue #496 404 诊断）。"""
+        if self.search_mode == "hit_diff":
+            return [{"id": 999, "path_with_namespace": f"chenkaidi/{search or 'demo'}"}]
+        if self.search_mode == "hit_same":
+            return [{"id": 42, "path_with_namespace": "chenkaidi/demo"}]
+        return []
+
+    def get_project_by_path(self, path: str) -> dict:
+        """按路径取项目（issue #496 404 诊断）。"""
+        if self.path_mode == "ok":
+            return {"id": 42, "path_with_namespace": path}
+        raise GitLabError(f"资源不存在（404）: /projects/{path}", 404)
+
 
 @pytest.fixture
 def db(tmp_path):
@@ -112,8 +151,9 @@ def notifier(db):
 
 
 def _mk_repo(db, project_id: int = 42, name: str = "demo",
-             enabled: bool = True) -> int:
-    db.upsert_repo(project_id, name, f"https://gitlab.example.com/{name}.git",
+             enabled: bool = True, url: str | None = None) -> int:
+    db.upsert_repo(project_id, name,
+                   url or f"https://gitlab.example.com/{name}.git",
                    enabled=enabled)
     return db.get_repo_by_project_id(project_id)["id"]
 
@@ -330,6 +370,85 @@ class TestInspectionJudgement:
 
 
 # ---- 聚合通知 ----
+
+# ---- 项目 404 补充诊断（issue #496）----
+
+class TestProject404Diagnosis:
+    """项目可达检查 404 时的补充诊断（issue #496）。
+
+    背景：GitLab 对「项目不存在」与「无权限访问的私有项目」统一返回 404
+    （隐私保护），旧实现两种情况都只报「项目不存在（可能已被删除或无权限）」，
+    误导用户以为项目被删除。本次新增：404 时通过匿名探测 / 命名空间探测 /
+    名称搜索 / 路径探测输出详细原因与处理建议（project_detail 字段），
+    last_error 为面向徽章/历史的精简摘要。
+    """
+
+    def _mk_abnormal(self, db, stub, config, notifier, project_id=89,
+                     name="tender_document_spider"):
+        stub.hooks = [{"id": 1, "url": stub.webhook_url(),
+                       "token": config.get().webhook_secret, "issues_events": True}]
+        stub.project_mode = "missing"   # GET /projects/{id} → 404
+        repo_id = _mk_repo(
+            db, project_id=project_id, name=name,
+            url=f"https://gitlab.example.com/chenkaidi/{name}.git")
+        _mk_inspector(config, db, stub, notifier).inspect_once()
+        return db.latest_repo_health(repo_id)
+
+    def test_project_404_private_no_membership_detailed(self, config, db, notifier):
+        """私有项目且 bot 无成员权限（tender_document_spider 案例）：404 诊断应
+        明确「私有 / 无权限」而非仅「项目不存在」。"""
+        stub = StubGitLab()
+        row = self._mk_abnormal(db, stub, config, notifier)
+        assert row["project_ok"] == 0
+        err = row["last_error"] or ""
+        detail = row["project_detail"] or ""
+        # 摘要要传达「私有项目 + bot 无权限」
+        assert "私有" in err and "无权限" in err
+        # 详情包含匿名探测 / 命名空间 / 名称搜索 / 处理建议
+        assert "匿名访问" in detail
+        assert "命名空间 chenkaidi" in detail and "存在" in detail
+        assert "按名称搜索" in detail
+        assert "处理建议" in detail
+        assert "Reporter" in detail
+
+    def test_project_404_public_but_token_scoped(self, config, db, notifier):
+        """项目公开但 token 访问受限：诊断应指向 token 问题而非项目不存在。"""
+        stub = StubGitLab()
+        stub.public_probe_mode = "ok"
+        row = self._mk_abnormal(db, stub, config, notifier)
+        err = row["last_error"] or ""
+        detail = row["project_detail"] or ""
+        assert "公开" in err or "token" in err
+        assert "公开" in detail and "token" in detail
+
+    def test_project_404_namespace_missing(self, config, db, notifier):
+        """命名空间不存在：诊断应提示项目可能已删除/转移。"""
+        stub = StubGitLab()
+        stub.namespace_mode = "missing"
+        row = self._mk_abnormal(db, stub, config, notifier)
+        detail = row["project_detail"] or ""
+        assert "命名空间 chenkaidi" in detail
+        assert "不存在" in detail
+        assert "删除或转移" in detail
+
+    def test_project_404_project_id_changed(self, config, db, notifier):
+        """按名称搜索命中不同 ID：诊断应提示项目 ID 可能已变更。"""
+        stub = StubGitLab()
+        stub.search_mode = "hit_diff"
+        row = self._mk_abnormal(db, stub, config, notifier)
+        detail = row["project_detail"] or ""
+        assert "id=999" in detail
+        assert "ID" in detail and "变更" in detail
+
+    def test_project_404_path_reachable_id_stale(self, config, db, notifier):
+        """按路径访问成功但按 ID 404：诊断应提示配置的 gitlab_project_id 已过期。"""
+        stub = StubGitLab()
+        stub.path_mode = "ok"
+        row = self._mk_abnormal(db, stub, config, notifier)
+        detail = row["project_detail"] or ""
+        assert "按路径" in detail and "成功" in detail
+        assert "gitlab_project_id=89" in detail
+
 
 class TestAggregatedNotification:
     def test_abnormal_aggregated_single_event(self, config, db, notifier):

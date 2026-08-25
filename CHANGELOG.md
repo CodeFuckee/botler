@@ -256,6 +256,25 @@
     头部紧贴抽屉顶部无空隙、滚动后顶部条带命中头部而非内容）。
 
 ### Fixed
+- **仓库健康巡检「项目可达」404 增加详细诊断，区分「项目不存在」与「私有项目
+  bot 无权限」（issue #496）**：
+  - 现象：GitLab 对「项目不存在」与「无权限访问的私有项目」统一返回 404（隐私
+    保护），旧实现在两种情况下都只报「项目不存在（可能已被删除或无权限）」，
+    误导用户以为项目被删除——实际案例 tender_document_spider（项目 89，私有）
+    项目真实存在，但平台全局 bot 账号（project_123_bot…，仅 botler 项目成员）
+    无访问权限，健康徽章误显示「项目不可达」；
+  - 修复：`health_inspection.py` `_check_project` 404 时新增补充诊断——① 匿名
+    访问探测（区分「公开但 token 受限」与「私有或不存在」）；② 命名空间探测
+    （按仓库 URL 解析用户/组是否存在）；③ 按名称搜索（命中且 ID 不同 → 配置
+    的 gitlab_project_id 可能已变更）；④ 按路径访问（成功 → 项目 ID 已过期），
+    并输出最可能原因与处理建议；详细诊断存 repo_health 新增 project_detail 列
+    （迁移 v32，health 详情弹窗单独展示），last_error 保持精简摘要；
+    `_check_webhook` 404 文案同步补充「私有且 bot 无权限」说明；GitLabClient
+    新增 `get_project_public`（无 token 匿名探测）与 `get_group`；
+  - 测试：新增 TestProject404Diagnosis 5 个用例（私有无权限 / 公开但 token 受限 /
+    命名空间不存在 / 项目 ID 变更 / 路径可达 ID 过期）；后端全量 pytest、前端
+    1806 用例、ruff、eslint 全部通过。
+
 - **CI：backend:test 开启 FF_DISABLE_POWERSHELL_STDIN，规避新 Windows runner 上
   get_sources 阶段 PowerShell 解析失败（issue #488 CI 修复）**：
   - 现象：2026-08-25 新注册的 Windows runner（HC-202608171632，gitlab-runner

@@ -143,6 +143,7 @@ def _health_row_to_dict(row) -> dict | None:
         "status": row["health_status"],
         "check_time": row["check_time"],
         "last_error": row["last_error"],
+        "project_detail": row["project_detail"],
         "webhook_ok": None if row["webhook_ok"] is None
                       else bool(row["webhook_ok"]),
         "token_ok": None if row["token_ok"] is None else bool(row["token_ok"]),

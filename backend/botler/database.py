@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS repo_health (
   health_status TEXT NOT NULL,
   check_time TEXT NOT NULL,
   last_error TEXT,
+  project_detail TEXT,
   webhook_ok INTEGER,
   token_ok INTEGER,
   project_ok INTEGER,
@@ -906,6 +907,7 @@ class Database:
                      health_status TEXT NOT NULL,
                      check_time TEXT NOT NULL,
                      last_error TEXT,
+                     project_detail TEXT,
                      webhook_ok INTEGER,
                      token_ok INTEGER,
                      project_ok INTEGER,
@@ -979,6 +981,17 @@ class Database:
                     "ALTER TABLE notification_events ADD COLUMN read_at TEXT")
             conn.execute("PRAGMA user_version = 31")
             ver = 31
+
+        if ver < 32:
+            # issue #496：项目 404 补充诊断详情——repo_health 加 project_detail
+            # 列（多行详细诊断：匿名探测/命名空间/搜索/路径 + 处理建议），
+            # last_error 保持精简摘要。新库由 _SCHEMA 直接创建；旧库补列，
+            # 存量记录 project_detail 为 NULL（详情弹窗不展示，不影响展示）。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repo_health)")}
+            if "project_detail" not in cols:
+                conn.execute("ALTER TABLE repo_health ADD COLUMN project_detail TEXT")
+            conn.execute("PRAGMA user_version = 32")
+            ver = 32
 
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
@@ -1563,15 +1576,22 @@ class Database:
                         webhook_ok: bool | None = None,
                         token_ok: bool | None = None,
                         project_ok: bool | None = None,
-                        repaired: bool = False) -> int:
-        """写入一条仓库健康巡检结果，返回记录 id。"""
+                        repaired: bool = False,
+                        project_detail: str | None = None) -> int:
+        """写入一条仓库健康巡检结果，返回记录 id。
+
+        project_detail（issue #496）：项目可达 404 时的多行详细诊断
+        （匿名探测/命名空间/名称搜索/路径探测 + 处理建议），与精简摘要
+        last_error 分开存储，健康详情弹窗单独展示。
+        """
         with self._conn(write=True) as conn:
             cur = conn.execute(
                 """INSERT INTO repo_health
                    (repo_id, health_status, check_time, last_error,
-                    webhook_ok, token_ok, project_ok, repaired)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    project_detail, webhook_ok, token_ok, project_ok, repaired)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (repo_id, health_status, check_time, last_error,
+                 project_detail,
                  1 if webhook_ok else 0 if webhook_ok is not None else None,
                  1 if token_ok else 0 if token_ok is not None else None,
                  1 if project_ok else 0 if project_ok is not None else None,

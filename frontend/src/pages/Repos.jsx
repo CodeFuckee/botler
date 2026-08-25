@@ -631,7 +631,15 @@ function HealthDetailModal({ repo, onClose, onChecked }) {
               )}
             </div>
             {latest.last_error && (
-              <div className="alert alert-error small">{latest.last_error}</div>
+              <div className="alert alert-error small pre-wrap">{latest.last_error}</div>
+            )}
+            {latest.project_detail && (
+              <div className="health-detail-block">
+                <div className="small muted" style={{ marginBottom: 4 }}>
+                  项目不可达详细诊断（issue #496）
+                </div>
+                {latest.project_detail}
+              </div>
             )}
             <div className="health-detail-grid">
               <HealthItem label="webhook" ok={latest.webhook_ok} />

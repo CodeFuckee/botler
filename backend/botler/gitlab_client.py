@@ -388,6 +388,38 @@ class GitLabClient:
         assert isinstance(proj, dict)
         return proj
 
+    def get_project_public(self, project_id: int) -> dict | None:
+        """匿名探测项目（不带 PRIVATE-TOKEN，issue #496）。
+
+        健康巡检「项目可达」404 补充诊断用：GitLab 对「项目不存在」与
+        「无权限访问的私有项目」统一返回 404（隐私保护），匿名探测可区分
+        「项目公开（匿名 200）」与「私有或不存在（匿名 404）」。探测是
+        尽力而为：网络异常 / 非 200 统一返回 None，不抛错中断巡检。
+        """
+        self.rate_limiter.acquire()
+        try:
+            with httpx.Client(base_url=f"{self.url}/api/v4", timeout=15,
+                              verify=self.verify_ssl) as client:
+                resp = client.get(f"/projects/{project_id}")
+        except httpx.HTTPError:
+            return None
+        if resp.status_code != 200:
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            return None
+
+    def get_group(self, group_path: str) -> dict:
+        """按路径获取组（group）信息；组不存在抛 404 GitLabError。
+
+        issue #496：项目 404 补充诊断用——命名空间可能为用户或组，探测
+        组是否存在以区分「项目被删除/转移」与「bot 无权限访问私有项目」。
+        """
+        group = self._request("GET", f"/groups/{group_path}")
+        assert isinstance(group, dict)
+        return group
+
     def get_project_avatar(self, project_id: int) -> tuple[bytes, str, str] | None:
         """拉取 GitLab 项目图标（头像）字节（issue #320）。
 

@@ -1512,6 +1512,19 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
 .health-unknown { background: var(--bg-soft); color: var(--muted); }
 /* 健康详情弹窗（issue #265）：巡检明细 chip 与检查项历史表格 */
 .health-detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); margin: var(--space-2) 0; }
+/* issue #496：项目不可达详细诊断块（健康详情弹窗）——多行保留换行 */
+.health-detail-block {
+  margin-top: 8px;
+  padding: var(--space-2) var(--space-3);
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px solid rgba(127, 127, 127, 0.22);
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
 .health-item { display: flex; flex-direction: column; gap: 4px; padding: 8px; border-radius: var(--radius); background: var(--bg-soft); }
 .health-item .muted { font-size: 12px; }
 .health-repaired { background: var(--warn-weak); color: var(--warn); }
