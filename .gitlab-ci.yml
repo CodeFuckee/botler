@@ -999,6 +999,17 @@ backend:test:
     # GitLab 允许 job 级同名变量覆盖非受保护预定义变量，仓库内无任何 job 依赖
     # 该变量，置空可彻底规避此问题。
     CI_COMMIT_DESCRIPTION: ""
+    # issue #488 CI 修复：2026-08-25 新注册 Windows runner（HC-202608171632，
+    # gitlab-runner 19.3.1，shell 为 Windows PowerShell 5.1）承接 backend:test 时，
+    # get_sources 阶段 PowerShell 解析失败（流水线 #1474/#1482 实测）。根因：
+    # 脚本默认经 stdin 传递，PS 5.1 按系统 ANSI 代码页读取 stdin，提交信息中的
+    # 中文（CI_COMMIT_MESSAGE/CI_COMMIT_TITLE，如「查看截图」等 UTF-8 多字节）被
+    # 误读为引号等特殊字符，字符串中途终止抛 ParserError（gitlab-runner issue
+    # #39427 同类问题；其 BOM 修复仅覆盖文件传递路径）。开启
+    # FF_DISABLE_POWERSHELL_STDIN 后脚本改为文件传递并带 UTF-8 BOM，PS 5.1
+    # 正确按 UTF-8 读取，中文提交信息不再破坏脚本解析；该标志亦为
+    # allow_failure:exit_codes 的官方前置条件，仅作用于 backend:test 一个 job。
+    FF_DISABLE_POWERSHELL_STDIN: "true"
   cache:
     key: uv-cache-${CI_COMMIT_REF_SLUG}
     paths:

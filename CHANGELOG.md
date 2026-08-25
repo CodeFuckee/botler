@@ -256,6 +256,24 @@
     头部紧贴抽屉顶部无空隙、滚动后顶部条带命中头部而非内容）。
 
 ### Fixed
+- **CI：backend:test 开启 FF_DISABLE_POWERSHELL_STDIN，规避新 Windows runner 上
+  get_sources 阶段 PowerShell 解析失败（issue #488 CI 修复）**：
+  - 现象：2026-08-25 新注册的 Windows runner（HC-202608171632，gitlab-runner
+    19.3.1，shell 为 Windows PowerShell 5.1）承接 backend:test 时，get_sources
+    （git 检出）阶段即抛 ParserError 失败，pytest 从未执行（流水线 #1474 重试
+    3 次、重跑 1 次全部复现）；而历史承载该 job 的 runner 16（DESKTOP-S1FQOMR，
+    19.1.1 + pwsh）不再接单，导致 CI 无法通过；
+  - 根因：runner 默认将 PowerShell 脚本经 stdin 传给 Windows PowerShell 5.1，
+    PS 5.1 按系统 ANSI 代码页读取 stdin——提交信息中的中文（CI_COMMIT_MESSAGE /
+    CI_COMMIT_TITLE 含「查看截图」等 UTF-8 多字节）被误读为引号等特殊字符，
+    字符串中途终止抛 ParserError（gitlab-runner issue #39427 同类问题；其 UTF-8
+    BOM 修复仅覆盖文件传递路径，stdin 路径不受益）；
+  - 修复：backend:test job 级变量开启 FF_DISABLE_POWERSHELL_STDIN=true，runner
+    改为把脚本写入带 UTF-8 BOM 的文件再执行（该标志亦为 allow_failure:exit_codes
+    的官方前置条件）；改动仅作用于 backend:test 一个 job，不影响其它 job；
+  - 验证：YAML 解析通过；本地后端全量 pytest / 前端全量 1806 用例通过；推送后
+    流水线 backend:test 在 runner 23 上成功执行（见流水线记录）。
+
 
 - **CI/CD 流水线详情右边栏：只有产物归档内确实含截图/报告时才渲染「查看截图」「查看报告」按钮（issue #488）**：
   - 现象：概览页流水线详情抽屉中，几乎所有上传了产物（zip 归档）的成功 job
