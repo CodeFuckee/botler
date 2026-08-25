@@ -6,6 +6,28 @@
 
 ### Added
 
+- **统一代码平台适配层（Provider），降低 GitLab 强绑定（issue #484）**：
+  - 新增 `backend/botler/providers/` 子包：`Provider` 抽象接口 + 通用领域模型
+    （`PullRequest` / `ChangeRequest` / `Issue` / `IssueComment` / `Pipeline` /
+    `PipelineJob` / `Webhook` / `Project`，平台专有字段保留在 `raw`）；GitLab 的
+    `MergeRequest` 概念只存在于 `GitLabProvider` 适配器内部，不进入核心领域模型；
+  - 四个平台实现：`GitLabProvider`（包装既有 GitLabClient，复用重试/限速/脱敏；
+    GitLabClient 新增 list/get/create/merge 合并请求与通用 `update_issue`、
+    `delete_webhook` 方法）、`GitHubProvider`（REST API v3，含 Actions 流水线与
+    repository webhook）、`GiteaProvider`（API v1，标签按名解析 id、commit status
+    聚合为流水线）、`LocalDemoProvider`（纯内存、零依赖，默认播种演示项目
+    `demo/demo-project`，支持全量 CRUD 与并发安全）；
+  - 工厂与注册表：`create_provider(platform, url, token)` 按平台名实例化，
+    `registry.register(平台名, Provider类)` 注册新平台——后续新增平台不影响核心
+    业务逻辑；未知平台抛 `ProviderError(400)`，平台错误统一转 `ProviderError`
+    （保留 HTTP 状态码）；
+  - 接入：`main.py` AppContext 挂载默认 `gitlab_provider`（GitLabProvider 包装全局
+    GitLabClient）与 `provider_registry`，供后续业务逐步迁移到统一接口；
+  - 测试：新增 202 个用例（领域模型映射与边界 / GitLabProvider / GitHubProvider
+    （httpx MockTransport 验证 URL/鉴权/映射）/ GiteaProvider / LocalDemoProvider
+    （含并发创建去重）/ 工厂注册表与接口完整性）；全量本地测试通过、ruff 通过、
+    mypy 三核心模块零错误。
+
 ### Added
 
 - **概览页单列分组布局改为「状态 → 仓库」两级分组（issue #485）**：

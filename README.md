@@ -116,6 +116,15 @@ Webhook 接收器 ──► 任务调度器（SQLite，同仓库串行/跨仓库
                           └─► 追加结果评论并标记 bot-done（人工决定是否关闭 Issue）
 ```
 
+> 💡 **统一代码平台适配层**（issue #484）：平台通过 `backend/botler/providers/`
+> 适配层与 GitLab 解耦。核心业务逻辑只依赖 `Provider` 抽象接口与通用领域模型
+> （`PullRequest` / `ChangeRequest` / `Issue` / `Pipeline`），GitLab 专属概念
+> （如 `MergeRequest`）只存在于 `GitLabProvider` 适配器内部。当前支持平台：
+> `gitlab`（全功能，默认）/ `github`（REST API v3）/ `gitea`（私有化部署，
+> API v1）/ `local_demo`（零依赖内存演示，`create_provider("local_demo")`
+> 即可体验统一接口）。新增平台只需实现 `Provider` 子类并注册到工厂
+> （`factory.register(平台名, 类)`），核心业务逻辑零改动。
+
 > 💡 **概览页创建 Issue 自动对账**（issue #425）：从概览页仓库卡片的「添加 Issue」弹窗成功创建 Issue 后，页面会立即对该仓库执行一次对账，令分配给 bot 且尚无活跃任务的 Issue 无需等待定时扫描即可入队。若对账请求失败，Issue 仍视为已创建并刷新列表，卡片会显示失败提示，用户可点击「对账」手动重试。
 
 调度器派发顺序：仓库优先级（数字小先）→ 同仓库队列内按 issue 标签优先级
@@ -193,6 +202,11 @@ backend/
     config.py        config.yaml 加载（${ENV} 展开）+ 写回
     database.py      SQLite 模型（repos / tasks / task_logs）
     gitlab_client.py GitLab REST API 封装（webhook 注册、issue 评论等）
+    providers/       统一代码平台适配层（issue #484）：Provider 抽象接口 + 通用领域模型
+                     （PullRequest / ChangeRequest / Issue / Pipeline 等），当前实现
+                     GitLabProvider（包装 GitLabClient）/ GitHubProvider（REST v3）/
+                     GiteaProvider（API v1）/ LocalDemoProvider（内存演示）；新增平台 =
+                     实现 Provider 子类 + factory.register() 一行注册，核心业务逻辑零改动
     webhook.py       webhook 接收器（secret 校验 + assignee 判定 + 去重）
     scheduler.py     任务调度器（每仓库串行、跨仓库并行、按仓库优先级派发；同仓库队列内按 issue 标签优先级排序，默认 bug 最优先）
     executor.py      执行器（引擎分发走插件体系，任务开始自动切回默认主分支 + git pull（拉取冲突保留现场交由 agent 手工合并）/ 人工停止 / 重试 / 失败评论）

@@ -549,6 +549,14 @@ class GitLabClient:
             logger.info("注销 webhook: project=%s removed=%s", project_id, removed)
         return removed
 
+    def delete_webhook(self, project_id: int, hook_id: int) -> None:
+        """删除指定 webhook（issue #484：平台适配层 unregister_webhook 底层实现）。
+
+        与 unregister_webhook（按回调 URL 匹配删除平台自身 hook）不同，
+        本方法按 hook id 精确删除。hook 不存在时 GitLab 返回 404。
+        """
+        self._request("DELETE", f"/projects/{project_id}/hooks/{hook_id}")
+
     def test_webhook(self, project_id: int) -> tuple[bool, str]:
         """测试 webhook 连通性（GitLab 向平台发 ping）。"""
         hooks = self.list_webhooks(project_id)
@@ -851,6 +859,19 @@ class GitLabClient:
         assert isinstance(issue, dict)
         return issue
 
+    def update_issue(self, project_id: int, iid: int, **changes) -> dict:
+        """通用 issue 更新（issue #484：平台适配层 update_issue 的底层调用）。
+
+        changes 直接透传 GitLab issue update API 字段（title / description /
+        state_event / assignee_ids / labels / add_labels / remove_labels 等），
+        由调用方按语义组织；state_event 支持 close / reopen。
+        """
+        issue = self._request(
+            "PUT", f"/projects/{project_id}/issues/{iid}",
+            json=changes)
+        assert isinstance(issue, dict)
+        return issue
+
     def last_note(self, project_id: int, iid: int) -> dict | None:
         """最后一条非系统评论的 note 对象（含 author/body）；无发言返回 None。
 
@@ -921,6 +942,62 @@ class GitLabClient:
                 pass
             time.sleep(2)
         return False
+
+    # ---- merge requests（issue #484：平台适配层 PullRequest 的底层实现）----
+
+    def list_merge_requests(self, project_id: int,
+                            state: str | None = None,
+                            limit: int | None = None) -> list[dict]:
+        """项目合并请求列表（GitLab MR API）。
+
+        平台适配层 PullRequest.list 的底层实现；state 取值 opened /
+        closed / merged / all，None 时列出全部（GitLab 默认 opened）。
+        limit 非空时最多取 limit 条。
+        """
+        params: dict = {}
+        if state:
+            params["state"] = state
+        return self._paged(f"/projects/{project_id}/merge_requests",
+                           limit=limit, **params)
+
+    def get_merge_request(self, project_id: int, mr_iid: int) -> dict:
+        """单条合并请求详情（平台适配层 PullRequest.get 的底层实现）。"""
+        mr = self._request(
+            "GET", f"/projects/{project_id}/merge_requests/{mr_iid}")
+        assert isinstance(mr, dict)
+        return mr
+
+    def create_merge_request(self, project_id: int, source_branch: str,
+                             target_branch: str, title: str,
+                             description: str | None = None) -> dict:
+        """创建合并请求（平台适配层 PullRequest.create 的底层实现）。
+
+        GitLab POST /projects/{id}/merge_requests 接受
+        {source_branch, target_branch, title, description}。
+        """
+        body: dict = {
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+            "title": title,
+        }
+        if description:
+            body["description"] = description
+        mr = self._request(
+            "POST", f"/projects/{project_id}/merge_requests", json=body)
+        assert isinstance(mr, dict)
+        return mr
+
+    def merge_merge_request(self, project_id: int, mr_iid: int) -> dict:
+        """合并合并请求（平台适配层 PullRequest.merge 的底层实现）。
+
+        GitLab PUT /projects/{id}/merge_requests/{iid}/merge 直接合并；
+        返回合并后的 MR 对象（state=merged）。合并条件不满足（冲突 /
+        未通过流水线等）时 GitLab 返回 405/406，由 _request 转 GitLabError。
+        """
+        mr = self._request(
+            "PUT", f"/projects/{project_id}/merge_requests/{mr_iid}/merge")
+        assert isinstance(mr, dict)
+        return mr
 
     # ---- commits ----
 

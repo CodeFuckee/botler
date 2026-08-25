@@ -33,6 +33,7 @@ from .database import DB_PATH, Database
 from .events import global_bus
 from .executor import ClaudeExecutor
 from .gitlab_client import GitLabClient, configure_default_rate_limiter
+from .providers import GitLabProvider, ProviderRegistry, registry as _provider_registry
 from .health_inspection import RepoHealthInspector
 from .log_redact import install_redact_filter, register_config_secrets
 from .reconciler import Reconciler
@@ -94,6 +95,10 @@ class AppContext:
     retention: RetentionManager
     health_inspection: RepoHealthInspector
     sso: SsoAuth
+    # issue #484：统一代码平台适配层——默认 GitLab 适配器与平台注册表
+    # （后续新增平台只需向注册表注册 Provider，核心业务逻辑零改动）
+    gitlab_provider: GitLabProvider | None = None
+    provider_registry: ProviderRegistry = _provider_registry
     config_path: str = ""
 
 
@@ -126,6 +131,12 @@ def build_context(config_path: str | None = None, db_path: str | None = None,
         settings.gitlab_url, settings.gitlab_token,
         verify_ssl=settings.verify_ssl,
     )
+    # issue #484：默认平台适配器——包装全局 GitLabClient，复用其限速/
+    # 重试/脱敏配置，对外暴露统一的 Provider 通用接口
+    gitlab_provider = GitLabProvider(
+        url=settings.gitlab_url, token=settings.gitlab_token,
+        verify_ssl=settings.verify_ssl, client=gitlab,
+    )
     renderer = TemplateRenderer(config)
     executor = ClaudeExecutor(config, db, gitlab, renderer)
     scheduler = TaskScheduler(config, db, executor)
@@ -153,7 +164,8 @@ def build_context(config_path: str | None = None, db_path: str | None = None,
         )
     config.set_external_change_callback(_on_config_external_change)
     return AppContext(
-        config=config, db=db, gitlab=gitlab, renderer=renderer,
+        config=config, db=db, gitlab=gitlab, gitlab_provider=gitlab_provider,
+        provider_registry=_provider_registry, renderer=renderer,
         executor=executor, scheduler=scheduler, reconciler=reconciler,
         webhook=webhook, backup=backup, retention=retention,
         health_inspection=health_inspection, sso=sso, config_path=config.path,
