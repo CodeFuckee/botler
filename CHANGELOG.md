@@ -190,6 +190,23 @@
 
 ### Fixed
 
+- **修复测试运行会向真实数据库新增 demo 仓库与测试灵感且无对应删除的问题（issue #486）**：
+  - 根因：`tests/test_global_events.py` 的 app fixture 经 `build_context` 构建
+    ctx 时，`Database()` 使用默认路径（受 `BOTLER_DB` 环境变量影响），在
+    `BOTLER_DB` 指向真实库（如生产 `data/backend/botler.db`）的环境下运行
+    测试，`test_inspiration_write_publishes` 会向真实库新增 demo 仓库
+    （project_id=42、假域名 URL）与「测试灵感」且测试结束不清理，造成生产/
+    开发库残留垃圾数据；
+  - 修复：`build_context` 新增可选 `db_path` 参数（不传则沿用默认路径，
+    向后兼容），`test_global_events.py` app fixture 显式传临时库路径，测试
+    完全隔离、不再写入真实库；
+  - 新增删除仓库/删除灵感测试：`test_delete_repo_removes_demo_data` /
+    `test_delete_repo_not_found` / `test_delete_inspiration_publishes_event` /
+    `test_delete_inspiration_not_found`（删除 200/204 + 软删除标记与
+    inspiration 事件广播 + 列表不再出现）；`test_inspiration_write_publishes`
+    改为创建后即删除、数据不残留；
+  - 已清理生产库中本次 bug 残留的 demo 仓库（软删除）与 2 条「测试灵感」。
+
 - **修复「backend:test 已迁移到另一台服务器，但运行该阶段时生产页面仍卡顿」的历史遗留问题（issue #481）**：
   - 深入诊断结论：backend:test 已确实迁移到 windows 标签 runner（runner
     id=16，流水线 #1428 实证在 Windows 机器上跑 pytest，code01 空闲），

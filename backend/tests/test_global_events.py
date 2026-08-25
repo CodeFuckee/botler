@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from botler.api import router as api_router
 from botler.database import Database
+from botler.gitlab_client import GitLabClient
 from botler.events import AppEventBus, global_bus
 
 CONFIG_TEXT = """\
@@ -51,7 +52,14 @@ def _clean_global_bus():
 
 @pytest.fixture
 def app():
-    """测试 app：挂 api 路由与最小 ctx（含独立事件总线）。"""
+    """测试 app：挂 api 路由与最小 ctx（含独立事件总线）。
+
+    issue #486：build_context 显式传 db_path 指向临时库——此前默认
+    Database() 会受 BOTLER_DB 环境变量影响，在指向真实库（如生产
+    data/backend/botler.db）的环境下运行测试，会在真实库中新增
+    demo 仓库与测试灵感且不清理。db_path 隔离后测试写临时库，不再
+    污染生产/开发数据库。
+    """
     from botler.main import create_app  # noqa: F401
     # 直接构建最小 app，避免 create_app 的完整上下文（调度器/对账等）
     from botler.main import build_context
@@ -60,7 +68,7 @@ def app():
         config_path = f"{td}/config.yaml"
         with open(config_path, "w", encoding="utf-8") as f:
             f.write(CONFIG_TEXT)
-        ctx = build_context(config_path)
+        ctx = build_context(config_path, db_path=f"{td}/events.db")
         app = FastAPI()
         app.state.ctx = ctx
         app.include_router(api_router)
@@ -288,19 +296,81 @@ class TestPublishPoints:
         assert q.get_nowait()["type"] == "issue"
 
     def test_inspiration_write_publishes(self, app):
-        """灵感增删改 API → inspiration 事件。"""
+        """灵感增删改 API → inspiration 事件（issue #486：创建后删除，不残留）。"""
         q = global_bus.subscribe()
         c = TestClient(app)
         ctx = app.state.ctx
-        ctx.db.upsert_repo(42, "demo", "https://gitlab.example.com/g/demo.git")
-        # 创建灵感
+        repo_id = ctx.db.upsert_repo(
+            42, "demo", "https://gitlab.example.com/g/demo.git")
+        # 创建灵感（repo_id 用 upsert 返回的真实 id，不再依赖环境已有仓库）
         resp = c.post("/api/inspirations",
-                      json={"repo_id": 1, "content": "测试灵感"})
-        assert resp.status_code in (201, 400, 404)  # 仓库 id 依赖环境
-        # 只要后端处理了写请求，总线应有事件（创建成功路径）
-        if resp.status_code == 201:
-            ev = q.get(timeout=1)
-            assert ev["type"] == "inspiration"
+                      json={"repo_id": repo_id, "content": "测试灵感"})
+        assert resp.status_code == 201, resp.text
+        ev = q.get(timeout=1)
+        assert ev["type"] == "inspiration"
+        insp_id = resp.json()["id"]
+        # 删除灵感 → 再次广播 inspiration 事件，且数据不残留
+        r = c.delete(f"/api/inspirations/{insp_id}")
+        assert r.status_code == 204, r.text
+        assert q.get(timeout=1)["type"] == "inspiration"
+        assert ctx.db.get_inspiration(insp_id) is None
+
+    def test_delete_inspiration_publishes_event(self, app):
+        """删除灵感：204 + inspiration 事件 + 数据库不再存在（issue #486）。"""
+        q = global_bus.subscribe()
+        c = TestClient(app)
+        ctx = app.state.ctx
+        repo_id = ctx.db.upsert_repo(
+            42, "demo", "https://gitlab.example.com/g/demo.git")
+        insp_id = ctx.db.create_inspiration(repo_id, "测试灵感")
+
+        r = c.delete(f"/api/inspirations/{insp_id}")
+
+        assert r.status_code == 204, r.text
+        assert q.get(timeout=1)["type"] == "inspiration"
+        assert ctx.db.get_inspiration(insp_id) is None
+
+    def test_delete_inspiration_not_found(self, app):
+        """删除不存在的灵感返回 404（不发布事件）。"""
+        q = global_bus.subscribe()
+        c = TestClient(app)
+        r = c.delete("/api/inspirations/999999")
+        assert r.status_code == 404, r.text
+
+    def test_delete_repo_removes_demo_data(self, app, monkeypatch):
+        """删除仓库：200 + 软删除标记 + 列表不再出现（issue #486）。
+
+        测试内新增的 demo 仓库删除后不残留；unregister_webhook 打桩
+        避免对真实 GitLab 发起网络请求。
+        """
+        q = global_bus.subscribe()
+        c = TestClient(app)
+        ctx = app.state.ctx
+        # 注销 webhook 打桩（不访问真实 GitLab）
+        monkeypatch.setattr(
+            GitLabClient, "unregister_webhook",
+            lambda self, project_id: {"id": 1})
+        repo_id = ctx.db.upsert_repo(
+            42, "demo", "https://gitlab.example.com/g/demo.git")
+
+        r = c.delete(f"/api/repos/{repo_id}")
+
+        assert r.status_code == 200, r.text
+        assert r.json() == {"ok": True}
+        row = ctx.db.get_repo(repo_id)
+        assert row is not None
+        assert not row["enabled"]
+        assert row["deleted_at"] is not None
+        # 列表不再返回（list_repos 默认过滤软删除行）
+        listing = c.get("/api/repos").json()
+        ids = [x["id"] for x in listing["repos"]]
+        assert repo_id not in ids
+
+    def test_delete_repo_not_found(self, app):
+        """删除不存在的仓库返回 404。"""
+        c = TestClient(app)
+        r = c.delete("/api/repos/999999")
+        assert r.status_code == 404, r.text
 
     def test_settings_save_publishes(self, app):
         """设置保存 → settings 事件。"""

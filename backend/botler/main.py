@@ -29,7 +29,7 @@ from .auth import CsrfGuardMiddleware, SsoAuth, SsoGuardMiddleware
 from .audit import config_diff_summary
 from .backup import BotlerBackup
 from .config import ConfigManager
-from .database import Database
+from .database import DB_PATH, Database
 from .events import global_bus
 from .executor import ClaudeExecutor
 from .gitlab_client import GitLabClient, configure_default_rate_limiter
@@ -97,7 +97,7 @@ class AppContext:
     config_path: str = ""
 
 
-def build_context(config_path: str | None = None) -> AppContext:
+def build_context(config_path: str | None = None, db_path: str | None = None) -> AppContext:
     config = ConfigManager(config_path or os.environ.get("BOTLER_CONFIG", str(BACKEND_DIR / "config.yaml")))
     settings = config.load()
     # 统一日志脱敏（issue #259）：配置中声明的凭据 Key（gitlab token /
@@ -111,7 +111,10 @@ def build_context(config_path: str | None = None) -> AppContext:
         logger.info("外部插件加载完成（%s 个模块）", len(loaded))
     # issue #478：任务创建/状态变化 → 全局事件总线广播 task 事件
     # （前端 SSE 订阅后事件驱动刷新任务列表/水位/统计）
-    db = Database(event_publisher=global_bus.publish)
+    # issue #486：测试隔离可用 db_path 指定临时库；生产调用不传则
+    # 沿用 DB_PATH（BOTLER_DB 环境变量 / 默认 backend/botler.db），
+    # 避免测试写入真实数据库
+    db = Database(path=db_path or DB_PATH, event_publisher=global_bus.publish)
     # 启动即应用配置，保证首次 webhook/手动对账前所有 GitLab API
     # 请求也使用用户设定的共享限速；Reconciler 每轮再刷新以支持热重载。
     configure_default_rate_limiter(settings.gitlab_api_requests_per_second)
