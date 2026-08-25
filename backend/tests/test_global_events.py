@@ -332,7 +332,6 @@ class TestPublishPoints:
 
     def test_delete_inspiration_not_found(self, app):
         """删除不存在的灵感返回 404（不发布事件）。"""
-        q = global_bus.subscribe()
         c = TestClient(app)
         r = c.delete("/api/inspirations/999999")
         assert r.status_code == 404, r.text
@@ -343,7 +342,6 @@ class TestPublishPoints:
         测试内新增的 demo 仓库删除后不残留；unregister_webhook 打桩
         避免对真实 GitLab 发起网络请求。
         """
-        q = global_bus.subscribe()
         c = TestClient(app)
         ctx = app.state.ctx
         # 注销 webhook 打桩（不访问真实 GitLab）
