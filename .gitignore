@@ -15,6 +15,7 @@ backend/config.yaml
 backend/.env
 # SSO 会话签名密钥（运行时自动生成，含密钥严禁入库）
 backend/data/
+backend/data
 
 # Node
 frontend/node_modules/
