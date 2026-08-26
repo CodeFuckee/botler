@@ -55,6 +55,7 @@ class StubGitLab:
 
     def __init__(self):
         self.hooks: list[dict] = []          # 远端项目 webhook 列表
+        self.hooks_mode = "ok"               # ok / missing404（读取列表 404）
         self.register_calls: list[tuple] = []  # register_webhook(project_id, secret)
         self.token_mode = "ok"               # ok / unauthorized
         self.project_mode = "ok"             # ok / missing
@@ -69,6 +70,9 @@ class StubGitLab:
         return "https://botler.example.com/webhook/gitlab"
 
     def list_webhooks(self, project_id: int) -> list[dict]:
+        if self.hooks_mode == "missing404":
+            raise GitLabError(
+                f"资源不存在（404）: /projects/{project_id}/hooks", 404)
         return list(self.hooks)
 
     def register_webhook(self, project_id: int, secret: str) -> dict:
@@ -729,3 +733,95 @@ class TestWebhookJudgementDetails:
         assert stub.hooks[0]["id"] == 9  # 更新而非新建
         assert stub.hooks[0]["url"] == "http://10.0.0.122:8000/webhook/gitlab"
         assert stub.hooks[0]["token"] == config.get().webhook_secret
+
+
+# ---- 私有项目 per-repo client（issue #497）----
+
+class TestPerRepoClientInspection:
+    """私有项目 + 全局 bot token 无权访问时，巡检应使用仓库 remote 内嵌
+    token 的 per-repo client（issue #497）。
+
+    背景：tender_document_spider（项目 89）为私有项目，全局 bot token 是
+    项目级限定 PAT（仅能访问指定项目），对其余项目所有 API 一律返回 404
+    （GitLab 隐私保护）；但仓库本地 remote url 内嵌的 token 有权限。旧实现
+    健康巡检一律用全局 client，私有项目被误报「webhook 自动修复失败 404 /
+    项目不存在（可能已被删除或无权限）」，用户核对 GitLab 发现项目正常，
+    产生困惑。修复：与概览页流水线/issues 一致，per-repo client 优先。
+    """
+
+    def _make_repo_stub(self, config):
+        """per-repo client 桩：webhook 已注册且匹配、项目可达。"""
+        stub = StubGitLab()
+        stub.hooks = [{"id": 8, "url": stub.webhook_url(),
+                       "token": config.get().webhook_secret,
+                       "issues_events": True}]
+        return stub
+
+    def test_private_repo_uses_per_repo_client_healthy(
+            self, config, db, notifier, monkeypatch):
+        """全局 token 对私有项目 404，但 per-repo token 可访问 → 巡检应健康。"""
+        global_stub = StubGitLab()
+        global_stub.project_mode = "missing"  # 全局 client 对项目 404
+        repo_stub = self._make_repo_stub(config)
+        monkeypatch.setattr(
+            "botler.health_inspection.build_repo_client_with_username",
+            lambda row, verify_ssl=True: (repo_stub, "agent"))
+
+        repo_id = _mk_repo(
+            db, project_id=89, name="tender_document_spider",
+            url="https://gitlab.example.com/chenkaidi/tender_document_spider.git")
+        result = _mk_inspector(config, db, global_stub, notifier).inspect_once()
+        # 修复前：误报异常（webhook 404 + 项目 404）；修复后：per-repo
+        # client 检查通过 → 健康
+        assert result["abnormal"] == []
+        row = db.latest_repo_health(repo_id)
+        assert row["health_status"] == HEALTH_HEALTHY
+        assert row["webhook_ok"] == 1
+        assert row["project_ok"] == 1
+        assert row["token_ok"] == 1
+
+    def test_no_per_repo_token_falls_back_to_global(
+            self, config, db, notifier, monkeypatch):
+        """remote 无内嵌 token（build 返回 None）→ 回退全局 client，保持原
+        语义（404 仍判异常并输出诊断）。"""
+        global_stub = StubGitLab()
+        global_stub.hooks = [{"id": 1, "url": global_stub.webhook_url(),
+                              "token": config.get().webhook_secret,
+                              "issues_events": True}]
+        global_stub.project_mode = "missing"
+        monkeypatch.setattr(
+            "botler.health_inspection.build_repo_client_with_username",
+            lambda row, verify_ssl=True: (None, None))
+
+        repo_id = _mk_repo(db, project_id=89, name="tender_document_spider",
+                           url="https://gitlab.example.com/chenkaidi/tender_document_spider.git")
+        result = _mk_inspector(config, db, global_stub, notifier).inspect_once()
+        assert result["abnormal"] == ["tender_document_spider"]
+        row = db.latest_repo_health(repo_id)
+        assert row["health_status"] == HEALTH_ABNORMAL
+        assert row["project_ok"] == 0
+        assert "项目" in (row["last_error"] or "")
+
+    def test_auto_repair_404_keeps_informative_check_error(
+            self, config, db, notifier, monkeypatch):
+        """无 per-repo token（回退全局）且全局 token 对项目 404：检查阶段已给出
+        「私有项目 / bot 无权限」说明，自动修复 404 失败时不得覆盖为裸
+        「资源不存在（404）」文案（issue #497 标题所述误导）。"""
+        global_stub = StubGitLab()
+        global_stub.hooks_mode = "missing404"   # 读取 webhook 列表即 404
+        global_stub.project_mode = "missing"
+        monkeypatch.setattr(
+            "botler.health_inspection.build_repo_client_with_username",
+            lambda row, verify_ssl=True: (None, None))
+
+        repo_id = _mk_repo(
+            db, project_id=89, name="tender_document_spider",
+            url="https://gitlab.example.com/chenkaidi/tender_document_spider.git")
+        result = _mk_inspector(config, db, global_stub, notifier).inspect_once()
+        assert result["abnormal"] == ["tender_document_spider"]
+        row = db.latest_repo_health(repo_id)
+        err = row["last_error"] or ""
+        # 保留检查阶段的详细 404 说明，而非裸「自动修复 webhook 失败: 资源不存在」
+        assert "读取 webhook 列表失败（404" in err
+        assert "自动修复 webhook 失败: 资源不存在" not in err
+        assert "私有" in err and "无权限" in err

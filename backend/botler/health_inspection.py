@@ -34,6 +34,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .database import Database
+from .git_remote import build_repo_client_with_username
 from .gitlab_client import GitLabClient, GitLabError, HOOK_URL_PATH
 
 logger = logging.getLogger(__name__)
@@ -192,22 +193,37 @@ class RepoHealthInspector:
         """
         project_id = repo["gitlab_project_id"]
         now = _utc_now_str()
-        webhook_ok, webhook_err = self._check_webhook(project_id, cfg)
+        # 每仓库优先用 remote url 内嵌 token 的 per-repo client（issue #497）：
+        # 私有项目 + 全局 bot token 为项目级限定 PAT 时，全局 token 对该仓库
+        # 所有 API 一律 404（GitLab 隐私保护），但仓库 remote 的 token 有权限
+        # ——与概览页流水线/issues 的 per-repo client 优先模式一致；remote 无
+        # 内嵌 token / 本地目录不是 git 仓库时回退全局 client（兼容旧仓库）。
+        client = self._repo_client(repo, cfg)
+        webhook_ok, webhook_err = self._check_webhook(project_id, cfg, client)
         repaired = False
         if not webhook_ok and cfg.inspection_auto_repair:
             # webhook 缺失 / secret 不匹配 / 事件开关被改 → 自动修复（issue
             # #265 验收标准 2）；修复成功即视为本轮 webhook 检查通过并标记
             # repaired
             try:
-                self._repair_webhook(project_id, cfg.webhook_secret)
+                self._repair_webhook(project_id, cfg.webhook_secret, client)
                 repaired = True
                 webhook_ok, webhook_err = True, None
                 logger.info("巡检仓库 %s：webhook 异常，已自动修复", repo["name"])
             except GitLabError as exc:
-                webhook_err = f"自动修复 webhook 失败: {exc}"
+                # 自动修复失败（issue #497）：检查阶段若已给出更具体的 404
+                # 说明（如「项目不存在，或为私有项目且 bot 账号无权限」），
+                # 保留该说明而非覆盖为裸「资源不存在（404）」——裸 404 会
+                # 让用户误以为项目被删除（tender_document_spider 案例）
+                if exc.status_code == 404 and webhook_err and "404" in webhook_err:
+                    logger.info(
+                        "巡检仓库 %s：webhook 自动修复失败（404，检查阶段已"
+                        "说明原因），保留检查阶段错误说明", repo["name"])
+                else:
+                    webhook_err = f"自动修复 webhook 失败: {exc}"
         token_ok, token_err = self._check_token()
         project_ok, project_err, project_detail = self._check_project(
-            project_id, repo)
+            project_id, repo, client)
 
         failures: list[str] = []
         if not webhook_ok:
@@ -229,6 +245,19 @@ class RepoHealthInspector:
             "project_ok": project_ok, "repaired": repaired,
         }
 
+    def _repo_client(self, repo, cfg) -> GitLabClient:
+        """按仓库 remote url 内嵌 token 构建 per-repo 客户端（issue #497）。
+
+        私有项目场景：全局 bot token 可能是项目级限定 PAT，仅能访问指定
+        项目，对其余私有项目所有 API 一律返回 404（GitLab 隐私保护），
+        而仓库本地 remote url 内嵌的 token 有权限。健康巡检与概览页
+        流水线/issues 一致：优先用 per-repo client 检查该仓库的 webhook
+        与项目可达。remote 无内嵌 token / 本地目录不是 git 仓库时回退
+        全局 client（兼容旧仓库，保持原语义）。
+        """
+        fallback, _ = build_repo_client_with_username(repo, cfg.verify_ssl)
+        return fallback or self.gitlab
+
     @staticmethod
     def _find_platform_hook(hooks: list[dict]) -> dict | None:
         """在项目 hook 列表中查找平台注册的 webhook。
@@ -244,16 +273,19 @@ class RepoHealthInspector:
             (h for h in hooks if (h.get("url") or "").endswith(HOOK_URL_PATH)),
             None)
 
-    def _check_webhook(self, project_id: int, cfg) -> tuple[bool, str | None]:
+    def _check_webhook(self, project_id: int, cfg,
+                      client: GitLabClient | None = None) -> tuple[bool, str | None]:
         """webhook 存在且 secret 匹配（GET /projects/{id}/hooks 比对）。
 
-        GitLab 出于安全对 hook 的 token 字段做掩码（list/single 接口均
-        返回 null），仅当接口返回明文 token 时才做严格比对；掩码时无法
-        比对 secret，视为已配置（webhook 存在性已确认）。同时校验 issue
-        事件开关（issues_events=false 时新 issue 事件同样收不到）。
+        默认用传入的 per-repo client（issue #497：私有项目场景下全局 bot
+        token 可能无权访问），缺省回退全局 client。GitLab 出于安全对 hook
+        的 token 字段做掩码（list/single 接口均返回 null），仅当接口返回
+        明文 token 时才做严格比对；掩码时无法比对 secret，视为已配置
+        （webhook 存在性已确认）。同时校验 issue 事件开关
+        （issues_events=false 时新 issue 事件同样收不到）。
         """
         try:
-            hooks = self.gitlab.list_webhooks(project_id)
+            hooks = (client or self.gitlab).list_webhooks(project_id)
         except GitLabError as exc:
             if exc.status_code == 404:
                 return False, ("读取 webhook 列表失败（404：项目不存在，或为"
@@ -269,21 +301,24 @@ class RepoHealthInspector:
             return False, "webhook 未开启 issue 事件"
         return True, None
 
-    def _repair_webhook(self, project_id: int, secret: str) -> None:
+    def _repair_webhook(self, project_id: int, secret: str,
+                       client: GitLabClient | None = None) -> None:
         """自动修复 webhook：优先更新已存在的平台 hook，缺失时新建。
 
+        默认用传入的 per-repo client（issue #497），缺省回退全局 client。
         更新已存在的 hook 时保留其回调 URL（以注册时实际地址为准），只
         刷新 issues_events 开关与 secret——若按 client.webhook_url() 重建
         会注册到错误的默认地址（部署环境回调地址与 gitlab_url 不同）。
         缺失时回退 register_webhook 新建（与添加仓库行为一致）。
         """
-        hooks = self.gitlab.list_webhooks(project_id)
+        gitlab = client or self.gitlab
+        hooks = gitlab.list_webhooks(project_id)
         existing = self._find_platform_hook(hooks)
         if existing is not None:
-            self.gitlab.update_webhook(
+            gitlab.update_webhook(
                 project_id, existing["id"], existing["url"], secret)
             return
-        self.gitlab.register_webhook(project_id, secret)
+        gitlab.register_webhook(project_id, secret)
 
     def _check_token(self) -> tuple[bool, str | None]:
         """token 有效性：轻量 API 调用（GET /user）。
@@ -302,9 +337,11 @@ class RepoHealthInspector:
             return False, str(exc)
 
     def _check_project(self, project_id: int,
-                       repo: dict | None = None) -> tuple[bool, str | None, str | None]:
+                       repo: dict | None = None,
+                       client: GitLabClient | None = None) -> tuple[bool, str | None, str | None]:
         """仓库可达：GET /projects/{id}。
 
+        默认用传入的 per-repo client（issue #497），缺省回退全局 client。
         返回 (project_ok, last_error, project_detail)。404 时执行补充诊断
         （issue #496）：GitLab 对「项目不存在」与「无权限访问的私有项目」
         统一返回 404（隐私保护），旧实现只报「项目不存在（可能已被删除或
@@ -313,7 +350,7 @@ class RepoHealthInspector:
         精简摘要。
         """
         try:
-            self.gitlab.get_project(project_id)
+            (client or self.gitlab).get_project(project_id)
             return True, None, None
         except GitLabError as exc:
             if exc.status_code == 404:

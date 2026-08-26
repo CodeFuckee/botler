@@ -322,6 +322,28 @@
 
 ### Fixed
 
+- **仓库健康巡检改为 per-repo client 优先，修复私有项目被误报「项目不存在」
+  （issue #497）**：
+  - 现象：仓库页面 tender_document_spider（项目 89，私有）健康徽章显示「异常」，
+    错误为「webhook 自动修复 webhook 失败: 资源不存在（404）: /projects/89/hooks；
+    项目 项目不存在（可能已被删除或无权限）」；但用户核对 GitLab 确认项目正常。
+    与 issue #496 的补充诊断不同，本次是根因修复——全局 bot token 为项目级限定
+    PAT（仅能访问 botler 项目），对私有项目 89 的所有 API 一律返回 404（GitLab
+    隐私保护），而该仓库本地 remote url 内嵌的 token 实际有权限（概览页流水线/
+    issues 正是用它正常展示项目 89）；
+  - 修复：`health_inspection.py` 巡检单仓库时先按仓库 remote url 内嵌 token 构建
+    per-repo client（`git_remote.build_repo_client_with_username`，与概览页
+    pipelines/issues 的 per-repo client 优先模式一致），webhook 检查 / 自动修复 /
+    项目可达均用它执行，remote 无内嵌 token 时回退全局 client（兼容旧仓库）；
+    token 有效性检查仍用全局 client（校验平台自身凭据）；另修复自动修复失败时
+    错误文案被覆盖为裸「资源不存在（404）」的问题——检查阶段若已给出更具体的
+    404 说明（私有项目 / bot 无权限）则保留该说明；
+  - 测试：新增 TestPerRepoClientInspection 3 个用例（全局 token 404 + per-repo
+    token 可访问 → 巡检健康；remote 无 token 回退全局 → 保持异常判定；自动修复
+    404 失败保留检查阶段的详细说明）；后端全量 pytest 通过、ruff 通过。
+
+### Fixed
+
 - **平板竖屏下 issue 详情右边栏底部操作按钮被遮挡/裁切（issue #482）**：
   - 现象：平板竖屏（≤860px）查看概览页 issue 详情右边栏，底部操作栏
     （.drawer-bottom-actions）被压缩到约 29px（自然高度约 68px），按钮溢出
