@@ -12,8 +12,10 @@ docs 约定 config.yaml 是唯一事实来源、Web UI 是编辑它的外壳，�
 """
 
 
+import os
 import pytest
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -40,6 +42,14 @@ def _manual_edit_template(path: Path, template: str = TEMPLATE_B) -> None:
     data.setdefault("templates", {})["default"] = template
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+    # Windows runner（issue #498 CI 实测，流水线 #1483 两次失败）：tmp_path 所在
+    # 文件系统 mtime 粒度粗（如 2 秒），紧邻的两次写入可能落在同一 mtime 刻度，
+    # get() 的 `getmtime() > _loaded_mtime` 严格大于比较会漏检「外部编辑」。
+    # 真实场景中人工编辑与进程上次加载相隔足够时间；这里显式把 mtime 推进 2 秒，
+    # 模拟真实时间间隔，保证测试在任何文件系统上确定性成立
+    # （同 test_backup.py 的 os.utime 手法）。
+    now = time.time()
+    os.utime(path, (now + 2, now + 2))
 
 
 class TestManualEditAutoReload:

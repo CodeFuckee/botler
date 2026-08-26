@@ -21,6 +21,17 @@
   - 测试：`test_failure_classify.py` 新增 404 分类与数字串不误伤用例、
     `test_executor.py` 新增 404 收尾跳过评论/标签用例。
 
+- **config.yaml 手动编辑重载测试在 Windows runner 上的确定性修复（issue #498）**：
+  - 现象：流水线 #1483 的 backend:test 在 Windows runner 上两次失败——
+    `TestManualEditAutoReload` 手动编辑后 `get()` 仍返回旧模板；
+  - 根因：tmp_path 所在文件系统 mtime 粒度粗（如 2 秒），测试中「初始写入」与
+    「模拟用户编辑」两次写入落在同一 mtime 刻度，`get()` 的
+    `getmtime() > _loaded_mtime` 严格大于比较漏检外部编辑（生产环境为人工
+    编辑、时间间隔足够，不受影响）；
+  - 修复：`test_config_reload.py` 的 `_manual_edit_template` 写入后显式推进
+    文件 mtime（`os.utime` +2 秒），模拟真实编辑与上次加载的时间间隔，保证
+    测试在任意文件系统上确定性成立（同 `test_backup.py` 的 utime 手法）。
+
 ## [1.7.0] - 2026-08-26
 
 ### Added
