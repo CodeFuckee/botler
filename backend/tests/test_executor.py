@@ -1674,12 +1674,14 @@ class TestGitlabFallbackOnGlobalTokenFailure:
 
     def test_call_with_fallback_non_auth_error_no_fallback(self, executor,
                                                            monkeypatch):
-        """非 401/403（如 404）不触发兜底，原样抛出。"""
+        """非 401/403/404（如 500 系瞬时错误已由外层重试，400 参数错误）
+        不触发兜底，原样抛出。404 自 issue #498 起与 401/403 并列触发
+        per-repo 兜底（私有项目全局 bot 无权限时 GitLab 以 404 隐藏存在性）。"""
         built = []
         monkeypatch.setattr("botler.executor.build_repo_client_with_username",
                             lambda r, verify_ssl: built.append(1) or (None, None))
         executor.gitlab = SimpleNamespace(
-            probe=lambda: (_ for _ in ()).throw(GitLabError("资源不存在（404）", 404)))
+            probe=lambda: (_ for _ in ()).throw(GitLabError("参数错误（400）", 400)))
 
         with pytest.raises(GitLabError):
             executor._call_with_fallback({"name": "demo"},
@@ -1743,6 +1745,106 @@ class TestGitlabFallbackOnGlobalTokenFailure:
         assert any("任务已完成" in a[2]
                    for kind, a in calls if kind == "comment")
         assert db.get_task(task_id)["status"] == "succeeded"
+
+
+class TestGitlabFallbackOn404PrivateProject:
+    """issue #498：全局 bot 对私有项目无权限时 GitLab 以 404 隐藏存在性，
+    executor 应像 401/403 一样回退仓库 remote 内嵌 token 的 per-repo client。
+
+    生产复现（tender_document_spider，gitlab_project_id=89）：
+    - 概览页/「执行」用 per-repo client（project_89_bot token）→ 能看到
+      issue 89#18/19 并成功创建任务；
+    - executor 领取后 _call_with_fallback 用全局 client（project_123_bot
+      token）→ 私有项目无权限返回 404 → 旧逻辑只回退 401/403，任务直接
+      判失败「获取 issue 89#18 失败: 资源不存在（404）」，任务从未真正运行。
+    修复：404 与 401/403 一样触发 per-repo 兜底；per-repo 也 404 才认定
+    资源不存在（保持 issue #498 第一轮修复的降噪语义）。
+    """
+
+    @staticmethod
+    def _boom(*args, **kwargs):
+        raise GitLabError("资源不存在（404）: /projects/42/issues/1", 404)
+
+    def _install(self, executor, monkeypatch, tmp_path, fallback,
+                 run_once=None):
+        """全局 client 全部 404（私有项目无权限）；fallback 为 remote token 客户端桩。"""
+        executor.gitlab = SimpleNamespace(
+            get_issue=self._boom, add_comment=self._boom,
+            add_labels=self._boom, find_commit_for_issue=self._boom,
+            get_latest_pipeline=self._boom, get_pipeline=self._boom,
+            last_note_author_id=self._boom)
+        monkeypatch.setattr(executor, "_log_file",
+                            lambda tid: tmp_path / f"task_{tid}.log")
+        monkeypatch.setattr("botler.executor.build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "project_89_bot"))
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+        if run_once is not None:
+            monkeypatch.setattr(executor, "_run_once", run_once)
+
+    def test_call_with_fallback_404_uses_remote_client(self, executor,
+                                                       monkeypatch):
+        """_call_with_fallback：全局 404 → 用 remote token 客户端重试成功。"""
+        repo = {"name": "tender_document_spider"}
+        fallback = SimpleNamespace(probe=lambda: "fallback-ok")
+        monkeypatch.setattr("botler.executor.build_repo_client_with_username",
+                            lambda r, verify_ssl: (fallback, "project_89_bot"))
+        executor.gitlab = SimpleNamespace(probe=self._boom)
+
+        result, client = executor._call_with_fallback(repo,
+                                                      lambda c: c.probe())
+
+        assert result == "fallback-ok"
+        assert client is fallback
+
+    def test_call_with_fallback_404_both_missing_raises(self, executor,
+                                                        monkeypatch):
+        """全局 404 + remote client 也 404 → 资源确实不存在，抛出 404。"""
+        fallback = SimpleNamespace(
+            probe=lambda: (_ for _ in ()).throw(
+                GitLabError("资源不存在（404）", 404)))
+        monkeypatch.setattr("botler.executor.build_repo_client_with_username",
+                            lambda r, verify_ssl: (fallback, "agent"))
+        executor.gitlab = SimpleNamespace(probe=self._boom)
+
+        with pytest.raises(GitLabError) as exc:
+            executor._call_with_fallback({"name": "demo"},
+                                         lambda c: c.probe())
+        assert exc.value.status_code == 404
+
+    def test_run_task_404_private_project_falls_back_and_succeeds(self,
+                                                                  executor,
+                                                                  monkeypatch,
+                                                                  tmp_path):
+        """全局 get_issue 404（私有项目无权限）→ remote token 兜底领取，
+        任务照常执行成功（修复前生产任务 725/726 因此直接失败）。"""
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        output = json.dumps({"result": "开发完成，已推送代码"},
+                            ensure_ascii=False)
+        calls = []
+        fallback = SimpleNamespace(
+            get_issue=lambda pid, iid: _issue_dict("opened"),
+            add_comment=lambda *a, **k: calls.append(("comment", a)),
+            add_labels=lambda *a, **k: calls.append(("labels", a)),
+            find_commit_for_issue=lambda pid, iid: None,
+            last_note_author_id=lambda pid, iid: None,
+            get_bot_id=lambda: 7,
+            get_latest_pipeline=lambda pid: {"id": 1, "status": "success",
+                                             "sha": "other-sha"},
+        )
+        self._install(executor, monkeypatch, tmp_path, fallback,
+                      run_once=lambda *a: (0, output))
+        _shorten_ci_timeouts(executor, monkeypatch)
+
+        executor.run_task(task_id)
+
+        task = db.get_task(task_id)
+        assert task["status"] == "succeeded",             f"私有项目 404 不应导致任务失败: {task['error_message']}"
+        # 领取评论与 bot-done 标签经 remote token 兜底客户端发出
+        assert any("已收到该 issue" in a[2]
+                   for kind, a in calls if kind == "comment")
+        assert ("labels", (42, 1, ["bot-done"])) in calls
 
 
 class TestResumePromptTemplate:

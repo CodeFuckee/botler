@@ -32,6 +32,22 @@
     文件 mtime（`os.utime` +2 秒），模拟真实编辑与上次加载的时间间隔，保证
     测试在任意文件系统上确定性成立（同 `test_backup.py` 的 utime 手法）。
 
+- **私有项目任务领取误判 404 为「资源不存在」导致任务无法运行的根因修复（issue #498）**：
+  - 现象：tender_document_spider（项目 89）为私有项目，全局 bot token 未加入该
+    项目时 GitLab 对项目内资源统一返回 404（隐藏项目存在性）。executor 领取任务时
+    `_call_with_fallback` 仅对 401/403 回退仓库 remote 内嵌 token 的 per-repo
+    client，404 被直接判为「issue/项目不存在」→ 任务在领取阶段即失败（生产任务
+    725/726：issue 89#18 实际存在，却报「获取 issue 89#18 失败: 资源不存在
+    （404）」，用户点击「执行」后任务从未真正运行）；
+  - 修复：`executor` / `webhook` / `reconciler` 三处 `_call_with_fallback` 的兜底
+    状态码从 401/403 扩展为 401/403/404——全局 client 返回 404 时先用仓库 remote
+    url 内嵌 token 的 per-repo client 重试一次：per-repo 成功则任务正常执行 /
+    webhook 正常入队 / 对账正常扫描；per-repo 仍 404 才认定资源确实不存在（保持
+    第一轮修复的 issue_missing 降噪语义不变）；
+  - 测试：`test_executor.py` / `test_webhook.py` / `test_reconciler.py` 新增私有
+    项目 404 场景复现与回归用例（全局 404 + per-repo 成功、无 remote token 维持
+    原行为）。
+
 ## [1.7.0] - 2026-08-26
 
 ### Added

@@ -193,23 +193,31 @@ class WebhookHandler:
 
     def _call_with_fallback(self, project_id: int, cfg, call):
         """用全局 client 执行 call(client)；遇 401/403（全局 token 失效）
-        时用仓库 remote url 内嵌 token 构建 per-repo client 重试一次。
+        或 404（私有项目全局 bot 无权限时 GitLab 以 404 隐藏存在性，
+        issue #498）时用仓库 remote url 内嵌 token 构建 per-repo client
+        重试一次。
 
         issue #65 补充：此前 webhook 的 issue 查询与最后发言人查询 401
         直接拒绝入队——全局 token 被撤销期间 webhook 事件全部丢弃，
         只能等对账兜底补入队（实时性受损）。remote 无可用 token 或
         重试仍失败时抛 GitLabError。
+
+        issue #498 补充：私有项目（如 tender_document_spider 项目 89）
+        的 webhook 事件同样会被全局 client 以 404 拒绝——与 executor /
+        对账同源缺陷，404 一并触发 per-repo 兜底，remote 仍 404 才放弃。
         """
         try:
             return call(self.gitlab)
         except GitLabError as e:
-            if e.status_code not in (401, 403):
+            if e.status_code not in (401, 403, 404):
                 raise
             fallback = self._repo_client(project_id, cfg)
             if fallback is None:
                 raise
-            logger.info("webhook 项目 %s：全局 token 失效（%s），"
-                        "改用 remote url 内嵌 token 重试", project_id, e)
+            reason = ("全局 token 失效" if e.status_code in (401, 403)
+                      else "全局 token 无权限（私有项目返回 404）")
+            logger.info("webhook 项目 %s：%s（%s），"
+                        "改用 remote url 内嵌 token 重试", project_id, reason, e)
             return call(fallback)
 
     def _repo_bot_ids(self, project_id: int, cfg) -> list[int]:

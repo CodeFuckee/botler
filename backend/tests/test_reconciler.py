@@ -448,6 +448,66 @@ class TestReconcileFallsBackToRemoteToken:
         assert any("仓库 demo" in e for e in result["errors"])
 
 
+class TestReconcileFallsBackOn404PrivateProject:
+    """issue #498：私有项目（如 tender_document_spider 项目 89）全局 bot
+    未加入时，GitLab 对 issue 列表查询返回 404（隐藏项目存在性）——对账与
+    executor/webhook 同源缺陷，404 一并触发 per-repo 兜底。
+
+    修复前：对账扫描项目 89 直接「仓库 tender_document_spider: 资源不存在
+    （404）」，私有仓库开放 issue 全部漏扫。
+    """
+
+    @staticmethod
+    def _add_local_repo(db, tmp_path, project_id=42, name="demo") -> int:
+        import subprocess
+        repo_dir = tmp_path / name
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo_dir)],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo_dir), "remote", "add", "origin",
+                        "https://agent:glpat-repo@gitlab.example.com/group/repo.git"],
+                       check=True)
+        return db.upsert_repo(
+            project_id=project_id, name=name,
+            url=f"https://gitlab.example.com/{name}.git",
+            local_path=str(repo_dir), remote_name="origin")
+
+    def test_global_404_falls_back_to_remote_token(self, ctx, tmp_path, monkeypatch):
+        """全局 404（私有项目无权限）→ remote token 兜底，补入队成功。"""
+        repo_id = self._add_local_repo(ctx.db, tmp_path)
+
+        def fail_list(project_id, assignee_id=None):
+            raise GitLabError("资源不存在（404）: /projects/42/issues", 404)
+
+        ctx.gitlab.list_open_issues = fail_list
+        fallback = StubGitLab()
+        fallback.issues_by_project = {42: [make_issue(1, labels=["bug"])]}
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "project_89_bot"),
+                            raising=False)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result == {"scanned": 1, "enqueued": 1}
+        assert ctx.db.find_active_task(42, 1) is not None
+
+    def test_global_404_without_remote_token_reports_error(self, ctx, monkeypatch):
+        """全局 404 且仓库 remote 无可用 token：报错进 errors，不补入队。"""
+        repo_id = _add_repo(ctx.db)  # 无 local_path，remote 不可解析
+
+        def fail_list(project_id, assignee_id=None):
+            raise GitLabError("资源不存在（404）: /projects/42/issues", 404)
+
+        ctx.gitlab.list_open_issues = fail_list
+        monkeypatch.setattr(reconciler_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (None, None), raising=False)
+
+        result = ctx.reconciler.reconcile_once(repo_id=repo_id)
+
+        assert result["scanned"] == 0
+        assert result["enqueued"] == 0
+        assert any("仓库 demo" in e for e in result["errors"])
+
+
 class TestReconcileRemoteTokenIdentityMismatch:
     """issue #65：全局 token 失效后对账 bot 身份漂移。
 

@@ -129,19 +129,26 @@ class Reconciler:
         api/issues.py），agent 无论如何都不能使用 owner token（issue #87
         的 prefer_owner 机制已按 #130 移除）。
 
+        issue #498 补充：私有项目（如 tender_document_spider 项目 89）
+        全局 client 会以 404 隐藏项目存在性——与 executor/webhook 同源
+        缺陷，404 一并触发 per-repo 兜底；client 已是 per-repo 兜底
+        客户端或 remote 仍 404 时不再兜底（资源确实不存在）。
+
         返回 (result, client)。client 已是 per-repo 兜底客户端时不再重复
         兜底；remote 无可用 token 或重试仍失败时抛 GitLabError。
         """
         try:
             return call(client), client
         except GitLabError as e:
-            if e.status_code not in (401, 403) or client is not self.gitlab:
+            if e.status_code not in (401, 403, 404) or client is not self.gitlab:
                 raise
             fallback, _ = build_repo_client_with_username(repo, verify_ssl)
             if fallback is None:
                 raise
-            logger.info("对账仓库 %s：token 失效（%s），改用 remote url 内嵌 token 重试",
-                        repo["name"], e)
+            reason = ("token 失效" if e.status_code in (401, 403)
+                      else "全局 token 无权限（私有项目返回 404）")
+            logger.info("对账仓库 %s：%s（%s），改用 remote url 内嵌 token 重试",
+                        repo["name"], reason, e)
             return call(fallback), fallback
 
     def _reconcile_repo(self, repo: dict, cfg, bot_id: int | None) -> tuple[int, int, list[str]]:

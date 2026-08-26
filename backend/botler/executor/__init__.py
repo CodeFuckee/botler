@@ -189,7 +189,9 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
     # ---- GitLab 调用兜底 ----
     def _call_with_fallback(self, repo, call):
         """用全局 client 执行 call(client)；遇 401/403（全局 token 失效）
-        时用仓库 remote url 内嵌 token 构建 per-repo client 重试一次。
+        或 404（私有项目全局 bot 无权限时 GitLab 以 404 隐藏存在性，
+        issue #498）时用仓库 remote url 内嵌 token 构建 per-repo client
+        重试一次。
 
         issue #130 + #132：任务侧（生命周期评论、打标签等）绝不使用
         owner token——owner token 只允许在概览页 issue 编辑操作时由平台
@@ -202,20 +204,32 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         评论、打标签仍只走全局 client——全局 token 被撤销后任务领取即
         401 失败、issue 上收不到任何评论（生产任务 #88/#89）。repo 为
         None（无仓库上下文的测试等）时仅用全局 client（行为同旧）。
+
+        issue #498 补充：私有项目场景下全局 bot 未加入项目时，GitLab 对
+        项目内任意资源统一返回 404（隐藏项目存在性）——只按 401/403
+        兜底会把「无权限」误判为「资源不存在」，任务领取即失败（生产
+        任务 725/726：tender_document_spider 项目 89 的 issue 实际存在，
+        但 executor 领取时全局 client 404 直接判「获取 issue 89#18 失败:
+        资源不存在（404）」）。404 与 401/403 一样触发 per-repo 兜底：
+        remote token 成功则继续执行；remote token 仍 404 才认定资源确实
+        不存在（保持调用方 issue_missing 降噪语义不变）。
         """
         if repo is None:
             return call(self.gitlab), self.gitlab
         try:
             return call(self.gitlab), self.gitlab
         except GitLabError as e:
-            if e.status_code not in (401, 403):
+            if e.status_code not in (401, 403, 404):
                 raise
             fallback, _ = build_repo_client_with_username(
                 repo, self.config.get().verify_ssl)
             if fallback is None:
                 raise
-            logger.info("任务仓库 %s：全局 token 失效（%s），"
-                        "改用 remote url 内嵌 token 重试", repo["name"], e)
+            reason = ("全局 token 失效" if e.status_code in (401, 403)
+                      else "全局 token 无权限（私有项目返回 404）")
+            logger.info("任务仓库 %s：%s（%s），"
+                        "改用 remote url 内嵌 token 重试",
+                        repo["name"], reason, e)
             return call(fallback), fallback
     def _transient_retry(self, what: str, call, *,
                          attempts: int = FINISH_RETRY_ATTEMPTS,

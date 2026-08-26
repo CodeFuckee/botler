@@ -394,6 +394,59 @@ class TestWebhookGlobalTokenFallback:
         assert "查询 issue 失败" in result["reason"]
         assert ctx.db.count_tasks() == 0
 
+    class BoomGitLab404:
+        """全局 client 桩：私有项目无权限——GitLab 对未加入的私有项目统一返回 404。"""
+
+        def __init__(self):
+            self.get_bot_id_calls = 0
+
+        def get_bot_id(self):
+            self.get_bot_id_calls += 1
+            raise GitLabError("资源不存在（404）: /projects/89/issues/18", 404)
+
+        def get_issue(self, project_id, iid):
+            raise GitLabError("资源不存在（404）: /projects/89/issues/18", 404)
+
+        def last_note_author_id(self, project_id, iid):
+            raise GitLabError("资源不存在（404）: /projects/89/issues/18", 404)
+
+    def test_global_404_falls_back_and_enqueues(self, ctx, monkeypatch):
+        """全局 404（私有项目无权限）→ remote token 兜底，正常入队。
+
+        issue #498：tender_document_spider（项目 89）为私有项目，全局 bot
+        未加入时 GitLab 对 issue 查询返回 404——修复前 webhook 事件被
+        「查询 issue 失败」拒绝入队，任务只能靠对账/手动补。
+        """
+        _add_repo(ctx.db)
+        fallback = self.RemoteStub(make_api_issue(labels=["bug"]))
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (fallback, "project_89_bot"),
+                            raising=False)
+        ctx.gitlab = self.BoomGitLab404()
+        ctx.handler.gitlab = ctx.gitlab
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is True
+        assert fallback.issue_calls == 1
+        task = ctx.db.find_active_task(PROJECT_ID, IID)
+        assert task is not None and task["status"] == "queued"
+
+    def test_global_404_without_remote_token_rejects(self, ctx, monkeypatch):
+        """全局 404 且 remote 无 token：维持「查询 issue 失败，拒绝入队」。"""
+        _add_repo(ctx.db)
+        monkeypatch.setattr(webhook_mod, "build_repo_client_with_username",
+                            lambda repo, verify_ssl: (None, None),
+                            raising=False)
+        ctx.gitlab = self.BoomGitLab404()
+        ctx.handler.gitlab = ctx.gitlab
+
+        result = ctx.handler.handle(make_event(), "test-secret")
+
+        assert result["accepted"] is False
+        assert "查询 issue 失败" in result["reason"]
+        assert ctx.db.count_tasks() == 0
+
 
 class TestWebhookStoresIssueLabelsForPriority:
     """issue #76：webhook 入队时把 issue 标签与更新时间落库，供调度器排序。"""
