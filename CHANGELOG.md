@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **目标项目/issue 不存在（404）时任务失败处理降噪与准确分类（issue #498）**：
+  - 失败分类：`failure_classify.py` 环境类（env）规则新增 404「资源不存在」
+    匹配——仓库配置的 gitlab_project_id 失效、项目被删除/转移、token 无权限
+    统一归为环境类（独立 404 用负向断言 `(?<![\w.])404(?![\w.])`，避免
+    磁盘剩余数值如 "4041.5 MB" 误命中，借鉴 issue #481 的 429 规则写法）；
+  - 收尾降噪：`executor._finish_failed` 新增 `issue_missing` 标记，`get_issue`
+    返回 404（目标 issue/项目已不存在）时跳过对不存在资源的失败评论与
+    bot-failed 标签操作（此前会连环「留失败评论失败 / 打 bot-failed 标签
+    失败」404 噪音，误导用户以为多个独立故障），记录说明日志并仍分发
+    task_failed 事件；
+  - 上报增强：`plugins/auto_issue.py` 创建失败上报 issue 遇 404 时日志明确
+    说明「任务所属项目不存在或无权限」，替代裸 404 报错；
+  - 测试：`test_failure_classify.py` 新增 404 分类与数字串不误伤用例、
+    `test_executor.py` 新增 404 收尾跳过评论/标签用例。
+
 ## [1.7.0] - 2026-08-26
 
 ### Added

@@ -2161,3 +2161,47 @@ class TestDshSessionRootNormalizationWiring:
         assert exit_code == 0
         logs = db.list_logs(task_id)
         assert not any("归一化到 zstd 压缩" in row["message"] for row in logs)
+
+
+class TestIssueMissing404Finish:
+    """issue #498：目标 issue/项目不存在（404）时失败收尾不应连环 404。
+
+    生产日志（任务 723，tender_document_spider 项目 89 已删除）：
+    「获取 issue 89#19 失败: 资源不存在（404）」→ 随后又对同一个不存在的
+    issue 发起 add_comment / add_labels → 连环 404 error（留失败评论失败 /
+    打 bot-failed 标签失败 / 创建失败上报 issue 失败）。目标资源已不存在，
+    评论/标签操作必然失败且无意义，应跳过并给出说明，同时失败分类归 env
+    （项目/issue 不存在属环境配置问题）。
+    """
+
+    def _install(self, executor, monkeypatch, tmp_path, get_issue, calls):
+        db = executor.db
+        repo_id = _mk_repo(db)
+        task_id = _mk_task(db, repo_id)
+        executor.gitlab = SimpleNamespace(
+            get_issue=get_issue,
+            add_comment=lambda *a, **k: calls.append(("comment", a)),
+            add_labels=lambda *a, **k: calls.append(("labels", a)),
+        )
+        monkeypatch.setattr("botler.executor.time.sleep", lambda s: None)
+        monkeypatch.setattr(executor, "_log_file", lambda tid: tmp_path / f"task_{tid}.log")
+        return task_id
+
+    def test_404_skips_comment_and_labels(self, executor, monkeypatch, tmp_path):
+        """获取 issue 404 → 判失败但不连环评论/打标签，分类为 env。"""
+        calls = []
+
+        def always_404(pid, iid):
+            raise GitLabError("资源不存在（404）: /projects/42/issues/1", 404)
+
+        task_id = self._install(executor, monkeypatch, tmp_path, always_404, calls)
+        executor.run_task(task_id)
+
+        task = executor.db.get_task(task_id)
+        assert task["status"] == "failed"
+        assert "获取 issue" in task["error_message"]
+        assert task["failure_category"] == "env", "404 目标不存在应归环境类"
+        assert calls == [], "目标 issue 不存在，不应再连环调用评论/打标签"
+        logs = [m["message"] for m in executor.db.list_logs(task_id)]
+        assert any("404" in m and "跳过" in m for m in logs), \
+            "应记录跳过失败评论/标签的说明日志"

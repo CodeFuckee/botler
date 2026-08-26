@@ -495,3 +495,30 @@ class TestPluginLlmApiSkip:
             ctx, _task(failure_category="env"), "GitLab 网络超时，重试耗尽")
         assert result is not None
         assert len(gl.created) == 1
+
+
+class TestAutoIssueCreate404:
+    """issue #498：创建失败上报 issue 遇 404（任务所属项目不存在/无权限）
+    时日志应明确说明原因，而非只报裸 404。"""
+
+    def test_create_404_logs_project_missing_reason(self, tmp_path):
+        """项目不存在（404）→ 日志说明「任务所属项目不存在或无权限」。"""
+        cm = _make_config(tmp_path)
+        gl = _FakeGitlab()
+        gl.fail_create = GitLabError("资源不存在（404）: /projects/89/issues", 404)
+        ctx = _FakeCtx(cm, gl)
+        with pytest.raises(GitLabError):
+            _plugin().send_task_failed(ctx, _task(project_id=89), "获取 issue 失败")
+        assert any("任务所属项目不存在或无权限" in m for m in ctx.db.logs)
+        assert any("创建失败上报 issue 失败" in m for m in ctx.db.logs)
+
+    def test_create_400_keeps_original_message(self, tmp_path):
+        """非 404（如 400）→ 日志保持原错误文本，不套用项目不存在说明。"""
+        cm = _make_config(tmp_path)
+        gl = _FakeGitlab()
+        gl.fail_create = GitLabError("title too long", 400)
+        ctx = _FakeCtx(cm, gl)
+        with pytest.raises(GitLabError):
+            _plugin().send_task_failed(ctx, _task(), "原因")
+        assert any("创建失败上报 issue 失败: title too long" in m for m in ctx.db.logs)
+        assert not any("任务所属项目不存在" in m for m in ctx.db.logs)

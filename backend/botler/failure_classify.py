@@ -68,10 +68,17 @@ DEFAULT_RULES: dict[str, list[str]] = {
         r"temporary failure", r"name resolution", r"连接失败", r"连接被拒绝",
         r"getaddrinfo", r"resolve host", r"host not found", r"unreachable",
         r"401", r"403", r"unauthorized", r"authentication", r"认证失败",
+        # issue #498：目标项目/issue 不存在（404「资源不存在」）归环境类——
+        # 仓库配置的 gitlab_project_id 失效、项目被删除/转移、token 无权限，
+        # 均属环境/配置问题（需人工检查仓库配置）；独立 404 用负向断言避免
+        # 数字串误伤（借鉴 issue #481 的 429 规则：磁盘剩余 "4041.5 MB" 等
+        # 不应命中；`404` 前后不能是数字/小数点/字母）。
         r"token[^。\n]{0,40}(invalid|expired|revoked|失效|无效|已过期)",
         r"(invalid|expired|revoked)[^。\n]{0,40}token",
         r"no space left", r"磁盘", r"disk full", r"quota", r"ENOSPC",
         r"任务执行前预检失败", r"预检失败", r"不可克隆", r"无法克隆", r"仓库不可达",
+        r"资源不存在（404）", r"(?<![\w.])404(?![\w.])",
+        r"not found", r"project not found",
     ],
     CATEGORY_ENGINE: [
         r"command not found", r"找不到.*命令", r"请先 npm install",

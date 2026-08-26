@@ -511,9 +511,13 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
                 break
             except GitLabError as e:
                 if attempt >= ISSUE_FETCH_MAX_ATTEMPTS - 1 or not is_transient_error(e):
+                    # issue #498：404 资源不存在 = 目标 issue/项目已不存在
+                    # （GitLab 对项目不存在与私有项目无权限统一返回 404），
+                    # 标记 issue_missing 让收尾跳过对不存在资源的评论/标签
                     self._finish_failed(task_id,
                                         f"获取 issue {project_id}#{issue_iid} 失败: {e}",
-                                        repo=repo)
+                                        repo=repo,
+                                        issue_missing=(e.status_code == 404))
                     return
                 delay = min(ISSUE_FETCH_BASE_DELAY * (2 ** attempt), ISSUE_FETCH_MAX_DELAY)
                 self.db.add_log(task_id, "warn",
@@ -1093,7 +1097,8 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
     def _finish_failed(self, task_id: int, reason: str, output: str = "",
                        error_detail: str | None = None,
                        repo: dict | None = None,
-                       failure_category: str | None = None) -> None:
+                       failure_category: str | None = None,
+                       issue_missing: bool = False) -> None:
         task = self.db.get_task(task_id)
         # issue #274：任务收尾时对失败原因做规则分类（env/engine/unsolvable/
         # unknown），结果落库 tasks.failure_category——详情页展示分类徽章+建议、
@@ -1125,7 +1130,11 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         self._write_log_tail(task_id, output)
 
         # 在 issue 上留失败评论 + 打标签
-        if task:
+        # issue #498：目标 issue/项目不存在（404）时，留失败评论/打标签
+        # 必然对不存在的资源再次 404（生产日志连环「留失败评论失败/打
+        # bot-failed 标签失败」）——目标已不存在，操作无意义且会刷误导性
+        # 错误日志，跳过并记录说明，避免用户误判多个独立故障。
+        if task and not issue_missing:
             # issue #252：失败任务输出结构化失败报告（失败原因 + 相关文件 +
             # 测试摘要 + 日志尾部）；无改动/无测试数据时对应段落自动隐藏
             tail = self._tail_output(output)
@@ -1167,6 +1176,17 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
             except GitLabError as e:
                 self.db.add_log(task_id, "error", f"打 bot-failed 标签失败: {e}")
             # 网页通知：任务需要人工介入（issue #21）
+            self._emit_task_event(task_id, "task_failed", reason)
+        elif task and issue_missing:
+            # issue #498：目标 issue/项目不存在（404）——失败评论与
+            # bot-failed 标签无法送达（资源已不存在），记录说明即可；
+            # 仍分发 task_failed 事件，让 auto_issue 等插件自行处理
+            # （项目存在时仍可创建失败上报 issue，项目也不存在时由
+            # 插件容错记录）
+            self.db.add_log(
+                task_id, "warn",
+                "目标 issue/项目不存在（404），跳过失败评论与 "
+                "bot-failed 标签")
             self._emit_task_event(task_id, "task_failed", reason)
         logger.warning("任务 %s 失败: %s", task_id, reason)
     def _finish_asked(self, task_id: int, output: str,

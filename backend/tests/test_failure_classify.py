@@ -199,3 +199,33 @@ class TestLabelsAndAdvice:
         assert "issue" in category_advice(CATEGORY_UNSOLVABLE)
         assert category_advice(None) == category_advice(CATEGORY_UNKNOWN)
         assert category_advice("bad") == category_advice(CATEGORY_UNKNOWN)
+
+
+class TestNotFound404:
+    """issue #498：目标项目/issue 不存在（404「资源不存在」）应归为环境类。
+
+    生产日志（任务 723，tender_document_spider 项目 89 已删除）：
+    「任务失败: 获取 issue 89#19 失败: 资源不存在（404）: /projects/89/issues/19
+    （失败分类：未知）」——404 未命中任何规则兜底 unknown，用户看不到
+    明确分类。项目/issue 不存在属环境/配置问题（仓库配置的
+    gitlab_project_id 失效、项目被删除/转移、token 无权限），应归 env。
+    """
+
+    @pytest.mark.parametrize("text", [
+        "获取 issue 89#19 失败: 资源不存在（404）: /projects/89/issues/19",
+        "GitLab API 错误 404: Project Not Found",
+        "项目不可达（404）：项目不存在或为私有且 bot 账号无权限",
+        "资源不存在（404）: /projects/89/issues/19/notes",
+        "资源不存在（404）: /projects/89/issues",
+    ])
+    def test_404_not_found_is_env(self, text):
+        assert classify_failure(text) == CATEGORY_ENV
+
+    @pytest.mark.parametrize("text", [
+        # 数字串里的 404 不应命中（借鉴 issue #481 的 429 教训）
+        "磁盘剩余 4041.5 MB ≥ 阈值 2048 MB（C:\\data）",
+        "磁盘剩余 40496.2 MB ≥ 阈值 2048 MB（C:\\data）",
+    ])
+    def test_bare_404_in_number_is_not_misclassified(self, text):
+        """数字串里的 404 不应命中 404 规则：环境类文本仍归 env（不落 engine）。"""
+        assert classify_failure(text) == CATEGORY_ENV

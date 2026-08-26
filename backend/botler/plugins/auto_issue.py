@@ -241,8 +241,15 @@ class AutoIssueNotifierPlugin(NotifierPlugin):
             assert isinstance(issue, dict)
         except GitLabError as e:
             try:
-                context.db.add_log(
-                    task_id, "error", f"创建失败上报 issue 失败: {e}")
+                # issue #498：404 = 任务所属项目已不存在（或 bot 无权限），
+                # 上报 issue 无处可建——日志说明原因而非只报裸 404，避免
+                # 用户误判为平台故障
+                if e.status_code == 404:
+                    msg = (f"创建失败上报 issue 失败: 任务所属项目不存在或"
+                           f"无权限（404），无法创建失败上报 issue: {e}")
+                else:
+                    msg = f"创建失败上报 issue 失败: {e}"
+                context.db.add_log(task_id, "error", msg)
             except Exception:  # noqa: BLE001 日志落库失败忽略
                 pass
             raise
