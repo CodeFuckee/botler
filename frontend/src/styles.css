@@ -857,13 +857,28 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   width: 240px;
   transition: width var(--dur-fast) var(--ease-out);
 }
-/* 整体折叠（issue #168）：收成 44px 窄栏 */
+/* 整体折叠（issue #168，折叠态精修迭代）：收为零宽——不在页面上留下
+   一条只为展开按钮存在的空白竖条；展开入口改为幽灵图标按钮悬浮在
+   内容区左上角（与首个分组标题同一行，见下方 rail 规则）。
+   sticky top 收为 24px：展开态 68px 会把零宽 aside 从内容自然位（与
+   分组标题同高）下推约 40px，导致按钮与标题错位；折叠后无导航面板，
+   24px 即可保证滚动时按钮贴顶可见 */
 .settings-sidebar.collapsed {
-  width: 44px;
+  width: 0;
+  top: 24px;
 }
-/* 折叠时隐藏导航面板（搜索框 + 分组），仅保留窄栏展开入口 */
+/* 折叠时隐藏导航面板（搜索框 + 分组），仅保留幽灵图标展开入口 */
 .settings-sidebar.collapsed .settings-nav {
   display: none;
+}
+/* 折叠态布局（精修迭代）：零宽窄栏不再参与栅格占位——首列收为 0、间距
+   归零，内容区取回全部宽度，仅在左侧留出一条与分组标题同行的按钮位 */
+.settings-layout:has(> .settings-sidebar.collapsed) {
+  grid-template-columns: 0 minmax(0, 1fr);
+  gap: 0;
+}
+.settings-layout:has(> .settings-sidebar.collapsed) .settings-content {
+  padding-left: 36px;
 }
 /* 折叠态窄栏：垂直排列的展开按钮（issue #344：与展开态一致，
    四周不留边距——去掉卡片容器样式，窄栏直接铺在页面上） */
@@ -872,17 +887,21 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   flex-direction: column;
   align-items: center;
 }
-/* 折叠态窄栏展开按钮：与全局侧栏 .sidebar-toggle 同规格的 28px 卡片按钮
-   （bg-soft 底 + 发丝线边 + 6px 圆角），窄栏内水平居中——不再是无容器裸字形 */
+/* 折叠态展开按钮（精修迭代）：幽灵图标——无卡片底、无边框的 muted
+   箭头，悬浮在内容区左上角与分组标题同一行（aside 为 sticky 定位元素，
+   作为按钮的绝对定位包含块，滚动时按钮保持可见） */
 .settings-nav-rail-toggle {
+  position: absolute;
+  top: -4px;
+  left: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid var(--hairline);
-  background: var(--bg-soft);
+  border: none;
+  background: transparent;
   border-radius: var(--radius);
   color: var(--muted);
   cursor: pointer;
@@ -1107,6 +1126,13 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   }
   .settings-sidebar {
     position: static;
+  }
+  /* 折叠态：aside 失去 sticky 后改为相对定位，幽灵展开按钮仍以它为
+     包含块锚在内容区左上角（页面顶部），不飘到错误祖先；
+     top 归零抵消桌面折叠态的 sticky 偏移（relative 下 top 会变成位移） */
+  .settings-sidebar.collapsed {
+    position: relative;
+    top: 0;
   }
   .settings-nav {
     max-height: none;

@@ -282,7 +282,8 @@ test('持久化：预置折叠值时初始即折叠，预置展开值初始展�
 test('styles.css 提供整体折叠窄栏与展开按钮样式', () => {
   assert.match(styles, /\.settings-layout\s*\{\s*display: grid/, '设置页仍为 grid 两栏布局')
   assert.match(styles, /\.settings-sidebar\s*\{[^}]*width: 240px/, '展开态侧边栏宽度 240px')
-  assert.match(styles, /\.settings-sidebar\.collapsed\s*\{[^}]*width: 44px/, '折叠态侧边栏收成 44px 窄栏')
+  assert.match(styles, /\.settings-sidebar\.collapsed\s*\{[^}]*width: 0/, '折叠态侧边栏收为零宽（不留独立竖条，展开入口改为幽灵图标）')
+  assert.match(styles, /\.settings-layout:has\(> \.settings-sidebar\.collapsed\)/, '折叠态栅格收为零宽首列，内容区取回全部宽度')
   assert.match(styles, /\.settings-sidebar\.collapsed\s*\.settings-nav\s*\{\s*display: none/, '折叠时应隐藏导航面板')
   assert.match(styles, /\.settings-nav-rail\s*\{/, '应有窄栏样式')
   assert.match(styles, /\.settings-nav-collapse\s*\{/, '应有收起按钮样式')
