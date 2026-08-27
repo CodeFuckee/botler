@@ -106,8 +106,10 @@ def _fake_run_remote(monkeypatch, script):
 
 class TestRemoteWorkdir:
     def test_remote_workdir_is_remote_path(self, executor):
+        # Path 相等比较按解析结果（Windows 下反斜杠规范化后仍相等）；
+        # 不用 str() 比较——Windows 上 str(Path) 是反斜杠形态
         p = executor._repo_workdir(REMOTE_REPO)
-        assert str(p) == "/srv/apps/proj"
+        assert p == Path("/srv/apps/proj")
 
     def test_remote_cfg_found_and_missing(self, executor):
         assert executor._remote_cfg_for(REMOTE_REPO)["host"] == "10.0.0.9"
