@@ -216,7 +216,7 @@ export default function SettingsNav() {
             aria-expanded={false}
             aria-controls="settings-nav-panel"
             title="展开侧边栏"
-          >»</button>
+          ><Icon name="chevronsRight" /></button>
         </div>
       ) : (
       <div className="settings-nav" id="settings-nav-panel">

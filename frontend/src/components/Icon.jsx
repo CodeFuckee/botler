@@ -9,7 +9,7 @@
 import {
   Archive, ArchiveRestore,
   ArrowLeft, ArrowUp, BarChart3, Bell, Bot, Brain, Check, CheckCircle2, CheckSquare, ChevronDown,
-  ChevronLeft, ChevronRight, ClipboardList, Coins, Compass, Download, ExternalLink, Eye,
+  ChevronLeft, ChevronRight, ChevronsRight, ClipboardList, Coins, Compass, Download, ExternalLink, Eye,
   FileText, Flag, Folder, FolderOpen, GripVertical, Hourglass,
   Image as ImageIcon, Keyboard, LayoutGrid, LayoutList, Lightbulb, Lock, Menu, MessageCircle, Mic, Package,
   Pencil, Pin, Plus, RefreshCw,
@@ -33,6 +33,7 @@ export const ICONS = {
   chevronDown: ChevronDown,
   chevronLeft: ChevronLeft,
   chevronRight: ChevronRight,
+  chevronsRight: ChevronsRight,
   clipboard: ClipboardList,
   coins: Coins,
   compass: Compass,

@@ -44,7 +44,7 @@ const EXPECTED_NAMES = [
   // 归档开关图标，同步补入语义清单
   'archive', 'archiveRestore',
   'arrowLeft', 'arrowUp', 'bell', 'bot', 'brain', 'chart', 'check', 'checkCircle', 'checkSquare',
-  'chevronDown', 'chevronLeft', 'chevronRight', 'clipboard', 'coins', 'compass', 'download',
+  'chevronDown', 'chevronLeft', 'chevronRight', 'chevronsRight', 'clipboard', 'coins', 'compass', 'download',
   'externalLink', 'eye', 'fileText', 'flag', 'folder', 'folderOpen', 'gripVertical',
   'hourglass', 'image', 'keyboard', 'layoutGrid', 'layoutList', 'lightbulb', 'lock', 'menu',
   'message', 'mic', 'package', 'pencil', 'pin', 'plus', 'refresh', 'rocket', 'search',

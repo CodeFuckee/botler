@@ -342,6 +342,16 @@ body {
   margin-left: 0;
 }
 .sidebar.collapsed .brand { justify-content: center; }
+/* 折叠态品牌标识：机器人图标放入与上方展开按钮同宽的 28px 居中容器，
+   字号 16→18px——作为窄栏标识更醒目，且与按钮卡片构成整齐的居中一列 */
+.sidebar.collapsed .brand-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+}
 .sidebar-toggle {
   margin-left: auto;
   display: inline-flex;
@@ -862,20 +872,30 @@ input[type='radio'], input[type='checkbox'] { accent-color: var(--primary); }
   flex-direction: column;
   align-items: center;
 }
+/* 折叠态窄栏展开按钮：与全局侧栏 .sidebar-toggle 同规格的 28px 卡片按钮
+   （bg-soft 底 + 发丝线边 + 6px 圆角），窄栏内水平居中——不再是无容器裸字形 */
 .settings-nav-rail-toggle {
-  border: none;
-  background: none;
-  color: var(--muted);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: var(--space-2) var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  background: var(--bg-soft);
   border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
   transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .settings-nav-rail-toggle:hover {
-  color: var(--primary);
+  color: var(--text);
   background: var(--bg-hover-soft);
+}
+.settings-nav-rail-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 /* 展开态头部操作按钮组：全部展开/收起 + 收起侧边栏 */
 .settings-nav-head-actions {
