@@ -176,6 +176,10 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         self._procs: dict[int, subprocess.Popen] = {}
         self._stop_requests: set[int] = set()
         self._proc_lock = threading.Lock()
+        # 远程项目执行（SSH）：task_id → (远程主机配置, 任务标记)。停止
+        # 任务时除杀本地 ssh 进程组外，尽力远程 pkill 同标记进程（远端
+        # 引擎可能在 ssh 断开后存活）
+        self._remote_tasks: dict[int, tuple[dict, str]] = {}
         # 拉取冲突交接（issue #147 补充）：prepare_workspace 的
         # git pull --rebase 遇到合并冲突时保留冲突现场并登记工作区，
         # _build_prompt / _resume_prompt 据此追加「先手工解决冲突」指引，
@@ -372,12 +376,15 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
           （默认 2GB），目标为仓库实际落盘目录所在文件系统
         - workspace：工作区根目录存在且可写、目标目录未被文件占用
 
+        远程项目（remote_host）走 SSH 分支（_run_precheck_remote）。
         任一检查未通过 → 结果 ok=False（调用方直接判任务失败，不重试、
         不消耗模型调用）。git 探测带超时（8s），整体预检远小于 10s。
         """
         # repo 为 sqlite3.Row（dict 接口）——转普通 dict 供预检函数
         # 统一取值（sqlite3.Row 无 .get()，dict 行为一致且无副作用）
         repo = dict(repo)
+        if repo.get("remote_host"):
+            return self._run_precheck_remote(task_id, repo, cfg)
         workdir = self._repo_workdir(repo)
         # 与 prepare_workspace 同一凭据来源，保证预检结论与真实执行一致
         git_env = self._build_git_env(repo)
@@ -405,6 +412,81 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
         checks.append({"name": "workspace", "label": "工作区可用",
                        "ok": ok, "detail": detail})
 
+        return {
+            "ok": all(c["ok"] is not False for c in checks),
+            "checks": checks,
+            "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+
+    def _run_precheck_remote(self, task_id: int, repo: dict, cfg) -> dict:
+        """远程项目预检（SSH 分支）：SSH 连通、远端为 git 仓库、远端磁盘。
+
+        与本地预检同语义（ok=False → 任务直接失败不重试）；检查名与
+        详情页展示一致（label 中文名）。
+        """
+        import time as _time
+
+        from ..remote_exec import run_remote, sh_quote
+
+        checks: list[dict] = []
+
+        def _add(name: str, label: str, ok: bool, detail: str) -> None:
+            checks.append({"name": name, "label": label,
+                           "ok": ok, "detail": detail})
+
+        try:
+            host = self._remote_cfg_for(repo)
+        except ExecutorError as e:
+            _add("ssh_connect", "SSH 连接", False, str(e))
+            return self._precheck_result(checks)
+
+        path = str(self._repo_workdir(repo))
+        # 1. SSH 连通（echo 往返计时）
+        start = _time.monotonic()
+        try:
+            cp = run_remote(host, "echo ok", timeout=15)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            _add("ssh_connect", "SSH 连接", False, f"SSH 连接失败: {e}")
+            return self._precheck_result(checks)
+        if cp.returncode != 0 or cp.stdout.strip() != "ok":
+            detail = (cp.stderr or cp.stdout or "").strip()[-200:]
+            _add("ssh_connect", "SSH 连接", False,
+                 f"SSH 连接失败（退出码 {cp.returncode}）: {detail}")
+            return self._precheck_result(checks)
+        _add("ssh_connect", "SSH 连接", True,
+             f"连接正常（{int((_time.monotonic() - start) * 1000)}ms）")
+
+        # 2. 远端项目为 git 仓库
+        cp = run_remote(host, f"test -d {sh_quote(path)}/.git", timeout=15)
+        if cp.returncode != 0:
+            _add("remote_repo", "远程路径", False,
+                 f"远程目录不是 git 仓库: {host['name']}:{path}")
+        else:
+            _add("remote_repo", "远程路径", True,
+                 f"{host['name']}:{path}")
+
+        # 3. 远端磁盘剩余（df -k 目标目录，阈值同本地 precheck_disk_min_free_mb）
+        cp = run_remote(
+            host,
+            f"df -k {sh_quote(path)} 2>/dev/null | tail -1 | awk '{{print $4}}'",
+            timeout=15)
+        if cp.returncode != 0 or not cp.stdout.strip().isdigit():
+            _add("disk_space", "磁盘剩余空间", True,
+                 "远端磁盘探测失败，跳过（不阻塞任务）")
+        else:
+            avail_mb = int(cp.stdout.strip()) // 1024
+            need = cfg.precheck_disk_min_free_mb
+            if avail_mb < need:
+                _add("disk_space", "磁盘剩余空间", False,
+                     f"远端剩余 {avail_mb}MB，低于阈值 {need}MB")
+            else:
+                _add("disk_space", "磁盘剩余空间", True,
+                     f"远端剩余 {avail_mb}MB")
+
+        return self._precheck_result(checks)
+
+    @staticmethod
+    def _precheck_result(checks: list[dict]) -> dict:
         return {
             "ok": all(c["ok"] is not False for c in checks),
             "checks": checks,
@@ -587,6 +669,17 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
                 pass
             elif engine == "dsh":
                 resume_session = _row_get(task, "dsh_session_id") if task else None
+            elif engine == "zcode":
+                # zcode 引擎断点续跑：会话 id 落 tasks.zcode_session_id，
+                # --resume 接续（与 claude 同模式）；本地会话文件校验见
+                # _zcode_session_file（~/.zcode 缺失时宽容放行）
+                resume_session = _row_get(task, "zcode_session_id") if task else None
+                if resume_session and not self._zcode_session_file(resume_session):
+                    self.db.set_task_status(task_id, None, zcode_session_id=None)
+                    self.db.add_log(
+                        task_id, "warn",
+                        f"上次会话 {resume_session[:8]}… 的会话文件已不存在，降级为全新会话")
+                    resume_session = None
             else:
                 resume_session = task["claude_session_id"] if task else None
                 if resume_session and not self._session_file(resume_session):

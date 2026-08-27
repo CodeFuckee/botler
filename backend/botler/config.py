@@ -187,6 +187,41 @@ def _failure_classify_rules(cfg: dict) -> dict | None:
     return cleaned if cleaned else None
 
 
+def _remotes(data: list) -> list[dict]:
+    """归一化 config remotes 段（远程服务器 SSH 清单）。
+
+    每项必须有 name 与 host（去重 name，首见优先）；port 防御性转正整数
+    （默认 22），user/key_path 为可选字符串，extra_options 归一为字符串
+    列表。非法项（缺 name/host / 非 dict）静默跳过，不让单条脏配置拖垮
+    整个配置加载（与 repos/ai_providers 归一策略一致）。
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for r in data or []:
+        if not isinstance(r, dict):
+            continue
+        name = str(r.get("name", "")).strip()
+        host = str(r.get("host", "")).strip()
+        if not name or not host or name in seen:
+            continue
+        seen.add(name)
+        try:
+            port = max(1, int(r.get("port", 22)))
+        except (TypeError, ValueError):
+            port = 22
+        extra = r.get("extra_options")
+        out.append({
+            "name": name,
+            "host": host,
+            "port": port,
+            "user": str(r.get("user", "") or "").strip(),
+            "key_path": str(r.get("key_path", "") or "").strip(),
+            "extra_options": [str(o) for o in extra if str(o).strip()]
+            if isinstance(extra, list) else [],
+        })
+    return out
+
+
 @dataclass
 class RepoConfig:
     project_id: int
@@ -197,6 +232,12 @@ class RepoConfig:
     local_path: str | None = None
     remote_name: str | None = None
     remote_username: str | None = None  # 仓库用户（issue #153）：remote url userinfo 用户名
+    # 远程项目（SSH）：代码位于其他服务器上的文件夹。remote_host 引用
+    # settings.remotes 的 name；remote_path 为该服务器上的项目绝对路径。
+    # 两者同时非空 = 远程项目（工作区准备与引擎执行均经 SSH 在远程进行，
+    # 本机不 clone）；local_path 与远程项目互斥。
+    remote_host: str | None = None
+    remote_path: str | None = None
     priority: int = 100  # 调度优先级（issue #51）：1~999，数字越小越优先
     # 仓库级任务参数覆盖（issue #237）：None = 继承全局 worker 段对应配置
     max_retries: int | None = None  # 任务最大重试次数，覆盖 worker.max_retries
@@ -275,6 +316,12 @@ class Settings:
     # claude 2.1.x 要求 stream-json 配 --verbose，executor 会自动补齐
     claude_args: list[str] = field(
         default_factory=lambda: ["-p", "--output-format", "stream-json", "--verbose"])
+    # zcode 引擎（ZCode CLI 无头模式，与 Claude Code 同源）：命令/参数与
+    # claude 段同构，stream-json 逐行输出供实时事件流与会话 id 落库；
+    # CLI 未安装时健康探测报不可用，不影响其他引擎
+    zcode_command: str = "zcode"
+    zcode_args: list[str] = field(
+        default_factory=lambda: ["-p", "--output-format", "stream-json", "--verbose"])
     # 任务执行引擎（issue #47/#84/#171，插件化 issue #140）：claude =
     # Claude Code CLI（默认，现网行为不变）；hermes = hermes-agent SDK
     # （issue #171 起改为进程内集成，经 hermes_sdk_runner.py 调用
@@ -298,6 +345,14 @@ class Settings:
     # 模块内调用 botler.plugins.register_plugin 完成登记；加载失败仅记
     # 日志告警，不阻塞应用启动。
     plugin_paths: list[str] = field(default_factory=list)
+    # 远程服务器（SSH）：远程项目的工作目录所在主机清单。repos[].remote_host
+    # 引用此处 name；任务执行与工作区准备经 SSH 在远程主机上进行
+    # （botler/remote_exec.py 统一封装）。每项字段：
+    # name（唯一标识，仓库引用用）/ host / port（默认 22）/ user（可选，
+    # 缺省走本机 ssh 配置）/ key_path（可选私钥路径，缺省走 ssh-agent /
+    # ~/.ssh/config）/ extra_options（附加 ssh -o 选项列表）。
+    # 认证必须为密钥免密（BatchMode=yes 禁止交互式密码提示防挂起）。
+    remotes: list[dict] = field(default_factory=list)
     # 审计日志管理员名单（issue #260）：SSO 用户名列表。名单为空 =
     # 所有登录用户均视为管理员（平台现状无用户分级，保持默认宽松）；
     # 配置后仅名单内用户可见/删除审计日志（普通用户不可删除审计记录）。
@@ -497,6 +552,7 @@ KNOWN_FIELDS = {
                "fallback_engines", "fallback_after_failures",
                "precheck_enabled", "precheck_disk_min_free_mb"},
     "claude": {"command", "args"},
+    "zcode": {"command", "args"},
     "dsh": {"provider", "model", "max_tokens", "reasoning_effort",
             "session_root", "cordis", "runtime_bin", "base_url", "api_key"},
     "templates": {"default", "resume", "comment",
@@ -563,6 +619,7 @@ SECTION_SCHEMAS: dict[str, SectionSchema] = {
     "gitlab": SectionSchema(fields=tuple(KNOWN_FIELDS["gitlab"]),
                             masked=("owner_token",)),
     "claude": SectionSchema(fields=tuple(KNOWN_FIELDS["claude"])),
+    "zcode": SectionSchema(fields=tuple(KNOWN_FIELDS["zcode"])),
     "dsh": SectionSchema(fields=tuple(KNOWN_FIELDS["dsh"]),
                          masked=("api_key",)),
     "templates": SectionSchema(fields=tuple(KNOWN_FIELDS["templates"]),
@@ -589,6 +646,9 @@ SECTION_SCHEMAS: dict[str, SectionSchema] = {
     "ai_providers": SectionSchema(fields=(), replace_list=True),
     "image_models": SectionSchema(fields=(), replace_list=True),
     "vision_models": SectionSchema(fields=(), replace_list=True),
+    # 远程服务器（SSH）清单：整段列表替换（与 ai_providers 同模式），
+    # 字段归一在 _remotes（config load）与 settings API _validate_remotes
+    "remotes": SectionSchema(fields=(), replace_list=True),
 }
 
 # 网页通知开关 → Settings 字段映射（issue #21）
@@ -734,6 +794,7 @@ class ConfigManager:
         gitlab = data.get("gitlab", {})
         worker = data.get("worker", {})
         claude = data.get("claude", {})
+        zcode = data.get("zcode", {})
         dsh = data.get("dsh", {})
         tpl = data.get("templates", {})
         browse = data.get("browse", {})
@@ -766,6 +827,12 @@ class ConfigManager:
                 local_path=r.get("local_path"),
                 remote_name=r.get("remote_name"),
                 remote_username=r.get("remote_username"),
+                remote_host=(str(r["remote_host"]).strip()
+                             if r.get("remote_host") not in (None, "")
+                             else None),
+                remote_path=(str(r["remote_path"]).strip()
+                             if r.get("remote_path") not in (None, "")
+                             else None),
                 priority=int(r.get("priority", 100)),
                 # issue #424：忽略历史仓库 timeout_seconds，执行引擎不限时。
                 max_retries=(int(r["max_retries"])
@@ -813,6 +880,10 @@ class ConfigManager:
             ci_wait_timeout_seconds=int(worker.get("ci_wait_timeout_seconds", 1800)),
             claude_command=claude.get("command", "claude"),
             claude_args=claude.get("args", ["-p", "--output-format", "json"]),
+            zcode_command=str(zcode.get("command", "zcode") or "zcode"),
+            zcode_args=[str(a) for a in (zcode.get("args") or
+                                         ["-p", "--output-format", "stream-json", "--verbose"])],
+            remotes=_remotes(data.get("remotes", []) or []),
             engine=str(worker.get("engine", "claude")).strip() or "claude",
             fallback_engines=[str(e).strip().lower() for e in
                               (worker.get("fallback_engines") or [])
@@ -1115,6 +1186,10 @@ class ConfigManager:
             d["remote_name"] = repo.remote_name
         if repo.remote_username:
             d["remote_username"] = repo.remote_username
+        if repo.remote_host:
+            d["remote_host"] = repo.remote_host
+        if repo.remote_path:
+            d["remote_path"] = repo.remote_path
         # issue #424：历史 timeout_seconds 不再写回配置，执行引擎始终不限时。
         if repo.max_retries is not None:
             d["max_retries"] = repo.max_retries

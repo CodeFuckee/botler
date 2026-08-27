@@ -86,7 +86,24 @@ class DshEnginePlugin(ExecutorPlugin):
         return executor._run_dsh_once(task_id, repo, issue, resume_session)
 
 
+class ZcodeEnginePlugin(ExecutorPlugin):
+    """ZCode CLI 无头模式引擎（与 Claude Code 同源，复用 stream-json 协议）。
+
+    断点续跑：resume_session 为上次会话 id（tasks.zcode_session_id，
+    CLI --resume 接续；会话文件由 CLI 自持久化，工作区保留）。
+    """
+
+    name = "zcode"
+    description = "ZCode CLI 无头模式引擎（与 Claude Code 同源）"
+
+    def run(self, executor: Any, task_id: int, repo: dict, issue: dict,
+            resume_session: str | None = None,
+            resume_history: list | None = None) -> tuple[int, str]:
+        return executor._run_zcode_once(task_id, repo, issue, resume_session)
+
+
 # 模块导入即注册内置引擎插件（注册顺序 = 展示顺序）
 register_plugin(ClaudeEnginePlugin())
 register_plugin(HermesEnginePlugin())
 register_plugin(DshEnginePlugin())
+register_plugin(ZcodeEnginePlugin())

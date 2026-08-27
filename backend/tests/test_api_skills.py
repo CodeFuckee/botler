@@ -87,7 +87,7 @@ class TestListSkills:
         data = resp.json()
         assert data["engine"] == "claude"
         by_name = {e["name"]: e for e in data["engines"]}
-        assert set(by_name) == {"claude", "hermes", "dsh"}
+        assert set(by_name) == {"claude", "hermes", "dsh", "zcode"}
         # 默认引擎标记（worker.engine=claude）
         assert by_name["claude"]["default"] is True
         assert by_name["hermes"]["default"] is False
@@ -281,10 +281,10 @@ class TestSyncSkills:
         data = resp.json()
         assert data["ok"] is True
         s = data["summary"]
-        assert s["engines"] == 3
+        assert s["engines"] == 4
         assert s["merged"] == 4     # animate / nested/group/spike / grill-me / find-skills
         assert s["deduped"] == 0    # 无同名技能
-        assert s["copied"] == 12    # claude+2、hermes+3、.dsh/skills+4、.agents/skills+3
+        assert s["copied"] == 16    # claude+2、hermes+3、.dsh/skills+4、.agents/skills+3、zcode+4
         assert s["skipped"] == 4    # claude 2、hermes 1、.agents/skills 1
         assert s["failed"] == 0
         # 落盘校验：hermes 的 grill-me 复制到 claude 根；claude 的 animate 复制到 hermes 根
@@ -307,6 +307,6 @@ class TestSyncSkills:
         tc, _ = client
         first = tc.post("/api/skills/sync").json()
         second = tc.post("/api/skills/sync").json()
-        assert first["summary"]["copied"] == 12
+        assert first["summary"]["copied"] == 16
         assert second["summary"]["copied"] == 0      # 已全部就位
-        assert second["summary"]["skipped"] == 16    # 4 根 × 4 技能全部跳过
+        assert second["summary"]["skipped"] == 20    # 5 根 × 4 技能全部跳过

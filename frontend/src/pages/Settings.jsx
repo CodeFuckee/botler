@@ -24,6 +24,7 @@ import WebhookCard from '../components/settings/WebhookCard.jsx'
 import AutoIssueCard from '../components/settings/AutoIssueCard.jsx'
 import ClaudeCard from '../components/settings/ClaudeCard.jsx'
 import DshCard from '../components/settings/DshCard.jsx'
+import RemotesCard from '../components/settings/RemotesCard.jsx'
 import EnvironmentCard from '../components/settings/EnvironmentCard.jsx'
 import OwnerTokenCard from '../components/settings/OwnerTokenCard.jsx'
 import GitlabCredCard from '../components/settings/GitlabCredCard.jsx'
@@ -114,6 +115,12 @@ export default function Settings() {
             botler 在设置后自动派生 Cordis 注入，无需手工维护 cordis 文件 */}
         <section id="settings-dsh" className="settings-section">
           <DshCard {...data} />
+        </section>
+
+        {/* 远程服务器（SSH）：远程项目的工作目录所在主机清单，仓库页
+            「远程服务器」方式添加项目时引用；任务经 SSH 在远程主机执行 */}
+        <section id="settings-remotes" className="settings-section">
+          <RemotesCard />
         </section>
 
         <h2 className="settings-group-title">运维与数据</h2>

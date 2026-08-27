@@ -253,6 +253,19 @@ class SessionMixin:
     def _session_file(self, session_id: str) -> Path | None:
         """查找 session 文件 ~/.claude/projects/*/<sid>.jsonl；不存在返回 None。"""
         return find_session_file(session_id, self._claude_home())
+    def _zcode_session_file(self, session_id: str) -> bool:
+        """zcode 会话文件校验（宽容语义，返回「是否应继续用该会话续跑」）。
+
+        ~/.zcode 存在时按 claude 同规则在 projects/*/<sid>.jsonl 查找，
+        找不到（会话文件被清理）返回 False → 降级全新会话；
+        ~/.zcode 不存在（CLI 会话根自定义，或引擎实际跑在远程主机——
+        远程项目场景本机无会话文件）时无法本地校验，返回 True 放行，
+        resume 失败由引擎退出码暴露，走正常失败/重试链路。
+        """
+        home = Path.home() / ".zcode"
+        if not home.is_dir():
+            return True
+        return find_session_file(session_id, home) is not None
     def _render_progress_handoff(self, task_id: int | None) -> str:
         """从 task_progress 账本渲染确定性进度交接单（§4.4 数据源）。
 

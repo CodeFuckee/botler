@@ -668,13 +668,18 @@ def _event_stream(ctx, task_id: int):
       即收尾（客户端断开时生成器随响应取消自然退出）
     - done：流结束哨兵事件（前端据此关闭连接）
     """
-    engine = str(getattr(ctx.config.get(), "engine", "") or "claude").strip().lower()
-    # dsh 引擎（issue #84）的输出协议与 hermes 对齐（事件行 + 结果行），
+    row = ctx.db.get_task(task_id)
+    # 解析器按任务实际引擎选择（tasks.engine 落库值，仓库级 engine 覆盖
+    # 全局后与 worker.engine 可能不同）；旧任务/任务不存在回退全局
+    engine = ((str(row["engine"] or "").strip().lower()
+               if row is not None else "")
+              or str(getattr(ctx.config.get(), "engine", "") or "claude").strip().lower())
+    # claude 与 zcode（Claude Code 家族 CLI）同为 stream-json 协议；dsh
+    # 引擎（issue #84）的输出协议与 hermes 对齐（事件行 + 结果行），
     # 日志回放解析复用 parse_hermes_event_line
-    parser = (parse_claude_stream_line if engine == "claude"
+    parser = (parse_claude_stream_line if engine in ("claude", "zcode")
               else parse_hermes_event_line)
 
-    row = ctx.db.get_task(task_id)
     # 注意 sqlite3.Row 无 .get()（issue #11），统一索引访问
     log_path = row["log_path"] if row is not None else None
     # 先订阅再回放：回放逐行 yield 的间隙 executor 仍在发布事件，若订阅

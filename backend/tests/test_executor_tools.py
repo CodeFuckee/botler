@@ -127,9 +127,9 @@ class TestRunClaudeInject:
         monkeypatch.setattr(executor, "_capture_base_sha",
                             lambda tid, wd, env: None)
         monkeypatch.setattr(executor, "_persist_session_id",
-                            lambda tid, out: None)
+                            lambda tid, out, column="claude_session_id": None)
         monkeypatch.setattr(executor, "_persist_claude_usage",
-                            lambda tid, out: None)
+                            lambda tid, out, engine="claude": None)
         monkeypatch.setattr(executor, "_drain_process_output",
                             lambda *a, **k: (False, ['{"result":"ok"}']))
 

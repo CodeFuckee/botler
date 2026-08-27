@@ -11,6 +11,7 @@
   HermesSdkRunner.start 同语义，见 hermes_sdk_runner.py）；
 - **dsh**：检查 deepseek-harness SDK 可导入（``deepseek_harness`` 模块，
   与 DshRunner.start 同语义，见 dsh_runner.py）；
+- **zcode**：执行 ``zcode --version``（与 claude 同模式，ZCode CLI）；
 - **其他**（外部加载的引擎插件）：无内置探测实现，返回 unknown（不误报）。
 
 探测结果经进程内注册表缓存（TTL 默认 30s，避免每次任务 / 页面刷新都拉起
@@ -91,11 +92,38 @@ def probe_dsh(cfg: Any) -> dict:
             "detail": "deepseek-harness SDK 未安装（deepseek_harness 模块缺失，请按 docs/dsh-engine-deployment.md 部署）"}
 
 
+def probe_zcode(cfg: Any) -> dict:
+    """zcode 引擎探测：执行 ``zcode --version``（与 probe_claude 同模式）。
+
+    命令缺失（FileNotFoundError）/ 超时 / 非零退出 / 空输出 = 不可用。
+    :param cfg: Settings 实例（取 zcode_command）
+    :return: {"status": "ok"|"fail", "detail": ...}
+    """
+    cmd = [cfg.zcode_command, "--version"]
+    try:
+        # 命令来自部署机配置白名单，与 executor 同源（S603 禁用）
+        proc = subprocess.run(  # noqa: S603
+            cmd, capture_output=True, text=True, timeout=PROBE_TIMEOUT)
+    except FileNotFoundError:
+        return {"status": STATUS_FAIL,
+                "detail": f"找不到 zcode 命令: {cfg.zcode_command}（请先安装 ZCode CLI 并加入 PATH）"}
+    except subprocess.TimeoutExpired:
+        return {"status": STATUS_FAIL,
+                "detail": f"zcode --version 探测超时（>{PROBE_TIMEOUT:g}s）"}
+    out = (proc.stdout or "").strip()
+    if proc.returncode == 0 and out:
+        return {"status": STATUS_OK, "detail": out.splitlines()[-1][:120]}
+    err = (proc.stderr or "").strip().splitlines()
+    tail = err[-1][:120] if err else f"退出码 {proc.returncode}"
+    return {"status": STATUS_FAIL, "detail": f"zcode --version 失败（{tail}）"}
+
+
 # 内置引擎探测实现表（引擎名 → 探测函数）；外部插件引擎不在表中 → unknown
 _PROBERS: dict[str, Callable[[Any], dict]] = {
     "claude": probe_claude,
     "hermes": probe_hermes,
     "dsh": probe_dsh,
+    "zcode": probe_zcode,
 }
 
 

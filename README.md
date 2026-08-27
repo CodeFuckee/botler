@@ -4,9 +4,13 @@
 
 运行在服务器上的自动化平台：统一配置多个 GitLab 仓库，通过 webhook 实时监控 issue，
 当 issue 被指派给 bot 账号时，自动调用 **Claude Code CLI（无头模式）** 处理并推送修复到 main，追加开发结果评论和 `bot-done` 标签，Issue 由人工确认后关闭。
-执行引擎可切换为 **hermes-agent**（hermes agent SDK 进程内集成，见 [docs/hermes-engine-deployment.md](docs/hermes-engine-deployment.md)）
-或 **deepseek-harness**（Python SDK 进程内调用，见 [docs/dsh-engine-deployment.md](docs/dsh-engine-deployment.md)）；
+执行引擎可切换为 **hermes-agent**（hermes agent SDK 进程内集成，见 [docs/hermes-engine-deployment.md](docs/hermes-engine-deployment.md)）、
+**deepseek-harness**（Python SDK 进程内调用，见 [docs/dsh-engine-deployment.md](docs/dsh-engine-deployment.md)）
+或 **ZCode CLI**（与 Claude Code 同源，见 [docs/远程项目与-ZCode-引擎部署指南.md](docs/远程项目与-ZCode-引擎部署指南.md)）；
 切换入口在 Web 设置页「任务调度」卡片的 `worker.engine` 设置项（issue #113）。
+项目代码也可以位于**其他服务器**上：仓库页以「远程服务器（SSH）」方式添加，
+botler 经 SSH 在远程主机完成工作区准备并拉起引擎，所有交互仍在 Botler 完成
+（见 [docs/远程项目与-ZCode-引擎部署指南.md](docs/远程项目与-ZCode-引擎部署指南.md)）。
 
 完整设计见 [`docs/设计方案.md`](docs/设计方案.md)；
 UI 优化参考与同类开源项目调研见 [`docs/ui-design-reference.md`](docs/ui-design-reference.md)（issue #121 调研产出）。
@@ -19,8 +23,10 @@ Botler 面向需要持续维护多个 GitLab 仓库的团队，将「Issue → A
 
 - **多仓库调度**：通过 webhook 实时接收 Issue 事件，并以定时对账补齐漏网事件；同仓库
   串行、跨仓库并行，支持按仓库和标签优先级排队。
-- **可切换 AI 执行引擎**：支持 Claude Code、hermes-agent 和 deepseek-harness（DSH），
-  可配置备用引擎，在主引擎不可用时降级重试。
+- **可切换 AI 执行引擎**：支持 Claude Code、hermes-agent、deepseek-harness（DSH）
+  和 ZCode CLI，可配置备用引擎，在主引擎不可用时降级重试。
+- **远程项目（SSH）**：项目代码位于其他服务器上的文件夹也能接入——经 SSH 识别
+  GitLab 项目、在远程主机准备工作区并执行引擎（建议 ZCode），实时事件流回传。
 - **端到端可观测性**：在 Web 界面查看任务、日志、GitLab 流水线、统计数据、失败分类和
   通知；支持手动执行、重试、暂停窗口和数据保留策略。通知中心（issue #215）汇总全部
   通知事件并提供已读/未读状态：导航栏未读计数徽标、单条/全部已读、bot-failed 与平台

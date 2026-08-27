@@ -41,6 +41,7 @@ export const SETTING_KEYWORDS = {
   'settings-auto-issue': ['auto_issue', '失败', '上报', 'issue', 'bug'],
   'settings-claude': ['claude', '命令', '参数', 'anthropic', 'command'],
   'settings-dsh': ['dsh', 'deepseek', 'reasoning', '推理', 'effort'],
+  'settings-remotes': ['远程', '服务器', 'ssh', 'remote', '主机'],
   'settings-environment': ['环境', '工具', '版本', '检测', 'env'],
   'settings-backup': ['backup', '备份', '恢复', 'restore', '数据'],
   'settings-audit-logs': ['audit', '审计', '日志', '操作记录', 'admin'],

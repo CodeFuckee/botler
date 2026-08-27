@@ -48,10 +48,11 @@ test('IssueDrawer 源码：含「执行引擎」行并从 detail 响应读取 d.
   assert.doesNotMatch(drawerSrc, /api\.get\s*\(\s*['\"]\/api\/settings/, '不应再拉取全局 /api/settings 引擎配置')
 })
 
-test('ENGINE_META 映射覆盖 claude / hermes / dsh 三引擎', () => {
+test('ENGINE_META 映射覆盖 claude / hermes / dsh / zcode 四引擎', () => {
   assert.ok(ENGINE_META.claude, '应含 claude 映射')
   assert.ok(ENGINE_META.hermes, '应含 hermes 映射')
   assert.ok(ENGINE_META.dsh, '应含 dsh 映射')
+  assert.ok(ENGINE_META.zcode, '应含 zcode 映射（ZCode CLI）')
 })
 
 test('engineDisplay 纯函数：null=加载中 / 空值回退 claude / 未知原样', () => {
@@ -62,6 +63,7 @@ test('engineDisplay 纯函数：null=加载中 / 空值回退 claude / 未知原
   assert.equal(engineDisplay('claude'), ENGINE_META.claude.label)
   assert.equal(engineDisplay('hermes'), ENGINE_META.hermes.label)
   assert.equal(engineDisplay('dsh'), ENGINE_META.dsh.label)
+  assert.equal(engineDisplay('zcode'), ENGINE_META.zcode.label)
   assert.equal(engineDisplay('Dsh'), ENGINE_META.dsh.label, '大写应归一为小写匹配')
   assert.equal(engineDisplay('foo'), 'foo', '未知值应原样展示兜底')
 })

@@ -70,7 +70,8 @@ _TASK_FIELDS = {"attempt_count", "exit_code", "error_message", "error_detail",
                 "log_path", "started_at", "finished_at", "claude_session_id",
                 "hermes_history", "commit_sha", "dsh_session_id", "dsh_transcript",
                 "engine", "environment", "base_sha",
-                "failure_category", "engine_fallback", "precheck_result"}
+                "failure_category", "engine_fallback", "precheck_result",
+                "zcode_session_id"}
 
 # ---- 关键行类型化（issue #213）----
 # tasks / repos 表行类型：mypy 下 dict key 拼错（如 row["commit_shaa"]）与
@@ -97,6 +98,9 @@ class TaskRow(TypedDict):
     finished_at: str | None
     commit_sha: str | None
     hermes_history: str | None
+    # zcode 引擎断点续跑会话 id（v33 迁移补列；claude_session_id /
+    # dsh_session_id 同为迁移补列，TypedDict 不单列）
+    zcode_session_id: str | None
     issue_labels: str | None
     issue_updated_at: str | None
     issue_created_at: str | None
@@ -125,6 +129,10 @@ class RepoRow(TypedDict):
     local_path: str | None
     remote_name: str | None
     remote_username: str | None
+    # 远程项目（SSH）：remote_host 引用 config remotes 的 name，
+    # remote_path 为该服务器上的项目绝对路径（v34 迁移补列）
+    remote_host: str | None
+    remote_path: str | None
     prompt_template: str | None
     enabled: int | None
     priority: int | None
@@ -993,6 +1001,30 @@ class Database:
             conn.execute("PRAGMA user_version = 32")
             ver = 32
 
+        if ver < 33:
+            # zcode 引擎断点续跑——记录上次执行的 zcode 会话 id（ZCode CLI
+            # 自持久化会话，重试/重启后 --resume 同一 id 接续对话；与
+            # claude_session_id / dsh_session_id 同模式，按引擎分列避免
+            # 同一任务切换引擎后串会话）
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "zcode_session_id" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN zcode_session_id TEXT")
+            conn.execute("PRAGMA user_version = 33")
+            ver = 33
+
+        if ver < 34:
+            # 远程项目（SSH）：代码位于其他服务器上的文件夹——remote_host
+            # 引用 config remotes 的 name，remote_path 为该服务器上的项目
+            # 绝对路径；两者同时非空 = 远程项目（工作区准备与引擎执行经
+            # SSH 在远程进行，本机不 clone）。local_path 语义不变（本机）。
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(repos)")}
+            if "remote_host" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN remote_host TEXT")
+            if "remote_path" not in cols:
+                conn.execute("ALTER TABLE repos ADD COLUMN remote_path TEXT")
+            conn.execute("PRAGMA user_version = 34")
+            ver = 34
+
     def _fix_legacy_cst_timestamps(self, conn) -> int:
         """修正旧版 executor 按本地 CST 写入的 started_at/finished_at（issue #49 第二轮）。
 
@@ -1478,6 +1510,8 @@ class Database:
                     enabled: bool = True, local_path: str | None = None,
                     remote_name: str | None = None,
                     remote_username: str | None = None,
+                    remote_host: str | None = None,
+                    remote_path: str | None = None,
                     priority: int = DEFAULT_PRIORITY,
                     timeout_seconds: int | None = None,
                     max_retries: int | None = None,
@@ -1485,14 +1519,16 @@ class Database:
                     token_expires_at: str | None = None) -> int:
         with self._conn(write=True) as conn:
             conn.execute(
-                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, remote_username, priority, timeout_seconds, max_retries, engine, token_expires_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO repos (gitlab_project_id, name, url, prompt_template, enabled, local_path, remote_name, remote_username, remote_host, remote_path, priority, timeout_seconds, max_retries, engine, token_expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(gitlab_project_id) DO UPDATE SET
                      name=excluded.name, url=excluded.url,
                      prompt_template=excluded.prompt_template,
                      enabled=excluded.enabled, local_path=excluded.local_path,
                      remote_name=excluded.remote_name,
                      remote_username=excluded.remote_username,
+                     remote_host=excluded.remote_host,
+                     remote_path=excluded.remote_path,
                      priority=excluded.priority,
                      timeout_seconds=excluded.timeout_seconds,
                      max_retries=excluded.max_retries,
@@ -1500,7 +1536,8 @@ class Database:
                      token_expires_at=COALESCE(excluded.token_expires_at, repos.token_expires_at),
                      deleted_at=NULL""",
                 (project_id, name, url, prompt_template, 1 if enabled else 0,
-                 local_path, remote_name, remote_username, priority,
+                 local_path, remote_name, remote_username, remote_host,
+                 remote_path, priority,
                  timeout_seconds, max_retries, engine, token_expires_at),
             )
             # 冲突更新路径 lastrowid 不可靠（issue #62：重新添加已删除仓库），
@@ -1548,7 +1585,7 @@ class Database:
                    WHERE id=?""", (repo_id,))
 
     def update_repo(self, repo_id: int, **fields) -> None:
-        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "priority", "timeout_seconds", "max_retries", "engine", "logo_path", "logo_updated_at", "logo_mime", "token_expires_at"}
+        allowed = {"name", "url", "prompt_template", "enabled", "local_path", "remote_name", "remote_username", "remote_host", "remote_path", "priority", "timeout_seconds", "max_retries", "engine", "logo_path", "logo_updated_at", "logo_mime", "token_expires_at"}
         sets = {k: v for k, v in fields.items() if k in allowed}
         if not sets:
             return

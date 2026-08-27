@@ -60,14 +60,59 @@ def _split_https_remote_url(url: str | None) -> dict | None:
     return {"scheme": scheme, "userinfo": userinfo, "host": host, "path": path}
 
 
+def parse_symref_branches(stdout: str) -> tuple[str | None, set[str]]:
+    """解析 ``git ls-remote --symref`` 输出 → (HEAD 候选分支, 存在的分支集合)。
+
+    本地与远程工作区准备共用（远程经 SSH 拿到同样的 stdout 文本）。
+    HEAD 符号引用行：``ref: refs/heads/main\tHEAD``；分支行：
+    ``<sha>\trefs/heads/main``。
+    """
+    candidate: str | None = None
+    heads: set[str] = set()
+    for line in (stdout or "").splitlines():
+        parts = line.strip().split()
+        if not parts:
+            continue
+        if parts[0] == "ref:" and len(parts) == 3 and parts[2] == "HEAD":
+            if parts[1].startswith("refs/heads/"):
+                candidate = parts[1].rsplit("/", 1)[-1]
+        elif parts[0].startswith("refs/heads/"):
+            heads.add(parts[0].rsplit("/", 1)[-1])
+    return candidate, heads
+
+
+# 「git pull 失败输出是否为合并冲突」的文本标志（本地与远程共用；
+# 本地另有文件系统级探测，远程只能依赖文本判定）
+PULL_CONFLICT_TEXT_MARKERS = (
+    "conflict", "automatic merge failed", "fix conflicts",
+    "could not apply", "untracked working tree files "
+    "would be overwritten", "divergent branches",
+    "have diverged", "unmerged files",
+)
+
+
 class WorkspaceMixin:
     """git 工作区准备与管理（依赖 ClaudeExecutor 实例状态）。"""
 
     def _repo_workdir(self, repo: dict) -> Path:
-        """仓库工作区：有 local_path（本地文件夹方式添加）时直接用该文件夹。"""
+        """仓库工作区：远程项目用 remote_path（SSH 执行的路径标识）、
+        有 local_path（本地文件夹方式添加）时直接用该文件夹。"""
+        if _row_get(repo, "remote_host") and _row_get(repo, "remote_path"):
+            # 远程项目：Path 仅作路径标识（键一致性/冲突跟踪），不表示
+            # 本机存在该目录；远端命令构造时转 str 使用
+            return Path(str(repo["remote_path"]))
         if _row_get(repo, "local_path"):
             return Path(repo["local_path"])
         return self.workspace_root / repo["name"]
+    def _remote_cfg_for(self, repo: dict) -> dict:
+        """按仓库 remote_host 名取远程服务器配置；缺失抛 ExecutorError。"""
+        name = _row_get(repo, "remote_host")
+        host = next((r for r in self.config.get().remotes
+                     if r.get("name") == name), None)
+        if host is None:
+            raise ExecutorError(
+                f"远程服务器「{name}」不存在（请先在设置页 config remotes 配置）")
+        return host
     def _git(self, workdir: Path, *args: str, env: dict | None = None,
              timeout: int = 300) -> None:
         """执行 git 命令，失败抛 ExecutorError。"""
@@ -211,11 +256,15 @@ class WorkspaceMixin:
     def prepare_workspace(self, repo: dict, resume: bool = False) -> tuple[Path, dict]:
         """确保工作区存在且干净，返回 (workdir, git_env)。
 
-        local_path 仓库直接用该文件夹（不 clone）；普通仓库首次执行时 clone。
+        远程项目（remote_host）经 SSH 在远程主机上做工作区准备
+        （_prepare_workspace_remote，git_env 为远端 env 键值）；local_path
+        仓库直接用该文件夹（不 clone）；普通仓库首次执行时 clone。
         resume=True（会话断点续跑）时只 fetch 更新远端引用，跳过
         checkout / reset --hard / clean -fd——保留 Claude 上次的未提交改动
         与本地提交，供恢复会话接续使用。
         """
+        if _row_get(repo, "remote_host"):
+            return self._prepare_workspace_remote(repo, resume=resume)
         workdir = self._repo_workdir(repo)
         git_env = self._build_git_env(repo)
 
@@ -277,6 +326,155 @@ class WorkspaceMixin:
         # 脚本内容每次 prepare 覆盖刷新（token 轮换自动生效），权限 0700，
         # 且在工作区父目录，不受 clean -fd 波及。
         return workdir, git_env
+
+    # ---- 远程项目工作区准备（SSH，远程项目专用）----
+
+    def _remote_askpass(self, host: dict, repo_name: str) -> str:
+        """把 GIT_ASKPASS 脚本写到远程主机 ~/.botler/ 下，返回远端路径。
+
+        内容与本地 _askpass_script 一致（Username=oauth2，
+        Password=bot token）；经 heredoc（引号定界符）传输，token 不会被
+        远端 shell 二次展开。每次 prepare 覆盖刷新（token 轮换自动生效）。
+        """
+        from ..remote_exec import run_remote
+
+        safe = "".join(c if c.isalnum() or c in "._-" else "_"
+                       for c in repo_name) or "repo"
+        remote_path = f"~/.botler/askpass-{safe}.sh"
+        token = self.config.get().gitlab_token
+        esc = token.replace("'", "'\\''")
+        script = ("#!/bin/sh\ncase \"$1\" in\n"
+                  "  *Username*) echo \"oauth2\" ;;\n"
+                  f"  *Password*) echo '{esc}' ;;\n"
+                  f"  *) echo '{esc}' ;;\n"
+                  "esac\n")
+        cmd = ("mkdir -p ~/.botler && cat > "
+               f"{remote_path} <<'BOTLER_ASKPASS_EOF'\n"
+               f"{script}BOTLER_ASKPASS_EOF\nchmod 700 {remote_path}")
+        cp = run_remote(host, cmd, timeout=30)
+        if cp.returncode != 0:
+            raise ExecutorError(
+                "写入远程 GIT_ASKPASS 脚本失败: "
+                f"{(cp.stderr or cp.stdout).strip()[-300:]}")
+        return remote_path
+
+    def _run_remote_checked(self, host: dict, command: str, what: str,
+                            timeout: int = 600):
+        """执行远端命令（run_remote 包装）：超时/SSH 故障/非零退出统一抛
+        ExecutorError，成功返回 CompletedProcess（stderr/stdout 可读）。"""
+        from ..remote_exec import run_remote
+
+        try:
+            cp = run_remote(host, command, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise ExecutorError(f"远程 git {what} 超时（>{timeout}s）")
+        except OSError as e:
+            raise ExecutorError(f"SSH 连接失败（远程 git {what}）: {e}")
+        if cp.returncode != 0:
+            raise ExecutorError(
+                f"远程 git {what} 失败 (exit {cp.returncode}): "
+                f"{(cp.stderr or cp.stdout).strip()[-500:]}")
+        return cp
+
+    def _prepare_workspace_remote(self, repo: dict,
+                                  resume: bool = False) -> tuple[Path, dict]:
+        """远程项目工作区准备：经 SSH 在远程主机执行等效 git 序列。
+
+        序列（与本地 prepare 语义对齐，MVP 简化为服务端权威探测 +
+        显式补齐跟踪引用）：
+        1. 校验远端目录为 git 仓库（.git 存在）；
+        2. 写 GIT_ASKPASS 脚本到远端（bot token 凭据）；
+        3. fetch --prune；
+        4. 非续跑：ls-remote --symref 解析远端默认分支（拿不到回退 main）→
+           显式拉取该分支跟踪引用（issue #148 等价）→ checkout -B →
+           reset --hard → clean -fd → pull --rebase（冲突保留现场交 agent，
+           文本标志判定，PULL_CONFLICT_TEXT_MARKERS）。
+        返回 (workdir, git_env)：workdir 为 Path(remote_path)（远端路径
+        标识），git_env 为远端 env 键值（GIT_ASKPASS/GIT_TERMINAL_PROMPT），
+        供引擎执行时拼进远端命令环境。
+        """
+        from ..remote_exec import run_remote, sh_quote
+
+        host = self._remote_cfg_for(repo)
+        workdir = self._repo_workdir(repo)
+        path = str(workdir)
+        remote = _row_get(repo, "remote_name") or "origin"
+
+        # 1. 远端目录必须是 git 仓库（与 local_path 校验语义一致）
+        cp = run_remote(host, f"test -d {sh_quote(path)}/.git", timeout=20)
+        if cp.returncode != 0:
+            raise ExecutorError(
+                f"远程目录不是 git 仓库（或不可访问）: {host['name']}:{path}"
+                "（remote_path 方式要求远端存在 .git 目录）")
+
+        # 2. 远端 askpass 凭据脚本
+        askpass = self._remote_askpass(host, repo["name"])
+        git_env = {"GIT_ASKPASS": askpass, "GIT_TERMINAL_PROMPT": "0"}
+
+        def git_cmd(*args: str) -> str:
+            return ("env "
+                    f"GIT_ASKPASS={sh_quote(askpass)} GIT_TERMINAL_PROMPT=0 "
+                    f"git -C {sh_quote(path)} -c http.sslVerify=false "
+                    + " ".join(args))
+
+        # 3. fetch
+        self._run_remote_checked(
+            host, git_cmd("fetch", sh_quote(remote), "--prune"), "fetch")
+
+        if not resume:
+            # 4a. 远端服务端权威解析默认分支（ls-remote --symref），
+            #     拿不到回退 main（本地流程的完整三级降级在远程 MVP 简化）
+            cp = self._run_remote_checked(
+                host, git_cmd("ls-remote", "--symref", sh_quote(remote)),
+                "ls-remote")
+            candidate, heads = parse_symref_branches(cp.stdout)
+            if candidate and candidate in heads:
+                branch = candidate
+            elif "main" in heads:
+                branch = "main"
+            elif "master" in heads:
+                branch = "master"
+            elif heads:
+                branch = sorted(heads)[0]
+            else:
+                branch = "main"
+            # 4b. 显式补齐跟踪引用（单分支克隆/受限 refspec，issue #148 等价）
+            self._run_remote_checked(
+                host,
+                git_cmd("fetch", sh_quote(remote),
+                        sh_quote(f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}")),
+                "fetch branch")
+            self._run_remote_checked(
+                host,
+                git_cmd("checkout", "-B", sh_quote(branch),
+                        sh_quote(f"{remote}/{branch}")),
+                "checkout")
+            self._run_remote_checked(
+                host,
+                git_cmd("reset", "--hard", sh_quote(f"{remote}/{branch}")),
+                "reset")
+            self._run_remote_checked(host, git_cmd("clean", "-fd"), "clean")
+            # 4c. pull --rebase 兜底同步；冲突保留现场（文本标志判定）
+            cp = run_remote(host, git_cmd("pull", "--rebase",
+                                          sh_quote(remote), sh_quote(branch)),
+                            timeout=300)
+            if cp.returncode != 0:
+                text = (cp.stderr or cp.stdout or "").lower()
+                if any(m in text for m in PULL_CONFLICT_TEXT_MARKERS):
+                    self._pull_conflict_workdirs.add(workdir)
+                    logger.warning(
+                        "%s@%s: 远程 git pull --rebase 出现合并冲突，保留冲突"
+                        "现场交由 agent 手工合并", host["name"], path)
+                else:
+                    raise ExecutorError(
+                        f"远程 git pull 失败: "
+                        f"{(cp.stderr or cp.stdout).strip()[-500:]}")
+            else:
+                self._pull_conflict_workdirs.discard(workdir)
+                logger.info("%s@%s: 远程工作区已切到默认主分支 %s 并同步最新",
+                            host["name"], path, branch)
+        return workdir, git_env
+
     def _resolve_default_branch(self, workdir: Path, remote: str,
                                 git_env: dict) -> str:
         """解析远端默认主分支名（issue #147 / #148 强化，不再硬编码 main）。
@@ -329,17 +527,7 @@ class WorkspaceMixin:
             logger.debug("ls-remote --symref 返回非零（%s），走 git remote show 降级: %s",
                          result.returncode, (result.stderr or result.stdout).strip()[-200:])
             return None
-        candidate: str | None = None
-        heads: set[str] = set()
-        for line in result.stdout.splitlines():
-            parts = line.strip().split()
-            if not parts:
-                continue
-            if parts[0] == "ref:" and len(parts) == 3 and parts[2] == "HEAD":
-                if parts[1].startswith("refs/heads/"):
-                    candidate = parts[1].rsplit("/", 1)[-1]
-            elif parts[0].startswith("refs/heads/"):
-                heads.add(parts[0].rsplit("/", 1)[-1])
+        candidate, heads = parse_symref_branches(result.stdout)
         if candidate and candidate in heads:
             return candidate
         # HEAD 符号引用指向的分支不存在（如新裸仓库）→ 按常见命名回退
@@ -527,12 +715,8 @@ class WorkspaceMixin:
         except Exception:  # git 缺失/异常时仅靠错误文本兜底
             logger.debug("git ls-files -u 探测未合并路径失败", exc_info=True)
         text = str(exc).lower()
-        for marker in ("conflict", "automatic merge failed", "fix conflicts",
-                       "could not apply", "untracked working tree files "
-                       "would be overwritten", "divergent branches",
-                       "have diverged", "unmerged files"):
-            if marker in text:
-                return True
+        if any(m in text for m in PULL_CONFLICT_TEXT_MARKERS):
+            return True
         return False
 
     @staticmethod

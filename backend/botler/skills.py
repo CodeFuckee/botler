@@ -64,7 +64,8 @@ def _builtin_roots(engine_name: str) -> list[Path]:
     - hermes：$HERMES_HOME/skills（默认 ~/.hermes/skills，见
       docs/hermes-engine-deployment.md 的 skills 数据目录说明）；
     - dsh：$DSH_HOME/skills + ~/.agents/skills（deepseek-harness
-      runtime 按 user-dsh / user-agents 两层发现技能）。
+      runtime 按 user-dsh / user-agents 两层发现技能）；
+    - zcode：~/.zcode/skills（ZCode CLI，与 Claude Code 同源惯例路径）。
 
     返回的路径可能不存在（如本机未启用某引擎）；调用方按 exists 展示。
     """
@@ -74,6 +75,8 @@ def _builtin_roots(engine_name: str) -> list[Path]:
         return [_hermes_home() / "skills"]
     if engine_name == "dsh":
         return [_dsh_home() / "skills", Path.home() / ".agents" / "skills"]
+    if engine_name == "zcode":
+        return [Path.home() / ".zcode" / "skills"]
     return []
 
 

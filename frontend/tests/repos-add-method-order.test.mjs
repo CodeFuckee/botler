@@ -110,17 +110,17 @@ test('渲染：选项文本顺序为 本地文件夹 → GitLab URL（issue #73 
   }
 })
 
-test('渲染：第一个选项（本地文件夹）默认选中，第二个未选中', async () => {
+test('渲染：第一个选项（本地文件夹）默认选中，其余未选中', async () => {
   mockApi()
   const { renderer, renderError } = await renderRepos()
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
     const radios = radioInputs(renderer)
-    assert.equal(radios.length, 2, '应有两个添加方式 radio 选项')
+    assert.equal(radios.length, 3, '应有三个添加方式 radio 选项（本地/URL/远程服务器）')
     assert.deepEqual(
       radios.map((r) => r.props.checked),
-      [true, false],
-      '默认应选中第一个选项（本地文件夹），第二个（GitLab URL）未选中',
+      [true, false, false],
+      '默认应选中第一个选项（本地文件夹），其余未选中',
     )
   } finally {
     await TestRenderer.act(() => renderer.unmount())
@@ -153,7 +153,7 @@ test('交互：切换到第二个选项（GitLab URL）后表单切换为 URL �
   try {
     assert.equal(renderError, null, `渲染抛错：${renderError?.message}`)
     const radios = radioInputs(renderer)
-    assert.equal(radios.length, 2)
+    assert.equal(radios.length, 3)
     await TestRenderer.act(async () => {
       radios[1].props.onChange() // 选中 GitLab URL / project_id
     })
@@ -166,7 +166,7 @@ test('交互：切换到第二个选项（GitLab URL）后表单切换为 URL �
       '切换后不应再渲染本地路径输入框',
     )
     const checked = radioInputs(renderer).map((r) => r.props.checked)
-    assert.deepEqual(checked, [false, true], '切换后第二个选项应选中')
+    assert.deepEqual(checked, [false, true, false], '切换后第二个选项应选中')
   } finally {
     await TestRenderer.act(() => renderer.unmount())
     mock.restoreAll()

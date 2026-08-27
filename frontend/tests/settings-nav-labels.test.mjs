@@ -118,8 +118,9 @@ function resolveName(entry) {
   return entry.id
 }
 
-/** 20 个设置项名称快照（issue #174：每个设置项都有对应的名称；
- *  issue #229 新增「聚合告警」、issue #265 新增「仓库健康巡检」设置区块） */
+/** 21 个设置项名称快照（issue #174：每个设置项都有对应的名称；
+ *  issue #229 新增「聚合告警」、issue #265 新增「仓库健康巡检」设置区块，
+ *  远程项目联动新增「远程服务器」区块） */
 const EXPECTED_NAMES = {
   'settings-sso': 'Synology SSO 登录',
   'settings-ai-providers': 'AI API 供应商',
@@ -135,6 +136,7 @@ const EXPECTED_NAMES = {
   'settings-auto-issue': '任务失败自动上报',
   'settings-claude': 'Claude Code',
   'settings-dsh': 'dsh 引擎',
+  'settings-remotes': '远程服务器 remotes',
   'settings-environment': '本地环境检测',
   'settings-backup': '数据备份',
   'settings-audit-logs': '审计日志',
@@ -145,9 +147,9 @@ const EXPECTED_NAMES = {
 
 // ---------- A. 源码链路：每个设置区块都有名称来源 ----------
 
-test('设置页应包含 18 个设置区块且 id 唯一（与已知设置项一致）', () => {
+test('设置页应包含 21 个设置区块且 id 唯一（与已知设置项一致）', () => {
   const entries = sectionEntries()
-  assert.equal(entries.length, 20, `应解析到 20 个设置区块，实际 ${entries.length}`)
+  assert.equal(entries.length, 21, `应解析到 21 个设置区块，实际 ${entries.length}`)
   const ids = entries.map((e) => e.id)
   assert.equal(new Set(ids).size, ids.length, '设置区块 id 不应重复')
   assert.deepEqual(
@@ -183,12 +185,12 @@ test('18 个已知设置项名称快照：每个设置项都有对应的名称',
   }
 })
 
-test('卡片区块名称由卡片组件内 h2 提供（16 个卡片区块与导航名称一致）', () => {
-  // issue #201 拆分后：除「版本信息」为页面内联 h2 外，其余 16 个设置区块
+test('卡片区块名称由卡片组件内 h2 提供（20 个卡片区块与导航名称一致）', () => {
+  // issue #201 拆分后：除「版本信息」为页面内联 h2 外，其余设置区块
   // 全部由卡片组件提供区块名称（含新拆出的 SsoCard / TasksCard 等；
-  // issue #229 新增 AlertsCard「聚合告警」）
+  // issue #229 新增 AlertsCard「聚合告警」，远程项目联动新增 RemotesCard）
   const cardSections = sectionEntries().filter((e) => e.cards.length > 0)
-  assert.equal(cardSections.length, 19, '应有 19 个卡片区块（版本信息为页面内联 h2）')
+  assert.equal(cardSections.length, 20, '应有 20 个卡片区块（版本信息为页面内联 h2）')
   const expected = {
     'settings-sso': 'Synology SSO 登录',
     'settings-ai-providers': 'AI API 供应商',
@@ -204,6 +206,7 @@ test('卡片区块名称由卡片组件内 h2 提供（16 个卡片区块与导�
   'settings-auto-issue': '任务失败自动上报',
     'settings-claude': 'Claude Code',
     'settings-dsh': 'dsh 引擎',
+    'settings-remotes': '远程服务器 remotes',
     'settings-environment': '本地环境检测',
     'settings-backup': '数据备份',
     'settings-audit-logs': '审计日志',
@@ -273,10 +276,10 @@ function renderNavWithMirror() {
   }
 }
 
-test('collectSettingsGroups：基于真实源码结构生成 19 项，每项名称非空且不等于原始 id', () => {
+test('collectSettingsGroups：基于真实源码结构生成 21 项，每项名称非空且不等于原始 id', () => {
   const groups = collectSettingsGroups(sourceMirrorContent())
   const items = groups.flatMap((g) => g.items)
-  assert.equal(items.length, 20, `应生成 20 个设置子项，实际 ${items.length}`)
+  assert.equal(items.length, 21, `应生成 21 个设置子项，实际 ${items.length}`)
   const byId = Object.fromEntries(items.map((it) => [it.id, it.label]))
   for (const [id, name] of Object.entries(byId)) {
     assert.ok(name, `${id} 子项应有非空名称`)
@@ -293,11 +296,11 @@ test('collectSettingsGroups：基于真实源码结构生成 19 项，每项名�
   assert.equal(byId['settings-ai-providers'], 'AI API 供应商', 'settings-ai-providers 应显示为「AI API 供应商」')
 })
 
-test('渲染：左侧边栏展示全部 19 个设置项名称，无原始 id 泄露', () => {
+test('渲染：左侧边栏展示全部 21 个设置项名称，无原始 id 泄露', () => {
   const { renderer, root, restore } = renderNavWithMirror()
   try {
     const links = root.findAll((n) => n.type === 'a' && String(n.props.href || '').startsWith('#'))
-    assert.equal(links.length, 20, '应渲染 20 个子项链接')
+    assert.equal(links.length, 21, '应渲染 21 个子项链接')
     const linkTexts = new Set(links.map((l) => deepText(l)))
     for (const expected of Object.values(EXPECTED_NAMES)) {
       assert.ok(linkTexts.has(expected), `导航应展示设置项名称「${expected}」`)
@@ -493,7 +496,7 @@ test('【运行时】真实渲染 Settings：每个设置区块在渲染树中�
     })
     const sections = renderer.root.findAll(
       (n) => n.type === 'section' && String(n.props.className || '').split(/\s+/).includes('settings-section'))
-    assert.equal(sections.length, 20, `设置页应渲染 20 个设置区块，实际 ${sections.length}`)
+    assert.equal(sections.length, 21, `设置页应渲染 20 个设置区块，实际 ${sections.length}`)
     const byId = {}
     for (const s of sections) {
       const h2 = s.findAll((n) => n.type === 'h2')[0]

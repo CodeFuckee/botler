@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -26,11 +27,19 @@ router = APIRouter(prefix="/repos", tags=["repos"])
 
 class RepoCreate(BaseModel):
     url: str | None = Field(
-        default=None, description="GitLab 项目 URL（如 https://host/group/project.git）或数字 project_id，与 local_path 二选一")
+        default=None, description="GitLab 项目 URL（如 https://host/group/project.git）或数字 project_id，与 local_path / remote_host 三选一")
     local_path: str | None = Field(
-        default=None, description="本地 git 仓库文件夹路径（与 url 二选一），平台运行 git remote -v 读取 remote")
+        default=None, description="本地 git 仓库文件夹路径（与 url / remote_host 三选一），平台运行 git remote -v 读取 remote")
+    # 远程项目（SSH）：代码位于其他服务器上的文件夹。remote_host 引用
+    # 设置页 remotes 已保存的 name，remote_path 为该服务器上的项目绝对
+    # 路径；平台经 SSH 读取 remote 列表识别项目，任务在工作目录准备与
+    # 引擎执行均在远程进行（本机不 clone）
+    remote_host: str | None = Field(
+        default=None, description="远程服务器名（config remotes 的 name，与 url / local_path 三选一）")
+    remote_path: str | None = Field(
+        default=None, description="远程服务器上的项目绝对路径（remote_host 方式必填）")
     remote_name: str | None = Field(
-        default=None, description="local_path 方式下选中的 remote 名称（如 origin）")
+        default=None, description="local_path / remote_host 方式下选中的 remote 名称（如 origin）")
     name: str | None = None
     prompt_template: str | None = None
     enabled: bool = True
@@ -49,15 +58,70 @@ class RepoCreate(BaseModel):
 
 
 class LocalPathBody(BaseModel):
-    local_path: str = Field(description="本地 git 仓库文件夹路径")
+    local_path: str | None = Field(
+        default=None, description="本地 git 仓库文件夹路径（与 remote_host 二选一）")
+    # 远程项目（SSH）：传 remote_host + remote_path 时读取远程目录的
+    # git remote 列表（remote_host 引用设置页 remotes 已保存的 name）
+    remote_host: str | None = Field(
+        default=None, description="远程服务器名（config remotes 的 name）")
+    remote_path: str | None = Field(
+        default=None, description="远程服务器上的项目绝对路径")
+
+
+def _remote_host_cfg(c, name: str) -> dict:
+    """按 name 取已保存的远程服务器配置；不存在 400（设置页先配置）。"""
+    host = next((r for r in c.config.get().remotes if r["name"] == name), None)
+    if host is None:
+        raise HTTPException(400, f"远程服务器「{name}」不存在，请先在设置页配置")
+    return host
+
+
+def _list_remotes_via_ssh(c, remote_host: str, remote_path: str) -> list[dict]:
+    """经 SSH 在远程主机上读取项目的 git remote 列表（远程项目接入用）。
+
+    远端执行 ``git -C <path> remote -v``；SSH 失败/非 git 仓库归一为
+    HTTPException 400（与本地 list_local_remotes 的 NoGitRemoteError
+    语义一致）。
+    """
+    from ..remote_exec import run_remote, sh_quote
+
+    host_cfg = _remote_host_cfg(c, remote_host)
+    if not remote_path or not str(remote_path).strip().startswith("/"):
+        raise HTTPException(400, "remote_path 必须是远程服务器上的绝对路径")
+    try:
+        cp = run_remote(host_cfg,
+                        f"git -C {sh_quote(remote_path)} remote -v", timeout=30)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(400, f"读取远程仓库 remote 超时: {remote_host}:{remote_path}")
+    except (OSError, ValueError) as e:
+        raise HTTPException(400, f"SSH 连接失败: {e}")
+    if cp.returncode != 0:
+        detail = (cp.stderr or cp.stdout or "").strip()[-300:]
+        raise HTTPException(400,
+                            f"读取远程仓库 remote 失败（{remote_host}:{remote_path}）: {detail}")
+    from ..git_remote import parse_git_remote_output
+    return parse_git_remote_output(cp.stdout)
 
 
 def _resolve_repo_source(body: RepoCreate, c) -> tuple[str, str | None, str | None]:
     """确定仓库来源，返回 (url, local_path, remote_name)。
 
     url 方式直接透传；local_path 方式在服务端运行 git remote -v，
-    从选中的 remote 读取仓库 URL（local_path 同时被记录为执行工作区）。
+    从选中的 remote 读取仓库 URL（local_path 同时被记录为执行工作区）；
+    remote 方式（远程项目，SSH）经 SSH 在远程主机读取 remote 列表，
+    local_path 恒为 None（工作区在远程，由 remote_host+remote_path 定位）。
     """
+    if body.remote_host:
+        if body.local_path:
+            raise HTTPException(400, "local_path 与 remote_host 互斥（本机目录与远程项目二选一）")
+        remotes = _list_remotes_via_ssh(c, body.remote_host, body.remote_path or "")
+        if not body.remote_name:
+            raise HTTPException(400, "远程项目方式需要指定 remote_name")
+        match = next((r for r in remotes if r["name"] == body.remote_name), None)
+        if match is None:
+            available = ", ".join(r["name"] for r in remotes)
+            raise HTTPException(400, f"远程仓库没有 remote「{body.remote_name}」（可用: {available}）")
+        return match["url"], None, body.remote_name
     if body.local_path:
         from ..git_remote import NoGitRemoteError, list_local_remotes
 
@@ -73,7 +137,7 @@ def _resolve_repo_source(body: RepoCreate, c) -> tuple[str, str | None, str | No
             raise HTTPException(400, f"本地仓库没有 remote「{body.remote_name}」（可用: {available}）")
         return match["url"], body.local_path, body.remote_name
     if not body.url or not body.url.strip():
-        raise HTTPException(400, "需要提供 url 或 local_path 其中之一")
+        raise HTTPException(400, "需要提供 url / local_path / remote_host 其中之一")
     return body.url.strip(), None, None
 
 
@@ -82,6 +146,10 @@ class RepoUpdate(BaseModel):
     url: str | None = None
     prompt_template: str | None = None
     enabled: bool | None = None
+    # 远程项目（SSH）：允许修正远程主机/路径（remote_host 必须已在
+    # 设置页 remotes 保存；空串 = 清除，回退本机/URL 工作区语义）
+    remote_host: str | None = None
+    remote_path: str | None = None
     priority: int | None = Field(
         default=None, ge=1, le=999,
         description="调度优先级（issue #51）：1~999 整数，数字越小越优先")
@@ -103,6 +171,10 @@ def _repo_row_to_dict(row) -> dict:
         "local_path": row["local_path"],
         "remote_name": row["remote_name"],
         "remote_username": row["remote_username"],
+        # 远程项目（SSH）：remote_host 引用 config remotes 的 name，
+        # remote_path 为该服务器上的项目绝对路径
+        "remote_host": row["remote_host"],
+        "remote_path": row["remote_path"],
         "prompt_template": row["prompt_template"],
         "enabled": bool(row["enabled"]),
         "priority": row["priority"],
@@ -209,6 +281,8 @@ def _sync_repo_to_config(app, repo_dict: dict) -> None:
         local_path=repo_dict.get("local_path"),
         remote_name=repo_dict.get("remote_name"),
         remote_username=repo_dict.get("remote_username"),
+        remote_host=repo_dict.get("remote_host"),
+        remote_path=repo_dict.get("remote_path"),
         priority=repo_dict["priority"],
         # issue #237：仓库级任务参数覆盖（None = 继承全局，不写 config.yaml）
         max_retries=repo_dict.get("max_retries"),
@@ -263,10 +337,25 @@ def browse_directories(request: Request, path: str | None = None):
 
 @router.post("/discover")
 def discover_remote(request: Request, body: LocalPathBody):
-    """读取本地 git 仓库的 remote 列表（前端展示，供用户选择）。"""
-    ctx_of(request)
+    """读取 git 仓库的 remote 列表（前端展示，供用户选择）。
+
+    传 remote_host + remote_path 时经 SSH 读取远程服务器上目录的
+    remote 列表（远程项目接入）；否则按本地文件夹处理。
+    """
+    c = ctx_of(request)
+
+    if body.remote_host:
+        remotes = _list_remotes_via_ssh(
+            c, body.remote_host, body.remote_path or "")
+        for r in remotes:
+            r["url"] = mask_url_token(r["url"])
+        return {"remotes": remotes, "local_path": None,
+                "remote_host": body.remote_host, "remote_path": body.remote_path}
+
     from ..git_remote import NoGitRemoteError, list_local_remotes
 
+    if not body.local_path:
+        raise HTTPException(400, "需要提供 local_path（本机目录）或 remote_host + remote_path（远程项目）")
     try:
         remotes = list_local_remotes(body.local_path)
     except NoGitRemoteError as e:
@@ -372,13 +461,19 @@ def add_repo(request: Request, body: RepoCreate):
         prompt_template=body.prompt_template, enabled=body.enabled,
         local_path=local_path, remote_name=remote_name,
         remote_username=remote_username,
+        remote_host=body.remote_host, remote_path=body.remote_path,
         priority=body.priority if body.priority is not None else DEFAULT_PRIORITY,
         max_retries=body.max_retries,
         engine=body.engine,
         token_expires_at=(submitted_expiry.strip() if submitted_expiry else detected_expiry))
     _sync_repo_to_config(request.app, _repo_row_to_dict(c.db.get_repo(repo_id)))
 
-    source = f"local_path={local_path}" if local_path else f"url={url}"
+    if remote_host := (body.remote_host or None):
+        source = f"remote={remote_host}:{body.remote_path}"
+    elif local_path:
+        source = f"local_path={local_path}"
+    else:
+        source = f"url={url}"
     logger.info("添加仓库 %s (project=%s, %s) 并注册 webhook", name, project_id, source)
     # issue #260：仓库新增审计
     record_audit(request, c.db, "repo.add", "repo", repo_id, {
@@ -420,6 +515,15 @@ def update_repo(request: Request, repo_id: int, body: RepoUpdate):
             raise HTTPException(
                 400, f"engine 取值非法: {engine}（可选 {' / '.join(engine_choices())}）")
         fields["engine"] = engine
+    # 远程项目字段：strip 归一，空串清除；remote_host 必须已保存
+    if "remote_host" in fields:
+        rh = (fields["remote_host"] or "").strip() if isinstance(fields["remote_host"], str) else fields["remote_host"]
+        if rh:
+            _remote_host_cfg(c, rh)
+        fields["remote_host"] = rh or None
+    if "remote_path" in fields:
+        rp = (fields["remote_path"] or "").strip() if isinstance(fields["remote_path"], str) else fields["remote_path"]
+        fields["remote_path"] = rp or None
     if fields:
         c.db.update_repo(repo_id, **fields)
     updated = _repo_row_to_dict(c.db.get_repo(repo_id))

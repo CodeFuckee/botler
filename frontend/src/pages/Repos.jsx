@@ -13,10 +13,13 @@ export default function Repos() {
   // 设置弹窗编辑中的仓库（null = 关闭；issue #51）
   const [editing, setEditing] = useState(null)
 
-  // 添加表单（method: 'url' = GitLab URL 方式，'local' = 本地文件夹方式；默认本地文件夹方式）
+  // 添加表单（method: 'url' = GitLab URL 方式，'local' = 本地文件夹方式，
+  // 'remote' = 远程服务器方式（SSH）；默认本地文件夹方式）
   const [method, setMethod] = useState('local')
-  const [form, setForm] = useState({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '', priority: '100', token_expires_at: '' })
+  const [form, setForm] = useState({ url: '', local_path: '', remote_host: '', remote_path: '', remote_name: '', name: '', webhook_url: '', priority: '100', token_expires_at: '' })
   const [remotes, setRemotes] = useState([])
+  // 远程服务器清单（config remotes，设置页维护；「远程服务器」方式下拉用）
+  const [remoteHosts, setRemoteHosts] = useState([])
   const [addError, setAddError] = useState('')
   // 服务器目录选择对话框
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -47,7 +50,13 @@ export default function Repos() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // 远程服务器清单（「远程服务器」添加方式下拉）：加载失败静默（方式
+    // 仍可选，但下拉为空时提交前会提示先到设置页配置）
+    api.get('/api/settings').then((s) => setRemoteHosts(s.remotes || []))
+      .catch(() => setRemoteHosts([]))
+  }, [])
 
   const addRepo = async () => {
     setAddError('')
@@ -55,6 +64,11 @@ export default function Repos() {
     if (method === 'local') {
       if (!form.local_path.trim()) { setAddError('请填写本地文件夹路径'); return }
       if (!form.remote_name) { setAddError('请先在本地文件夹中选择一个 remote'); return }
+    }
+    if (method === 'remote') {
+      if (!form.remote_host) { setAddError('请选择远程服务器（无选项时先到设置页「远程服务器」配置）'); return }
+      if (!form.remote_path.trim().startsWith('/')) { setAddError('请填写远程服务器上的项目绝对路径（以 / 开头）'); return }
+      if (!form.remote_name) { setAddError('请先读取并选择一个 remote'); return }
     }
     // 调度优先级（issue #161）：1~999 整数，数字越小越优先；留空按后端默认 100
     let priority
@@ -71,13 +85,15 @@ export default function Repos() {
       await api.post('/api/repos', {
         url: method === 'url' ? form.url.trim() : undefined,
         local_path: method === 'local' ? form.local_path.trim() : undefined,
-        remote_name: method === 'local' ? form.remote_name : undefined,
+        remote_host: method === 'remote' ? form.remote_host : undefined,
+        remote_path: method === 'remote' ? form.remote_path.trim() : undefined,
+        remote_name: method === 'local' || method === 'remote' ? form.remote_name : undefined,
         name: form.name.trim() || undefined,
         webhook_url: form.webhook_url.trim() || undefined,
         priority,
         token_expires_at: form.token_expires_at || undefined,
       })
-      setForm({ url: '', local_path: '', remote_name: '', name: '', webhook_url: '', priority: '100', token_expires_at: '' })
+      setForm({ url: '', local_path: '', remote_host: '', remote_path: '', remote_name: '', name: '', webhook_url: '', priority: '100', token_expires_at: '' })
       setRemotes([])
       await load()
     } catch (e) {
@@ -95,6 +111,27 @@ export default function Repos() {
     setBusy(true)
     try {
       const res = await api.post('/api/repos/discover', { local_path: target })
+      setRemotes(res.remotes)
+      setForm((f) => ({ ...f, remote_name: res.remotes.length === 1 ? res.remotes[0].name : '' }))
+    } catch (e) {
+      setAddError(e.message)
+      setRemotes([])
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 远程服务器方式（SSH）：经后端在远程主机上读取项目的 git remote 列表
+  const discoverRemote = async () => {
+    setAddError('')
+    if (!form.remote_host) { setAddError('请选择远程服务器'); return }
+    if (!form.remote_path.trim()) { setAddError('请填写远程项目路径'); return }
+    setBusy(true)
+    try {
+      const res = await api.post('/api/repos/discover', {
+        remote_host: form.remote_host,
+        remote_path: form.remote_path.trim(),
+      })
       setRemotes(res.remotes)
       setForm((f) => ({ ...f, remote_name: res.remotes.length === 1 ? res.remotes[0].name : '' }))
     } catch (e) {
@@ -208,6 +245,10 @@ export default function Repos() {
             <input type="radio" checked={method === 'url'} onChange={() => { setMethod('url'); setRemotes([]); }} />
             GitLab URL / project_id
           </label>
+          <label className="add-method">
+            <input type="radio" checked={method === 'remote'} onChange={() => { setMethod('remote'); setRemotes([]); }} />
+            远程服务器（SSH，代码在其他服务器上）
+          </label>
         </div>
 
         {method === 'url' && (
@@ -219,6 +260,56 @@ export default function Repos() {
               onChange={(e) => setForm({ ...form, url: e.target.value })}
             />
           </div>
+        )}
+
+        {method === 'remote' && (
+          <>
+            <div className="form-row">
+              <select
+                className="input"
+                value={form.remote_host}
+                onChange={(e) => { setForm({ ...form, remote_host: e.target.value, remote_name: '' }); setRemotes([]) }}
+              >
+                <option value="">{remoteHosts.length === 0 ? '（无已配置远程服务器）' : '选择远程服务器'}</option>
+                {remoteHosts.map((r) => (
+                  <option key={r.name} value={r.name}>
+                    {r.name}（{r.user ? `${r.user}@` : ''}{r.host}）
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input grow"
+                placeholder="远程服务器上的项目绝对路径（如 /srv/apps/my-repo）"
+                value={form.remote_path}
+                onChange={(e) => setForm({ ...form, remote_path: e.target.value })}
+              />
+              <button className="btn" disabled={busy || !form.remote_host} onClick={discoverRemote}>
+                {busy ? '读取中…' : '读取 remote'}
+              </button>
+            </div>
+            {remoteHosts.length === 0 && (
+              <p className="muted small">尚未配置远程服务器：请先到「设置 → 执行引擎 → 远程服务器」添加并测试连接。</p>
+            )}
+            {remotes.length > 0 && (
+              <div className="form-row remote-list">
+                {remotes.map((r) => (
+                  <label key={r.name} className="remote-option">
+                    <input
+                      type="radio"
+                      name="remote"
+                      checked={form.remote_name === r.name}
+                      onChange={() => setForm({ ...form, remote_name: r.name })}
+                    />
+                    <code>{r.name}</code> {r.url}
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="muted small">
+              远程项目：任务在该服务器的工作目录上执行（建议仓库级执行引擎选
+              zcode）；botler 通过 SSH 完成工作区准备与引擎调用，所有交互仍在本页完成。
+            </p>
+          </>
         )}
 
         {method === 'local' && (
@@ -349,6 +440,11 @@ export default function Repos() {
               )}
               {repo.local_path && (
                 <div className="muted small">本地工作区: {repo.local_path}</div>
+              )}
+              {repo.remote_host && (
+                <div className="muted small">
+                  远程工作区: {repo.remote_host}:{repo.remote_path}（SSH 执行）
+                </div>
               )}
               {testResults[repo.id] && (
                 <TestResult result={testResults[repo.id]} />

@@ -11,6 +11,7 @@ import base64
 import logging
 import math
 import os
+import subprocess
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -142,6 +143,11 @@ def get_settings(request: Request):
             "command": s.claude_command,
             "args": s.claude_args,
         },
+        "zcode": {
+            "command": s.zcode_command,
+            "args": s.zcode_args,
+        },
+        "remotes": s.remotes,
         "dsh": {
             # dsh 引擎（issue #84）：api_key 只返回掩码，明文不流转到界面
             "provider": s.dsh_provider,
@@ -373,6 +379,16 @@ def update_settings(request: Request, body: dict):
         _validate_claude(claude_patch)
         c.config.update_section("claude", claude_patch)
 
+    zcode_patch = body.get("zcode")
+    if zcode_patch is not None:
+        _validate_zcode(zcode_patch)
+        c.config.update_section("zcode", zcode_patch)
+
+    remotes_patch = body.get("remotes")
+    if remotes_patch is not None:
+        cleaned = _validate_remotes(remotes_patch)
+        c.config.update_section("remotes", cleaned)
+
     dsh_patch = body.get("dsh")
     if dsh_patch is not None:
         _validate_dsh(dsh_patch)
@@ -565,6 +581,80 @@ def test_webhook(request: Request):
         return {"ok": False,
                 "error": f"webhook 目标返回 HTTP {status}：{result.get('text', '')[:200]}"}
     return {"ok": True, "status_code": status}
+
+
+@router.post("/remotes-test")
+def test_remote(request: Request, body: dict):
+    """远程服务器连通性测试（设置页「远程服务器」卡片「测试」按钮）。
+
+    body: {"name": "<已保存的 remote 名>"} 或完整 remote 字段
+    （未保存前测试）。两步探测：
+    1. connectivity —— ``ssh <host> echo ok``（BatchMode，密钥免密为前提），
+       返回时延；
+    2. zcode —— ``<zcode_command> --version``（远端引擎可用性，缺失不
+       阻断连通性结论，仅提示）。
+    任何失败均返回结构化结果（ok=false + 原因），不抛 500。
+    """
+    import time as _time
+
+    from ..remote_exec import run_remote, sh_quote
+
+    c = ctx_of(request)
+    s = c.config.get()
+    name = str(body.get("name") or "").strip()
+    remote = None
+    if name:
+        remote = next((r for r in s.remotes if r["name"] == name), None)
+    if remote is None and str(body.get("host", "") or "").strip():
+        # 未保存主机直测（设置页编辑中）：body 携带完整字段
+        cleaned = _validate_remotes([body])
+        remote = cleaned[0] if cleaned else None
+    if remote is None:
+        return {"ok": False,
+                "error": (f"远程服务器「{name}」不存在" if name
+                          else "缺少远程主机配置（name 或 host）")}
+
+    result: dict = {"ok": False, "connectivity": None, "zcode": None}
+    start = _time.monotonic()
+    try:
+        cp = run_remote(remote, "echo ok", timeout=15.0)
+    except subprocess.TimeoutExpired:
+        result["connectivity"] = {"ok": False, "detail": "连接超时（>15s）"}
+        return result
+    except FileNotFoundError:
+        result["connectivity"] = {"ok": False, "detail": "本机无 ssh 命令"}
+        return result
+    except OSError as e:
+        result["connectivity"] = {"ok": False, "detail": f"ssh 启动失败: {e}"}
+        return result
+    latency_ms = int((_time.monotonic() - start) * 1000)
+    if cp.returncode != 0 or cp.stdout.strip() != "ok":
+        detail = (cp.stderr or cp.stdout or "").strip().splitlines()
+        tail = detail[-1][:200] if detail else f"退出码 {cp.returncode}"
+        result["connectivity"] = {"ok": False,
+                                  "detail": f"SSH 连接失败（{tail}）——请检查主机/端口/密钥免密配置"}
+        return result
+    result["connectivity"] = {"ok": True, "latency_ms": latency_ms,
+                              "detail": "SSH 连接正常"}
+
+    # 远端 zcode 可用性（尽力探测：缺失只提示，不否定连通性）
+    zc = str(s.zcode_command or "zcode")
+    try:
+        zp = run_remote(remote, f"{sh_quote(zc)} --version", timeout=15.0)
+    except (subprocess.TimeoutExpired, OSError):
+        result["zcode"] = {"ok": False, "detail": "zcode 探测超时/失败"}
+    else:
+        out = (zp.stdout or "").strip()
+        if zp.returncode == 0 and out:
+            result["zcode"] = {"ok": True,
+                               "detail": out.splitlines()[-1][:120]}
+        else:
+            err = (zp.stderr or "").strip().splitlines()
+            tail = err[-1][:120] if err else f"退出码 {zp.returncode}"
+            result["zcode"] = {"ok": False,
+                               "detail": f"远端未检测到 zcode（{tail}）"}
+    result["ok"] = True
+    return result
 
 
 # 生图模型测试（issue #137）：测试按钮用的小 prompt 与超时（秒）。
@@ -961,6 +1051,52 @@ def _validate_claude(patch: dict) -> None:
         raise HTTPException(400, "claude.command 必须是字符串")
     if "args" in patch and (not isinstance(patch["args"], list) or not all(isinstance(a, str) for a in patch["args"])):
         raise HTTPException(400, "claude.args 必须是字符串数组")
+
+
+def _validate_zcode(patch: dict) -> None:
+    """校验 zcode 段（与 claude 段同构：command 字符串 + args 字符串数组）。"""
+    if "command" in patch and (not patch["command"] or not isinstance(patch["command"], str)):
+        raise HTTPException(400, "zcode.command 必须是字符串")
+    if "args" in patch and (not isinstance(patch["args"], list) or not all(isinstance(a, str) for a in patch["args"])):
+        raise HTTPException(400, "zcode.args 必须是字符串数组")
+
+
+def _validate_remotes(patch) -> list[dict]:
+    """校验 remotes 段（远程服务器 SSH 清单，整段列表替换）。
+
+    每项必须有 name 与 host；name 全局唯一；port 1~65535 整数（默认
+    22）；user/key_path 可选字符串；extra_options 字符串数组。返回清洗
+    后的列表（非法项 400 拒绝——与 config load 的静默跳过不同，API 入口
+    是用户显式保存，应给出明确错误而非吞掉）。
+    """
+    if not isinstance(patch, list):
+        raise HTTPException(400, "remotes 必须是列表")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for i, r in enumerate(patch):
+        if not isinstance(r, dict):
+            raise HTTPException(400, f"remotes[{i}] 必须是对象")
+        name = str(r.get("name", "") or "").strip()
+        host = str(r.get("host", "") or "").strip()
+        if not name:
+            raise HTTPException(400, f"remotes[{i}].name 不能为空")
+        if not host:
+            raise HTTPException(400, f"remotes[{i}].host 不能为空")
+        if name in seen:
+            raise HTTPException(400, f"remotes 存在重复名称: {name}")
+        seen.add(name)
+        port = r.get("port", 22)
+        if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+            raise HTTPException(400, f"remotes[{i}].port 必须是 1~65535 的整数")
+        user = str(r.get("user", "") or "").strip()
+        key_path = str(r.get("key_path", "") or "").strip()
+        extra = r.get("extra_options", [])
+        if not isinstance(extra, list) or not all(isinstance(o, str) for o in extra):
+            raise HTTPException(400, f"remotes[{i}].extra_options 必须是字符串数组")
+        out.append({"name": name, "host": host, "port": port,
+                    "user": user, "key_path": key_path,
+                    "extra_options": [o.strip() for o in extra if o.strip()]})
+    return out
 
 
 def _validate_dsh(patch: dict) -> None:

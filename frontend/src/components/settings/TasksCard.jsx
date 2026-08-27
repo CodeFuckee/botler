@@ -157,6 +157,7 @@ export default function TasksCard({
                 <option value="claude">claude — Claude Code CLI（默认）</option>
                 <option value="hermes">hermes — hermes-agent SDK</option>
                 <option value="dsh">dsh — deepseek-harness SDK</option>
+                <option value="zcode">zcode — ZCode CLI</option>
               </select>
               <span className="muted small">切换后对新领取的任务生效。</span>
             </td>

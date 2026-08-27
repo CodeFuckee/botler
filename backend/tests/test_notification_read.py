@@ -77,7 +77,7 @@ class TestMigrateReadAt:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
             rows = conn.execute("SELECT * FROM notification_events").fetchall()
         assert "read_at" in cols, "旧库应补出 read_at 列"
-        assert ver == 32, "迁移后 user_version 应为 32"
+        assert ver == 34, "迁移后 user_version 应为最新版（v33 zcode 会话/v34 远程项目字段之后）"
         assert len(rows) == 1 and rows[0]["title"] == "历史通知", "迁移不得丢数据"
         assert rows[0]["read_at"] is None, "存量数据默认未读"
 

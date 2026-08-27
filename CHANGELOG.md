@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+### Added
+
+- **ZCode 执行引擎与远程项目（SSH 直连，远程项目 + zcode 联动）**：
+  - zcode 引擎：ZCode CLI 无头模式（与 Claude Code 同源）作为第四个内置
+    执行引擎——`worker.engine: zcode` 或仓库级覆盖；stream-json 逐行输出
+    驱动实时事件流，会话 id 落 `tasks.zcode_session_id`（DB v33 迁移），
+    `--resume` 断点续跑（`~/.zcode` 缺失时宽容放行）；命令/参数可配置
+    （`zcode.command`/`zcode.args`，executor 自动补 `--verbose` 与
+    `--dangerously-skip-permissions`）；健康探测（`zcode --version`）纳入
+    引擎降级链；`_run_claude_once` 重构为 claude/zcode 共用的
+    `_run_cli_once`；SSE 回放解析器改为按任务实际引擎选择（修复仓库级
+    engine 覆盖全局时回放解析错位的既有问题）；
+  - SSH 远程通道：新增 `botler/remote_exec.py` 统一封装 ssh 命令构造与
+    执行（BatchMode 禁交互/keepalive/accept-new，`run_remote` 一次性 +
+    `stream_remote` 行流）；设置页新增「远程服务器」卡片（remotes 段
+    CRUD + 连通性测试：SSH echo 时延 + 远端 zcode 探测，`remotes` 配置段
+    整段列表替换）；
+  - 远程项目接入：仓库新增 `remote_host`/`remote_path`（DB v34 迁移 +
+    config `RepoConfig`），仓库页新增「远程服务器（SSH）」添加方式——经
+    SSH 读远端 `git remote -v` 自动识别 GitLab 项目（webhook/issue 回写
+    不变）；远程工作区准备经 SSH 执行等效 git 序列（fetch → ls-remote
+    解析默认分支 → 补跟踪引用 → checkout/reset/clean → pull --rebase，
+    冲突保留现场交 agent）；任务经 SSH 拉起远端引擎，prompt 走 stdin，
+    stdout 行流复用本地 drain 链路（日志/SSE/会话/用量），停止为本地杀
+    ssh 进程组 + 尽力远程 pkill 任务标记；预检走远程分支（SSH 连通/远端
+    git 仓库/远端磁盘）；
+  - 测试：`test_executor_zcode.py`（14）、`test_remote_exec.py`（17）、
+    `test_api_repos.py` 远程接入（7）、`test_executor_remote.py`（14）、
+    前端 `repos-add-remote.test.mjs` / `settings-remotes-card.test.mjs`；
+  - 文档：`docs/远程项目与-ZCode-引擎部署指南.md`（前置条件/启用步骤/
+    执行链路/安全边界/故障排查）；常驻 botler-agent（HTTP+SSE）远程通道
+    列为后续演进计划。
+
 ### Fixed
 
 - **概览页单列分组布局组头折叠按钮被挤到单独一行（用户截图反馈）**：

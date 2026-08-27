@@ -13,6 +13,7 @@ import re
 import secrets
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from ..events import parse_claude_stream_line, parse_hermes_event_line
 from ..gitlab_client import PIPELINE_TERMINAL_STATES, GitLabError
 from ..log_redact import redact
 from ..plugins import PluginKind, has_plugin
+from ..remote_exec import run_remote, sh_quote, stream_remote
 from ..usage import finalize_usage, parse_claude_result_usage
 from .common import ExecutorError, STOP_EXIT_CODE, _load_json_output, _row_get, logger
 from .prompt import PROGRESS_REPORT_INSTRUCTION, _decode_escapes
@@ -90,13 +92,27 @@ class ProcessMixin:
 
         登记先行：进程尚未创建（worker 还在准备阶段）时，_run_once 在
         Popen 后立即检查登记表自行终止；进程已存在则直接 SIGKILL 进程组
-        （readline 读到 EOF 后 _run_once 自然退出）。
+        （readline 读到 EOF 后 _run_once 自然退出）。远程项目任务（SSH）
+        额外尽力远程 pkill 任务标记进程——kill 本地 ssh 只断开通道，远端
+        引擎可能存活。
         """
         with self._proc_lock:
             self._stop_requests.add(task_id)
             proc = self._procs.get(task_id)
+            remote = self._remote_tasks.get(task_id)
         if proc is not None and proc.poll() is None:
             self._kill_process_group(proc)
+        if remote is not None:
+            # 尽力而为：后台线程远程 pkill，不阻塞 API 响应
+            threading.Thread(target=self._remote_pkill, args=remote,
+                             daemon=True).start()
+
+    def _remote_pkill(self, host: dict, marker: str) -> None:
+        """远程 pkill 任务标记进程（停止远程任务时的远端兜底清理）。"""
+        try:
+            run_remote(host, f"pkill -f {sh_quote(marker)} || true", timeout=10)
+        except Exception:  # noqa: BLE001 兜底清理失败不影响本地停止语义
+            logger.debug("远程 pkill 失败（标记 %s）", marker, exc_info=True)
     def _stop_requested(self, task_id: int) -> bool:
         with self._proc_lock:
             return task_id in self._stop_requests
@@ -245,29 +261,40 @@ class ProcessMixin:
                 f"（模型 {record['model'] or engine}）{cost_text}")
         except Exception as e:  # noqa: BLE001 落库失败不影响任务收尾
             self.db.add_log(task_id, "warn", f"token 用量落库失败: {e}")
-    def _persist_claude_usage(self, task_id: int, output: str) -> None:
-        """从 claude 输出解析用量并落库（执行结束或人工停止路径共用）。
+    def _persist_claude_usage(self, task_id: int, output: str,
+                              engine: str = "claude") -> None:
+        """从 CLI 引擎（claude/zcode，stream-json 同构）输出解析用量并落库
+        （执行结束或人工停止路径共用）。
 
         结果行（type=result）含 usage 字段（stream-json 与单行
         --output-format json 同构），modelUsage 提供模型名；解析失败
         （异常中断无结果行）不落库，任务详情显示「无数据」。
+        ``engine`` 参数（zcode 引擎复用）仅决定落库的引擎名，解析协议
+        与 claude 一致。
         """
         data = self._last_json_object(output)
         usage = parse_claude_result_usage(data)
         if usage is None:
             return
-        self._persist_engine_usage(task_id, "claude", usage)
-    def _run_claude_once(self, task_id: int, repo: dict, issue: dict,
-                         resume_session: str | None = None) -> tuple[int, str]:
-        """执行一次 claude 引擎（Claude Code CLI 无头模式）。
+        self._persist_engine_usage(task_id, engine, usage)
+    def _run_cli_once(self, task_id: int, repo: dict, issue: dict,
+                      resume_session: str | None, *,
+                      engine: str, command: str, args: list[str],
+                      session_column: str,
+                      install_hint: str = "") -> tuple[int, str]:
+        """执行一次 CLI 无头模式引擎（claude / zcode 共用主流程）。
 
-        resume_session 非空时为断点续跑（claude --resume 接续上次会话，
-        工作区保留）；执行后解析 JSON 输出中的 session_id 落库。本方法由
-        ClaudeEnginePlugin（botler.plugins.executors）委托调用。
+        两者同为 Claude Code 家族 CLI：``-p`` 无人值守 + stream-json 逐行
+        输出（实时 SSE 事件流 + 会话 id 落库）+ ``--resume`` 断点续跑 +
+        ``--dangerously-skip-permissions`` 跳过权限确认（无人值守无法交互
+        授权）。差异仅在命令名/参数（config 的 claude_* / zcode_* 段）与
+        会话 id 落库列（tasks.claude_session_id / zcode_session_id）。
+
+        resume_session 非空时为断点续跑（--resume 接续上次会话，工作区
+        保留）；执行后解析 JSON 输出中的 session_id 落库。本方法由
+        ClaudeEnginePlugin / ZcodeEnginePlugin（botler.plugins.executors）
+        经 _run_claude_once / _run_zcode_once 委托调用。
         """
-        # issue #237/#424：仓库级任务参数覆盖——仅取重试/引擎生效配置
-        # （仓库级 > 全局，run_task 解析暂存，无覆盖时等价全局）
-        cfg = self._effective_cfg(task_id)
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
         # MCP 工具注入（issue #172）：任务执行前把启用中的工具写入工作区
         # .mcp.json（Claude Code 项目级 MCP 配置），供 agent 直接调用；
@@ -284,12 +311,12 @@ class ProcessMixin:
         else:
             prompt = self._build_prompt(repo, issue)
             self.db.add_log(task_id, "info",
-                            f"执行 claude -p（工作区 {workdir}，不设执行超时）")
+                            f"执行 {engine}（工作区 {workdir}，不设执行超时）")
         env = self._build_env(repo, issue)
 
         log_path = self._log_file(task_id)
 
-        cmd = [cfg.claude_command, *cfg.claude_args]
+        cmd = [command, *args]
         # stream-json 输出在 claude 2.1.x 强制要求 --verbose，缺失直接报错；
         # 用户配置可能只写 --output-format stream-json，这里自动补齐
         if ("--output-format" in cmd
@@ -310,9 +337,11 @@ class ProcessMixin:
                 text=True, start_new_session=True,
             )
         except FileNotFoundError:
-            raise ExecutorError(f"找不到 claude 命令: {cfg.claude_command}（请先 npm install -g @anthropic-ai/claude-code）")
+            raise ExecutorError(
+                f"找不到 {engine} 命令: {command}"
+                + (f"（{install_hint}）" if install_hint else ""))
 
-        # 注册运行中进程（issue #35：一键停止可定位并终止 claude 进程组）
+        # 注册运行中进程（issue #35：一键停止可定位并终止引擎进程组）
         with self._proc_lock:
             self._procs[task_id] = proc
         try:
@@ -326,7 +355,8 @@ class ProcessMixin:
                 # 运行中即把 session_id 落库（issue #20 实时查看），
                 # 只落首次：进程未结束时 API 就能定位当前会话文件。
                 # stream-json 下 init 行首条即带 session_id，比 result 更早
-                if not session_known and self._persist_session_from_chunk(task_id, chunk):
+                if not session_known and self._persist_session_from_chunk(
+                        task_id, chunk, column=session_column):
                     session_known = True
                 # 实时事件流（SSE）：逐行解析 stream-json 输出发布到总线
                 self._publish_stream_line(task_id, chunk, parse_claude_stream_line)
@@ -342,20 +372,191 @@ class ProcessMixin:
                 proc.wait(timeout=10)
                 output = "".join(chunks)
                 self.db.add_log(task_id, "warn",
-                                "任务被用户停止，已强制终止 claude 进程组")
-                self._persist_session_id(task_id, output)
-                self._persist_claude_usage(task_id, output)  # issue #235
+                                f"任务被用户停止，已强制终止 {engine} 进程组")
+                self._persist_session_id(task_id, output, column=session_column)
+                self._persist_claude_usage(task_id, output, engine=engine)  # issue #235
                 return STOP_EXIT_CODE, output
 
             exit_code = proc.wait(timeout=30)
             output = "".join(chunks)
-            self.db.add_log(task_id, "info", f"claude 退出码: {exit_code}")
-            self._persist_session_id(task_id, output)
-            self._persist_claude_usage(task_id, output)  # issue #235
+            self.db.add_log(task_id, "info", f"{engine} 退出码: {exit_code}")
+            self._persist_session_id(task_id, output, column=session_column)
+            self._persist_claude_usage(task_id, output, engine=engine)  # issue #235
             return exit_code, output
         finally:
             with self._proc_lock:
                 self._procs.pop(task_id, None)
+
+    def _run_remote_cli_once(self, task_id: int, repo: dict, issue: dict,
+                             resume_session: str | None, *,
+                             engine: str, command: str, args: list[str],
+                             session_column: str) -> tuple[int, str]:
+        """在远程服务器上执行一次 CLI 引擎（SSH 流式，远程项目专用）。
+
+        工作区准备（prepare_workspace 远程分支）经 SSH 在远程完成；随后
+        本地拉起 ssh 进程（stream_remote），远端 cd 到项目目录、带凭据/
+        上下文 env 启动引擎，stdout 行流回本地后与本地 CLI 引擎走完全相同
+        的 drain 链路（日志落盘/SSE/会话 id 落库/用量）。prompt 经 stdin
+        传输（不进远端 ps/argv）。停止：杀本地 ssh 进程组断开会话 + 尽力
+        远程 pkill 任务标记进程（BOTLER_TASK_MARKER）。
+        """
+        host = self._remote_cfg_for(repo)
+        workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
+        path = str(workdir)
+        # 远程项目暂不支持 MCP 工具注入（.mcp.json 需写到远端，后续版本）
+        self.db.add_log(task_id, "info", "远程项目：跳过本地 MCP 工具注入")
+        self._capture_base_sha_remote(task_id, host, path)
+        if resume_session:
+            prompt = self._resume_prompt(repo, issue, task_id)
+            self.db.add_log(
+                task_id, "info",
+                f"恢复上次会话 {resume_session[:8]}… 继续执行"
+                f"（远程 {host['name']}:{path}，不设执行超时）")
+        else:
+            prompt = self._build_prompt(repo, issue)
+            self.db.add_log(
+                task_id, "info",
+                f"远程执行 {engine}（{host['name']}:{path}，不设执行超时）")
+        env = self._build_env(repo, issue)
+
+        log_path = self._log_file(task_id)
+
+        # stream-json 自动补 --verbose（与本地 CLI 引擎同逻辑）
+        args = list(args)
+        if ("--output-format" in args
+                and args[args.index("--output-format") + 1] == "stream-json"
+                and "--verbose" not in args):
+            args.append("--verbose")
+        # 远端命令：cd <path> && env <凭据/上下文/标记> <cmd> <args>
+        #   [skip-permissions] [--resume sid]   （prompt 走 stdin）
+        env_parts = [f"{k}={sh_quote(str(env[k]))}"
+                     for k in ("GITLAB_TOKEN", "GITLAB_URL", "PROJECT_ID",
+                               "ISSUE_IID") if env.get(k)]
+        if git_env.get("GIT_ASKPASS"):
+            env_parts.append(f"GIT_ASKPASS={sh_quote(git_env['GIT_ASKPASS'])}")
+        env_parts.append("GIT_TERMINAL_PROMPT=0")
+        marker = f"botler-task-{task_id}"
+        env_parts.append(f"BOTLER_TASK_MARKER={marker}")
+        remote_cmd = (
+            f"cd {sh_quote(path)} && env {' '.join(env_parts)} "
+            + sh_quote(command) + " "
+            + " ".join(sh_quote(a) for a in args)
+            + " --dangerously-skip-permissions"
+            + (f" --resume {sh_quote(resume_session)}" if resume_session else ""))
+        try:
+            proc = stream_remote(host, remote_cmd, stdin=subprocess.PIPE)
+        except FileNotFoundError:
+            raise ExecutorError("找不到 ssh 命令（远程项目执行依赖本机 ssh）")
+
+        # prompt 经 stdin 传输：远端引擎 -p 无位置参数时从 stdin 读提示词
+        # （Claude Code 家族约定）。进程启动即退出（SSH 失败等）时写管道
+        # 抛 BrokenPipe/OSError，吞掉由读循环暴露真实错误。
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+        with self._proc_lock:
+            self._procs[task_id] = proc
+            self._remote_tasks[task_id] = (host, marker)
+        try:
+            session_known = False
+            stopped = self._stop_requested(task_id)
+
+            def _on_chunk(chunk: str) -> None:
+                nonlocal session_known
+                if not session_known and self._persist_session_from_chunk(
+                        task_id, chunk, column=session_column):
+                    session_known = True
+                self._publish_stream_line(task_id, chunk, parse_claude_stream_line)
+
+            if not stopped:
+                stopped, chunks = self._drain_process_output(
+                    proc, task_id, log_path, _on_chunk)
+            else:
+                chunks = []
+
+            if stopped:
+                self._kill_process_group(proc)
+                proc.wait(timeout=10)
+                output = "".join(chunks)
+                self.db.add_log(
+                    task_id, "warn",
+                    f"任务被用户停止，已断开远程会话并尽力终止远端 {engine} 进程")
+                self._persist_session_id(task_id, output, column=session_column)
+                self._persist_claude_usage(task_id, output, engine=engine)
+                return STOP_EXIT_CODE, output
+
+            exit_code = proc.wait(timeout=30)
+            output = "".join(chunks)
+            # ssh 退出码 255 = 连接层错误（网络断/认证失败），映射为可读错误
+            if exit_code == 255 and "session_id" not in output:
+                self.db.add_log(
+                    task_id, "error",
+                    f"远程 SSH 会话异常退出（255）：{(output or '').strip()[-300:]}")
+            else:
+                self.db.add_log(task_id, "info",
+                                f"远程 {engine} 退出码: {exit_code}")
+            self._persist_session_id(task_id, output, column=session_column)
+            self._persist_claude_usage(task_id, output, engine=engine)
+            return exit_code, output
+        finally:
+            with self._proc_lock:
+                self._procs.pop(task_id, None)
+                self._remote_tasks.pop(task_id, None)
+
+    def _capture_base_sha_remote(self, task_id: int, host: dict,
+                                 path: str) -> None:
+        """远程项目任务首次执行开始时记录远端工作区基线提交（issue #252
+        的远程分支）。只采一次；失败不阻塞任务执行。"""
+        task = self.db.get_task(task_id)
+        if task is not None and _row_get(task, "base_sha"):
+            return
+        try:
+            cp = run_remote(host, f"git -C {sh_quote(path)} rev-parse HEAD",
+                            timeout=15)
+            if cp.returncode == 0 and cp.stdout.strip():
+                self.db.set_task_status(task_id, None,
+                                        base_sha=cp.stdout.strip())
+                self.db.add_log(task_id, "info",
+                                "已记录任务改动基线提交（远程工作区）")
+        except Exception as e:  # noqa: BLE001 采集失败不阻塞任务执行
+            logger.warning("任务 %s 远程基线提交采集失败: %s", task_id, e)
+
+    def _run_claude_once(self, task_id: int, repo: dict, issue: dict,
+                         resume_session: str | None = None) -> tuple[int, str]:
+        """执行一次 claude 引擎（Claude Code CLI 无头模式，默认引擎）。
+
+        issue #237/#424：命令/参数取仓库级任务参数覆盖（仓库级 > 全局）。
+        """
+        cfg = self._effective_cfg(task_id)
+        return self._run_cli_once(
+            task_id, repo, issue, resume_session,
+            engine="claude", command=cfg.claude_command, args=list(cfg.claude_args),
+            session_column="claude_session_id",
+            install_hint="请先 npm install -g @anthropic-ai/claude-code")
+
+    def _run_zcode_once(self, task_id: int, repo: dict, issue: dict,
+                        resume_session: str | None = None) -> tuple[int, str]:
+        """执行一次 zcode 引擎（ZCode CLI 无头模式，与 Claude Code 同源）。
+
+        输出协议复用 claude stream-json 解析（parse_claude_stream_line）；
+        会话 id 落 tasks.zcode_session_id，断点续跑 --resume 同 claude。
+        命令/参数同 claude 支持仓库级覆盖（issue #237）。
+        远程项目（repo.remote_host）经 SSH 在远程主机上执行
+        （_run_remote_cli_once）。
+        """
+        cfg = self._effective_cfg(task_id)
+        if _row_get(repo, "remote_host"):
+            return self._run_remote_cli_once(
+                task_id, repo, issue, resume_session,
+                engine="zcode", command=cfg.zcode_command,
+                args=list(cfg.zcode_args), session_column="zcode_session_id")
+        return self._run_cli_once(
+            task_id, repo, issue, resume_session,
+            engine="zcode", command=cfg.zcode_command, args=list(cfg.zcode_args),
+            session_column="zcode_session_id")
 
     def _inject_mcp_tools(self, task_id: int, workdir) -> None:
         """把启用中的 MCP 工具写入工作区 .mcp.json（issue #172）。
@@ -1093,21 +1294,28 @@ class ProcessMixin:
             return
         for event in events:
             self._publish_event(task_id, event)
-    def _persist_session_id(self, task_id: int, output: str) -> None:
-        """执行结束后把 claude 会话 id 落库（供下次重试 / 平台重启断点续跑）。"""
+    def _persist_session_id(self, task_id: int, output: str,
+                            column: str = "claude_session_id") -> None:
+        """执行结束后把 CLI 引擎会话 id 落库（供下次重试 / 平台重启断点续跑）。
+
+        ``column`` 指定落库列：claude 引擎 claude_session_id（默认）、
+        zcode 引擎 zcode_session_id。
+        """
         session_id = self._extract_session_id(output)
         if session_id:
-            self.db.set_task_status(task_id, None, claude_session_id=session_id)
-    def _persist_session_from_chunk(self, task_id: int, chunk: str) -> bool:
+            self.db.set_task_status(task_id, None, **{column: session_id})
+    def _persist_session_from_chunk(self, task_id: int, chunk: str,
+                                    column: str = "claude_session_id") -> bool:
         """运行中首次发现 session_id 即落库（issue #20 实时查看聊天记录）。
 
         此前 session_id 只在执行完全结束后才落库，任务 running 期间 API
         拿不到当前会话，无法实时读聊天记录；这里在读循环里每行检测，
-        首次解析到即落库（幂等，与结束后落库同一值）。
+        首次解析到即落库（幂等，与结束后落库同一值）。``column`` 语义同
+        _persist_session_id。
         """
         session_id = self._extract_session_id(chunk)
         if session_id:
-            self.db.set_task_status(task_id, None, claude_session_id=session_id)
+            self.db.set_task_status(task_id, None, **{column: session_id})
             return True
         return False
     def _is_unresolvable(self, output: str) -> bool:

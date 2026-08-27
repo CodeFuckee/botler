@@ -101,6 +101,7 @@ export const ENGINE_META = {
   claude: { label: 'Claude Code CLI' },
   hermes: { label: 'hermes-agent SDK' },
   dsh: { label: 'deepseek-harness SDK' },
+  zcode: { label: 'ZCode CLI' },
 }
 
 // 引擎 → 展示文本（纯函数导出，便于测试）：null/undefined 表示加载中；

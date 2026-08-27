@@ -844,3 +844,121 @@ class TestRepoTaskParamsOverride:
         repo_id = self._mk_repo(tc)
         for bad in [{"max_retries": -1}, {"max_retries": 21}]:
             assert tc.put(f"/api/repos/{repo_id}", json=bad).status_code == 422
+
+
+class TestAddRepoFromRemoteHost:
+    """远程项目接入（SSH）：discover + add_repo with remote_host/remote_path。"""
+
+    def _save_remote(self, tc):
+        resp = tc.put("/api/settings", json={"remotes": [
+            {"name": "build", "host": "10.0.0.9", "user": "bot", "port": 22},
+        ]})
+        assert resp.status_code == 200
+
+    @staticmethod
+    def _patch_ssh(monkeypatch, stdout="", returncode=0, stderr=""):
+        from types import SimpleNamespace
+
+        calls = []
+
+        def fake_run(argv, timeout=None, **kwargs):
+            calls.append({"argv": argv, "timeout": timeout})
+            return SimpleNamespace(returncode=returncode,
+                                   stdout=stdout, stderr=stderr)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        return calls
+
+    def test_discover_remote_via_ssh(self, client, monkeypatch):
+        tc, stub, tmp_path = client
+        self._save_remote(tc)
+        calls = self._patch_ssh(monkeypatch, stdout=(
+            "origin\thttps://gitlab.example.com/group/project.git (fetch)\n"
+            "origin\thttps://gitlab.example.com/group/project.git (push)\n"
+            "upstream\thttps://github.com/group/project.git (fetch)\n"))
+
+        resp = tc.post("/api/repos/discover", json={
+            "remote_host": "build", "remote_path": "/srv/apps/project"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["remote_host"] == "build"
+        assert data["remote_path"] == "/srv/apps/project"
+        assert [r["name"] for r in data["remotes"]] == ["origin", "upstream"]
+        # SSH 调用走 git -C <path> remote -v，远端命令串含路径
+        assert calls and "remote -v" in calls[0]["argv"][-1]
+        assert "/srv/apps/project" in calls[0]["argv"][-1]
+
+    def test_discover_unknown_host_rejected(self, client):
+        tc, stub, tmp_path = client
+        resp = tc.post("/api/repos/discover", json={
+            "remote_host": "nope", "remote_path": "/srv/x"})
+        assert resp.status_code == 400
+        assert "不存在" in resp.json()["detail"]
+
+    def test_discover_non_git_dir_rejected(self, client, monkeypatch):
+        tc, stub, tmp_path = client
+        self._save_remote(tc)
+        self._patch_ssh(monkeypatch, returncode=128,
+                        stderr="fatal: not a git repository")
+        resp = tc.post("/api/repos/discover", json={
+            "remote_host": "build", "remote_path": "/srv/not-git"})
+        assert resp.status_code == 400
+        assert "读取远程仓库 remote 失败" in resp.json()["detail"]
+
+    def test_add_repo_from_remote_host(self, client, monkeypatch):
+        tc, stub, tmp_path = client
+        self._save_remote(tc)
+        self._patch_ssh(monkeypatch, stdout=(
+            "origin\thttps://gitlab.example.com/group/project.git (fetch)\n"
+            "origin\thttps://gitlab.example.com/group/project.git (push)\n"))
+        registered: list[int] = []
+        monkeypatch.setattr(
+            GitLabClient, "register_webhook",
+            lambda self, project_id, secret: registered.append(project_id) or {"id": 1})
+
+        resp = tc.post("/api/repos", json={
+            "remote_host": "build", "remote_path": "/srv/apps/project",
+            "remote_name": "origin", "name": "远程项目",
+            "webhook_url": "https://hooks.example.com",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["gitlab_project_id"] == 42
+        # local_path 恒为 None（工作区在远程），远程字段落库
+        assert data["local_path"] is None
+        assert data["remote_host"] == "build"
+        assert data["remote_path"] == "/srv/apps/project"
+        assert data["remote_name"] == "origin"
+        assert registered == [42]
+        # 写回 config.yaml（唯一事实来源）
+        config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "remote_host: build" in config_text
+        assert "remote_path: /srv/apps/project" in config_text
+
+    def test_add_repo_remote_relative_path_rejected(self, client, monkeypatch):
+        tc, stub, tmp_path = client
+        self._save_remote(tc)
+        self._patch_ssh(monkeypatch, stdout="origin\thttps://x (fetch)\n")
+        resp = tc.post("/api/repos", json={
+            "remote_host": "build", "remote_path": "apps/project",
+            "remote_name": "origin"})
+        assert resp.status_code == 400
+        assert "绝对路径" in resp.json()["detail"]
+
+    def test_add_repo_remote_and_local_path_mutually_exclusive(self, client):
+        tc, stub, tmp_path = client
+        self._save_remote(tc)
+        resp = tc.post("/api/repos", json={
+            "remote_host": "build", "remote_path": "/srv/x",
+            "local_path": "/tmp/x", "remote_name": "origin"})
+        assert resp.status_code == 400
+        assert "互斥" in resp.json()["detail"]
+
+    def test_add_repo_remote_missing_remote_name(self, client, monkeypatch):
+        tc, stub, tmp_path = client
+        self._save_remote(tc)
+        self._patch_ssh(monkeypatch, stdout="origin\thttps://x (fetch)\n")
+        resp = tc.post("/api/repos", json={
+            "remote_host": "build", "remote_path": "/srv/apps/project"})
+        assert resp.status_code == 400
+        assert "remote_name" in resp.json()["detail"]

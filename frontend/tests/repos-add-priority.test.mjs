@@ -108,7 +108,7 @@ async function click(renderer, button) {
 // 切到 GitLab URL / project_id 方式并回填 URL（添加请求只依赖这两个字段）
 async function fillUrlForm(renderer, url) {
   const radios = renderer.root.findAllByType('input').filter((i) => i.props.type === 'radio')
-  assert.equal(radios.length, 2, '应有两个添加方式 radio 选项')
+  assert.equal(radios.length, 3, '应有三个添加方式 radio 选项（本地/URL/远程服务器）')
   await TestRenderer.act(async () => {
     radios[1].props.onChange() // 选中 GitLab URL / project_id
   })

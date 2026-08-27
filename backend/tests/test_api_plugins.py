@@ -98,7 +98,7 @@ class TestListPlugins:
             PluginKind.NOTIFIER.value,
         }
         executors = data["plugins"]["executor"]
-        assert [p["name"] for p in executors] == ["claude", "hermes", "dsh"]
+        assert [p["name"] for p in executors] == ["claude", "hermes", "dsh", "zcode"]
         assert all(p["builtin"] is True and p["path"] is None for p in executors)
         assert data["plugins"]["model_provider"][0]["name"] == "gemini_nano_banana"
         # 识图模型供应商（issue #152）：内置 gemini_vision / openai_vision / custom
@@ -267,7 +267,7 @@ class TestReloadPlugins:
         assert resp.status_code == 200
         data = resp.json()
         assert data["plugin_paths"] == []
-        assert [p["name"] for p in data["plugins"]["executor"]] == ["claude", "hermes", "dsh"]
+        assert [p["name"] for p in data["plugins"]["executor"]] == ["claude", "hermes", "dsh", "zcode"]
 
 
 class TestPluginSettings:
@@ -305,11 +305,11 @@ class TestEngineHealthInPlugins:
     """
 
     def test_list_includes_engine_health(self, client):
-        """默认返回三内置引擎的健康状态快照。"""
+        """默认返回全部内置引擎的健康状态快照。"""
         tc, _ = client
         data = tc.get("/api/plugins").json()
         health = data["engine_health"]
-        assert [h["engine"] for h in health] == ["claude", "dsh", "hermes"]
+        assert [h["engine"] for h in health] == ["claude", "dsh", "hermes", "zcode"]
         for h in health:
             assert h["status"] in ("ok", "fail", "unknown")
             assert "ok" in h and "detail" in h and "checked_at" in h

@@ -190,7 +190,7 @@ export default function RepoEditModal({ repo, onClose, onSaved }) {
             />
           </label>
           <div className="muted small">
-            claude / hermes / dsh 之一；留空继承全局（当前 {globalEngine || '—'}）
+            claude / hermes / dsh / zcode 之一；留空继承全局（当前 {globalEngine || '—'}）
           </div>
         </div>
 
