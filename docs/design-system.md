@@ -124,7 +124,7 @@ font-family: var(--mono);
 | 场景 | 字号 | 字重 | 备注 |
 |---|---|---|---|
 | 页面标题 `h1` | 20px | 600 | `letter-spacing: var(--tracking-display)`（负字距收紧） |
-| 区块标题 `h2` | 14px | 600 | 全大写 + `0.05em` 字距，灰色（区块功能标签） |
+| 区块标题 `h2` | 15px | 600 | 句首大写 + `var(--tracking-display)` 负字距，主文本色（层级靠字重与颜色深浅）；设置分组眉标 `.settings-group-title` 例外，保留 12px 全大写灰字 |
 | 正文/表格/输入 | 14px | 400 | 默认 |
 | 弱化文本 `.small` | 12.5px | 400 | 辅助说明 |
 | 表头 `th` | 12px | 500 | 灰色 |
@@ -192,7 +192,7 @@ font-family: var(--mono);
 ### 7.2 卡片（`.card`）
 
 - 白底 + `--shadow-card` + 6px 圆角 + 20px 内边距 + 16px 下间距
-- 卡片内区块标题用 `h2`（灰色小号全大写）
+- 卡片内区块标题用 `h2`（句首大写主文本色，见 4.2 字号层级）
 
 ### 7.3 按钮（`.btn`）
 
@@ -203,12 +203,15 @@ font-family: var(--mono);
 | `.btn-danger` | 红字；hover 红底弱化 + 红边框。用于破坏性操作 |
 | `disabled` | 50% 透明度 + `not-allowed` 光标 |
 
-### 7.4 表单控件（`.input`、`.add-method`、`.remote-option`）
+### 7.4 表单控件（`.input`、`.check-input`、`.add-method`、`.remote-option`）
 
 - 输入框：白底、1px `--border` 边框、6px 圆角、`min-width: 0`
   - hover：`--border-hover`
   - 焦点：蓝色边框 + `--focus-ring` 焦点环（键盘可达性）
-- 单选/复选：`accent-color: var(--primary)` 跟随主色
+- 布尔开关（`.check-input`）：原生 checkbox 以 `appearance: none` 自绘为
+  「轨道 + 滑块」开关（36×20，圆角 999px）——未选中 = `--border-strong`
+  灰轨道，选中 = `--primary-strong` 主色轨道，滑块白色圆形带微阴影；
+  DOM 与表单语义不变，`:focus-visible` 显示焦点环（键盘可达）
 - 选项胶囊（`.add-method` / `.remote-option`）：边框样式，选中态 = 蓝边框 + 蓝字 + 蓝弱底（`:has(input:checked)`）
 
 ### 7.5 表格（`.table`）
