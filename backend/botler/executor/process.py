@@ -402,7 +402,7 @@ class ProcessMixin:
         """
         host = self._remote_cfg_for(repo)
         workdir, git_env = self.prepare_workspace(repo, resume=bool(resume_session))
-        path = str(workdir)
+        path = self._remote_path_str(repo)
         # 远程项目暂不支持 MCP 工具注入（.mcp.json 需写到远端，后续版本）
         self.db.add_log(task_id, "info", "远程项目：跳过本地 MCP 工具注入")
         self._capture_base_sha_remote(task_id, host, path)

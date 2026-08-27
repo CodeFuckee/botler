@@ -440,7 +440,7 @@ class ClaudeExecutor(WorkspaceMixin, ProcessMixin, SessionMixin, PromptMixin):
             _add("ssh_connect", "SSH 连接", False, str(e))
             return self._precheck_result(checks)
 
-        path = str(self._repo_workdir(repo))
+        path = self._remote_path_str(repo)
         # 1. SSH 连通（echo 往返计时）
         start = _time.monotonic()
         try:

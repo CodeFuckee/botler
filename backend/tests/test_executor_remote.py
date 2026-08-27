@@ -13,6 +13,7 @@
 
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -123,12 +124,14 @@ class TestPrepareWorkspaceRemote:
 
         workdir, git_env = executor.prepare_workspace(dict(REMOTE_REPO))
 
-        assert str(workdir) == "/srv/apps/proj"
+        assert workdir == Path("/srv/apps/proj")
         assert git_env["GIT_ASKPASS"].startswith("~/.botler/askpass-")
         joined = "\n".join(commands)
         # 序列：目录校验 → askpass 写入 → fetch → ls-remote → 补跟踪引用
         # → checkout -B → reset --hard → clean → pull --rebase
-        # （无特殊字符的参数经 sh_quote 不加引号）
+        # （远端命令一律用配置原样路径串，不经 Path 规范化——Windows
+        # 部署机上 Path 会产生反斜杠，远端 POSIX shell 无法识别；
+        # 无特殊字符的参数经 sh_quote 不加引号）
         assert "test -d /srv/apps/proj/.git" in joined
         assert "BOTLER_ASKPASS_EOF" in joined
         assert "fetch origin --prune" in joined

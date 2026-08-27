@@ -113,6 +113,16 @@ class WorkspaceMixin:
             raise ExecutorError(
                 f"远程服务器「{name}」不存在（请先在设置页 config remotes 配置）")
         return host
+
+    @staticmethod
+    def _remote_path_str(repo: dict) -> str:
+        """远程项目远端路径**原串**（不经 Path 规范化）。
+
+        拼进远端命令的路径必须是配置原样（POSIX 绝对路径）；经 Path
+        往返会在 Windows 部署机上被规范化成反斜杠（CI Windows runner
+        实测），远端 shell 无法识别。
+        """
+        return str(_row_get(repo, "remote_path") or "")
     def _git(self, workdir: Path, *args: str, env: dict | None = None,
              timeout: int = 300) -> None:
         """执行 git 命令，失败抛 ExecutorError。"""
@@ -397,7 +407,7 @@ class WorkspaceMixin:
 
         host = self._remote_cfg_for(repo)
         workdir = self._repo_workdir(repo)
-        path = str(workdir)
+        path = self._remote_path_str(repo)
         remote = _row_get(repo, "remote_name") or "origin"
 
         # 1. 远端目录必须是 git 仓库（与 local_path 校验语义一致）
