@@ -6,6 +6,19 @@
 
 ### Fixed
 
+- **概览页单列分组布局组头折叠按钮被挤到单独一行（用户截图反馈）**：
+  - 现象：单列分组（column）布局下，仓库子分组组头的折叠开关单独占一行，
+    仓库名「📁 仓库名」另起一行，组头变成三行；
+  - 根因：`styles.css` 中 `.issue-repo-group-name`（`flex-basis: auto`，意图让
+    单列布局仓库名与折叠开关同行）定义在基础规则 `.issue-repo-name`
+    （`flex-basis: 100%`，卡片布局让仓库名独占首行）之前——两个单类选择器
+    同优先级，CSS 层叠按源码顺序后者胜出，覆盖规则成为死代码，单列布局
+    仓库名仍独占整行并把折叠开关挤到单独一行；
+  - 修复：`.issue-repo-group-name` 覆盖规则移动到 `.issue-repo-name` 之后使其
+    生效，注释标明「必须位于基础规则之后」的位置约束；新增
+    `overview-column-toggle-row.test.mjs`——层叠模拟断言两类并存时生效的
+    `flex-basis` 为 `auto`，并守住规则顺序与 issue #102 换行契约。
+
 - **目标项目/issue 不存在（404）时任务失败处理降噪与准确分类（issue #498）**：
   - 失败分类：`failure_classify.py` 环境类（env）规则新增 404「资源不存在」
     匹配——仓库配置的 gitlab_project_id 失效、项目被删除/转移、token 无权限

@@ -3479,15 +3479,6 @@ body:has(.drawer-overlay) {
 .issue-repo-group {
   min-width: 0;
 }
-/* issue #471：单列分组组头——折叠开关与仓库名同处首行（卡片布局中
-   .issue-repo-name 独占整行以适配窄卡片；单列布局宽度充足，去掉
-   flex-basis: 100% 让开关+仓库名+计数同一行排布）。
-   用独立类名 .issue-repo-group-name 覆盖，避免影响 .issue-repo-name
-   基础规则（overview-repo-name-wrap 测试契约：独占首行/任意断行） */
-.issue-repo-group-name {
-  flex-basis: auto;
-  min-width: 0;
-}
 /* issue #102：头部允许换行——竖屏平板窄卡片（auto-fit 降为 1 列
    ≈280px）中仓库名不再被优先级/计数/添加按钮等固定项压缩至不可见 */
 .issue-repo-head {
@@ -3505,6 +3496,17 @@ body:has(.drawer-overlay) {
   font-weight: 600;
   flex-basis: 100%;
   overflow-wrap: anywhere;
+}
+/* issue #471：单列分组组头——折叠开关与仓库名同处首行（卡片布局中
+   .issue-repo-name 独占整行以适配窄卡片；单列布局宽度充足，去掉
+   flex-basis: 100% 让开关+仓库名+计数同一行排布）。
+   用独立类名 .issue-repo-group-name 覆盖，避免影响 .issue-repo-name
+   基础规则（overview-repo-name-wrap 测试契约：独占首行/任意断行）。
+   必须位于 .issue-repo-name 之后：同为单类选择器，覆盖靠源码顺序
+   生效（overview-column-toggle-row 测试契约） */
+.issue-repo-group-name {
+  flex-basis: auto;
+  min-width: 0;
 }
 /* issue #134：仓库卡片头右侧操作组（「对账」+「添加 Issue」按钮）——
    整体推到卡片头最右侧（此前添加按钮单独 margin-left:auto 推右，现两
