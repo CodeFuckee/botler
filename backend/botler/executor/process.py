@@ -23,6 +23,7 @@ from ..gitlab_client import PIPELINE_TERMINAL_STATES, GitLabError
 from ..log_redact import redact
 from ..plugins import PluginKind, has_plugin
 from ..remote_exec import run_remote, sh_quote, stream_remote
+from ..dsh_runner import resolve_dsh_pi_ai_cordis
 from ..usage import finalize_usage, parse_claude_result_usage
 from .common import ExecutorError, STOP_EXIT_CODE, _load_json_output, _row_get, logger
 from .prompt import PROGRESS_REPORT_INSTRUCTION, _decode_escapes
@@ -76,6 +77,33 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+# ---- issue #729/#730：第三方 OpenAI 兼容端点 → llm-pi-ai 路由 ----
+
+# llm-pi-ai provider 标识与 apiKeyEnv 变量名（resolver 侧同款，见
+# dsh_runner.resolve_dsh_pi_ai_cordis —— provider_id 对应派生 Cordis 里
+# providers.<id> 键名，api_key_env 对应 SDK 运行时凭据缝读取的环境变量）
+_DSH_PI_AI_PROVIDER_ID = "botler-pi-ai"
+_DSH_PI_AI_KEY_ENV = "BOTLER_DSH_PI_AI_KEY"
+# 官方 DeepSeek API 主机：llm-deepseek 适配器对该端点的流式续片（缺省
+# name 字段）设计正确，不回退 pi-ai 路由（保持现状）
+_DSH_OFFICIAL_HOSTS = frozenset({"api.deepseek.com"})
+
+
+def _dsh_use_pi_ai_route(base_url: str | None) -> bool:
+    """第三方 OpenAI 兼容端点（base_url 非空且非官方 DeepSeek 主机）→ True。
+
+    issue #729/#730 根因：dsh 引擎此前把硅基流动等 OpenAI 兼容中转站的
+    凭据以 provider=deepseek-official（llm-deepseek 适配器）消费，其
+    translate 的 `!== void 0` 守卫把续片显式空串 name 覆盖成 "" →
+    unknown tool ""。web 正常因硅基流动注册在 llm-pi-ai（openai-
+    completions）。这里判定：base_url 指向非官方主机 → 改走 llm-pi-ai。
+    """
+    if not base_url:
+        return False  # SDK 默认官方 DeepSeek 端点 → deepseek-official 现状
+    host = base_url.split("://", 1)[-1].split("/", 1)[0].split(":")[0].lower()
+    return host not in _DSH_OFFICIAL_HOSTS
 
 
 class ProcessMixin:
@@ -1004,6 +1032,28 @@ class ProcessMixin:
         dsh_api_key, dsh_base_url, dsh_model = self._dsh_credentials(cfg)
         runner_model = dsh_model or cfg.dsh_model
 
+        # issue #729/#730：第三方 OpenAI 兼容端点（硅基流动等，base_url
+        # 非空且非官方 DeepSeek 主机）改走 llm-pi-ai 路由——派生 Cordis
+        # 挂载 llm-pi-ai + provider（api: openai-completions），与 web 的
+        # 「AI 供应商 -> 硅基流动」注册同构；官方 DeepSeek（base_url 空 /
+        # api.deepseek.com）维持 deepseek-official（llm-deepseek）现状。
+        # 原因：llm-deepseek 的 translate 守卫 `!== void 0` 把 SiliconFlow
+        # 流式续片的显式空串 name 覆盖成 "" → `unknown tool ""`，tasks
+        # #729/#730 全部工具调用失败；llm-pi-ai 只在首片记录名字不覆盖。
+        use_pi_ai = _dsh_use_pi_ai_route(dsh_base_url)
+        if use_pi_ai:
+            dsh_provider = _DSH_PI_AI_PROVIDER_ID
+            dsh_cordis = resolve_dsh_pi_ai_cordis(
+                cfg.dsh_cordis or None, _DSH_PI_AI_PROVIDER_ID,
+                base_url=dsh_base_url, api_key_env=_DSH_PI_AI_KEY_ENV,
+                model=runner_model)
+            dsh_env = dict(env)
+            dsh_env[_DSH_PI_AI_KEY_ENV] = dsh_api_key or ""
+        else:
+            dsh_provider = cfg.dsh_provider
+            dsh_cordis = cfg.dsh_cordis or None
+            dsh_env = env
+
         def _run_round(session_id: str, round_prompt: str) -> tuple[int, bool, bool]:
             """跑一轮 dsh：构造 runner、启动、等待完成或人工停止。
 
@@ -1013,18 +1063,19 @@ class ProcessMixin:
             try:
                 runner = DshRunner(
                     prompt=round_prompt, session_id=session_id,
-                    provider=cfg.dsh_provider, model=runner_model,
+                    provider=dsh_provider, model=runner_model,
                     max_tokens=cfg.dsh_max_tokens,
                     # 推理等级（issue #123）：dsh.reasoning_effort 经
                     # DshRunner 派生 Cordis 注入 SDK，空串 = 不设置
+                    # （pi-ai 路由下注入 llm-deepseek 条目无害，适配器不读）
                     reasoning_effort=cfg.dsh_reasoning_effort,
                     cwd=str(workdir),
                     session_root=cfg.dsh_session_root or None,
-                    cordis=cfg.dsh_cordis or None,
+                    cordis=dsh_cordis,
                     runtime_bin=cfg.dsh_runtime_bin or None,
                     base_url=dsh_base_url,
                     api_key=dsh_api_key,
-                    env=env, on_line=_on_line)
+                    env=dsh_env, on_line=_on_line)
                 runner.start()
                 last_runner = runner
             except DshSdkNotInstalledError as e:

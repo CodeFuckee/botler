@@ -56,6 +56,12 @@ _LLM_DEEPSEEK_NAME = "@deepseek-ai/dsh-llm-deepseek"
 # runtime 侧 llm-deepseek adapter 白名单（启动时校验，非法值直接拒绝）
 REASONING_EFFORT_CHOICES = ("off", "high", "max")
 
+# ---- OpenAI 兼容第三方端点路由（issue #729/#730）：llm-pi-ai 适配器 ----
+
+# llm-pi-ai 条目标识（web 的 llm-pi-ai.providers.gjld 注册同构；SDK 捆绑
+# runtime 内置同名插件，Cordis 组合挂载即可使用，无需升级 SDK）
+_PI_AI_NAME = "@deepseek-ai/dsh-llm-pi-ai"
+
 
 def _entry_start(lines: list[str]) -> int | None:
     """定位 llm-deepseek 条目起始行（- id: llm-deepseek；无 id 时回退 name）。"""
@@ -180,6 +186,78 @@ def resolve_dsh_cordis(cordis: str | None, reasoning_effort: str | None,
     digest = hashlib.sha256(
         f"{ref}\x00{effort}\x00{base_text}".encode("utf-8")).hexdigest()[:16]
     out = cache_dir / f"cordis-{digest}.yml"
+    if not out.exists() or out.read_text(encoding="utf-8") != text:
+        out.write_text(text, encoding="utf-8")
+    return str(out)
+
+
+def build_pi_ai_cordis_text(base: str, provider_id: str, *,
+                            base_url: str, api_key_env: str, model: str) -> str:
+    """在 Cordis 组合文本上追加 llm-pi-ai 条目（OpenAI 兼容 openai-completions）。
+
+    issue #729/#730 根因修复：SDK 捆绑 runtime 默认组合只挂 llm-deepseek，
+    其 translate 的守卫 `if (call.function?.name !== void 0)` 把硅基流动等
+    OpenAI 兼容中转站流式续片的**显式空串** name 视为有效 → 工具名被覆盖
+    成 "" → dsh-tools 派发 `unknown tool ""`，任务全部工具调用失败。web
+    正常是因为硅基流动注册在 llm-pi-ai（api: openai-completions），其
+    translate 只在 toolcall_start 记录名字、续片缺失/空名时不覆盖。这里在
+    （自定义或内置默认）组合上追加同 web 的 llm-pi-ai 条目 + provider
+    （api/baseURL/apiKeyEnv/models），使 SDK 走与 web 相同的适配器路径。
+    """
+    # provider_id 写进 YAML 键，防御注入；标量值防换行/空
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", provider_id):
+        raise ValueError(f"llm-pi-ai provider 标识非法: {provider_id!r}")
+    for label, value in (("base_url", base_url), ("api_key_env", api_key_env),
+                         ("model", model)):
+        if not value or "\n" in value:
+            raise ValueError(f"{label} 值非法: {value!r}")
+    entry = (
+        "\n- id: llm-pi-ai\n"
+        f"  name: '{_PI_AI_NAME}'\n"
+        "  config:\n"
+        "    providers:\n"
+        f"      {provider_id}:\n"
+        "        api: openai-completions\n"
+        f"        baseURL: {base_url}\n"
+        f"        apiKeyEnv: {api_key_env}\n"
+        "        models:\n"
+        f"          - id: {model}\n"
+    )
+    return base.rstrip("\n") + "\n" + entry
+
+
+def resolve_dsh_pi_ai_cordis(cordis: str | None, provider_id: str, *,
+                             base_url: str, api_key_env: str, model: str,
+                             bundled_text_provider=None) -> str:
+    """派生挂载 llm-pi-ai 的组合文件路径（issue #729/#730），缓存到临时目录。
+
+    基底与 resolve_dsh_cordis 同规则：自定义 cordis（存在时）或 SDK 内置
+    默认组合；在其上追加 llm-pi-ai 条目（build_pi_ai_cordis_text），按内容
+    哈希缓存（配置不变即复用）。自定义文件缺失抛异常，由 executor 转为
+    可读运行错误。
+    """
+    if cordis:
+        base = Path(cordis)
+        if not base.is_file():
+            raise FileNotFoundError(f"自定义 Cordis 配置不存在: {cordis}")
+        base_text = base.read_text(encoding="utf-8")
+        ref = f"custom:{base.resolve()}"
+    else:
+        if bundled_text_provider is None:
+            from deepseek_harness_runtime import bundled_default_config_path
+            base_text = bundled_default_config_path().read_text(encoding="utf-8")
+        else:
+            base_text = bundled_text_provider()
+        ref = "bundled"
+    text = build_pi_ai_cordis_text(
+        base_text, provider_id, base_url=base_url,
+        api_key_env=api_key_env, model=model)
+    cache_dir = Path(tempfile.gettempdir()) / "botler-dsh-cordis"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(
+        f"{ref}\x00{provider_id}\x00{base_url}\x00{api_key_env}\x00{model}"
+        .encode("utf-8")).hexdigest()[:16]
+    out = cache_dir / f"cordis-pi-ai-{digest}.yml"
     if not out.exists() or out.read_text(encoding="utf-8") != text:
         out.write_text(text, encoding="utf-8")
     return str(out)

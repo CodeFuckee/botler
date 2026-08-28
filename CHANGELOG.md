@@ -82,6 +82,36 @@
 
 ### Fixed
 
+- **dsh 引擎使用硅基流动等 OpenAI 兼容中转站时「工具调用错误」根因修复（issue #729/#730）**：
+  - 现象：tasks #729/#730 切 dsh 引擎后所有工具调用失败（`unknown tool ""`），
+    最终以「工具调用层完全不可用」阻塞收尾；同一模型在 web（DeepSeek Harness）
+    上直调正常，仅 dsh SDK 报错；
+  - 根因：dsh 引擎此前把硅基流动（base_url 非空的第三方 OpenAI 兼容端点）的
+    凭据以 provider=deepseek-official 消费，SDK 捆绑 runtime 因此走 llm-deepseek
+    适配器；其 translate 守卫 `if (call.function?.name !== void 0)` 把
+    SiliconFlow 流式续片的**显式空串** name（而非缺省的 undefined）视为有效 →
+    首块写入的工具名被续片覆盖成 `""` → dsh-tools 派发 `unknown tool ""`
+    （ToolNotFoundError）。web 正常是因为硅基流动注册在 llm-pi-ai
+    （api: openai-completions），其 translate 只在 toolcall_start 记录名字、
+    续片缺失/空名时不覆盖——工具名全程保留；
+  - 修复（方案 A，botler 侧路由，与 web 的 llm-pi-ai 注册同构）：
+    - `dsh_runner.py` 新增 `build_pi_ai_cordis_text` / `resolve_dsh_pi_ai_cordis`
+      ——在（自定义或内置默认）Cordis 组合上派生挂载 llm-pi-ai + provider
+      （api: openai-completions / baseURL / apiKeyEnv / models）的组合文件，
+      缓存到临时目录（与 `resolve_dsh_cordis` 同款缓存策略）；
+    - `executor/process.py` 新增 `_dsh_use_pi_ai_route` 路由决策：base_url 非空
+      且非官方 DeepSeek 主机（api.deepseek.com）→ provider 改走 `botler-pi-ai`、
+      cordis 用派生文件、env 注入 apiKeyEnv 变量（api key 经运行时凭据缝消费）；
+      官方 DeepSeek（base_url 空 / api.deepseek.com）维持 deepseek-official
+      （llm-deepseek）现状不变；
+  - 测试：`test_dsh_pi_ai_route.py`（8 用例）——文本层复现两种 translate 语义
+    （llm-deepseek 守卫丢失工具名 / llm-pi-ai 保留）、Cordis 派生构建与缓存、
+    executor 路由决策（硅基流动 → pi-ai 路由 + 派生 cordis + apiKeyEnv 注入；
+    官方 DeepSeek → 现状）；修复前该文件 6 个用例失败（复现），修复后全绿；
+  - 实证：真实 SDK + 硅基流动抓包确认续片 `"name":""` 且 `id/type` 为 null，
+    修复前必现 `unknown tool ""`，llm-pi-ai 路由后工具名保留、
+    finish_reason=completed。
+
 - **概览页单列分组布局组头折叠按钮被挤到单独一行（用户截图反馈）**：
   - 现象：单列分组（column）布局下，仓库子分组组头的折叠开关单独占一行，
     仓库名「📁 仓库名」另起一行，组头变成三行；
