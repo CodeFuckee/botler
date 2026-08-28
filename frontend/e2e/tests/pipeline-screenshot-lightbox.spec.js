@@ -32,7 +32,7 @@ function screenshotsPipelineFixture() {
         status: 'success',
         ref: 'main',
         sha: 'abc123def456',
-        web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/pipelines/731',
+        web_url: 'https://gitlab.example.com/chenkaidi/botler/-/pipelines/731',
         created_at: '2026-08-19T08:00:00.000Z',
         updated_at: '2026-08-19T08:05:00.000Z',
         finished_at: '2026-08-19T08:05:00.000Z',
@@ -45,7 +45,7 @@ function screenshotsPipelineFixture() {
           id: 77,
           name: 'e2e:screenshots',
           status: 'success',
-          web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/jobs/77',
+          web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/77',
           artifacts: [{
             file_type: 'archive',
             filename: 'artifacts.zip',

@@ -91,7 +91,7 @@ Issue 执行。后端健康检查可用 `curl http://localhost:8000/api/health` 
 
 ## 项目 Wiki 与 GitHub 同步
 
-项目知识库维护在 [GitLab Wiki](https://home.chenkaidi.top:509/chenkaidi/botler/-/wikis/home)，包括项目概览、快速开始、配置、使用、架构、开发测试、CI/CD、运维和安全主题。GitLab Wiki 是唯一事实来源：向其中提交页面后，任意 `main` 分支推送完成部署与 E2E 门禁，会由 `sync_wiki_to_github` 作业把全部 Wiki 页面和附件同步至 [GitHub Wiki](https://github.com/CodeFuckee/botler/wiki)。
+项目知识库维护在 [GitLab Wiki](https://gitlab.example.com/chenkaidi/botler/-/wikis/home)，包括项目概览、快速开始、配置、使用、架构、开发测试、CI/CD、运维和安全主题。GitLab Wiki 是唯一事实来源：向其中提交页面后，任意 `main` 分支推送完成部署与 E2E 门禁，会由 `sync_wiki_to_github` 作业把全部 Wiki 页面和附件同步至 [GitHub Wiki](https://github.com/CodeFuckee/botler/wiki)。
 
 启用同步前，请在 GitHub 仓库的 **Settings → Features** 启用 Wiki，并在 GitLab 项目 **Settings → CI/CD → Variables** 设置受保护且脱敏的 `GITHUB_PUSH_TOKEN`。该 PAT 必须具有 `CodeFuckee/botler` Wiki 的写权限；同步使用普通提交和普通 push，不会强制覆盖 GitHub Wiki 的历史或独立修改。
 
@@ -264,7 +264,7 @@ Botler Web 前端（React/Vite 产物由 FastAPI 同源托管），原生壳提�
 加载动画 / 失败重试 / 返回键历史回退，Web 端全部能力（任务 / 详情 / 设置 /
 标签管理等）开箱即用。工程位于 `harmony/`，加载地址在
 `harmony/entry/src/main/ets/common/AppConfig.ets` 的 `WEB_URL` 中配置
-（默认 `http://10.0.0.122:8000`，按部署环境修改）。
+（默认 `http://your-server.example.com:8000`，按部署环境修改）。
 
 CI/CD 的 `build` 阶段新增 **`harmony:build`** 作业（与 frontend:build /
 backend:test 并行）：先跑结构校验（`harmony/scripts/validate_harmony.py`），
@@ -645,7 +645,7 @@ python3 scripts/release.py --force --no-push
 > 版本一致）；本地缺省读 `data/version.txt`。发版提交仅改 CHANGELOG/归档
 > 文档，触发的 docs-only 流水线自动跳过构建（无循环）。
 
-## 部署（10.0.0.122，Ubuntu 24.04）
+## 部署（your-server.example.com，Ubuntu 24.04）
 
 前置条件：
 
@@ -657,7 +657,7 @@ python3 scripts/release.py --force --no-push
    ANTHROPIC_MODEL=deepseek-chat
    ```
    > ⚠️ 若服务器配了代理，`claude -p` 前需清理代理环境变量，否则报 TLS 证书错误。
-3. GitLab 网络互通：10.0.0.122 能访问 `home.chenkaidi.top:509`，且 GitLab 能反访 10.0.0.122 的 webhook 端口（同一 ZeroTier 网络应互通）。
+3. GitLab 网络互通：your-server.example.com 能访问 `gitlab.example.com`，且 GitLab 能反访 your-server.example.com 的 webhook 端口（同一 ZeroTier 网络应互通）。
 4. bot 账号 PAT（scope `api` + `write_repository`），并加入各目标仓库（角色 Maintainer，webhook 注册需要）。
 
 部署步骤：
@@ -674,7 +674,7 @@ deploy/nginx-minio-public.conf        # nginx 代理 MinIO public 桶配置（�
 # 启动（三选一）
 pm2 start deploy/botler.config.cjs && pm2 save && pm2 startup
 #   pm2 配置含 botler + botler-minio 两个 app（MinIO 随 botler 一并托管，
-#   数据目录 $BOTLER_DATA_DIR/minio/data，控制台 http://10.0.0.122:9001）
+#   数据目录 $BOTLER_DATA_DIR/minio/data，控制台 http://your-server.example.com:9001）
 # 或
 sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --now botler
 # 或 Docker（见下方「Docker 部署」）
@@ -689,7 +689,7 @@ sudo cp deploy/botler.service /etc/systemd/system/ && sudo systemctl enable --no
 > 部署前会自动停止旧 pm2 服务，凭据优先用服务器上 `backend/.env`（缺失时用
 > CI 变量生成）。
 
-冒烟测试：浏览器打开 `http://10.0.0.122:8000` → 添加仓库（自动注册 webhook）→
+冒烟测试：浏览器打开 `http://your-server.example.com:8000` → 添加仓库（自动注册 webhook）→
 在 GitLab 建一个测试 issue 指派给 bot → 观察任务列表，验证代码推上 main、Issue 已追加结果评论并标记 `bot-done`；人工验证后再决定是否关闭。
 
 ## Docker 部署

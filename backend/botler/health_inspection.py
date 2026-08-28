@@ -263,7 +263,7 @@ class RepoHealthInspector:
         """在项目 hook 列表中查找平台注册的 webhook。
 
         按回调路径后缀（/webhook/gitlab）匹配而非 URL 全等：部署环境
-        Botler 回调地址（如 http://10.0.0.122:8000）与 gitlab_url 通常
+        Botler 回调地址（如 http://your-server.example.com:8000）与 gitlab_url 通常
         不同，client.webhook_url() 是按其 webhook_base_url 拼接的，可能
         与真实注册地址不一致；后缀匹配 host 无关，能正确识别任何
         地址上注册的平台 webhook（与 add_repo 注册时按访问地址动态

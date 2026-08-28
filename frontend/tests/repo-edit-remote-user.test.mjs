@@ -34,7 +34,7 @@ const REPO = {
   name: 'botler',
   enabled: true,
   priority: 100,
-  url: 'https://home.chenkaidi.top:509/chenkaidi/botler.git',
+  url: 'https://gitlab.example.com/chenkaidi/botler.git',
   remote_username: 'agent',
 }
 

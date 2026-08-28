@@ -255,7 +255,7 @@ export default function Repos() {
           <div className="form-row">
             <input
               className="input grow"
-              placeholder="GitLab 项目 URL 或 project_id（如 https://home.chenkaidi.top:509/group/project.git）"
+              placeholder="GitLab 项目 URL 或 project_id（如 https://gitlab.example.com/group/project.git）"
               value={form.url}
               onChange={(e) => setForm({ ...form, url: e.target.value })}
             />

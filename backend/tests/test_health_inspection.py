@@ -698,7 +698,7 @@ class TestWebhookJudgementDetails:
         """平台 webhook 回调地址与 gitlab_url 不同（如内网 IP）：按回调路径
         后缀匹配，host 无关也能正确识别为已注册。"""
         stub = StubGitLab()
-        stub.hooks = [{"id": 7, "url": "http://10.0.0.122:8000/webhook/gitlab",
+        stub.hooks = [{"id": 7, "url": "http://your-server.example.com:8000/webhook/gitlab",
                        "token": None, "issues_events": True}]
         _mk_repo(db)
         result = _mk_inspector(config, db, stub, notifier).inspect_once()
@@ -724,14 +724,14 @@ class TestWebhookJudgementDetails:
         """secret 不匹配修复时保留已存在 hook 的回调 URL（部署环境回调地址
         与 gitlab_url 不同，重建会注册到错误地址）。"""
         stub = StubGitLab()
-        stub.hooks = [{"id": 9, "url": "http://10.0.0.122:8000/webhook/gitlab",
+        stub.hooks = [{"id": 9, "url": "http://your-server.example.com:8000/webhook/gitlab",
                        "token": "旧-secret", "issues_events": True}]
         _mk_repo(db)
         result = _mk_inspector(config, db, stub, notifier).inspect_once()
         assert result["abnormal"] == []
         assert stub.register_calls == [(42, config.get().webhook_secret)]
         assert stub.hooks[0]["id"] == 9  # 更新而非新建
-        assert stub.hooks[0]["url"] == "http://10.0.0.122:8000/webhook/gitlab"
+        assert stub.hooks[0]["url"] == "http://your-server.example.com:8000/webhook/gitlab"
         assert stub.hooks[0]["token"] == config.get().webhook_secret
 
 

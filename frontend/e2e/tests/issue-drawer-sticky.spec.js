@@ -35,7 +35,7 @@ function tallIssueFixture() {
         milestone: null,
         created_at: '2026-08-19 19:45:32',
         updated_at: '2026-08-19 19:45:32',
-        web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/work_items/332',
+        web_url: 'https://gitlab.example.com/chenkaidi/botler/-/work_items/332',
         assignees: [{ username: 'agent', name: 'Agent', avatar_url: '' }],
         user_notes_count: 0,
       }],
@@ -230,7 +230,7 @@ function tallPipelineFixture() {
     name: `job-${i} 这是一个很长的任务名称用于撑高流水线详情内容`,
     status: 'success',
     allow_failure: false,
-    web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/jobs/1000',
+    web_url: 'https://gitlab.example.com/chenkaidi/botler/-/jobs/1000',
     artifacts: [],
   }))
   return {
@@ -247,7 +247,7 @@ function tallPipelineFixture() {
         updated_at: '2026-08-19 20:05:00',
         finished_at: '2026-08-19 20:06:00',
         duration: 300,
-        web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/pipelines/335',
+        web_url: 'https://gitlab.example.com/chenkaidi/botler/-/pipelines/335',
       },
       stages: Array.from({ length: 8 }, (_, s) => ({
         name: `stage-${s}`,

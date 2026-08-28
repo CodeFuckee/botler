@@ -74,7 +74,7 @@ def _run_job_script(tmp_path, monkeypatch):
     env = {
         **os.environ,
         "CI_JOB_ID": "test-464",
-        "CI_SERVER_URL": "https://home.chenkaidi.top:509",
+        "CI_SERVER_URL": "https://gitlab.example.com",
         "CI_PROJECT_PATH": "chenkaidi/botler",
         "CI_JOB_TOKEN": "dummy-token",
         "GITHUB_PUSH_TOKEN": "dummy-pat",

@@ -40,7 +40,7 @@ function overviewWithDetail() {
         milestone: null,
         created_at: '2026-08-19 19:45:32',
         updated_at: '2026-08-19 19:45:32',
-        web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/work_items/452',
+        web_url: 'https://gitlab.example.com/chenkaidi/botler/-/work_items/452',
         assignees: [{ username: 'agent', name: 'Agent', avatar_url: '' }],
         user_notes_count: 2,
       }],

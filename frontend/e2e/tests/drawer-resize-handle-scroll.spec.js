@@ -33,7 +33,7 @@ function tallIssueFixture() {
         milestone: null,
         created_at: '2026-08-24 17:23:56',
         updated_at: '2026-08-24 17:23:56',
-        web_url: 'https://home.chenkaidi.top:509/chenkaidi/botler/-/work_items/475',
+        web_url: 'https://gitlab.example.com/chenkaidi/botler/-/work_items/475',
         assignees: [{ username: 'agent', name: 'Agent', avatar_url: '' }],
         user_notes_count: 0,
       }],
