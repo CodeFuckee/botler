@@ -1059,6 +1059,7 @@ GET/PUT /api/repos/{id}/template      仓库模版
 GET    /api/template-versions        模板版本历史（issue #262）：?key=global:default|global:resume|global:comment|repo:{repo_id}&limit=N，返回 versions（最新在前）与 latest（当前最新版本，前端展示版本号/时间）
 POST   /api/template-versions/{id}/rollback  回滚到指定历史版本（issue #262）：按版本 key 写回 config.yaml templates 段 / repos.prompt_template，回滚立即生效并生成带「回滚到版本 N」备注的新版本；版本不存在 404、仓库已删除 404、未知 key 400
 GET/PUT /api/settings                 系统设置（写回 config.yaml；worker.engine 为全局默认执行引擎，issue #113）
+POST   /api/ai/list-models              获取 AI 供应商模型列表（issue #499）：body `{base_url, api_key?, name?}`，后端代调 OpenAI 兼容 `GET {base_url}/models` 返回 `{models: [id,...]}`（去重保序）；api_key 留空/掩码时按 name 匹配已保存配置（明文不流转前端），Base URL 非法 400、上游非 2xx/响应格式不符 400、网络异常 502
 GET    /api/audit-logs                 审计日志分页查询（issue #260）：?page=&per_page=&action=&actor=&target_type=，按 id 倒序（时间倒序），响应含 items / total / page / per_page / actions（全部操作类型下拉）/ admin（当前用户是否管理员，前端据此显隐删除按钮）；SSO 启用且配置 admin_usernames 时仅名单内用户可访问（403）
 GET    /api/audit-logs/actions         审计日志出现过的全部操作类型（去重升序，过滤下拉数据源，issue #260）
 DELETE /api/audit-logs/{id}            删除单条审计日志（仅管理员，普通用户 403；行不存在 404，issue #260 验收标准 3）
