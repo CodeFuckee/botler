@@ -11,6 +11,7 @@ def ctx(request: Request):
 
 
 from .repos import router as repos_router  # noqa: E402
+from .ai import router as ai_router  # noqa: E402
 from .tasks import router as tasks_router  # noqa: E402
 from .settings import router as settings_router  # noqa: E402
 from .backup import router as backup_router  # noqa: E402
@@ -36,6 +37,7 @@ from .audit import router as audit_router  # noqa: E402
 from .events import router as events_router  # noqa: E402
 from .template_versions import router as template_versions_router  # noqa: E402
 
+router.include_router(ai_router)
 router.include_router(repos_router)
 router.include_router(tasks_router)
 router.include_router(settings_router)

@@ -4957,6 +4957,24 @@ body:has(.drawer-overlay) {
   align-items: center;
   gap: var(--space-2);
 }
+/* 获取模型（issue #499）：模型输入框与「获取模型」按钮同行，
+   模型选择列表在输入框下方按钮式排布，可滚动 */
+.provider-model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.model-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  max-height: 180px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
 
 /* apple-design 可及性：系统开启「减弱透明」时毛玻璃回退纯色材质（无模糊），
    保证悬浮层文字在任何背景下可读 */

@@ -19,6 +19,9 @@ export default function AiProvidersCard() {
   // 编辑表单：null = 列表模式；{ index, form }（index 为 null 表示新增）
   const [editing, setEditing] = useState(null)
   const [apiKeyInput, setApiKeyInput] = useState('')
+  // 获取模型（issue #499）：modelOptions = null 未加载 / [] 无模型 / [ids] 已加载
+  const [modelOptions, setModelOptions] = useState(null)
+  const [fetchingModels, setFetchingModels] = useState(false)
 
   const load = () => {
     setError('')
@@ -36,13 +39,13 @@ export default function AiProvidersCard() {
       index: null,
       form: { ...EMPTY_FORM, base_url: preset.baseUrl, model: preset.model },
     })
-    setApiKeyInput('')
+    setApiKeyInput(''); setModelOptions(null)
   }
 
   const startEdit = (i) => {
     setError(''); setSaved(false)
     setEditing({ index: i, form: { ...providers[i] } })
-    setApiKeyInput('')
+    setApiKeyInput(''); setModelOptions(null)
   }
 
   const onProviderChange = (key) => {
@@ -55,6 +58,34 @@ export default function AiProvidersCard() {
 
   const setForm = (key, val) =>
     setEditing((e) => ({ ...e, form: { ...e.form, [key]: val } }))
+
+  // 获取模型（issue #499）：经后端代理 POST /api/ai/list-models 调
+  // OpenAI 兼容 {base_url}/models，拿回模型列表供用户选择。
+  // apiKeyInput 留空 / 掩码时后端按 name 匹配已保存 Key（与保存同语义）。
+  const fetchModels = async () => {
+    const url = (editing.form.base_url || '').trim()
+    if (!url) { setError('请先填写 Base URL 再获取模型'); return }
+    setFetchingModels(true); setError(''); setModelOptions(null)
+    try {
+      const data = await api.post('/api/ai/list-models', {
+        base_url: url,
+        api_key: apiKeyInput.trim(),
+        name: (editing.form.name || '').trim(),
+      })
+      const models = data.models || []
+      setModelOptions(models)
+      if (models.length === 0) setError('未获取到可用模型，请检查 Base URL / API Key')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setFetchingModels(false)
+    }
+  }
+
+  const pickModel = (m) => {
+    setForm('model', m)
+    setModelOptions(null)
+  }
 
   // 表单确认：写入本地列表（最终保存统一 PUT 到后端）
   const commitForm = () => {
@@ -76,7 +107,7 @@ export default function AiProvidersCard() {
     else list[editing.index] = entry
     setProviders(list)
     setEditing(null)
-    setApiKeyInput('')
+    setApiKeyInput(''); setModelOptions(null)
   }
 
   const remove = async (i) => {
@@ -202,12 +233,36 @@ export default function AiProvidersCard() {
           <div className="form-row wrap">
             <label className="provider-field">
               默认模型
-              <input
-                className="input grow"
-                placeholder="如：deepseek-chat"
-                value={editing.form.model}
-                onChange={(e) => setForm('model', e.target.value.trim())}
-              />
+              <span className="provider-model-row">
+                <input
+                  className="input grow"
+                  placeholder="如：deepseek-chat"
+                  value={editing.form.model}
+                  onChange={(e) => setForm('model', e.target.value.trim())}
+                />
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={fetchingModels}
+                  onClick={fetchModels}
+                >
+                  {fetchingModels ? '获取中…' : '获取模型'}
+                </button>
+              </span>
+              {modelOptions && modelOptions.length > 0 && (
+                <span className="model-picker">
+                  {modelOptions.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => pickModel(m)}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </span>
+              )}
             </label>
             <label className="provider-field">
               优先级
@@ -235,7 +290,7 @@ export default function AiProvidersCard() {
             <button className="btn btn-primary" onClick={commitForm}>
               {editing.index === null ? '添加到列表' : '确认修改'}
             </button>
-            <button className="btn" onClick={() => { setEditing(null); setApiKeyInput('') }}>取消</button>
+            <button className="btn" onClick={() => { setEditing(null); setApiKeyInput(''); setModelOptions(null) }}>取消</button>
           </div>
         </div>
       )}
@@ -254,7 +309,8 @@ export default function AiProvidersCard() {
       </div>
       <p className="muted small">
         为 AI 功能配置可用的 API 供应商。选择预设类型会自动填充默认 Base URL 与模型
-        （均可修改）；API Key 保存后仅显示掩码，编辑时留空 = 保持现有。
+        （均可修改）；点击「获取模型」经 OpenAI 兼容接口（GET {'{base_url}'}/models）
+        拉取该供应商可用模型供选择；API Key 保存后仅显示掩码，编辑时留空 = 保持现有。
         优先级为 1~999 整数（数字越小优先级越高，缺省 100）：调用 AI 时优先使用
         启用的高优先级供应商，该供应商额度不足 / 调用失败后自动切换下一个启用的
         供应商。修改后点击「保存 AI 供应商配置」写回 config.yaml，重启后不丢失。

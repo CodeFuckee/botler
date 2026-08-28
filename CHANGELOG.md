@@ -37,6 +37,19 @@
     执行链路/安全边界/故障排查）；常驻 botler-agent（HTTP+SSE）远程通道
     列为后续演进计划。
 
+- **设置页「AI API 供应商」卡片新增「获取模型」按钮（issue #499）**：
+  供应商编辑表单「默认模型」输入框旁新增「获取模型」按钮，点击后经后端
+  代理 `POST /api/ai/list-models`（OpenAI 兼容 `GET {base_url}/models`）
+  拉取该供应商全部可用模型，模型选择列表按钮式展示（可滚动），点击即填入
+  「默认模型」输入框；API Key 留空 / 掩码时按供应商 name 匹配已保存配置
+  （明文不流转前端）；Base URL 未填写 / 请求失败 / 无可用模型均有明确提示；
+  - 测试：后端 `test_api_ai.py`（21，httpx.MockTransport 模拟上游，覆盖
+    请求构造 / 空列表 / 非 2xx / 网络异常 / 掩码 Key 匹配 / 响应格式容错），
+    前端 `settings-ai-providers-fetch-models.test.mjs`（9，源码断言 + 组件
+    行为：成功拉取选择填入 / 空 Base URL 校验 / 请求中禁用防重复 / 失败
+    展示 / 切换编辑对象清空状态）；
+  - 文档：README `ai_providers[]` 配置说明补充「获取模型」用法。
+
 ### Changed
 
 - **设置页视觉精修（Geist 体系内，用户反馈美化需求）**：以设置页为主、
