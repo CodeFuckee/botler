@@ -273,9 +273,14 @@ class TestRouteDecision:
 
     def test_siliconflow_base_url_routes_pi_ai(
             self, tmp_path, monkeypatch, fake_runner):
+        """硅基流动 base_url（非官方主机）→ pi-ai 路由。
+
+        issue #729/#730 修复契约：executor 把 provider 换成 pi-ai 标识、
+        cordis 原样透传自定义基底（派生在 worker 内做——CI 无 optional
+        SDK，executor 层不得导入 SDK 运行时）、env 注入 apiKeyEnv 变量。
+        """
         sessions = tmp_path / "dsh-sessions"
         sessions.mkdir(exist_ok=True)
-        # 自定义 cordis 基底（避免测试依赖 SDK 内置组合文件）
         base_cordis = tmp_path / "cordis.yml"
         base_cordis.write_text(
             "- id: llm-deepseek\n  name: '@deepseek-ai/dsh-llm-deepseek'\n",
@@ -294,12 +299,10 @@ class TestRouteDecision:
         kwargs = fake_runner.instances[0].kwargs
         # 路由到 llm-pi-ai 提供商（修复核心：不再 deepseek-official）
         assert kwargs["provider"] == "botler-pi-ai"
-        # 派生 cordis 文件挂载 llm-pi-ai + siliconflow provider 条目
-        cordis = kwargs["cordis"]
-        assert cordis and str(cordis).endswith(".yml")
-        assert "- id: llm-pi-ai" in Path(cordis).read_text(encoding="utf-8")
-        assert "baseURL: https://api.siliconflow.cn/v1" in Path(cordis).read_text(
-            encoding="utf-8")
+        assert kwargs["use_pi_ai"] is True
+        # cordis 原样透传自定义基底（派生留在 worker：SDK 运行时内挂
+        # llm-pi-ai 条目；CI 无 optional SDK 也不在 executor 层派生）
+        assert kwargs["cordis"] == str(base_cordis)
         # apiKeyEnv 变量已注入 runner 环境（运行时凭据缝读取）
         assert kwargs["env"]["BOTLER_DSH_PI_AI_KEY"] == "sk-siliconflow-key"
         # 凭据与模型透传（issue #115/#397 语义保持）
@@ -324,8 +327,6 @@ class TestRouteDecision:
         assert kwargs["provider"] == "deepseek-official"
         assert kwargs["cordis"] is None
         assert "BOTLER_DSH_PI_AI_KEY" not in kwargs["env"]
-        assert kwargs["api_key"] is None
-        assert kwargs["base_url"] is None
 
     def test_official_deepseek_host_keeps_deepseek_route(
             self, tmp_path, monkeypatch, fake_runner):

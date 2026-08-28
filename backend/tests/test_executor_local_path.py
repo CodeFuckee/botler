@@ -11,6 +11,7 @@ import pytest
 from botler.config import ConfigManager
 from botler.database import Database
 from botler.executor import ClaudeExecutor, ExecutorError
+from botler.executor.workspace import parse_symref_branches
 from botler.gitlab_client import GitLabClient
 from botler.templates import TemplateRenderer
 
@@ -70,6 +71,50 @@ def _repo_dict(local_path: str) -> dict:
         "local_path": local_path,
         "remote_name": "origin",
     }
+
+
+class TestParseSymrefBranches:
+    """``git ls-remote --symref`` 输出解析（默认主分支服务端权威，issue #148）。
+
+    复现回归：分支行形如 ``<sha>\\trefs/heads/<name>``——ref 名称在第二列；
+    此前误判第一列导致 heads 集合恒空、服务端权威解析失效，单分支克隆
+    （受限 fetch refspec）场景下工作区被错误停在 dev 分支
+    （test_single_branch_clone_switches_to_default_branch 本机中文 locale 复现）。
+    """
+
+    def test_parses_real_lsremote_symref_output(self):
+        stdout = (
+            "ref: refs/heads/main\tHEAD\n"
+            "dc6af42e95cee9e0df393338ff759dc2e7eedd61\tHEAD\n"
+            "cfc3ea6701792fffc2af6af6c624545a811aaddf\trefs/heads/dev\n"
+            "dc6af42e95cee9e0df393338ff759dc2e7eedd61\trefs/heads/main\n"
+        )
+        candidate, heads = parse_symref_branches(stdout)
+        assert candidate == "main"
+        assert heads == {"main", "dev"}
+
+    def test_parses_master_only_remote(self):
+        stdout = (
+            "ref: refs/heads/master\tHEAD\n"
+            "dc6af42e95cee9e0df393338ff759dc2e7eedd61\tHEAD\n"
+            "dc6af42e95cee9e0df393338ff759dc2e7eedd61\trefs/heads/master\n"
+        )
+        candidate, heads = parse_symref_branches(stdout)
+        assert candidate == "master"
+        assert heads == {"master"}
+
+    def test_handles_tag_and_peeled_lines(self):
+        """tag/peeled 行（^ 结尾）不污染分支集合。"""
+        stdout = (
+            "ref: refs/heads/main\tHEAD\n"
+            "dc6af42e95cee9e0df393338ff759dc2e7eedd61\tHEAD\n"
+            "dc6af42e95cee9e0df393338ff759dc2e7eedd61\trefs/heads/main\n"
+            "9aabb9c06d4c9e1e59ea5b9b0e0a1c9c5b7f0d8e\trefs/tags/v1.0\n"
+            "9aabb9c06d4c9e1e59ea5b9b0e0a1c9c5b7f0d8e^{}\trefs/tags/v1.0^{}\n"
+        )
+        candidate, heads = parse_symref_branches(stdout)
+        assert candidate == "main"
+        assert heads == {"main"}
 
 
 class TestPrepareWorkspaceLocalPath:

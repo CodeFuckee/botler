@@ -61,6 +61,11 @@ REASONING_EFFORT_CHOICES = ("off", "high", "max")
 # llm-pi-ai 条目标识（web 的 llm-pi-ai.providers.gjld 注册同构；SDK 捆绑
 # runtime 内置同名插件，Cordis 组合挂载即可使用，无需升级 SDK）
 _PI_AI_NAME = "@deepseek-ai/dsh-llm-pi-ai"
+# 派生 Cordis 里 providers.<id> 键名 + apiKeyEnv 变量名（与
+# executor/process.py 路由决策共用；apiKeyEnv 变量经 SDK config.env
+# 注入运行时凭据缝，llm-pi-ai 适配器从进程环境读取）
+DSH_PI_AI_PROVIDER_ID = "botler-pi-ai"
+DSH_PI_AI_KEY_ENV = "BOTLER_DSH_PI_AI_KEY"
 
 
 def _entry_start(lines: list[str]) -> int | None:
@@ -486,6 +491,7 @@ class DshRunner:
                  model: str = "deepseek-v4-flash",
                  max_tokens: int | None = None,
                  reasoning_effort: str | None = None,
+                 use_pi_ai: bool = False,
                  cwd: str | None = None,
                  session_root: str | None = None,
                  cordis: str | None = None,
@@ -502,6 +508,9 @@ class DshRunner:
         self.max_tokens = max_tokens
         # 推理等级（issue #123）：非空时派生 Cordis 注入 reasoningEffort
         self.reasoning_effort = reasoning_effort
+        # issue #729/#730：第三方 OpenAI 兼容端点路由标志（executor 按
+        # base_url 主机判定；worker 据此派生挂载 llm-pi-ai 的 Cordis）
+        self.use_pi_ai = use_pi_ai
         self.cwd = cwd
         self.session_root = session_root
         self.cordis = cordis
@@ -571,9 +580,23 @@ class DshRunner:
                 None, None, self.session_id, error="stopped"))
             return
         try:
-            # issue #123：推理等级经派生 Cordis 注入 llm-deepseek 配置
-            # （非空时生成缓存文件，为空则原样透传用户 cordis）
-            cordis = resolve_dsh_cordis(self.cordis, self.reasoning_effort)
+            # issue #729/#730：第三方 OpenAI 兼容端点（use_pi_ai=True，
+            # executor 按 base_url 主机判定的路由）→ 派生挂载 llm-pi-ai
+            # 的 Cordis（llm-pi-ai 只在首片记录工具名、续片空名不覆盖，
+            # 硅基流动等中转站的显式空串 name 不再污染工具名）；官方
+            # DeepSeek 走原逻辑（issue #123 推理等级注入 llm-deepseek）。
+            # 这里的派生只在 worker 内进行——deepseek_harness_runtime
+            # 是 SDK 的捆绑组件，仅安装 SDK 的运行环境可导入（与
+            # resolve_dsh_cordis 的 bundled 分支同款约定，executor 层
+            # 不做任何 SDK 导入）。
+            if self.use_pi_ai:
+                cordis = resolve_dsh_pi_ai_cordis(
+                    self.cordis, DSH_PI_AI_PROVIDER_ID,
+                    base_url=self.base_url or "",
+                    api_key_env=DSH_PI_AI_KEY_ENV,
+                    model=self.model)
+            else:
+                cordis = resolve_dsh_cordis(self.cordis, self.reasoning_effort)
             config = DeepSeekHarnessConfig(
                 provider=self.provider,
                 model=self.model,

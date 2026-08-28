@@ -23,7 +23,7 @@ from ..gitlab_client import PIPELINE_TERMINAL_STATES, GitLabError
 from ..log_redact import redact
 from ..plugins import PluginKind, has_plugin
 from ..remote_exec import run_remote, sh_quote, stream_remote
-from ..dsh_runner import resolve_dsh_pi_ai_cordis
+from ..dsh_runner import DSH_PI_AI_KEY_ENV, DSH_PI_AI_PROVIDER_ID
 from ..usage import finalize_usage, parse_claude_result_usage
 from .common import ExecutorError, STOP_EXIT_CODE, _load_json_output, _row_get, logger
 from .prompt import PROGRESS_REPORT_INSTRUCTION, _decode_escapes
@@ -81,13 +81,13 @@ def _safe_int(value, default: int = 0) -> int:
 
 # ---- issue #729/#730：第三方 OpenAI 兼容端点 → llm-pi-ai 路由 ----
 
-# llm-pi-ai provider 标识与 apiKeyEnv 变量名（resolver 侧同款，见
-# dsh_runner.resolve_dsh_pi_ai_cordis —— provider_id 对应派生 Cordis 里
-# providers.<id> 键名，api_key_env 对应 SDK 运行时凭据缝读取的环境变量）
-_DSH_PI_AI_PROVIDER_ID = "botler-pi-ai"
-_DSH_PI_AI_KEY_ENV = "BOTLER_DSH_PI_AI_KEY"
+# llm-pi-ai provider 标识与 apiKeyEnv 变量名由 dsh_runner 定义并导出
+# （DSH_PI_AI_PROVIDER_ID / DSH_PI_AI_KEY_ENV，与 worker 派生 Cordis 的
+# providers.<id> 键名 / apiKeyEnv 一一对应）——本模块只做纯主机路由判定，
+# 不导入任何 SDK/运行时符号（CI 测试环境无 optional SDK，故 Cordis 派生
+# 一律留在 DshRunner._worker 内执行，与 issue #123 推理等级注入同款约定）。
 # 官方 DeepSeek API 主机：llm-deepseek 适配器对该端点的流式续片（缺省
-# name 字段）设计正确，不回退 pi-ai 路由（保持现状）
+# name 字段）设计正确，不回退 pi-ai 路由（保持现状）。
 _DSH_OFFICIAL_HOSTS = frozenset({"api.deepseek.com"})
 
 
@@ -1033,25 +1033,22 @@ class ProcessMixin:
         runner_model = dsh_model or cfg.dsh_model
 
         # issue #729/#730：第三方 OpenAI 兼容端点（硅基流动等，base_url
-        # 非空且非官方 DeepSeek 主机）改走 llm-pi-ai 路由——派生 Cordis
-        # 挂载 llm-pi-ai + provider（api: openai-completions），与 web 的
-        # 「AI 供应商 -> 硅基流动」注册同构；官方 DeepSeek（base_url 空 /
-        # api.deepseek.com）维持 deepseek-official（llm-deepseek）现状。
-        # 原因：llm-deepseek 的 translate 守卫 `!== void 0` 把 SiliconFlow
-        # 流式续片的显式空串 name 覆盖成 "" → `unknown tool ""`，tasks
-        # #729/#730 全部工具调用失败；llm-pi-ai 只在首片记录名字不覆盖。
+        # 非空且非官方 DeepSeek 主机）改走 llm-pi-ai 路由——provider 换
+        # 成 DSH_PI_AI_PROVIDER_ID、env 注入 apiKeyEnv 变量（api key 经
+        # worker 派生 Cordis 的凭据缝消费），与 web 的「AI 供应商 ->
+        # 硅基流动」注册同构；官方 DeepSeek（base_url 空 / api.deepseek.com）
+        # 维持 deepseek-official（llm-deepseek）现状。根因：llm-deepseek
+        # 的 translate 守卫 `!== void 0` 把 SiliconFlow 流式续片的显式
+        # 空串 name 覆盖成 "" → `unknown tool ""`；llm-pi-ai 只在首片
+        # 记录名字、续片缺失/空名不覆盖。Cordis 派生留在 worker（SDK
+        # 运行时内）执行——本层不导入 SDK，CI 无 optional SDK 也可测。
         use_pi_ai = _dsh_use_pi_ai_route(dsh_base_url)
+        dsh_provider = DSH_PI_AI_PROVIDER_ID if use_pi_ai else cfg.dsh_provider
+        dsh_cordis = cfg.dsh_cordis or None
         if use_pi_ai:
-            dsh_provider = _DSH_PI_AI_PROVIDER_ID
-            dsh_cordis = resolve_dsh_pi_ai_cordis(
-                cfg.dsh_cordis or None, _DSH_PI_AI_PROVIDER_ID,
-                base_url=dsh_base_url, api_key_env=_DSH_PI_AI_KEY_ENV,
-                model=runner_model)
             dsh_env = dict(env)
-            dsh_env[_DSH_PI_AI_KEY_ENV] = dsh_api_key or ""
+            dsh_env[DSH_PI_AI_KEY_ENV] = dsh_api_key or ""
         else:
-            dsh_provider = cfg.dsh_provider
-            dsh_cordis = cfg.dsh_cordis or None
             dsh_env = env
 
         def _run_round(session_id: str, round_prompt: str) -> tuple[int, bool, bool]:
@@ -1065,6 +1062,10 @@ class ProcessMixin:
                     prompt=round_prompt, session_id=session_id,
                     provider=dsh_provider, model=runner_model,
                     max_tokens=cfg.dsh_max_tokens,
+                    # issue #729/#730：第三方 OpenAI 兼容端点路由标志——
+                    # worker 据其在 SDK 运行时内派生挂载 llm-pi-ai 的
+                    # Cordis（本层不导入 SDK，故派生不在 executor 做）
+                    use_pi_ai=use_pi_ai,
                     # 推理等级（issue #123）：dsh.reasoning_effort 经
                     # DshRunner 派生 Cordis 注入 SDK，空串 = 不设置
                     # （pi-ai 路由下注入 llm-deepseek 条目无害，适配器不读）

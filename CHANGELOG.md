@@ -98,19 +98,49 @@
     - `dsh_runner.py` 新增 `build_pi_ai_cordis_text` / `resolve_dsh_pi_ai_cordis`
       ——在（自定义或内置默认）Cordis 组合上派生挂载 llm-pi-ai + provider
       （api: openai-completions / baseURL / apiKeyEnv / models）的组合文件，
-      缓存到临时目录（与 `resolve_dsh_cordis` 同款缓存策略）；
-    - `executor/process.py` 新增 `_dsh_use_pi_ai_route` 路由决策：base_url 非空
-      且非官方 DeepSeek 主机（api.deepseek.com）→ provider 改走 `botler-pi-ai`、
-      cordis 用派生文件、env 注入 apiKeyEnv 变量（api key 经运行时凭据缝消费）；
-      官方 DeepSeek（base_url 空 / api.deepseek.com）维持 deepseek-official
-      （llm-deepseek）现状不变；
-  - 测试：`test_dsh_pi_ai_route.py`（8 用例）——文本层复现两种 translate 语义
-    （llm-deepseek 守卫丢失工具名 / llm-pi-ai 保留）、Cordis 派生构建与缓存、
-    executor 路由决策（硅基流动 → pi-ai 路由 + 派生 cordis + apiKeyEnv 注入；
-    官方 DeepSeek → 现状）；修复前该文件 6 个用例失败（复现），修复后全绿；
-  - 实证：真实 SDK + 硅基流动抓包确认续片 `"name":""` 且 `id/type` 为 null，
-    修复前必现 `unknown tool ""`，llm-pi-ai 路由后工具名保留、
+      缓存到临时目录（与 `resolve_dsh_cordis` 同款缓存策略）；派生在
+      `DshRunner` worker 线程内执行（SDK 运行时内，测试/CI 环境无 optional
+      SDK 时不在 executor 层导入运行时组件——初版提交把派生放在 executor
+      层导致 CI backend:test 报 `ModuleNotFoundError:
+      deepseek_harness_runtime`，重构为 worker 内派生后消除）；
+    - `executor/process.py` 新增 `_dsh_use_pi_ai_route` 路由决策：base_url
+      非空且非官方 DeepSeek 主机（api.deepseek.com）→ provider 改走
+      `botler-pi-ai`、env 注入 apiKeyEnv 变量（api key 经运行时凭据缝消费），
+      Cordis 原样透传（派生交由 worker）；官方 DeepSeek（base_url 空 /
+      api.deepseek.com）维持 deepseek-official（llm-deepseek）现状不变；
+  - 测试：`test_dsh_pi_ai_route.py`（8 用例）——文本层复现两种 translate
+    语义（llm-deepseek 守卫丢失工具名 / llm-pi-ai 保留）、Cordis 派生构建
+    与缓存、executor 路由决策（硅基流动 → pi-ai 路由 + use_pi_ai 标志 +
+    apiKeyEnv 注入；官方 DeepSeek → 现状）；修复前该文件 6 个用例失败
+    （复现），修复后全绿；
+  - 实证：真实 SDK（0.1.0rc6）+ 硅基流动抓包确认续片 `"name":""` 且
+    `id/type` 为 null——llm-deepseek 路由必现 `unknown tool ""`（任务
+    #729 日志 24 次工具调用全部失败）；经 botler `DshRunner` worker 派生
+    路径 + 真实配置（api.siliconflow.cn / deepseek-ai/DeepSeek-V4-Flash）
+    实测 llm-pi-ai 路由工具名/id 全程保留、bash 工具真实执行、
     finish_reason=completed。
+
+- **工作区默认主分支解析在中文 git locale 下失效（默认分支解析/清理容错修正）**：
+  - 现象：本地（中文 locale git）运行 backend 全量测试时
+    `test_executor_local_path.py` 的默认主分支解析与 clean 权限容错用例失败
+    ——单分支克隆（受限 fetch refspec）工作区被错误停在 `dev` 分支、无写
+    权限残留直接抛 `git clean 失败`；CI（英文 locale）不受影响，属隐藏的
+    locale 依赖缺陷；
+  - 根因一：`parse_symref_branches` 解析 `git ls-remote --symref` 输出时把
+    分支行 `第 1 列`（提交 sha）当 ref 名判断——分支行的 ref 名称在第二列
+    （`<sha>\trefs/heads/<name>`），导致 heads 集合恒空、服务端权威解析
+    （第一级）永远失效；随后 `git remote show` 中文 locale 输出
+    `HEAD 分支：main` 而非英文 `HEAD branch:`，第二级同样失效，一路滑落到
+    本地跟踪引用——单分支克隆只剩 `dev` → 工作区停在错误分支；
+  - 根因二：`_clean_untracked` 的权限失败标志只匹配英文 `"Permission
+    denied"`，中文 locale 报「无法删除 …: 权限不够」→ issue #91 的容错
+    逻辑不生效，权限残留直接拖垮任务；
+  - 修复：`parse_symref_branches` 改按第二列匹配 `refs/heads/`；
+    `_remote_default_branch_via_show` 同时识别 `HEAD branch:` 与
+    `HEAD 分支：`；`_clean_untracked` 用正则匹配 `permission denied|权限不够`；
+  - 测试：`test_executor_local_path.py` 新增 `TestParseSymrefBranches`
+    （3 用例，真实 ls-remote 输出 / master-only / tag + peeled 行），
+    原单分支克隆切换默认分支与 clean 权限容错用例恢复通过。
 
 - **概览页单列分组布局组头折叠按钮被挤到单独一行（用户截图反馈）**：
   - 现象：单列分组（column）布局下，仓库子分组组头的折叠开关单独占一行，

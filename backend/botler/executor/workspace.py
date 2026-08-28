@@ -9,12 +9,19 @@ prepare（fetch / 切默认主分支 / reset / clean / pull --rebase）、
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 from .common import ExecutorError, _row_get, logger
 from .prompt import _strip_credential_sections
+
+# git clean 权限失败的中英文输出标志（issue #91 容错；中文 locale 下 git
+# 报「无法删除 …: 权限不够」而非英文 "Permission denied"，单匹配英文会让
+# 容错逻辑失效、权限残留直接拖垮任务——本机中文 git 复现）
+_CLEAN_PERMISSION_DENIED_RE = re.compile(
+    r"permission denied|权限不够", re.IGNORECASE)
 
 def _on_rmtree_error(func, path, exc_info) -> None:
     """rmtree 删除条目失败时的恢复处理（issue #91）。
@@ -66,6 +73,13 @@ def parse_symref_branches(stdout: str) -> tuple[str | None, set[str]]:
     本地与远程工作区准备共用（远程经 SSH 拿到同样的 stdout 文本）。
     HEAD 符号引用行：``ref: refs/heads/main\tHEAD``；分支行：
     ``<sha>\trefs/heads/main``。
+
+    解析主键：分支行的 ref 名称在**第二列**（第一列是提交 sha），
+    HEAD 符号引用行才是 ``ref:`` 开头——此前误判第一列导致 heads 集合
+    恒为空、服务端权威解析失效（本机中文 locale 下 `git remote show` 又
+    输出 ``HEAD 分支：`` 而非英文 ``HEAD branch:``，三级降级一路滑落到
+    本地跟踪引用，单分支克隆只剩 dev → 工作区被错误停在 dev 分支；
+    测试 test_single_branch_clone_switches_to_default_branch 复现）。
     """
     candidate: str | None = None
     heads: set[str] = set()
@@ -76,8 +90,8 @@ def parse_symref_branches(stdout: str) -> tuple[str | None, set[str]]:
         if parts[0] == "ref:" and len(parts) == 3 and parts[2] == "HEAD":
             if parts[1].startswith("refs/heads/"):
                 candidate = parts[1].rsplit("/", 1)[-1]
-        elif parts[0].startswith("refs/heads/"):
-            heads.add(parts[0].rsplit("/", 1)[-1])
+        elif len(parts) >= 2 and parts[1].startswith("refs/heads/"):
+            heads.add(parts[1].rsplit("/", 1)[-1])
     return candidate, heads
 
 
@@ -553,7 +567,8 @@ class WorkspaceMixin:
 
         ls-remote --symref 不可用（服务器不支持 / 探测异常）时的二次服务端
         探测。``git remote show`` 是 git 查询远端默认分支的标准命令，输出
-        ``HEAD branch: <名>``；HEAD 悬空时输出 ``(unknown)``。
+        ``HEAD branch: <名>``（中文 locale 下为 ``HEAD 分支：<名>``，
+        两种前缀都识别）；HEAD 悬空时输出 ``(unknown)``。
         """
         cmd = ["git", "remote", "show", remote]
         try:
@@ -569,10 +584,11 @@ class WorkspaceMixin:
             return None
         for line in result.stdout.splitlines():
             stripped = line.strip()
-            if stripped.startswith("HEAD branch:"):
-                name = stripped.split(":", 1)[1].strip()
-                if name and name != "(unknown)":
-                    return name
+            for prefix in ("HEAD branch:", "HEAD 分支："):
+                if stripped.startswith(prefix):
+                    name = stripped[len(prefix):].strip()
+                    if name and name != "(unknown)":
+                        return name
         return None
     def _local_default_branch(self, workdir: Path, remote: str) -> str | None:
         """远端不可达时用本地跟踪引用兜底解析默认主分支，没有则返回 None。
@@ -760,7 +776,7 @@ class WorkspaceMixin:
             self._git(workdir, "clean", "-fd", env=git_env)
             return
         except ExecutorError as exc:
-            if "Permission denied" not in str(exc):
+            if not _CLEAN_PERMISSION_DENIED_RE.search(str(exc)):
                 raise
         logger.warning("%s: git clean 权限受限，尝试 Python 层清理残留", workdir)
         for rel in self._untracked_paths(workdir, git_env):
@@ -771,7 +787,7 @@ class WorkspaceMixin:
         try:
             self._git(workdir, "clean", "-fd", env=git_env)
         except ExecutorError as exc:
-            if "Permission denied" in str(exc):
+            if _CLEAN_PERMISSION_DENIED_RE.search(str(exc)):
                 logger.warning("git clean 仍有权限受限残留，跳过继续执行: %s",
                                str(exc)[:200])
             else:
